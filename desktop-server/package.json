@@ -1,0 +1,32 @@
+{
+  "name": "code-mobile-ai-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Desktop companion server for the code-mobile-ai iOS app. Pairs with the app over WebSocket, clones GitHub repos, runs the agent loop, and executes code.",
+  "license": "MIT",
+  "bin": {
+    "code-mobile-ai-server": "dist/index.js"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "smoke": "tsx scripts/smoke.ts"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "qrcode-terminal": "^0.12.0",
+    "ws": "^8.18.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.5",
+    "@types/qrcode-terminal": "^0.12.2",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

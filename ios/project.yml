@@ -1,0 +1,39 @@
+name: CodeMobileAI
+options:
+  bundleIdPrefix: com.codemobileai
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+packages:
+  MobileAICore:
+    path: MobileAICore
+
+targets:
+  CodeMobileAI:
+    type: application
+    platform: iOS
+    sources:
+      - path: App/Sources
+    dependencies:
+      - package: MobileAICore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.codemobileai.app
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1,2"
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: "Code Mobile AI"
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        # Local-network dev tool: allow cleartext to the desktop server on your
+        # LAN (http:// pairing and ws:// streaming). Tighten for App Store.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+          NSAllowsLocalNetworking: true
+        NSLocalNetworkUsageDescription: "Connect to your desktop coding server on the local network."

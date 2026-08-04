@@ -1,0 +1,20 @@
+# Node
+node_modules/
+desktop-server/dist/
+*.log
+npm-debug.log*
+
+# macOS
+.DS_Store
+
+# Xcode / SwiftPM
+.build/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+ios/CodeMobileAI.xcodeproj/
+.swiftpm/
+
+# Env
+.env
+.env.local
