@@ -108,7 +108,7 @@ public struct RepoRef: Codable, Sendable {
 
 /// Discriminated messages the app sends. Encoded with a `type` field.
 public enum ClientMessage: Encodable, Sendable {
-    case createSession(sessionId: String?, repo: RepoRef, environment: EnvironmentConfig?, model: ModelSelection, permissionMode: PermissionMode)
+    case createSession(sessionId: String?, repo: RepoRef, environment: EnvironmentConfig?, model: ModelSelection, permissionMode: PermissionMode, skills: [String] = [], mcpServers: [MCPServerConfig] = [])
     case userMessage(sessionId: String, text: String)
     case permissionResponse(sessionId: String, requestId: String, decision: PermissionDecision)
     case interrupt(sessionId: String)
@@ -119,13 +119,15 @@ public enum ClientMessage: Encodable, Sendable {
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: DynamicKey.self)
         switch self {
-        case let .createSession(sessionId, repo, environment, model, permissionMode):
+        case let .createSession(sessionId, repo, environment, model, permissionMode, skills, mcpServers):
             try c.encode("create_session", forKey: .init("type"))
             if let sessionId { try c.encode(sessionId, forKey: .init("sessionId")) }
             try c.encode(repo, forKey: .init("repo"))
             if let environment { try c.encode(environment, forKey: .init("environment")) }
             try c.encode(model, forKey: .init("model"))
             try c.encode(permissionMode, forKey: .init("permissionMode"))
+            if !skills.isEmpty { try c.encode(skills, forKey: .init("skills")) }
+            if !mcpServers.isEmpty { try c.encode(mcpServers, forKey: .init("mcpServers")) }
         case let .userMessage(sessionId, text):
             try c.encode("user_message", forKey: .init("type"))
             try c.encode(sessionId, forKey: .init("sessionId"))
@@ -144,6 +146,21 @@ public enum ClientMessage: Encodable, Sendable {
             try c.encode(title, forKey: .init("title"))
             try c.encode(body, forKey: .init("body"))
         }
+    }
+}
+
+/// MCP server configuration sent to the desktop server.
+public struct MCPServerConfig: Codable, Sendable {
+    public let name: String
+    public let command: String
+    public let args: [String]
+    public let env: [String: String]
+    
+    public init(name: String, command: String, args: [String] = [], env: [String: String] = [:]) {
+        self.name = name
+        self.command = command
+        self.args = args
+        self.env = env
     }
 }
 

@@ -14,7 +14,7 @@ import { TOOLS, MUTATING_TOOLS } from "../tools/index.js";
 import { diffFiles } from "../git/github.js";
 import { getAgentAdapter, type NormalizedMessage, type ProviderAdapter } from "../providers/index.js";
 
-const SYSTEM_PROMPT = `You are a coding agent running on the user's desktop in a cloned Git repository.
+const BASE_SYSTEM_PROMPT = `You are a coding agent running on the user's desktop in a cloned Git repository.
 Work directly in the repository using the provided tools. Make focused, correct changes.
 Prefer reading files before editing them. Run tests or builds when relevant.
 When you have completed the request, stop and briefly summarize what you changed.`;
@@ -32,14 +32,34 @@ export interface AgentDeps {
   signal: AbortSignal;
   /** Override the provider adapter (tests inject the mock). */
   adapter?: ProviderAdapter;
+  /** Skill content strings to inject into the system prompt. */
+  skills?: string[];
 }
 
 export class AgentSession {
   private readonly messages: NormalizedMessage[] = [];
   private readonly adapter: ProviderAdapter;
+  private readonly systemPrompt: string;
 
   constructor(private readonly deps: AgentDeps) {
     this.adapter = deps.adapter ?? getAgentAdapter(deps.model.provider);
+    this.systemPrompt = this.buildSystemPrompt();
+  }
+
+  private buildSystemPrompt(): string {
+    let prompt = BASE_SYSTEM_PROMPT;
+    
+    if (this.deps.skills && this.deps.skills.length > 0) {
+      prompt += "\n\n## Active Skills\n\n";
+      prompt += "The following skills are active and should guide your approach:\n\n";
+      
+      for (const skillContent of this.deps.skills) {
+        prompt += skillContent;
+        prompt += "\n\n";
+      }
+    }
+    
+    return prompt;
   }
 
   async handleUserMessage(text: string): Promise<void> {
@@ -57,7 +77,7 @@ export class AgentSession {
         {
           model: this.deps.model.model,
           apiKey: this.deps.model.apiKey,
-          system: SYSTEM_PROMPT,
+          system: this.systemPrompt,
           messages: this.messages,
           tools: Object.values(TOOLS),
           effort: this.deps.model.effort,

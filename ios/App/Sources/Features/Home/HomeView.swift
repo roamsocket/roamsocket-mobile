@@ -1,8 +1,6 @@
 import SwiftUI
 import MobileAICore
 
-/// The composer / home screen (IMG_0987): suggestions, repo chip, input, and
-/// the bottom control row (model pill, permission pill, mic, send).
 struct HomeView: View {
     @EnvironmentObject var state: AppState
     @State private var prompt: String = ""
@@ -47,15 +45,13 @@ struct HomeView: View {
             case .model: ModelPickerSheet()
             case .environment: EnvironmentPickerSheet()
             case .repository: RepositoryPickerSheet()
+            case .skills: InstalledSkillsView()
             }
         }
     }
 
-    // MARK: Composer
-
     private var composer: some View {
         VStack(spacing: 12) {
-            // Repo chip row (IMG_0987)
             HStack(spacing: 12) {
                 Button {
                     activeSheet = .environment
@@ -86,7 +82,29 @@ struct HomeView: View {
                 Spacer(minLength: 0)
             }
 
-            // Input + controls container
+            if !state.skillManager.enabledSkills.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(state.skillManager.enabledSkills) { skill in
+                            SkillChip(skill: skill) {
+                                addToChatPrompt(skill)
+                            }
+                        }
+                        Button {
+                            activeSheet = .skills
+                        } label: {
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(Theme.accent)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(Theme.surfaceElevated, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
             VStack(alignment: .leading, spacing: 14) {
                 TextField("", text: $prompt, prompt: Text("Describe a task…").foregroundColor(Theme.textTertiary), axis: .vertical)
                     .font(.system(size: 20))
@@ -99,6 +117,11 @@ struct HomeView: View {
                     Pill(title: state.permissionMode.displayName,
                          systemImage: "chevron.left.forwardslash.chevron.right",
                          action: cyclePermissionMode)
+                    if !state.skillManager.enabledSkills.isEmpty {
+                        Pill(title: "\(state.skillManager.enabledSkills.count) skills",
+                             systemImage: "sparkles",
+                             action: { activeSheet = .skills })
+                    }
                     Spacer(minLength: 0)
                     Image(systemName: "mic")
                         .font(.system(size: 20))
@@ -142,6 +165,15 @@ struct HomeView: View {
         }
     }
 
+    private func addToChatPrompt(_ skill: Skill) {
+        let addition = "\n\n[Using skill: \(skill.name)]\n\(skill.description)"
+        if !prompt.isEmpty {
+            prompt += addition
+        } else {
+            prompt = "Using skill: \(skill.name)\n\n\(skill.description)\n\n"
+        }
+    }
+
     private func startSession() {
         guard let repo = state.selectedRepo,
               let model = state.modelSelectionForSession(),
@@ -152,6 +184,17 @@ struct HomeView: View {
             return
         }
         let workBranch = "cmai/\(slug(prompt))"
+
+        let skillsContent = state.skillManager.enabledSkills.map { $0.content }
+        let mcpConfigs = state.mcpManager.enabledServers.map { server in
+            MCPServerConfig(
+                name: server.name,
+                command: server.command,
+                args: server.args,
+                env: server.env
+            )
+        }
+
         startedSession = SessionConfig(
             endpoint: endpoint,
             token: token,
@@ -164,7 +207,9 @@ struct HomeView: View {
             environment: state.selectedEnvironment,
             model: model,
             permissionMode: state.permissionMode,
-            firstMessage: prompt
+            firstMessage: prompt,
+            skills: skillsContent,
+            mcpServers: mcpConfigs
         )
         prompt = ""
     }
@@ -178,7 +223,6 @@ struct HomeView: View {
         return base.isEmpty ? "task-\(Int(Date().timeIntervalSince1970))" : base
     }
 
-    /// Build an attributed string with accent-colored monospace tokens.
     private func highlight(_ text: String, tokens: [String]) -> AttributedString {
         var attributed = AttributedString(text)
         attributed.foregroundColor = Theme.textPrimary
@@ -193,6 +237,29 @@ struct HomeView: View {
 }
 
 enum HomeSheet: String, Identifiable {
-    case model, environment, repository
+    case model, environment, repository, skills
     var id: String { rawValue }
+}
+
+private struct SkillChip: View {
+    let skill: Skill
+    let onAddToChat: () -> Void
+
+    var body: some View {
+        Button(action: onAddToChat) {
+            HStack(spacing: 6) {
+                Image(systemName: skill.category.icon)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.accent)
+                Text(skill.name)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Theme.textPrimary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Theme.surfaceElevated, in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
 }

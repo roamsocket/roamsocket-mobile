@@ -6,6 +6,8 @@ import MobileAICore
 struct SettingsView: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
+    @State private var showSkills = false
+    @State private var showMCP = false
 
     var body: some View {
         NavigationStack {
@@ -13,6 +15,8 @@ struct SettingsView: View {
                 providerKeysSection
                 gitHubSection
                 serverSection
+                skillsSection
+                mcpSection
             }
             .scrollContentBackground(.hidden)
             .background(Theme.background)
@@ -25,6 +29,12 @@ struct SettingsView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .sheet(isPresented: $showSkills) {
+            InstalledSkillsView()
+        }
+        .sheet(isPresented: $showMCP) {
+            MCPManagerView()
+        }
     }
 
     // MARK: Provider keys
@@ -78,6 +88,52 @@ struct SettingsView: View {
                 }
             } else {
                 NavigationLink("Pair with a server") { ServerPairingView() }
+            }
+        }
+    }
+
+    // MARK: Skills
+
+    private var skillsSection: some View {
+        Section("Skills") {
+            Button {
+                showSkills = true
+            } label: {
+                HStack {
+                    Label("Manage Skills", systemImage: "sparkles")
+                    Spacer()
+                    let count = state.skillManager.installedSkills.count
+                    if count > 0 {
+                        Text("\(count) installed")
+                            .foregroundStyle(Theme.textTertiary)
+                    }
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 14))
+                        .foregroundStyle(Theme.textTertiary)
+                }
+            }
+        }
+    }
+
+    // MARK: MCP
+
+    private var mcpSection: some View {
+        Section("MCP Servers") {
+            Button {
+                showMCP = true
+            } label: {
+                HStack {
+                    Label("Manage MCP Servers", systemImage: "server.rack")
+                    Spacer()
+                    let count = state.mcpManager.configuredServers.count
+                    if count > 0 {
+                        Text("\(count) configured")
+                            .foregroundStyle(Theme.textTertiary)
+                    }
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 14))
+                        .foregroundStyle(Theme.textTertiary)
+                }
             }
         }
     }
