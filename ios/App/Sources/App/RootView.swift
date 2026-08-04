@@ -1,10 +1,12 @@
 import SwiftUI
 
 /// Root navigation: the Home composer, pushing to a coding Session when a task
-/// is submitted, with Settings reachable from the top bar.
+/// is submitted, with Settings reachable from the top bar and Chat accessible
+/// via the chat button.
 struct RootView: View {
     @EnvironmentObject var state: AppState
     @State private var showSettings = false
+    @State private var showChat = false
 
     var body: some View {
         NavigationStack {
@@ -19,11 +21,19 @@ struct RootView: View {
                         }
                     }
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            showSettings = true
-                        } label: {
-                            Image(systemName: "gearshape")
-                                .foregroundStyle(Theme.textPrimary)
+                        HStack(spacing: 8) {
+                            Button {
+                                showChat = true
+                            } label: {
+                                Image(systemName: "message.fill")
+                                    .foregroundStyle(Theme.textPrimary)
+                            }
+                            Button {
+                                showSettings = true
+                            } label: {
+                                Image(systemName: "gearshape")
+                                    .foregroundStyle(Theme.textPrimary)
+                            }
                         }
                     }
                 }
@@ -31,6 +41,9 @@ struct RootView: View {
         }
         .sheet(isPresented: $showSettings) {
             SettingsView()
+        }
+        .sheet(isPresented: $showChat) {
+            ChatView()
         }
         .task {
             if state.allModels.isEmpty { await state.refreshModels() }

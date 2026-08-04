@@ -139,3 +139,67 @@ struct SheetScaffold<Content: View>: View {
         .background(Theme.background)
     }
 }
+
+/// A badge showing a count (used in connectors list).
+struct CountBadge: View {
+    let count: Int
+    
+    var body: some View {
+        Text("\(count)")
+            .font(.system(size: 14, weight: .medium))
+            .foregroundStyle(.white)
+            .frame(minWidth: 28, minHeight: 28)
+            .padding(.horizontal, 8)
+            .background(Theme.selection, in: Capsule())
+    }
+}
+
+/// A toggle row with icon, title, and switch (used in Add to Chat sheet).
+struct ToggleRow: View {
+    let systemImage: String
+    let title: String
+    var subtitle: String? = nil
+    var iconColor: Color = Theme.textSecondary
+    @Binding var isOn: Bool
+    
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: systemImage)
+                .font(.system(size: 20))
+                .foregroundStyle(iconColor)
+                .frame(width: 32, height: 32)
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 17))
+                    .foregroundStyle(Theme.textPrimary)
+                
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.textSecondary)
+                }
+            }
+            
+            Spacer()
+            
+            Toggle("", isOn: $isOn)
+                .labelsHidden()
+                .tint(Theme.selection)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+    }
+}
+
+/// A beta badge label.
+struct BetaBadge: View {
+    var body: some View {
+        Text("Beta")
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(Theme.textPrimary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Theme.surfaceElevated, in: Capsule())
+    }
+}
