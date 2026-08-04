@@ -59,10 +59,32 @@ final class SessionViewModel: ObservableObject {
                 repo: config.repo,
                 environment: config.environment,
                 model: config.model,
-                permissionMode: config.permissionMode))
+                permissionMode: config.permissionMode,
+                skills: config.skills,
+                mcpServers: config.mcpServers))
             for await message in stream {
                 handle(message)
             }
+        } catch {
+            connectionError = error.localizedDescription
+        }
+        isRunning = false
+    }
+        } catch {
+            connectionError = error.localizedDescription
+        }
+        isRunning = false
+    }
+        } catch {
+            connectionError = error.localizedDescription
+        }
+        isRunning = false
+    }
+        } catch {
+            connectionError = error.localizedDescription
+        }
+        isRunning = false
+    }
         } catch {
             connectionError = error.localizedDescription
         }

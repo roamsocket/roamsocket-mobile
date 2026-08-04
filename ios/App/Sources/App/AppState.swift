@@ -11,6 +11,8 @@ final class AppState: ObservableObject {
     let secrets: SecretStore
     let catalog: ModelCatalog
     let serverClient = ServerClient()
+    let skillManager = SkillManager()
+    let mcpManager = MCPManager()
 
     /// Your GitHub OAuth app client id for Device Flow. Replace before shipping;
     /// can also be provided at runtime via Settings.
