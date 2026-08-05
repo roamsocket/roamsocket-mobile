@@ -39,6 +39,7 @@ final class SessionViewModel: ObservableObject {
     private let config: SessionConfig
     private let client: ServerClient
     private var streamTask: Task<Void, Never>?
+    weak var state: AppState?
 
     init(config: SessionConfig, client: ServerClient) {
         self.config = config
@@ -135,6 +136,16 @@ final class SessionViewModel: ObservableObject {
         case let .error(_, message):
             appendNotice("Error: \(message)")
             isRunning = false
+
+        case let .skillsSync(skills):
+            state?.skillManager.apply(skills: skills)
+
+        case let .mcpSync(servers):
+            state?.mcpManager.apply(servers: servers)
+
+        case .terminalData, .terminalControl, .fileListResult, .fileReadResult, .portListResult:
+            // Handled by the dedicated tools views via their own connection.
+            break
         }
     }
 

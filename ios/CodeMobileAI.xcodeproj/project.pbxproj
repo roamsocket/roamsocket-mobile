@@ -8,9 +8,11 @@
 
 /* Begin PBXBuildFile section */
 		071767FE867730C410F35DDC /* ModelPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 569D8644E57EC73B6AC32415 /* ModelPickerSheet.swift */; };
+		1072C0160A63C0832C5F7CBE /* SessionToolsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A9266305EC58D214BBBD767 /* SessionToolsView.swift */; };
 		127242BEAE803C9FF568959F /* ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3B588A401A8084CA0142E13 /* ChatMessage.swift */; };
 		12CC91DF04A88CAA98DC87AF /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12211FC2F397CB08A99C0639 /* ChatView.swift */; };
 		1347BD5A9264B8548C6839F1 /* SessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB90650912DA1C3BDF22884F /* SessionView.swift */; };
+		199468247B73E3142A9E8896 /* ArtifactsListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B67147DE7BC0A8C315D22CC8 /* ArtifactsListView.swift */; };
 		21EAC22C540F26A44066C95C /* RepositoryPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3C4AC3B4E276785F85775BC /* RepositoryPickerSheet.swift */; };
 		2DBAC3E0633EC6A20A506961 /* SessionViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98A147B53BE46B0A986DAD1D /* SessionViewModel.swift */; };
 		3E18683E4498A15C1F022244 /* SkillMarketplaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD6BF5788442DA106418480A /* SkillMarketplaceView.swift */; };
@@ -22,12 +24,12 @@
 		4E1B983D123B955705CF21F5 /* MessageActionsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92B8B37187ABF4B1D38C035C /* MessageActionsSheet.swift */; };
 		4F2F4C5E065A3D39CE07B457 /* ServerPairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2859EE3164B1E6B9B8FC413E /* ServerPairingView.swift */; };
 		5739CAB5403BD54C802F6B36 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC557DCFD4943B2ABA77A8C3 /* Theme.swift */; };
-
 		708303123A73B0994A4E725C /* Components.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BA47872C9C41C216E23297C /* Components.swift */; };
 		7BBFC39AB588D69FBDF860E8 /* ChatHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A505A610A789452CDFD12E5 /* ChatHistory.swift */; };
 		7E231F1EB73CF1A624BB4718 /* Connector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44C8BADC39A1B1FC2370FD17 /* Connector.swift */; };
 		8F3DB8FE8D6A9AD4B378545A /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51A6F3760C3F554FB30618FD /* SidebarView.swift */; };
 		966A4F9BE180EA171CB53E18 /* CodeMobileAIApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C43F44FA114A49D5E4DBA077 /* CodeMobileAIApp.swift */; };
+		98F75671DEBF97911DECB3F6 /* CodeHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 725C268E921DE1E981A9205A /* CodeHomeView.swift */; };
 		9FC14E8AA0CA56C6EA91813A /* ProjectDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8852D1BF14C291064F9472EF /* ProjectDetailView.swift */; };
 		A072A2EF329B1CD94113290B /* AddToChatSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD9D6DBBFFD549911826E178 /* AddToChatSheet.swift */; };
 		A76F958B233AC6B0D85194D1 /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BC526BDB273DB5767242AF8 /* ChatViewModel.swift */; };
@@ -40,6 +42,8 @@
 		D9BB72E307E7AEEF83FBE81F /* GitHubLinkView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A0B3CE3CB0415FAD1F47AF4 /* GitHubLinkView.swift */; };
 		DA53C1806108750BD2ED3777 /* MobileAICore in Frameworks */ = {isa = PBXBuildFile; productRef = 74930CA371CE795655940937 /* MobileAICore */; };
 		DF5C5838724334088A5D7BC2 /* InstalledSkillsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFE78AFAE5253B2F07231406 /* InstalledSkillsView.swift */; };
+		E2C2A9BB2F6603AC805CC55E /* CustomTextSkillEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 177B7DCF804471004C7B15D7 /* CustomTextSkillEditor.swift */; };
+		E54CE6D77E8084328177FD21 /* ClaudeSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E872F29975B35FDB239FE78 /* ClaudeSettingsView.swift */; };
 		E88CFA98858E51F292CDD36F /* MCPClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = AACDD9E331ED815DA4DD0880 /* MCPClient.swift */; };
 		F142FBD6E6B27DC65DA2557C /* ThoughtProcessView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 541908E062403156454B8C2B /* ThoughtProcessView.swift */; };
 		F5E8CC9FE6C809D2B1A13D0D /* KeychainSecretStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CAA66335E6ABFF13F701B09 /* KeychainSecretStore.swift */; };
@@ -49,6 +53,7 @@
 /* Begin PBXFileReference section */
 		0A505A610A789452CDFD12E5 /* ChatHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatHistory.swift; sourceTree = "<group>"; };
 		12211FC2F397CB08A99C0639 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
+		177B7DCF804471004C7B15D7 /* CustomTextSkillEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomTextSkillEditor.swift; sourceTree = "<group>"; };
 		2859EE3164B1E6B9B8FC413E /* ServerPairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerPairingView.swift; sourceTree = "<group>"; };
 		2BA47872C9C41C216E23297C /* Components.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components.swift; sourceTree = "<group>"; };
 		2BB4D883E3DDA3FA8854FD87 /* ConnectorsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectorsView.swift; sourceTree = "<group>"; };
@@ -62,7 +67,9 @@
 		569D8644E57EC73B6AC32415 /* ModelPickerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelPickerSheet.swift; sourceTree = "<group>"; };
 		5EB4EE65C4258698A46CAA4B /* AddMCPServerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddMCPServerView.swift; sourceTree = "<group>"; };
 		6C07CDB09433C1260E20F12F /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
+		725C268E921DE1E981A9205A /* CodeHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeHomeView.swift; sourceTree = "<group>"; };
 		75B98B2E1CADCBFDDA17E24C /* MobileAICore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MobileAICore; path = MobileAICore; sourceTree = SOURCE_ROOT; };
+		7A9266305EC58D214BBBD767 /* SessionToolsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionToolsView.swift; sourceTree = "<group>"; };
 		7BC526BDB273DB5767242AF8 /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModel.swift; sourceTree = "<group>"; };
 		7E89F2166AA9386334E1525F /* NewEnvironmentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewEnvironmentView.swift; sourceTree = "<group>"; };
 		8852D1BF14C291064F9472EF /* ProjectDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectDetailView.swift; sourceTree = "<group>"; };
@@ -71,11 +78,13 @@
 		92B8B37187ABF4B1D38C035C /* MessageActionsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageActionsSheet.swift; sourceTree = "<group>"; };
 		98A147B53BE46B0A986DAD1D /* SessionViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionViewModel.swift; sourceTree = "<group>"; };
 		9D7CABD64FA1C5A2F2BA7B73 /* SkillDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillDetailView.swift; sourceTree = "<group>"; };
+		9E872F29975B35FDB239FE78 /* ClaudeSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeSettingsView.swift; sourceTree = "<group>"; };
 		A39D4A74CD479B5EF31ECE03 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		A3B588A401A8084CA0142E13 /* ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMessage.swift; sourceTree = "<group>"; };
 		AACDD9E331ED815DA4DD0880 /* MCPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPClient.swift; sourceTree = "<group>"; };
 		AD115F3023601B4263EE42CB /* CodeMobileAI.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = CodeMobileAI.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B2ADFE0A53FD2B4D3C2A580A /* MCPManagerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPManagerView.swift; sourceTree = "<group>"; };
+		B67147DE7BC0A8C315D22CC8 /* ArtifactsListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtifactsListView.swift; sourceTree = "<group>"; };
 		BD9D6DBBFFD549911826E178 /* AddToChatSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddToChatSheet.swift; sourceTree = "<group>"; };
 		C43F44FA114A49D5E4DBA077 /* CodeMobileAIApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeMobileAIApp.swift; sourceTree = "<group>"; };
 		CD6BF5788442DA106418480A /* SkillMarketplaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillMarketplaceView.swift; sourceTree = "<group>"; };
@@ -134,6 +143,14 @@
 			path = Repositories;
 			sourceTree = "<group>";
 		};
+		1FC2670BD1F733437718E104 /* Code */ = {
+			isa = PBXGroup;
+			children = (
+				725C268E921DE1E981A9205A /* CodeHomeView.swift */,
+			);
+			path = Code;
+			sourceTree = "<group>";
+		};
 		2C7346C7CF584D06B3A3CAE1 /* MCP */ = {
 			isa = PBXGroup;
 			children = (
@@ -153,8 +170,10 @@
 		40A33413455E1A87BB4729FA /* Features */ = {
 			isa = PBXGroup;
 			children = (
+				66C2D1FCBA512A705CF99E67 /* Artifacts */,
 				45202652DE6C33F9471F580D /* Chat */,
 				9376BAB562CF018F0EE0DCAC /* Chats */,
+				1FC2670BD1F733437718E104 /* Code */,
 				ACD356F7819C3A6074D54680 /* Environments */,
 				40920685B621ADE058B5A7F0 /* ModelPicker */,
 				19366CEA844781BC86A23F98 /* Repositories */,
@@ -220,10 +239,19 @@
 			path = Models;
 			sourceTree = "<group>";
 		};
+		66C2D1FCBA512A705CF99E67 /* Artifacts */ = {
+			isa = PBXGroup;
+			children = (
+				B67147DE7BC0A8C315D22CC8 /* ArtifactsListView.swift */,
+			);
+			path = Artifacts;
+			sourceTree = "<group>";
+		};
 		89DFFC03DC5F52AFB91451CE /* Skills */ = {
 			isa = PBXGroup;
 			children = (
 				5EB4EE65C4258698A46CAA4B /* AddMCPServerView.swift */,
+				177B7DCF804471004C7B15D7 /* CustomTextSkillEditor.swift */,
 				CFE78AFAE5253B2F07231406 /* InstalledSkillsView.swift */,
 				B2ADFE0A53FD2B4D3C2A580A /* MCPManagerView.swift */,
 				9D7CABD64FA1C5A2F2BA7B73 /* SkillDetailView.swift */,
@@ -253,6 +281,7 @@
 			isa = PBXGroup;
 			children = (
 				8D34F1A752BCD74456273A7F /* SessionConfig.swift */,
+				7A9266305EC58D214BBBD767 /* SessionToolsView.swift */,
 				FB90650912DA1C3BDF22884F /* SessionView.swift */,
 				98A147B53BE46B0A986DAD1D /* SessionViewModel.swift */,
 			);
@@ -279,6 +308,7 @@
 		D53F0AA541E2635563EFDE1C /* Settings */ = {
 			isa = PBXGroup;
 			children = (
+				9E872F29975B35FDB239FE78 /* ClaudeSettingsView.swift */,
 				3A0B3CE3CB0415FAD1F47AF4 /* GitHubLinkView.swift */,
 				2859EE3164B1E6B9B8FC413E /* ServerPairingView.swift */,
 			);
@@ -348,15 +378,19 @@
 				4566952DA0132D77A8EE9591 /* AddMCPServerView.swift in Sources */,
 				A072A2EF329B1CD94113290B /* AddToChatSheet.swift in Sources */,
 				B0EA5E254B9C4FF873C41442 /* AppState.swift in Sources */,
+				199468247B73E3142A9E8896 /* ArtifactsListView.swift in Sources */,
 				7BBFC39AB588D69FBDF860E8 /* ChatHistory.swift in Sources */,
 				127242BEAE803C9FF568959F /* ChatMessage.swift in Sources */,
 				4114491C6A1C079454CDA058 /* ChatMessageView.swift in Sources */,
 				12CC91DF04A88CAA98DC87AF /* ChatView.swift in Sources */,
 				A76F958B233AC6B0D85194D1 /* ChatViewModel.swift in Sources */,
+				E54CE6D77E8084328177FD21 /* ClaudeSettingsView.swift in Sources */,
+				98F75671DEBF97911DECB3F6 /* CodeHomeView.swift in Sources */,
 				966A4F9BE180EA171CB53E18 /* CodeMobileAIApp.swift in Sources */,
 				708303123A73B0994A4E725C /* Components.swift in Sources */,
 				7E231F1EB73CF1A624BB4718 /* Connector.swift in Sources */,
 				3F478CBE217FA3282FB4F237 /* ConnectorsView.swift in Sources */,
+				E2C2A9BB2F6603AC805CC55E /* CustomTextSkillEditor.swift in Sources */,
 				431C6E901D116DFC9D36D044 /* EnvironmentPickerSheet.swift in Sources */,
 				D9BB72E307E7AEEF83FBE81F /* GitHubLinkView.swift in Sources */,
 				DF5C5838724334088A5D7BC2 /* InstalledSkillsView.swift in Sources */,
@@ -373,6 +407,7 @@
 				C59C695F80052E3B5A10C856 /* RootView.swift in Sources */,
 				4F2F4C5E065A3D39CE07B457 /* ServerPairingView.swift in Sources */,
 				C5B00DFC58DA8C566E2FBFEE /* SessionConfig.swift in Sources */,
+				1072C0160A63C0832C5F7CBE /* SessionToolsView.swift in Sources */,
 				1347BD5A9264B8548C6839F1 /* SessionView.swift in Sources */,
 				2DBAC3E0633EC6A20A506961 /* SessionViewModel.swift in Sources */,
 				8F3DB8FE8D6A9AD4B378545A /* SidebarView.swift in Sources */,

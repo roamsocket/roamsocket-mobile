@@ -44,6 +44,7 @@ export const Skill = z.object({
   category: z.string(),
   source: z.enum(["official", "community", "custom"]),
   isEnabled: z.boolean(),
+  frontmatter: z.record(z.string()).default({}),
 });
 export type Skill = z.infer<typeof Skill>;
 
@@ -146,12 +147,113 @@ export const CreatePrMsg = z.object({
 });
 export type CreatePrMsg = z.infer<typeof CreatePrMsg>;
 
+// Skills/MCP sync — the iOS app is the editor, the desktop is the git operator.
+
+export const SkillsSyncRequestMsg = z.object({
+  type: z.literal("skills_sync_request"),
+});
+export type SkillsSyncRequestMsg = z.infer<typeof SkillsSyncRequestMsg>;
+
+export const SkillUpsertMsg = z.object({
+  type: z.literal("skill_upsert"),
+  skill: Skill,
+});
+export type SkillUpsertMsg = z.infer<typeof SkillUpsertMsg>;
+
+export const SkillDeleteMsg = z.object({
+  type: z.literal("skill_delete"),
+  id: z.string(),
+});
+export type SkillDeleteMsg = z.infer<typeof SkillDeleteMsg>;
+
+export const MCPSyncRequestMsg = z.object({
+  type: z.literal("mcp_sync_request"),
+});
+export type MCPSyncRequestMsg = z.infer<typeof MCPSyncRequestMsg>;
+
+export const MCPUpsertMsg = z.object({
+  type: z.literal("mcp_upsert"),
+  server: MCPServer,
+});
+export type MCPUpsertMsg = z.infer<typeof MCPUpsertMsg>;
+
+export const MCPDeleteMsg = z.object({
+  type: z.literal("mcp_delete"),
+  id: z.string(),
+});
+export type MCPDeleteMsg = z.infer<typeof MCPDeleteMsg>;
+
+// Terminal, file explorer, port manager.
+
+export const TerminalOpenMsg = z.object({
+  type: z.literal("terminal_open"),
+  terminalId: z.string().optional(),
+  sessionId: z.string(),
+  cols: z.number().int().min(1).max(400).default(80),
+  rows: z.number().int().min(1).max(200).default(24),
+});
+export type TerminalOpenMsg = z.infer<typeof TerminalOpenMsg>;
+
+export const TerminalInputMsg = z.object({
+  type: z.literal("terminal_input"),
+  terminalId: z.string(),
+  data: z.string(),
+});
+export type TerminalInputMsg = z.infer<typeof TerminalInputMsg>;
+
+export const TerminalResizeMsg = z.object({
+  type: z.literal("terminal_resize"),
+  terminalId: z.string(),
+  cols: z.number().int().min(1).max(400),
+  rows: z.number().int().min(1).max(200),
+});
+export type TerminalResizeMsg = z.infer<typeof TerminalResizeMsg>;
+
+export const TerminalKillMsg = z.object({
+  type: z.literal("terminal_kill"),
+  terminalId: z.string(),
+});
+export type TerminalKillMsg = z.infer<typeof TerminalKillMsg>;
+
+export const FileListMsg = z.object({
+  type: z.literal("file_list"),
+  sessionId: z.string(),
+  path: z.string().default(""),
+});
+export type FileListMsg = z.infer<typeof FileListMsg>;
+
+export const FileReadMsg = z.object({
+  type: z.literal("file_read"),
+  sessionId: z.string(),
+  path: z.string(),
+});
+export type FileReadMsg = z.infer<typeof FileReadMsg>;
+
+export const PortListMsg = z.object({
+  type: z.literal("port_list"),
+  sessionId: z.string(),
+});
+export type PortListMsg = z.infer<typeof PortListMsg>;
+
 export const ClientMessage = z.discriminatedUnion("type", [
   CreateSessionMsg,
   UserMessageMsg,
   PermissionResponseMsg,
   InterruptMsg,
   CreatePrMsg,
+  SkillsSyncRequestMsg,
+  SkillUpsertMsg,
+  SkillDeleteMsg,
+  MCPSyncRequestMsg,
+  MCPUpsertMsg,
+  MCPDeleteMsg,
+  TerminalOpenMsg,
+  TerminalInputMsg,
+  TerminalResizeMsg,
+  TerminalKillMsg,
+  FileListMsg,
+  FileReadMsg,
+  PortListMsg,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
@@ -238,6 +340,76 @@ export const ErrorMsg = z.object({
 });
 export type ErrorMsg = z.infer<typeof ErrorMsg>;
 
+export const SkillsSyncMsg = z.object({
+  type: z.literal("skills_sync"),
+  skills: z.array(Skill),
+});
+export type SkillsSyncMsg = z.infer<typeof SkillsSyncMsg>;
+
+export const MCPSyncMsg = z.object({
+  type: z.literal("mcp_sync"),
+  servers: z.array(MCPServer),
+});
+export type MCPSyncMsg = z.infer<typeof MCPSyncMsg>;
+
+export const TerminalDataMsg = z.object({
+  type: z.literal("terminal_data"),
+  terminalId: z.string(),
+  stream: z.enum(["out", "err"]),
+  data: z.string(),
+});
+export type TerminalDataMsg = z.infer<typeof TerminalDataMsg>;
+
+export const TerminalControlMsg = z.object({
+  type: z.literal("terminal_control"),
+  terminalId: z.string(),
+  event: z.enum(["ready", "exit"]),
+  code: z.number(),
+});
+export type TerminalControlMsg = z.infer<typeof TerminalControlMsg>;
+
+export interface FileEntry {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+  size: number;
+  modifiedAt: string;
+}
+export const FileListResultMsg = z.object({
+  type: z.literal("file_list_result"),
+  sessionId: z.string(),
+  path: z.string(),
+  entries: z.array(z.object({
+    name: z.string(),
+    path: z.string(),
+    isDirectory: z.boolean(),
+    size: z.number(),
+    modifiedAt: z.string(),
+  })),
+  diff: z.string().optional(),
+});
+export type FileListResultMsg = z.infer<typeof FileListResultMsg>;
+
+export const FileReadResultMsg = z.object({
+  type: z.literal("file_read_result"),
+  sessionId: z.string(),
+  path: z.string(),
+  content: z.string(),
+  truncated: z.boolean(),
+});
+export type FileReadResultMsg = z.infer<typeof FileReadResultMsg>;
+
+export const PortListResultMsg = z.object({
+  type: z.literal("port_list_result"),
+  sessionId: z.string(),
+  ports: z.array(z.object({
+    port: z.number(),
+    pid: z.number(),
+    command: z.string(),
+  })),
+});
+export type PortListResultMsg = z.infer<typeof PortListResultMsg>;
+
 export const ServerMessage = z.discriminatedUnion("type", [
   SessionCreatedMsg,
   AssistantDeltaMsg,
@@ -248,6 +420,13 @@ export const ServerMessage = z.discriminatedUnion("type", [
   SessionDoneMsg,
   PrCreatedMsg,
   ErrorMsg,
+  SkillsSyncMsg,
+  MCPSyncMsg,
+  TerminalDataMsg,
+  TerminalControlMsg,
+  FileListResultMsg,
+  FileReadResultMsg,
+  PortListResultMsg,
 ]);
 export type ServerMessage = z.infer<typeof ServerMessage>;
 

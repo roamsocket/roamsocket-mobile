@@ -11,6 +11,11 @@ struct ChatView: View {
     @EnvironmentObject var state: AppState
     var onOpenSidebar: () -> Void = {}
 
+    /// Set when the user hits Send and the prerequisites for a coding session
+    /// are met (paired server + repo + model with API key). The fullScreenCover
+    /// takes over the chat until the session ends.
+    @State private var sessionConfig: SessionConfig?
+
     var body: some View {
         ZStack {
             Theme.background.ignoresSafeArea()
@@ -29,13 +34,22 @@ struct ChatView: View {
         }
         .onAppear { viewModel.state = state }
         .sheet(isPresented: $viewModel.showAddToChatSheet) {
-            AddToChatSheet(viewModel: viewModel)
+            AddToChatSheet(viewModel: viewModel) { task in
+                if let config = SessionLauncher.makeConfig(in: state, task: task) {
+                    sessionConfig = config
+                }
+            }
         }
         .sheet(isPresented: $viewModel.showConnectorsView) {
             ConnectorsView(viewModel: viewModel)
         }
         .sheet(isPresented: $viewModel.showModelPicker) {
             ModelPickerSheet()
+        }
+        .fullScreenCover(item: $sessionConfig) { config in
+            NavigationStack {
+                SessionView(config: config)
+            }
         }
     }
 
@@ -183,18 +197,20 @@ struct ChatView: View {
                 }
                 .buttonStyle(.plain)
 
-                // Send
-                Button(action: {
-                    Task { await viewModel.sendMessage() }
-                }) {
-                    Image(systemName: "waveform")
+                // Send button: when there's text, show an up arrow; when empty, show the
+                // voice waveform. Tapping either does the appropriate action — text goes
+                // through `sendTapped` (which routes to a coding session when the user
+                // has paired a server + selected a repo + model); the mic is a no-op
+                // placeholder for now (voice input is a separate feature).
+                Button(action: sendTapped) {
+                    Image(systemName: hasText ? "arrow.up" : "waveform")
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(.white)
                         .frame(width: 36, height: 36)
                         .background(sendBackground, in: Circle())
                 }
                 .buttonStyle(.plain)
-                .disabled(viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(!hasText)
             }
         }
         .padding(.horizontal, 12)
@@ -211,8 +227,12 @@ struct ChatView: View {
         state.selectedModel?.displayName ?? "Sonnet 5 Medium"
     }
 
+    private var hasText: Bool {
+        !viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     private var sendBackground: some ShapeStyle {
-        if viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if !hasText {
             return AnyShapeStyle(Theme.surfaceElevated)
         } else {
             // Orange gradient like the screenshot.
@@ -223,6 +243,20 @@ struct ChatView: View {
                     endPoint: .bottomTrailing
                 )
             )
+        }
+    }
+
+    /// Routes a Send tap to either a coding session (when the user has paired
+    /// a server + selected a repo + has a model with an API key) or the
+    /// provider-backed chat as before.
+    private func sendTapped() {
+        let text = viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        if let config = SessionLauncher.makeConfig(in: state, task: text) {
+            viewModel.inputText = ""
+            sessionConfig = config
+        } else {
+            Task { await viewModel.sendMessage() }
         }
     }
 }

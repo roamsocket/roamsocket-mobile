@@ -4,6 +4,8 @@ import SwiftUI
 enum SidebarDestination: Hashable {
     case chats
     case projects
+    case artifacts
+    case code
     case chat(ChatHistoryItem)
     case project(ProjectItem)
 }
@@ -55,6 +57,12 @@ struct SidebarView: View {
             }
             SidebarRow(systemImage: "tray.full", title: "Projects") {
                 onSelect(.projects)
+            }
+            SidebarRow(systemImage: "square.stack.3d.up", title: "Artifacts") {
+                onSelect(.artifacts)
+            }
+            SidebarRow(systemImage: "chevron.left.forwardslash.chevron.right", title: "Code") {
+                onSelect(.code)
             }
         }
     }

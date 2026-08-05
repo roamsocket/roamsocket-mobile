@@ -13,6 +13,8 @@ final class AppState: ObservableObject {
     let serverClient = ServerClient()
     let skillManager = SkillManager()
     let mcpManager = MCPManager()
+    let artifactStore = ArtifactStore()
+    let skillsMCPClient = SkillsMCPClient()
 
     /// Your GitHub OAuth app client id for Device Flow. Replace before shipping;
     /// can also be provided at runtime via Settings.
@@ -29,8 +31,19 @@ final class AppState: ObservableObject {
     @Published var providerResults: [ModelCatalog.ProviderResult] = []
     @Published var isLoadingModels = false
 
+    // Custom (user-defined OpenAI-compatible) providers
+    @Published var customProviders: [CustomProvider] = []
+
     // Environments (persisted)
     @Published var environments: [EnvironmentConfig] = []
+
+    // Synced git repos for skills + MCP. Owned by the desktop server (it
+    // has `git` in PATH); the iOS app asks the desktop to sync on connect
+    // and applies the `skills_sync`/`mcp_sync` payloads to its local cache.
+    @Published var skillsRepoURL: String = ""
+    @Published var skillsRepoBranch: String = "main"
+    @Published var mcpRepoURL: String = ""
+    @Published var mcpRepoBranch: String = "main"
 
     // Server pairing
     @Published var serverEndpoint: ServerClient.Endpoint?
@@ -40,12 +53,119 @@ final class AppState: ObservableObject {
     // Chat state (per-chat toggles live on `ChatViewModel`; nothing here yet.)
 
     private let environmentsKey = "environments.v1"
+    private let skillsRepoKey = "skillsRepoURL.v1"
+    private let skillsBranchKey = "skillsRepoBranch.v1"
+    private let mcpRepoKey = "mcpRepoURL.v1"
+    private let mcpBranchKey = "mcpRepoBranch.v1"
+    private let customProvidersKey = "customProviders.v1"
 
     init(secrets: SecretStore) {
         self.secrets = secrets
         self.catalog = ModelCatalog()
         loadEnvironments()
+        loadSyncedRepos()
+        loadCustomProviders()
         seedDefaultEnvironmentIfNeeded()
+    }
+
+    // MARK: - Custom providers
+
+    func addCustomProvider(label: String, baseURL: String, apiKey: String) -> CustomProvider? {
+        let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedLabel.isEmpty, !trimmedURL.isEmpty else { return nil }
+        guard URL(string: trimmedURL) != nil else { return nil }
+        let slug = Self.slugify(trimmedLabel)
+        guard !slug.isEmpty else { return nil }
+        if customProviders.contains(where: { $0.id == slug }) { return nil }
+        let provider = CustomProvider(id: slug, label: trimmedLabel, baseURL: trimmedURL)
+        customProviders.append(provider)
+        saveCustomProviders()
+        if !apiKey.isEmpty {
+            setAPIKey(apiKey, for: provider.providerID)
+        }
+        return provider
+    }
+
+    func updateCustomProvider(_ provider: CustomProvider, label: String, baseURL: String, apiKey: String?) {
+        let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedLabel.isEmpty, !trimmedURL.isEmpty else { return }
+        guard let idx = customProviders.firstIndex(where: { $0.id == provider.id }) else { return }
+        customProviders[idx].label = trimmedLabel
+        customProviders[idx].baseURL = trimmedURL
+        saveCustomProviders()
+        if let apiKey, !apiKey.isEmpty {
+            setAPIKey(apiKey, for: provider.providerID)
+        }
+    }
+
+    func deleteCustomProvider(_ provider: CustomProvider) {
+        customProviders.removeAll { $0.id == provider.id }
+        setAPIKey("", for: provider.providerID)
+        providerResults.removeAll { $0.provider == provider.providerID }
+        if selectedModel?.provider == provider.providerID { selectedModel = nil }
+        saveCustomProviders()
+    }
+
+    /// Resolve the base URL for a custom provider, if applicable.
+    func baseURL(for provider: ProviderID) -> URL? {
+        guard let slug = provider.customSlug,
+              let custom = customProviders.first(where: { $0.id == slug }),
+              let url = URL(string: custom.baseURL) else {
+            return nil
+        }
+        return url
+    }
+
+    private func loadCustomProviders() {
+        guard let data = UserDefaults.standard.data(forKey: customProvidersKey),
+              let decoded = try? JSONDecoder().decode([CustomProvider].self, from: data)
+        else { return }
+        customProviders = decoded
+    }
+
+    private func saveCustomProviders() {
+        if let data = try? JSONEncoder().encode(customProviders) {
+            UserDefaults.standard.set(data, forKey: customProvidersKey)
+        }
+    }
+
+    static func slugify(_ raw: String) -> String {
+        let lowered = raw.lowercased()
+        let allowed = lowered.unicodeScalars.map { scalar -> Character in
+            if CharacterSet.alphanumerics.contains(scalar) || scalar == "-" || scalar == "_" {
+                return Character(scalar)
+            }
+            return "-"
+        }
+        let collapsed = String(allowed)
+            .split(separator: "-", omittingEmptySubsequences: true)
+            .joined(separator: "-")
+        return collapsed
+    }
+
+    // MARK: - Synced repos (URL hints shown in Settings; the desktop owns the real ones)
+
+    func updateSkillsRepo(url: String, branch: String) {
+        skillsRepoURL = url
+        skillsRepoBranch = branch
+        UserDefaults.standard.set(url, forKey: skillsRepoKey)
+        UserDefaults.standard.set(branch, forKey: skillsBranchKey)
+    }
+
+    func updateMCPRepo(url: String, branch: String) {
+        mcpRepoURL = url
+        mcpRepoBranch = branch
+        UserDefaults.standard.set(url, forKey: mcpRepoKey)
+        UserDefaults.standard.set(branch, forKey: mcpBranchKey)
+    }
+
+    private func loadSyncedRepos() {
+        skillsRepoURL = UserDefaults.standard.string(forKey: skillsRepoKey) ?? ""
+        skillsRepoBranch = UserDefaults.standard.string(forKey: skillsBranchKey) ?? "main"
+        mcpRepoURL = UserDefaults.standard.string(forKey: mcpRepoKey) ?? ""
+        mcpRepoBranch = UserDefaults.standard.string(forKey: mcpBranchKey) ?? "main"
     }
 
     // MARK: Secrets convenience
@@ -73,11 +193,18 @@ final class AppState: ObservableObject {
         isLoadingModels = true
         defer { isLoadingModels = false }
         var keys: [ProviderID: String] = [:]
-        for provider in ProviderID.allCases {
+        var customBaseURLs: [ProviderID: URL] = [:]
+        for provider in ProviderID.allBuiltInCases {
             let key = apiKey(for: provider)
             if !key.isEmpty { keys[provider] = key }
         }
-        providerResults = await catalog.fetchAll(keys: keys)
+        for custom in customProviders {
+            let pid = custom.providerID
+            let key = apiKey(for: pid)
+            if !key.isEmpty { keys[pid] = key }
+            if let url = URL(string: custom.baseURL) { customBaseURLs[pid] = url }
+        }
+        providerResults = await catalog.fetchAll(keys: keys, customBaseURLs: customBaseURLs)
         if selectedModel == nil { selectedModel = allModels.first }
     }
 

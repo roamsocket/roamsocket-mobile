@@ -3,7 +3,7 @@ import SwiftUI
 /// Root navigation:
 ///  * `ChatView` is the default landing screen (mimicking the Claude iOS app).
 ///  * A left-edge sidebar lists top-level destinations (Chats, Projects,
-///    Artifacts, Code, Dispatch) plus a Recents list and a profile chip.
+///    Artifacts, Code) plus a Recents list and a profile chip.
 ///  * Settings is reachable from the sidebar profile.
 struct RootView: View {
     @EnvironmentObject var state: AppState
@@ -22,6 +22,10 @@ struct RootView: View {
                         switch route {
                         case .projects:
                             ProjectsListView(history: history)
+                        case .artifacts:
+                            ArtifactsListView()
+                        case .code:
+                            CodeHomeView()
                         case .projectDetail(let project):
                             ProjectDetailView(project: project, history: history)
                         }
@@ -106,6 +110,12 @@ struct RootView: View {
         case .projects:
             path = [.projects]
             withAnimation(.easeInOut(duration: 0.25)) { sidebarOpen = false }
+        case .artifacts:
+            path = [.artifacts]
+            withAnimation(.easeInOut(duration: 0.25)) { sidebarOpen = false }
+        case .code:
+            path = [.code]
+            withAnimation(.easeInOut(duration: 0.25)) { sidebarOpen = false }
         case .chat(let item):
             history.recents.removeAll { $0.id == item.id }
             history.recents.insert(item, at: 0)
@@ -120,5 +130,7 @@ struct RootView: View {
 
 enum RootRoute: Hashable {
     case projects
+    case artifacts
+    case code
     case projectDetail(ProjectItem)
 }

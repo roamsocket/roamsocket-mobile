@@ -14,6 +14,7 @@ import type {
 import { AgentSession } from "./agent/loop.js";
 import { cloneAndBranch, commitAll, pushBranch, type RepoSpec } from "./git/github.js";
 import type { ProviderAdapter } from "./providers/index.js";
+import { readProjectClaude } from "./project/claude.js";
 
 interface Session {
   id: string;
@@ -58,6 +59,27 @@ export class SessionManager {
     const abort = new AbortController();
     const pendingPermissions = new Map<string, (d: "allow" | "deny") => void>();
 
+    // Read per-project `.claude/` config and merge into the session:
+    // CLAUDE.md and project skills get injected into the agent system
+    // prompt; project MCP servers are surfaced for the upcoming tool
+    // registration pass; env vars are warned about (no shell injection
+    // today — they need to be set in the desktop's environment).
+    const project = await readProjectClaude(workdir);
+    const mergedSkills = [
+      ...msg.skills,
+      ...project.skills.map((s) => s.content),
+    ];
+    if (project.claudeMd) {
+      mergedSkills.unshift(`# Project instructions (from .claude/CLAUDE.md)\n\n${project.claudeMd}`);
+    }
+    if (Object.keys(project.env).length > 0) {
+      this.emit({
+        type: "error",
+        sessionId: id,
+        message: `Project .claude/ provided ${Object.keys(project.env).length} env var(s); the agent loop does not currently consume them — set them on the desktop shell.`,
+      });
+    }
+
     const agent = new AgentSession({
       sessionId: id,
       workdir,
@@ -66,7 +88,7 @@ export class SessionManager {
       emit: this.emit,
       signal: abort.signal,
       adapter: this.adapterOverride,
-      skills: msg.skills,
+      skills: mergedSkills,
       requestPermission: (requestId, tool, summary) =>
         new Promise<"allow" | "deny">((resolve) => {
           pendingPermissions.set(requestId, resolve);
@@ -104,6 +126,10 @@ export class SessionManager {
       session!.pendingPermissions.delete(requestId);
       resolve(decision);
     }
+  }
+
+  workdirFor(sessionId: string): string | null {
+    return this.sessions.get(sessionId)?.workdir ?? null;
   }
 
   interrupt(sessionId: string): void {

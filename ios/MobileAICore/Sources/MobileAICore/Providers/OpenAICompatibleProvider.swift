@@ -7,10 +7,10 @@ public struct OpenAICompatibleProvider: ModelProvider {
     private let http: HTTPClient
     private let baseURL: URL
 
-    public init(id: ProviderID, http: HTTPClient = URLSessionHTTPClient()) {
+    public init(id: ProviderID, http: HTTPClient = URLSessionHTTPClient(), baseURL: URL? = nil) {
         self.id = id
         self.http = http
-        self.baseURL = Self.baseURL(for: id)
+        self.baseURL = baseURL ?? Self.baseURL(for: id)
     }
 
     static func baseURL(for id: ProviderID) -> URL {
