@@ -334,6 +334,13 @@ function effortPicker(): HTMLElement {
   return wrap;
 }
 
+/** If the current provider is a user-defined Custom OpenAI-compatible endpoint,
+ * return its baseUrl so the agent dispatches there. Returns undefined otherwise. */
+function customProviderBaseUrl(): string | undefined {
+  const c = state.secrets?.customProviders?.find((p) => p.id === state.code.provider);
+  return c?.baseUrl;
+}
+
 async function sendCodeTask(text: string): Promise<void> {
   if (!state.code.repo) {
     appendCodeBubble("error", "missing repo", "Pick a repository first (e.g. owner/name).");
@@ -376,6 +383,7 @@ async function sendCodeTask(text: string): Promise<void> {
         model: state.code.model,
         effort: state.code.effort,
         apiKey,
+        customBaseUrl: customProviderBaseUrl(),
       },
       permissionMode: "acceptEdits",
       skills: [],

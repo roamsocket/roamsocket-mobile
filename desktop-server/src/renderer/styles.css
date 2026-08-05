@@ -1,41 +1,41 @@
-/* Code Mobile AI desktop — Claude Code palette.
-   Sampled from the Claude Code desktop reference: a deep olive-brown page,
-   slightly lighter sidebar, warm off-white text, brown/tan accents
-   (not bright gold). */
+/* Code Mobile AI desktop — neutral grey palette with a hint of warmth.
+   Slightly cooler than the Claude Code reference: greys dominate, the
+   accent is a desaturated warm grey (not bronze/gold), surfaces read as
+   "dark mode app" rather than "warm wood". */
 
 :root {
-  /* Surfaces — warm brown/olive, slightly desaturated */
-  --bg: #1f1d18;          /* page bg */
-  --bg-elev: #252319;     /* sidebar, modal */
-  --bg-elev-2: #2e2b21;   /* hover, inputs */
-  --bg-input: #2a2720;    /* composer, text fields */
-  --line: #353126;        /* hairline divider */
-  --line-strong: #48402f;
+  /* Surfaces — neutral dark grey with a tiny warm bias */
+  --bg: #1d1f22;          /* page bg */
+  --bg-elev: #24272b;     /* sidebar, modal */
+  --bg-elev-2: #2c3036;   /* hover, inputs */
+  --bg-input: #282c31;    /* composer, text fields */
+  --line: #34383e;        /* hairline divider */
+  --line-strong: #444a52;
 
-  /* Text */
-  --text: #efe9dc;
-  --text-dim: #c0b59b;
-  --text-mute: #8a7f6a;
-  --text-link: #b8a980;
+  /* Text — neutral off-white, not warm cream */
+  --text: #e6e8eb;
+  --text-dim: #b6bac0;
+  --text-mute: #7d8189;
+  --text-link: #a8aeb6;
 
-  /* Accents — warm brown, not bright gold */
-  --accent: #b8956a;          /* primary accent (tab active, send button) */
-  --accent-dim: #5b4a32;
-  --accent-bg: #3b3022;       /* subtle tinted background for active states */
-  --banner-bg: #4a2e16;       /* top safety banner (brown) */
-  --banner-fg: #f0c590;
+  /* Accents — desaturated warm grey, not brown/gold */
+  --accent: #9ea3ac;          /* primary accent (tab active, send button) */
+  --accent-dim: #4f535a;
+  --accent-bg: #33373d;       /* subtle tinted background for active states */
+  --banner-bg: #2f2a1f;       /* top safety banner (muted amber) */
+  --banner-fg: #d8c79a;
 
   /* Status */
-  --ok: #97b48f;
-  --warn: #c69560;
-  --err: #c66863;
+  --ok: #8db892;
+  --warn: #c6a06b;
+  --err: #c4726d;
 
   /* Session bubbles */
-  --bubble-user: #3a3122;
-  --bubble-assistant: #2b2820;
-  --bubble-tool: #1d1b16;
-  --diff-add: #2f4332;
-  --diff-del: #4a2e2e;
+  --bubble-user: #353941;
+  --bubble-assistant: #2a2e34;
+  --bubble-tool: #1c1e22;
+  --diff-add: #2e4032;
+  --diff-del: #4a3030;
 
   --radius-sm: 8px;
   --radius: 12px;
@@ -54,6 +54,9 @@ body {
   -webkit-font-smoothing: antialiased;
   user-select: none;
   overflow: hidden;
+  /* Force dark rendering of native widgets (select dropdowns, scrollbars,
+     date inputs) so they don't appear white on light OS themes. */
+  color-scheme: dark;
 }
 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }
 input, textarea, select { font: inherit; color: inherit; }
@@ -72,7 +75,7 @@ input, textarea, select { font: inherit; color: inherit; }
 }
 .top-banner .dot {
   width: 14px; height: 14px; border-radius: 50%;
-  background: #b8632a; flex-shrink: 0;
+  background: #b08663; flex-shrink: 0;
   display: inline-grid; place-items: center;
 }
 .top-banner .dot::after {
@@ -371,6 +374,21 @@ body:has(.top-banner:not([hidden])) #app { height: calc(100vh - 38px); }
   font-size: 13px;
   outline: none;
 }
+.field select {
+  /* Strip the OS-rendered widget so it can't show white-on-light. We use
+     `color-scheme: dark` on the document so the open dropdown menu also
+     renders dark. */
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 26px;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 16 16' fill='none' stroke='%237d8189' stroke-width='1.5'><path d='M4 6l4 4 4-4'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+.field select option {
+  background: var(--bg-elev);
+  color: var(--text);
+}
 .field input:focus, .field select:focus { border-color: var(--accent); }
 
 .session {
@@ -506,7 +524,7 @@ body:has(.top-banner:not([hidden])) #app { height: calc(100vh - 38px); }
   width: 30px; height: 30px;
   border-radius: 50%;
   background: var(--accent);
-  color: #1c1a14;
+  color: #14171a;
   flex-shrink: 0;
 }
 .composer-send:disabled { background: var(--accent-dim); color: var(--text-mute); cursor: not-allowed; }
@@ -628,6 +646,18 @@ body:has(.top-banner:not([hidden])) #app { height: calc(100vh - 38px); }
   font-size: 13px;
   outline: none;
 }
+.modal-panel select.panel-input {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 26px;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 16 16' fill='none' stroke='%237d8189' stroke-width='1.5'><path d='M4 6l4 4 4-4'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+.modal-panel select.panel-input option {
+  background: var(--bg-input);
+  color: var(--text);
+}
 .modal-panel .panel-input:focus { border-color: var(--accent); }
 .modal-panel .panel-status {
   font-size: 11.5px;
@@ -733,7 +763,28 @@ body:has(.top-banner:not([hidden])) #app { height: calc(100vh - 38px); }
   outline: none;
   font-family: inherit;
 }
-.mini-modal-field input:focus {
+.mini-modal-field select {
+  background: var(--bg-input);
+  border: 1px solid var(--line);
+  color: var(--text);
+  padding: 9px 11px;
+  border-radius: 8px;
+  font-size: 13px;
+  outline: none;
+  font-family: inherit;
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 26px;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 16 16' fill='none' stroke='%237d8189' stroke-width='1.5'><path d='M4 6l4 4 4-4'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+.mini-modal-field select option {
+  background: var(--bg-input);
+  color: var(--text);
+}
+.mini-modal-field input:focus,
+.mini-modal-field select:focus {
   border-color: var(--accent);
 }
 .mini-modal-hint {
