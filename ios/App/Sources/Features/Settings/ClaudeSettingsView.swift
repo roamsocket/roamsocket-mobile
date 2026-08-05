@@ -440,6 +440,6 @@ private struct AboutSheet: View {
 }
 
 #Preview {
-    ClaudeSettingsView(onOpenLegacySettings: {})
+    ClaudeSettingsView()
         .environmentObject(AppState(secrets: KeychainSecretStore()))
 }

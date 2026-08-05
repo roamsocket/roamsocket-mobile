@@ -1,4 +1,5 @@
 import SwiftUI
+import MobileAICore
 
 /// Main chat view, mimicking the Claude iOS UI:
 ///  * On a fresh / empty chat, shows a centered greeting like
@@ -208,7 +209,25 @@ struct ChatView: View {
     }
 
     private var modelPillTitle: String {
-        state.selectedModel?.displayName ?? "Sonnet 5 Medium"
+        if let name = state.selectedModel?.displayName {
+            return Self.stripEffort(from: name)
+        }
+        return "Select a model"
+    }
+
+    /// Removes a trailing " Low"/" Medium"/" High" suffix from a model
+    /// display name, so the composer pill shows just the family ("Sonnet 5"
+    /// instead of "Sonnet 5 Medium") while the picker still shows the full
+    /// name. Comparison is case-insensitive and trims whitespace.
+    private static func stripEffort(from name: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        for suffix in Effort.allCases.reversed() {
+            let token = " " + suffix.displayName
+            if trimmed.lowercased().hasSuffix(token.lowercased()) {
+                return String(trimmed.dropLast(token.count))
+            }
+        }
+        return trimmed
     }
 
     private var sendBackground: some ShapeStyle {
