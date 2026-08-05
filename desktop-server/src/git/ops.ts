@@ -103,7 +103,16 @@ export async function pullOrClone(config: RepoConfig, token?: string): Promise<s
 }
 
 function tokenEnv(token?: string): Record<string, string> {
-  return token ? { GITHUB_TOKEN: token } : {};
+  if (!token) return {};
+  // Inject the token as a credential helper so it never lands in the
+  // remote URL or on disk. Mirrors the helper used in git/github.ts.
+  return {
+    GIT_ASKPASS: "/bin/echo",
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "credential.helper",
+    GIT_CONFIG_VALUE_0: `!f() { echo username=x-access-token; echo password=${token}; }; f`,
+  };
 }
 
 export interface CommitOptions {
