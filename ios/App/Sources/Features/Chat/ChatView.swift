@@ -1,78 +1,93 @@
 import SwiftUI
 
-/// Main chat view with message list and composer
+/// Main chat view, mimicking the Claude iOS UI:
+///  * On a fresh / empty chat, shows a centered greeting like
+///    "Clocking in for the evening shift." with a centered asterism glyph.
+///  * Otherwise renders a vertically scrolling message list.
+///  * The bottom composer holds a `+` button, a model pill, a mic, and a
+///    gradient send button.
 struct ChatView: View {
     @StateObject private var viewModel = ChatViewModel()
-    @Environment(\.dismiss) private var dismiss
-    
+    @EnvironmentObject var state: AppState
+    var onOpenSidebar: () -> Void = {}
+
     var body: some View {
         ZStack {
             Theme.background.ignoresSafeArea()
-            
+
             VStack(spacing: 0) {
-                // Header
-                chatHeader
-                
-                // Message list
-                messageList
-                
-                // Composer
+                if isEffectivelyEmpty {
+                    if viewModel.error != nil {
+                        errorBanner
+                    }
+                    greeting
+                } else {
+                    messageList
+                }
                 composer
             }
         }
+        .onAppear { viewModel.state = state }
         .sheet(isPresented: $viewModel.showAddToChatSheet) {
             AddToChatSheet(viewModel: viewModel)
         }
         .sheet(isPresented: $viewModel.showConnectorsView) {
             ConnectorsView(viewModel: viewModel)
         }
-        .sheet(isPresented: $viewModel.showThoughtProcess) {
-            ThoughtProcessView(thoughtProcess: viewModel.currentThoughtProcess ?? "")
-        }
-        .task {
-            // Initialize MCP client
-            // await viewModel.mcpClient.connect(serverURL: URL(string: "https://mcp.example.com")!)
+        .sheet(isPresented: $viewModel.showModelPicker) {
+            ModelPickerSheet()
         }
     }
-    
-    // MARK: - Header
-    
-    private var chatHeader: some View {
-        HStack {
-            Button(action: { dismiss() }) {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(Theme.textPrimary)
-                    .frame(width: 44, height: 44)
-                    .background(Theme.surfaceElevated, in: Circle())
-            }
-            .buttonStyle(.plain)
-            
-            Spacer()
-            
-            Text("Chat")
-                .font(.system(size: 20, weight: .semibold))
+
+    private var errorBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.yellow)
+            Text(viewModel.error ?? "")
+                .font(.system(size: 13))
                 .foregroundStyle(Theme.textPrimary)
-            
+                .lineLimit(2)
             Spacer()
-            
-            Button(action: { viewModel.showAddToChatSheet = true }) {
-                Image(systemName: "plus")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(Theme.textPrimary)
-                    .frame(width: 44, height: 44)
-                    .background(Theme.surfaceElevated, in: Circle())
+            Button { viewModel.error = nil } label: {
+                Image(systemName: "xmark")
+                    .foregroundStyle(Theme.textSecondary)
             }
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 16)
         .padding(.top, 12)
-        .padding(.bottom, 8)
-        .background(Theme.background)
     }
-    
-    // MARK: - Message List
-    
+
+    /// True when there are no real user messages yet. The single welcome
+    /// message that `ChatViewModel` seeds is treated as part of the empty
+    /// state so we can show the centered greeting.
+    private var isEffectivelyEmpty: Bool {
+        viewModel.messages.allSatisfy { $0.role == .assistant } &&
+        viewModel.messages.count <= 1
+    }
+
+    // MARK: - Greeting (empty state)
+
+    private var greeting: some View {
+        VStack(spacing: 18) {
+            Spacer()
+            AsterismGlyph()
+                .frame(width: 56, height: 56)
+            Text("Clocking in for the evening shift.")
+                .font(.system(size: 26, weight: .regular, design: .serif))
+                .foregroundStyle(Theme.textPrimary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    // MARK: - Message list
+
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -82,17 +97,12 @@ struct ChatView: View {
                             message: message,
                             onCopy: { viewModel.copyMessage(message) },
                             onShare: { viewModel.shareMessage(message) },
-                            onStar: { viewModel.starMessage(message) },
                             onDelete: { viewModel.deleteMessage(message) },
-                            onRegenerate: { Task { await viewModel.regenerateResponse(for: message) } },
-                            onThoughtProcess: {
-                                viewModel.currentThoughtProcess = message.thoughtProcess
-                                viewModel.showThoughtProcess = true
-                            }
+                            onRegenerate: { Task { await viewModel.regenerateResponse(for: message) } }
                         )
                         .id(message.id)
                     }
-                    
+
                     if viewModel.isProcessing {
                         ProcessingIndicator()
                     }
@@ -109,70 +119,115 @@ struct ChatView: View {
             }
         }
     }
-    
+
     // MARK: - Composer
-    
+
     private var composer: some View {
-        VStack(spacing: 0) {
-            Divider()
-                .background(Theme.separator)
-            
-            HStack(spacing: 12) {
-                // Add button
+        VStack(spacing: 8) {
+            composerSurface
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 12)
+        .padding(.top, 8)
+        .background(Theme.background)
+    }
+
+    private var composerSurface: some View {
+        VStack(spacing: 8) {
+            // Top: text field on its own row — full width, room to breathe.
+            TextField("Chat with Claude", text: $viewModel.inputText, axis: .vertical)
+                .lineLimit(1...4)
+                .font(.system(size: 16))
+                .foregroundStyle(Theme.textPrimary)
+                .tint(Theme.textPrimary)
+                .frame(minHeight: 24, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+
+            // Bottom: controls row — +, model pill, mic, send.
+            HStack(alignment: .center, spacing: 8) {
+                // Plus: opens the AddToChat sheet
                 Button(action: { viewModel.showAddToChatSheet = true }) {
                     Image(systemName: "plus")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.system(size: 16, weight: .medium))
                         .foregroundStyle(Theme.textPrimary)
-                        .frame(width: 40, height: 40)
-                        .background(Theme.surfaceElevated, in: Circle())
+                        .frame(width: 36, height: 36)
                 }
                 .buttonStyle(.plain)
-                
-                // Text input
-                TextField("Reply to Claude", text: $viewModel.inputText, axis: .vertical)
-                    .lineLimit(1...6)
-                    .font(.system(size: 17))
-                    .foregroundStyle(Theme.textPrimary)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: 24))
-                
-                // Send button
+
+                // Model pill
+                Button(action: { viewModel.showModelPicker = true }) {
+                    HStack(spacing: 6) {
+                        Text(modelPillTitle)
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(Theme.textPrimary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Theme.textSecondary)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Theme.surfaceElevated, in: Capsule())
+                }
+                .buttonStyle(.plain)
+
+                Spacer(minLength: 0)
+
+                // Mic
+                Button(action: {}) {
+                    Image(systemName: "mic")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(Theme.textPrimary)
+                        .frame(width: 36, height: 36)
+                }
+                .buttonStyle(.plain)
+
+                // Send
                 Button(action: {
                     Task { await viewModel.sendMessage() }
                 }) {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 16, weight: .bold))
+                    Image(systemName: "waveform")
+                        .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(.white)
-                        .frame(width: 40, height: 40)
-                        .background(
-                            viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            ? Theme.surfaceElevated
-                            : Theme.accent,
-                            in: Circle()
-                        )
+                        .frame(width: 36, height: 36)
+                        .background(sendBackground, in: Circle())
                 }
                 .buttonStyle(.plain)
                 .disabled(viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            
-            // Model selector pill
-            HStack {
-                Spacer()
-                Pill(title: "Sonnet 5 Medium", systemImage: "sparkles") {
-                    // Show model picker
-                }
-                .padding(.trailing, 16)
-                .padding(.bottom, 8)
-            }
         }
-        .background(Theme.background)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(minHeight: 56)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 28))
+        .overlay(
+            RoundedRectangle(cornerRadius: 28)
+                .stroke(Theme.separator, lineWidth: 1)
+        )
+    }
+
+    private var modelPillTitle: String {
+        state.selectedModel?.displayName ?? "Sonnet 5 Medium"
+    }
+
+    private var sendBackground: some ShapeStyle {
+        if viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return AnyShapeStyle(Theme.surfaceElevated)
+        } else {
+            // Orange gradient like the screenshot.
+            return AnyShapeStyle(
+                LinearGradient(
+                    colors: [Theme.accent, Theme.accent.opacity(0.85)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+        }
     }
 }
 
-/// Processing indicator shown while AI is generating
+/// Processing indicator shown while AI is generating.
 struct ProcessingIndicator: View {
     var body: some View {
         HStack(spacing: 8) {
@@ -186,6 +241,28 @@ struct ProcessingIndicator: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// The decorative asterism glyph shown on the empty chat (mimics the
+/// orange burst in the screenshot).
+struct AsterismGlyph: View {
+    var body: some View {
+        ZStack {
+            ForEach(0..<12, id: \.self) { i in
+                Capsule()
+                    .fill(Theme.accent)
+                    .frame(width: 4, height: 22)
+                    .offset(y: -16)
+                    .rotationEffect(.degrees(Double(i) * 30))
+            }
+            // Center dot
+            Circle()
+                .fill(Theme.accent)
+                .frame(width: 6, height: 6)
+        }
+        .frame(width: 56, height: 56)
+        .compositingGroup()
     }
 }
 

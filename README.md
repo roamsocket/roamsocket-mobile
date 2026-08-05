@@ -49,6 +49,13 @@ Verify it end-to-end without any API key or GitHub:
 npm run smoke       # clones a local repo, runs the mock agent, opens a "PR"
 ```
 
+Or run as a native desktop app (Electron + built-in client UI):
+
+```bash
+npm run electron:dev       # hot-reload dev
+npm run electron:package   # package the app for the current platform
+```
+
 ### 2. iOS app
 
 Requires a Mac with Xcode 15+ and [XcodeGen](https://github.com/yonsm/XcodeGen).
