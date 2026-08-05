@@ -4,6 +4,10 @@ import SwiftUI
 /// Skills, and Connectors.
 struct AddToChatSheet: View {
     @ObservedObject var viewModel: ChatViewModel
+    /// Optional handler fired when the user picks "Start coding session".
+    /// The host view does the actual session creation (because it owns the
+    /// `sessionConfig` state for the fullScreenCover).
+    var onStartCodingSession: ((String) -> Void)?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -41,6 +45,27 @@ struct AddToChatSheet: View {
 
     private var optionsSection: some View {
         VStack(spacing: 0) {
+            // Start a coding session — routes through the host view, which
+            // owns the fullScreenCover state.
+            optionRow(
+                systemImage: "chevron.left.forwardslash.chevron.right",
+                title: "Start coding session"
+            ) {
+                let task = viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+                dismiss()
+                if !task.isEmpty {
+                    // Small delay so the sheet finishes dismissing before the
+                    // cover presents — avoids the iOS sheet/cover z-fight.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        onStartCodingSession?(task)
+                    }
+                } else {
+                    onStartCodingSession?("Help me with this repo")
+                }
+            }
+
+            Divider().background(Theme.separator).padding(.leading, 50)
+
             // Add files
             optionRow(
                 systemImage: "doc.badge.plus",

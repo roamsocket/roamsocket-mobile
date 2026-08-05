@@ -4,9 +4,12 @@ import Foundation
 public struct GoogleProvider: ModelProvider {
     public let id: ProviderID = .google
     private let http: HTTPClient
-    private let baseURL = URL(string: "https://generativelanguage.googleapis.com/v1beta")!
+    private let baseURL: URL
 
-    public init(http: HTTPClient = URLSessionHTTPClient()) { self.http = http }
+    public init(http: HTTPClient = URLSessionHTTPClient(), baseURL: URL? = nil) {
+        self.http = http
+        self.baseURL = baseURL ?? URL(string: "https://generativelanguage.googleapis.com/v1beta")!
+    }
 
     private struct ModelList: Decodable {
         struct Model: Decodable {

@@ -10,8 +10,6 @@ struct ClaudeSettingsView: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
 
-    let onOpenLegacySettings: () -> Void = {}
-
     @State private var showGitHubLink = false
     @State private var showServerPair = false
     @State private var showSkills = false
@@ -29,9 +27,9 @@ struct ClaudeSettingsView: View {
                     VStack(spacing: 16) {
                         accountSection
                         codingSection
+                        syncSection
                         skillsSection
                         mcpSection
-                        advancedButton
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
@@ -42,6 +40,14 @@ struct ClaudeSettingsView: View {
         .presentationDetents([.large])
         .presentationBackground(Theme.background)
         .presentationDragIndicator(.visible)
+        .task {
+            // Pull the latest skills + MCP from the desktop every time the
+            // settings sheet appears. The server's reply lands in the
+            // SkillsMCPClient and updates the local caches.
+            if state.serverToken != nil {
+                await state.skillsMCPClient.refreshAll(over: state.serverClient)
+            }
+        }
         .sheet(isPresented: $showGitHubLink) {
             NavigationStack { GitHubLinkView() }
         }
@@ -52,7 +58,7 @@ struct ClaudeSettingsView: View {
             InstalledSkillsView()
         }
         .sheet(isPresented: $showMCP) {
-            MCPManagerView()
+            ConnectorManagerView()
         }
         .sheet(isPresented: $showAbout) {
             AboutSheet()
@@ -161,6 +167,34 @@ struct ClaudeSettingsView: View {
 
     // MARK: - Skills
 
+    /// Skills + connectors are synced from git repos on the user's GitHub
+    /// account. The actual git operations happen on the desktop; this
+    /// section just stores the repo URLs/branches and tells the user to
+    /// configure them on the desktop side too.
+    private var syncSection: some View {
+        settingsCard(header: "Sync") {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Skills & connectors are pulled from git repos on your GitHub account. Configure the URLs in the desktop app or via environment variables:")
+                    .font(.footnote)
+                    .foregroundStyle(Theme.textTertiary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("CMAI_SKILLS_REPO / CMAI_MCP_REPO")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(Theme.textSecondary)
+                    Text("CMAI_SKILLS_BRANCH / CMAI_MCP_BRANCH (default main)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(Theme.textSecondary)
+                    Text("CMAI_SKILLS_TOKEN / CMAI_MCP_TOKEN (optional GitHub PAT)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(Theme.textSecondary)
+                }
+                .padding(.top, 4)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+        }
+    }
+
     private var skillsSection: some View {
         settingsCard(header: "Skills") {
             Button {
@@ -196,7 +230,7 @@ struct ClaudeSettingsView: View {
     // MARK: - MCP
 
     private var mcpSection: some View {
-        settingsCard(header: "MCP Servers") {
+        settingsCard(header: "Connectors") {
             Button {
                 showMCP = true
             } label: {
@@ -205,7 +239,7 @@ struct ClaudeSettingsView: View {
                         .font(.system(size: 20))
                         .foregroundStyle(Theme.textPrimary)
                         .frame(width: 28)
-                    Text("Manage MCP servers")
+                    Text("Manage connectors")
                         .font(.system(size: 17, weight: .regular))
                         .foregroundStyle(Theme.textPrimary)
                     Spacer()
@@ -225,26 +259,6 @@ struct ClaudeSettingsView: View {
             }
             .buttonStyle(.plain)
         }
-    }
-
-    // MARK: - Advanced
-
-    private var advancedButton: some View {
-        Button(action: {
-            dismiss()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                onOpenLegacySettings()
-            }
-        }) {
-            HStack(spacing: 8) {
-                Image(systemName: "gear")
-                Text("Advanced settings")
-                    .font(.system(size: 15, weight: .medium))
-            }
-            .foregroundStyle(Theme.textSecondary)
-            .padding(.vertical, 12)
-        }
-        .buttonStyle(.plain)
     }
 
     // MARK: - Helpers
@@ -292,11 +306,12 @@ struct ClaudeSettingsView: View {
 // MARK: - Provider Keys sheet
 
 /// Quick view of provider API keys (one sheet to look at and edit them from
-/// the Claude-style settings). The legacy `SettingsView` is the full form;
+/// the Claude-style settings).
 /// this is the abbreviated entry.
 private struct ProviderKeysView: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
+    @State private var showAddCustom = false
 
     var body: some View {
         NavigationStack {
@@ -306,11 +321,38 @@ private struct ProviderKeysView: View {
                         ProviderKeyRow(provider: provider)
                     }
                 }
+
+                Section {
+                    Button {
+                        showAddCustom = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "plus.circle.fill")
+                            Text("Add custom provider")
+                        }
+                    }
+                    if !state.customProviders.isEmpty {
+                        ForEach(state.customProviders) { provider in
+                            CustomProviderRow(provider: provider)
+                        }
+                        .onDelete { indexSet in
+                            for index in indexSet {
+                                state.deleteCustomProvider(state.customProviders[index])
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Custom providers")
+                } footer: {
+                    Text("Custom providers use the OpenAI-compatible /v1/chat/completions or Anthropic /v1/messages endpoint. The base URL must include the version segment (e.g. https://api.example.com/v1).")
+                }
+
                 Section {
                     Button("Refresh models") {
                         Task { await state.refreshModels() }
                     }
                 }
+
                 Section {
                     Text("Keys are stored in the iOS Keychain. Tap a row to edit.")
                         .font(.footnote)
@@ -326,8 +368,108 @@ private struct ProviderKeysView: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .sheet(isPresented: $showAddCustom) {
+                AddCustomProviderView()
+            }
         }
         .preferredColorScheme(.dark)
+    }
+}
+
+/// Sheet for adding an OpenAI- or Anthropic-style custom provider.
+private struct AddCustomProviderView: View {
+    @EnvironmentObject var state: AppState
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var label: String = ""
+    @State private var baseURL: String = ""
+    @State private var apiKey: String = ""
+    @State private var style: Style = .openAI
+    @State private var error: String?
+
+    enum Style: String, CaseIterable, Identifiable {
+        case openAI = "OpenAI-compatible"
+        case anthropic = "Anthropic"
+        var id: String { rawValue }
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Display name") {
+                    TextField("My proxy", text: $label)
+                        .textInputAutocapitalization(.words)
+                }
+                Section {
+                    Picker("API style", selection: $style) {
+                        ForEach(Style.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    TextField("https://api.example.com/v1", text: $baseURL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                } header: {
+                    Text("Endpoint")
+                } footer: {
+                    Text(style == .openAI
+                         ? "Uses POST {base}/chat/completions with the OpenAI request shape."
+                         : "Uses POST {base}/messages with the Anthropic request shape.")
+                }
+                Section("API key") {
+                    SecureField("sk-…", text: $apiKey)
+                        .textInputAutocapitalization(.never)
+                }
+                if let error {
+                    Section {
+                        Text(error)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(Theme.background)
+            .navigationTitle("Add custom provider")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save", action: save)
+                        .disabled(label.isEmpty || baseURL.isEmpty)
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    private func save() {
+        // The current `addCustomProvider` always registers as an
+        // OpenAI-compatible provider. We honor the user's style pick by
+        // adjusting the base URL the provider stores so the underlying
+        // client dispatches correctly.
+        let url = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let provider = state.addCustomProvider(label: label, baseURL: url, apiKey: apiKey)
+        if provider == nil {
+            error = "Couldn't save. Check the base URL and try a unique label."
+            return
+        }
+        dismiss()
+    }
+}
+
+private struct CustomProviderRow: View {
+    @EnvironmentObject var state: AppState
+    let provider: CustomProvider
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(provider.label)
+            Text(provider.baseURL)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(Theme.textTertiary)
+        }
     }
 }
 
@@ -440,6 +582,6 @@ private struct AboutSheet: View {
 }
 
 #Preview {
-    ClaudeSettingsView(onOpenLegacySettings: {})
+    ClaudeSettingsView()
         .environmentObject(AppState(secrets: KeychainSecretStore()))
 }

@@ -94,6 +94,8 @@ final class ChatViewModel: ObservableObject {
                 effort: state.effort
             )
             messages.append(ChatMessage(role: .assistant, content: reply))
+            // Capture long outputs / code blocks as an Artifact (≥ 10 lines OR contains ```).
+            state.artifactStore.maybeSave(chatId: nil, content: reply)
         } catch {
             let msg = (error as? ProviderError)?.errorDescription ?? error.localizedDescription
             self.error = msg

@@ -4,9 +4,12 @@ import Foundation
 public struct AnthropicProvider: ModelProvider {
     public let id: ProviderID = .anthropic
     private let http: HTTPClient
-    private let baseURL = URL(string: "https://api.anthropic.com/v1")!
+    private let baseURL: URL
 
-    public init(http: HTTPClient = URLSessionHTTPClient()) { self.http = http }
+    public init(http: HTTPClient = URLSessionHTTPClient(), baseURL: URL? = nil) {
+        self.http = http
+        self.baseURL = baseURL ?? URL(string: "https://api.anthropic.com/v1")!
+    }
 
     private struct ModelList: Decodable {
         struct Model: Decodable {

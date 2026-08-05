@@ -9,7 +9,10 @@ public struct Skill: Codable, Identifiable, Hashable, Sendable {
     public let category: SkillCategory
     public let source: SkillSource
     public var isEnabled: Bool
-    
+    /// Raw frontmatter parsed from SKILL.md; preserved across edits so we
+    /// can round-trip the file unchanged when the user hasn't touched it.
+    public var frontmatter: [String: String]
+
     public init(
         id: String,
         name: String,
@@ -17,7 +20,8 @@ public struct Skill: Codable, Identifiable, Hashable, Sendable {
         content: String,
         category: SkillCategory,
         source: SkillSource,
-        isEnabled: Bool = false
+        isEnabled: Bool = false,
+        frontmatter: [String: String] = [:]
     ) {
         self.id = id
         self.name = name
@@ -26,6 +30,23 @@ public struct Skill: Codable, Identifiable, Hashable, Sendable {
         self.category = category
         self.source = source
         self.isEnabled = isEnabled
+        self.frontmatter = frontmatter
+    }
+
+    /// Re-render the SKILL.md file from the current fields.
+    public var fullText: String {
+        var yaml = "---\n"
+        let keys = frontmatter.keys.sorted()
+        let ordered: [String] = keys.contains("name") && keys.contains("description") ?
+            (keys.filter { $0 != "name" && $0 != "description" } + ["name", "description"]).reversed() :
+            keys
+        for key in ordered where key != "name" && key != "description" {
+            yaml += "\(key): \(frontmatter[key] ?? "")\n"
+        }
+        yaml += "name: \(name)\n"
+        yaml += "description: \(description)\n"
+        yaml += "---\n\n"
+        return yaml + content
     }
 }
 

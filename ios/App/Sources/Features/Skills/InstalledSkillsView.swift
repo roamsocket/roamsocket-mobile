@@ -6,6 +6,7 @@ struct InstalledSkillsView: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
     @State private var showMarketplace = false
+    @State private var showNewSkill = false
     
     var body: some View {
         NavigationStack {
@@ -18,7 +19,7 @@ struct InstalledSkillsView: View {
                         Text("No skills installed")
                             .font(.system(size: 18, weight: .medium))
                             .foregroundStyle(Theme.textSecondary)
-                        Text("Install skills from the marketplace to enhance your AI coding experience")
+                        Text("Skills sync from your configured skills repo. Add them to the repo or import from another agent.")
                             .font(.system(size: 14))
                             .foregroundStyle(Theme.textTertiary)
                             .multilineTextAlignment(.center)
@@ -40,7 +41,12 @@ struct InstalledSkillsView: View {
                         .onDelete { indexSet in
                             for index in indexSet {
                                 let skill = state.skillManager.installedSkills[index]
-                                state.skillManager.uninstall(skill.id)
+                                Task {
+                                    try? await state.skillsMCPClient.deleteSkill(
+                                        id: skill.id,
+                                        over: state.serverClient
+                                    )
+                                }
                             }
                         }
                     }
@@ -56,8 +62,17 @@ struct InstalledSkillsView: View {
                     Button("Done") { dismiss() }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showMarketplace = true
+                    Menu {
+                        Button {
+                            showNewSkill = true
+                        } label: {
+                            Label("New text skill", systemImage: "doc.text")
+                        }
+                        Button {
+                            showMarketplace = true
+                        } label: {
+                            Label("From skills repo", systemImage: "tray.and.arrow.down")
+                        }
                     } label: {
                         Image(systemName: "plus")
                     }
@@ -65,6 +80,9 @@ struct InstalledSkillsView: View {
             }
             .sheet(isPresented: $showMarketplace) {
                 SkillMarketplaceView()
+            }
+            .sheet(isPresented: $showNewSkill) {
+                CustomTextSkillEditor()
             }
         }
         .preferredColorScheme(.dark)

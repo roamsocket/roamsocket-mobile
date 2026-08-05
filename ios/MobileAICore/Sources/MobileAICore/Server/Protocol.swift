@@ -113,6 +113,19 @@ public enum ClientMessage: Encodable, Sendable {
     case permissionResponse(sessionId: String, requestId: String, decision: PermissionDecision)
     case interrupt(sessionId: String)
     case createPR(sessionId: String, title: String, body: String)
+    case skillsSyncRequest
+    case mcpSyncRequest
+    case skillUpsert(skill: Skill)
+    case skillDelete(id: String)
+    case mcpUpsert(server: MCPServer)
+    case mcpDelete(id: String)
+    case terminalOpen(terminalId: String?, sessionId: String, cols: Int = 80, rows: Int = 24)
+    case terminalInput(terminalId: String, data: String)
+    case terminalResize(terminalId: String, cols: Int, rows: Int)
+    case terminalKill(terminalId: String)
+    case fileList(sessionId: String, path: String)
+    case fileRead(sessionId: String, path: String)
+    case portList(sessionId: String)
 
     public enum PermissionDecision: String, Codable, Sendable { case allow, deny }
 
@@ -145,6 +158,51 @@ public enum ClientMessage: Encodable, Sendable {
             try c.encode(sessionId, forKey: .init("sessionId"))
             try c.encode(title, forKey: .init("title"))
             try c.encode(body, forKey: .init("body"))
+        case .skillsSyncRequest:
+            try c.encode("skills_sync_request", forKey: .init("type"))
+        case .mcpSyncRequest:
+            try c.encode("mcp_sync_request", forKey: .init("type"))
+        case let .skillUpsert(skill):
+            try c.encode("skill_upsert", forKey: .init("type"))
+            try c.encode(skill, forKey: .init("skill"))
+        case let .skillDelete(id):
+            try c.encode("skill_delete", forKey: .init("type"))
+            try c.encode(id, forKey: .init("id"))
+        case let .mcpUpsert(server):
+            try c.encode("mcp_upsert", forKey: .init("type"))
+            try c.encode(server, forKey: .init("server"))
+        case let .mcpDelete(id):
+            try c.encode("mcp_delete", forKey: .init("type"))
+            try c.encode(id, forKey: .init("id"))
+        case let .terminalOpen(terminalId, sessionId, cols, rows):
+            try c.encode("terminal_open", forKey: .init("type"))
+            if let terminalId { try c.encode(terminalId, forKey: .init("terminalId")) }
+            try c.encode(sessionId, forKey: .init("sessionId"))
+            try c.encode(cols, forKey: .init("cols"))
+            try c.encode(rows, forKey: .init("rows"))
+        case let .terminalInput(terminalId, data):
+            try c.encode("terminal_input", forKey: .init("type"))
+            try c.encode(terminalId, forKey: .init("terminalId"))
+            try c.encode(data, forKey: .init("data"))
+        case let .terminalResize(terminalId, cols, rows):
+            try c.encode("terminal_resize", forKey: .init("type"))
+            try c.encode(terminalId, forKey: .init("terminalId"))
+            try c.encode(cols, forKey: .init("cols"))
+            try c.encode(rows, forKey: .init("rows"))
+        case let .terminalKill(terminalId):
+            try c.encode("terminal_kill", forKey: .init("type"))
+            try c.encode(terminalId, forKey: .init("terminalId"))
+        case let .fileList(sessionId, path):
+            try c.encode("file_list", forKey: .init("type"))
+            try c.encode(sessionId, forKey: .init("sessionId"))
+            try c.encode(path, forKey: .init("path"))
+        case let .fileRead(sessionId, path):
+            try c.encode("file_read", forKey: .init("type"))
+            try c.encode(sessionId, forKey: .init("sessionId"))
+            try c.encode(path, forKey: .init("path"))
+        case let .portList(sessionId):
+            try c.encode("port_list", forKey: .init("type"))
+            try c.encode(sessionId, forKey: .init("sessionId"))
         }
     }
 }
@@ -176,10 +234,34 @@ public enum ServerMessage: Decodable, Sendable {
     case sessionDone(sessionId: String, stopReason: String?)
     case prCreated(sessionId: String, url: String)
     case error(sessionId: String?, message: String)
+    case skillsSync(skills: [Skill])
+    case mcpSync(servers: [MCPServer])
+    case terminalData(terminalId: String, stream: String, data: String)
+    case terminalControl(terminalId: String, event: String, code: Int)
+    case fileListResult(sessionId: String, path: String, entries: [FileEntryPayload], diff: String?)
+    case fileReadResult(sessionId: String, path: String, content: String, truncated: Bool)
+    case portListResult(sessionId: String, ports: [PortEntryPayload])
+
+    public struct FileEntryPayload: Codable, Hashable, Sendable {
+        public let name: String
+        public let path: String
+        public let isDirectory: Bool
+        public let size: Int
+        public let modifiedAt: String
+    }
+    public struct PortEntryPayload: Codable, Hashable, Sendable {
+        public let port: Int
+        public let pid: Int
+        public let command: String
+    }
 
     private enum K: String, CodingKey {
         case type, sessionId, workdir, baseBranch, workBranch, text, callId, tool
         case summary, ok, output, path, patch, added, removed, requestId, stopReason, url, message
+        case skills, servers
+        case terminalId, stream, data, event, code
+        case entries, diff, content, truncated, ports, port, pid, command
+        case name, isDirectory, size, modifiedAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -233,6 +315,36 @@ public enum ServerMessage: Decodable, Sendable {
             self = .error(
                 sessionId: try c.decodeIfPresent(String.self, forKey: .sessionId),
                 message: try c.decode(String.self, forKey: .message))
+        case "skills_sync":
+            self = .skillsSync(skills: try c.decode([Skill].self, forKey: .skills))
+        case "mcp_sync":
+            self = .mcpSync(servers: try c.decode([MCPServer].self, forKey: .servers))
+        case "terminal_data":
+            self = .terminalData(
+                terminalId: try c.decode(String.self, forKey: .terminalId),
+                stream: try c.decode(String.self, forKey: .stream),
+                data: try c.decode(String.self, forKey: .data))
+        case "terminal_control":
+            self = .terminalControl(
+                terminalId: try c.decode(String.self, forKey: .terminalId),
+                event: try c.decode(String.self, forKey: .event),
+                code: try c.decode(Int.self, forKey: .code))
+        case "file_list_result":
+            self = .fileListResult(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                path: try c.decode(String.self, forKey: .path),
+                entries: try c.decode([FileEntryPayload].self, forKey: .entries),
+                diff: try c.decodeIfPresent(String.self, forKey: .diff))
+        case "file_read_result":
+            self = .fileReadResult(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                path: try c.decode(String.self, forKey: .path),
+                content: try c.decode(String.self, forKey: .content),
+                truncated: try c.decode(Bool.self, forKey: .truncated))
+        case "port_list_result":
+            self = .portListResult(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                ports: try c.decode([PortEntryPayload].self, forKey: .ports))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .type, in: c, debugDescription: "Unknown server message type: \(type)")

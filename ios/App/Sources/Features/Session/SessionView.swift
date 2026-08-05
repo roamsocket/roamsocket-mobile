@@ -10,6 +10,7 @@ struct SessionView: View {
     @State private var followUp = ""
     @State private var showPRSheet = false
     @State private var prTitle = ""
+    @State private var showTools = false
 
     private let config: SessionConfig
 
@@ -32,6 +33,12 @@ struct SessionView: View {
         .navigationTitle(config.repo.fullName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button { showTools = true } label: {
+                    Image(systemName: "wrench.and.screwdriver")
+                        .foregroundStyle(Theme.textPrimary)
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 if model.hasDiffs {
                     Button {
@@ -46,11 +53,17 @@ struct SessionView: View {
                 }
             }
         }
+        .sheet(isPresented: $showTools) {
+            SessionToolsView()
+        }
         .sheet(isPresented: $showPRSheet) { prSheet }
         .onChange(of: model.prURL) { _, url in
             if let url { openURL(url) }
         }
-        .onAppear { model.start() }
+        .onAppear {
+            model.state = state
+            model.start()
+        }
         .onDisappear { model.stop() }
     }
 

@@ -12,6 +12,11 @@ public enum ProviderID: String, Codable, CaseIterable, Sendable, Identifiable {
 
     public var id: String { rawValue }
 
+    /// The built-in cases (excludes any `.custom(...)` synthesized values).
+    public static var allBuiltInCases: [ProviderID] {
+        allCases
+    }
+
     /// Human-readable provider name for the UI.
     public var displayName: String {
         switch self {
@@ -55,4 +60,60 @@ public enum Effort: String, Codable, CaseIterable, Sendable {
     case low, medium, high
 
     public var displayName: String { rawValue.capitalized }
+}
+
+/// A user-defined OpenAI- or Anthropic-style provider. Persisted alongside
+/// API keys. The `id` is also the SecretKey suffix; `providerID` returns the
+/// case-insensitive `ProviderID` reference the app uses to look up keys.
+public struct CustomProvider: Codable, Hashable, Sendable, Identifiable {
+    public let id: String
+    public var label: String
+    public var baseURL: String
+
+    public init(id: String, label: String, baseURL: String) {
+        self.id = id
+        self.label = label
+        self.baseURL = baseURL
+    }
+
+    /// Style hint for the catalog: OpenAI-compatible (default) or Anthropic.
+    public var style: CustomProviderStyle {
+        // Detect by path: `/v1/messages` ⇒ Anthropic, `/v1/chat/completions` ⇒ OpenAI.
+        if baseURL.contains("/v1/messages") { return .anthropic }
+        return .openAI
+    }
+
+    public var providerID: ProviderID { .custom(id) }
+}
+
+public enum CustomProviderStyle: String, Codable, Sendable, CaseIterable {
+    case openAI
+    case anthropic
+
+    public var displayName: String {
+        switch self {
+        case .openAI: return "OpenAI-compatible"
+        case .anthropic: return "Anthropic"
+        }
+    }
+}
+
+extension ProviderID {
+    /// Custom provider case carrying the user's slug. Excluded from
+    /// `allCases` so catalog/refresh skip it; the app looks it up via
+    /// `AppState.customProviders` + `providerID(for slug)`.
+    public static func custom(_ slug: String) -> ProviderID {
+        // We piggyback on the openai raw value with a "custom:" prefix so
+        // the enum stays `RawRepresentable` + `CaseIterable` without changes
+        // upstream. Decoders check `.rawValue.hasPrefix("custom:")` and
+        // resolve the slug via `AppState`.
+        // swiftlint:disable:next force_unwrapping
+        ProviderID(rawValue: "custom:\(slug)") ?? .openai
+    }
+
+    /// Slug for `.custom(...)` providers, otherwise nil.
+    public var customSlug: String? {
+        guard rawValue.hasPrefix("custom:") else { return nil }
+        return String(rawValue.dropFirst("custom:".count))
+    }
 }
