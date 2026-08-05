@@ -673,3 +673,150 @@ body:has(.top-banner:not([hidden])) #app { height: calc(100vh - 38px); }
   border-radius: 4px;
   color: var(--text-dim);
 }
+
+/* ───── Mini modal (in-app prompt / confirm replacement) ───── */
+.mini-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: grid;
+  place-items: center;
+  z-index: 10000;
+  animation: mini-modal-fade 0.12s ease-out;
+}
+@keyframes mini-modal-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.mini-modal {
+  width: min(440px, calc(100vw - 40px));
+  background: var(--bg-elev);
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: var(--shadow-modal);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  animation: mini-modal-pop 0.12s ease-out;
+}
+@keyframes mini-modal-pop {
+  from { transform: translateY(6px) scale(0.98); opacity: 0; }
+  to   { transform: none; opacity: 1; }
+}
+.mini-modal-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+.mini-modal-desc {
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.45;
+}
+.mini-modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mini-modal-field label {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.mini-modal-field input {
+  background: var(--bg-input);
+  border: 1px solid var(--line);
+  color: var(--text);
+  padding: 9px 11px;
+  border-radius: 8px;
+  font-size: 13px;
+  outline: none;
+  font-family: inherit;
+}
+.mini-modal-field input:focus {
+  border-color: var(--accent);
+}
+.mini-modal-hint {
+  font-size: 11.5px;
+  color: var(--text-mute);
+}
+.mini-modal-error {
+  font-size: 12px;
+  color: #f1c4c4;
+  min-height: 0;
+}
+.mini-modal-error:not(:empty) {
+  padding: 6px 10px;
+  background: rgba(217, 111, 111, 0.12);
+  border: 1px solid rgba(217, 111, 111, 0.35);
+  border-radius: 8px;
+}
+.mini-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+.mini-modal-actions .ghost-btn {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  padding: 7px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.mini-modal-actions .ghost-btn:hover { background: var(--bg-input); }
+.mini-modal-actions .primary-btn {
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: #1a1810;
+  padding: 7px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.mini-modal-actions .primary-btn:hover { filter: brightness(1.08); }
+.mini-modal-actions .danger-btn-solid {
+  background: #d96f6f;
+  border: 1px solid #d96f6f;
+  color: #1a1810;
+  padding: 7px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.mini-modal-actions .danger-btn-solid:hover { filter: brightness(1.08); }
+
+/* Section header in the Providers section */
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.section-header h2 { margin: 0; }
+.section-header .ghost-btn {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.section-header .ghost-btn:hover { background: var(--bg-input); }
+
+.panel-sublabel {
+  font-size: 11.5px;
+  color: var(--text-mute);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 280px;
+}

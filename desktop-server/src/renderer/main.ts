@@ -306,9 +306,6 @@ function providerPicker(): HTMLElement {
   wrap.append(el("label", {}, ["Provider"]));
   const sel = el("select", { id: "code-provider" }) as HTMLSelectElement;
   for (const p of PROVIDERS) sel.append(el("option", { value: p.id }, [p.label]));
-  for (const c of state.secrets?.customProviders ?? []) {
-    sel.append(el("option", { value: c.id }, [`Custom · ${c.label}`]));
-  }
   sel.value = state.code.provider;
   sel.addEventListener("change", () => (state.code.provider = sel.value));
   wrap.append(sel);
@@ -547,17 +544,178 @@ function renderGeneralSection(): HTMLElement {
   return root;
 }
 
+// ───── In-app modal (replaces window.prompt / window.confirm) ─────
+//
+// Electron's renderer doesn't implement window.prompt — it returns null
+// silently, which made the original API-key add/replace buttons (and our
+// new "Add custom provider" flow) dead. This mini-modal renders an
+// in-app dialog that resolves with the user input.
+
+interface MiniModalField {
+  id: string;
+  label: string;
+  placeholder?: string;
+  defaultValue?: string;
+  type?: "text" | "password" | "url";
+  required?: boolean;
+  hint?: string;
+}
+
+interface MiniModalResult {
+  ok: boolean;
+  values: Record<string, string>;
+}
+
+function miniModal(opts: {
+  title: string;
+  description?: string;
+  fields: MiniModalField[];
+  confirmLabel?: string;
+  cancelLabel?: string;
+  validate?: (values: Record<string, string>) => string | null;
+}): Promise<MiniModalResult> {
+  return new Promise((resolve) => {
+    const backdrop = el("div", { class: "mini-modal-backdrop" });
+    const modal = el("div", { class: "mini-modal", role: "dialog", "aria-modal": "true" });
+    modal.append(el("div", { class: "mini-modal-title" }, [opts.title]));
+    if (opts.description) {
+      modal.append(el("div", { class: "mini-modal-desc" }, [opts.description]));
+    }
+    const inputs: Record<string, HTMLInputElement> = {};
+    for (const f of opts.fields) {
+      const wrap = el("div", { class: "mini-modal-field" });
+      wrap.append(el("label", { for: `mm-${f.id}` }, [f.label]));
+      const input = el("input", {
+        id: `mm-${f.id}`,
+        type: f.type ?? "text",
+        placeholder: f.placeholder ?? "",
+        value: f.defaultValue ?? "",
+      }) as HTMLInputElement;
+      input.autocomplete = "off";
+      input.spellcheck = false;
+      wrap.append(input);
+      if (f.hint) wrap.append(el("div", { class: "mini-modal-hint" }, [f.hint]));
+      modal.append(wrap);
+      inputs[f.id] = input;
+    }
+    const error = el("div", { class: "mini-modal-error" });
+    modal.append(error);
+
+    const actions = el("div", { class: "mini-modal-actions" });
+    const cancelBtn = el("button", { type: "button", class: "ghost-btn" }, [
+      opts.cancelLabel ?? "Cancel",
+    ]);
+    const confirmBtn = el("button", { type: "button", class: "primary-btn" }, [
+      opts.confirmLabel ?? "Save",
+    ]);
+    actions.append(cancelBtn, confirmBtn);
+    modal.append(actions);
+
+    const close = (result: MiniModalResult) => {
+      backdrop.remove();
+      document.removeEventListener("keydown", onKey, true);
+      resolve(result);
+    };
+    const collect = (): Record<string, string> => {
+      const out: Record<string, string> = {};
+      for (const f of opts.fields) {
+        const input = inputs[f.id];
+        if (input) out[f.id] = input.value.trim();
+      }
+      return out;
+    };
+    const submit = () => {
+      const values = collect();
+      for (const f of opts.fields) {
+        if (f.required && !values[f.id]) {
+          error.textContent = `${f.label} is required.`;
+          inputs[f.id]?.focus();
+          return;
+        }
+      }
+      if (opts.validate) {
+        const err = opts.validate(values);
+        if (err) {
+          error.textContent = err;
+          return;
+        }
+      }
+      close({ ok: true, values });
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        close({ ok: false, values: {} });
+      } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey || !e.shiftKey)) {
+        e.preventDefault();
+        submit();
+      }
+    };
+    cancelBtn.addEventListener("click", () => close({ ok: false, values: {} }));
+    confirmBtn.addEventListener("click", submit);
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === backdrop) close({ ok: false, values: {} });
+    });
+    document.addEventListener("keydown", onKey, true);
+
+    backdrop.append(modal);
+    document.body.append(backdrop);
+    // Focus the first field.
+    const firstField = opts.fields[0];
+    if (firstField) {
+      queueMicrotask(() => inputs[firstField.id]?.focus());
+    }
+  });
+}
+
+async function miniConfirm(opts: {
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  destructive?: boolean;
+}): Promise<boolean> {
+  return new Promise((resolve) => {
+    const backdrop = el("div", { class: "mini-modal-backdrop" });
+    const modal = el("div", { class: "mini-modal", role: "alertdialog", "aria-modal": "true" });
+    modal.append(el("div", { class: "mini-modal-title" }, [opts.title]));
+    modal.append(el("div", { class: "mini-modal-desc" }, [opts.message]));
+    const actions = el("div", { class: "mini-modal-actions" });
+    const cancelBtn = el("button", { type: "button", class: "ghost-btn" }, [
+      opts.cancelLabel ?? "Cancel",
+    ]);
+    const confirmBtn = el(
+      "button",
+      { type: "button", class: opts.destructive ? "danger-btn-solid" : "primary-btn" },
+      [opts.confirmLabel ?? "Confirm"],
+    );
+    actions.append(cancelBtn, confirmBtn);
+    modal.append(actions);
+
+    const close = (ok: boolean) => {
+      backdrop.remove();
+      document.removeEventListener("keydown", onKey, true);
+      resolve(ok);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close(false);
+      else if (e.key === "Enter") close(true);
+    };
+    cancelBtn.addEventListener("click", () => close(false));
+    confirmBtn.addEventListener("click", () => close(true));
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === backdrop) close(false);
+    });
+    document.addEventListener("keydown", onKey, true);
+    backdrop.append(modal);
+    document.body.append(backdrop);
+    queueMicrotask(() => confirmBtn.focus());
+  });
+}
+
 function renderProvidersSection(): HTMLElement {
   const root = el("div", {}, []);
-  // Section header with a `+` button on the left, mirroring the iOS settings UX.
-  const header = el("div", { class: "section-header" }, []);
-  header.append(el("h2", {}, ["Provider API keys"]));
-  const addBtn = el("button", { class: "ghost-btn", type: "button", id: "add-custom-provider" }, ["+ Custom"]);
-  addBtn.addEventListener("click", () => {
-    void addCustomProviderPrompt();
-  });
-  header.append(addBtn);
-  root.append(header);
+  root.append(el("h2", {}, ["Provider API keys"]));
   root.append(el("div", { class: "empty-block" }, [
     "Keys are stored locally via Electron safeStorage (OS keychain). They're never sent anywhere except the local server during a coding session.",
   ]));
@@ -570,9 +728,24 @@ function renderProvidersSection(): HTMLElement {
     const actions = el("div", { class: "panel-actions" }, []);
     const setBtn = el("button", { class: "ghost-btn", type: "button" }, [present ? "Replace" : "Add"]);
     setBtn.addEventListener("click", async () => {
-      const v = prompt(`${present ? "Replace" : "Add"} API key for ${p.label}:`, "");
-      if (!v) return;
-      await window.cmai.secrets.set({ providerKeys: { [p.id]: v } as any });
+      const res = await miniModal({
+        title: `${present ? "Replace" : "Add"} API key`,
+        description: `Enter the API key for ${p.label}. It's stored locally in the OS keychain.`,
+        fields: [
+          {
+            id: "apiKey",
+            label: "API key",
+            type: "password",
+            placeholder: "sk-…",
+            required: true,
+          },
+        ],
+        confirmLabel: present ? "Replace" : "Save",
+      });
+      if (!res.ok) return;
+      const apiKey = res.values.apiKey ?? "";
+      if (!apiKey) return;
+      await window.cmai.secrets.set({ providerKeys: { [p.id]: apiKey } as any });
       state.secrets = await window.cmai.secrets.get();
       renderSettingsSection();
     });
@@ -580,6 +753,13 @@ function renderProvidersSection(): HTMLElement {
     if (present) {
       const clearBtn = el("button", { class: "danger-btn", type: "button" }, ["Clear"]);
       clearBtn.addEventListener("click", async () => {
+        const ok = await miniConfirm({
+          title: "Clear API key?",
+          message: `Remove the API key for ${p.label}? You'll need to add it again to use this provider.`,
+          confirmLabel: "Clear",
+          destructive: true,
+        });
+        if (!ok) return;
         await window.cmai.secrets.clearProvider(p.id);
         state.secrets = await window.cmai.secrets.get();
         renderSettingsSection();
@@ -589,68 +769,85 @@ function renderProvidersSection(): HTMLElement {
     row.append(value, actions);
     root.append(row);
   }
-
-  // Custom providers (user-defined OpenAI-compatible endpoints).
-  for (const c of state.secrets?.customProviders ?? []) {
-    const present = !!state.secrets?.providerKeys[c.id]?.present;
-    const row = el("div", { class: "panel-row" }, []);
-    const labelWrap = el("div", { class: "panel-label" }, []);
-    labelWrap.append(el("div", {}, [`Custom · ${c.label}`]));
-    const urlLine = el("div", { class: "panel-sublabel" }, [c.baseUrl]);
-    labelWrap.append(urlLine);
-    row.append(labelWrap);
-    const status = el("span", { class: "panel-status " + (present ? "ok" : "warn") }, [present ? "configured" : "empty"]);
-    const value = el("div", { class: "panel-value" }, [status]);
-    const actions = el("div", { class: "panel-actions" }, []);
-    const setBtn = el("button", { class: "ghost-btn", type: "button" }, [present ? "Replace key" : "Add key"]);
-    setBtn.addEventListener("click", async () => {
-      const v = prompt(`${present ? "Replace" : "Add"} API key for ${c.label}:`, "");
-      if (!v) return;
-      await window.cmai.secrets.setCustomProviderKey(c.id, v);
-      state.secrets = await window.cmai.secrets.get();
-      renderSettingsSection();
-    });
-    actions.append(setBtn);
-    const removeBtn = el("button", { class: "danger-btn", type: "button" }, ["Remove"]);
-    removeBtn.addEventListener("click", async () => {
-      if (!confirm(`Remove custom provider "${c.label}"? Its key is also wiped.`)) return;
-      await window.cmai.secrets.removeCustomProvider(c.id);
-      state.secrets = await window.cmai.secrets.get();
-      if (state.code.provider === c.id) state.code.provider = "anthropic";
-      renderSettingsSection();
-    });
-    actions.append(removeBtn);
-    row.append(value, actions);
-    root.append(row);
-  }
   return root;
 }
 
 /** Prompt the user for label + base URL + optional API key, then persist. */
 async function addCustomProviderPrompt(): Promise<void> {
-  const label = prompt("Custom provider label (e.g. Internal LLM):", "");
-  if (!label) return;
-  const slug = label
+  const result = await miniModal({
+    title: "Add custom provider",
+    description:
+      "Custom providers talk any OpenAI-compatible /v1/models and /v1/chat/completions endpoint. The desktop agent uses your base URL.",
+    fields: [
+      {
+        id: "label",
+        label: "Display label",
+        placeholder: "Internal LLM",
+        required: true,
+      },
+      {
+        id: "baseUrl",
+        label: "Base URL",
+        placeholder: "https://llm.example.com/v1",
+        type: "url",
+        required: true,
+        hint: "Must be a valid http(s) URL ending in /v1.",
+      },
+      {
+        id: "apiKey",
+        label: "API key (optional)",
+        placeholder: "Leave empty to add later",
+        type: "password",
+      },
+    ],
+    confirmLabel: "Save",
+    validate: (vals) => {
+      const label = vals.label ?? "";
+      const baseUrl = vals.baseUrl ?? "";
+      try {
+        const u = new URL(baseUrl);
+        if (u.protocol !== "http:" && u.protocol !== "https:") {
+          return "Base URL must use http or https.";
+        }
+      } catch {
+        return "Base URL is not a valid URL.";
+      }
+      const slug = slugify(label);
+      if (!slug) return "Label must contain at least one letter or digit.";
+      const taken = (state.secrets?.customProviders ?? []).some((c) => c.id === slug);
+      if (taken) return `A custom provider with id "${slug}" already exists.`;
+      return null;
+    },
+  });
+  if (!result.ok) return;
+
+  const slug = slugify(result.values.label ?? "");
+  try {
+    const parsed = new URL(result.values.baseUrl ?? "");
+    await window.cmai.secrets.addCustomProvider({
+      id: slug,
+      label: result.values.label ?? "",
+      baseUrl: parsed.toString(),
+      apiKey: result.values.apiKey || undefined,
+    });
+    state.secrets = await window.cmai.secrets.get();
+    renderSettingsSection();
+  } catch (err) {
+    await miniConfirm({
+      title: "Couldn't add provider",
+      message: `Reason: ${(err as Error).message}`,
+      confirmLabel: "OK",
+      cancelLabel: "Dismiss",
+    });
+  }
+}
+
+/** Lowercase + non-alphanumerics → dashes; trimmed. Used to derive ids. */
+function slugify(s: string): string {
+  return s
     .toLowerCase()
     .replace(/[^a-z0-9_-]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  if (!slug) {
-    alert("Label must contain at least one letter or digit.");
-    return;
-  }
-  const baseUrl = prompt("OpenAI-compatible base URL (e.g. https://llm.example.com/v1):", "");
-  if (!baseUrl) return;
-  let parsed: URL;
-  try {
-    parsed = new URL(baseUrl);
-  } catch {
-    alert("Invalid base URL.");
-    return;
-  }
-  const apiKey = prompt(`API key for ${label} (optional — leave empty to add later):`, "") ?? "";
-  await window.cmai.secrets.addCustomProvider({ id: slug, label, baseUrl: parsed.toString(), apiKey });
-  state.secrets = await window.cmai.secrets.get();
-  renderSettingsSection();
 }
 
 function renderGithubSection(): HTMLElement {
@@ -667,9 +864,24 @@ function renderGithubSection(): HTMLElement {
   const actions = el("div", { class: "panel-actions" }, []);
   const setBtn = el("button", { class: "ghost-btn", type: "button" }, [present ? "Replace" : "Add"]);
   setBtn.addEventListener("click", async () => {
-    const v = prompt("GitHub personal access token:", "");
-    if (!v) return;
-    await window.cmai.secrets.set({ githubToken: v });
+    const res = await miniModal({
+      title: `${present ? "Replace" : "Add"} GitHub token`,
+      description: "Used by the server to clone repos and push branches when opening PRs. Stored locally.",
+      fields: [
+        {
+          id: "token",
+          label: "Personal access token",
+          type: "password",
+          placeholder: "ghp_…",
+          required: true,
+        },
+      ],
+      confirmLabel: present ? "Replace" : "Save",
+    });
+    if (!res.ok) return;
+    const token = res.values.token ?? "";
+    if (!token) return;
+    await window.cmai.secrets.set({ githubToken: token });
     state.secrets = await window.cmai.secrets.get();
     renderSettingsSection();
   });
@@ -677,6 +889,13 @@ function renderGithubSection(): HTMLElement {
   if (present) {
     const clearBtn = el("button", { class: "danger-btn", type: "button" }, ["Clear"]);
     clearBtn.addEventListener("click", async () => {
+      const ok = await miniConfirm({
+        title: "Clear GitHub token?",
+        message: "Removing the GitHub token prevents the server from cloning or pushing until you add a new one.",
+        confirmLabel: "Clear",
+        destructive: true,
+      });
+      if (!ok) return;
       await window.cmai.secrets.clearGithub();
       state.secrets = await window.cmai.secrets.get();
       renderSettingsSection();
