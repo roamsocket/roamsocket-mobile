@@ -1,16 +1,17 @@
 import Foundation
 
-/// OpenAI-compatible provider used by OpenAI, Groq, OpenRouter, xAI, and
-/// Mistral. All expose `GET {base}/models` with `Authorization: Bearer`.
+/// OpenAI-compatible provider used by OpenAI, Groq, OpenRouter, xAI, Mistral,
+/// and any user-defined custom endpoint. All expose `GET {base}/models` with
+/// `Authorization: Bearer`.
 public struct OpenAICompatibleProvider: ModelProvider {
     public let id: ProviderID
     private let http: HTTPClient
     private let baseURL: URL
 
-    public init(id: ProviderID, http: HTTPClient = URLSessionHTTPClient()) {
+    public init(id: ProviderID, http: HTTPClient = URLSessionHTTPClient(), baseURLOverride: URL? = nil) {
         self.id = id
         self.http = http
-        self.baseURL = Self.baseURL(for: id)
+        self.baseURL = baseURLOverride ?? Self.baseURL(for: id)
     }
 
     static func baseURL(for id: ProviderID) -> URL {
@@ -20,7 +21,8 @@ public struct OpenAICompatibleProvider: ModelProvider {
         case .openrouter: return URL(string: "https://openrouter.ai/api/v1")!
         case .xai: return URL(string: "https://api.x.ai/v1")!
         case .mistral: return URL(string: "https://api.mistral.ai/v1")!
-        default: return URL(string: "https://api.openai.com/v1")!
+        case .custom: return URL(string: "https://api.openai.com/v1")! // overridden at init
+        case .anthropic, .google: return URL(string: "https://api.openai.com/v1")!
         }
     }
 

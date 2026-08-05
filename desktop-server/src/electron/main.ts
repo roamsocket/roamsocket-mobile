@@ -77,6 +77,8 @@ interface SecretPayload {
   lastRepo: { fullName: string; baseBranch: string; workBranch: string } | null;
   /** Per-provider model selection: provider -> model id + effort. */
   modelPrefs: Record<string, { model: string; effort: "low" | "medium" | "high" }>;
+  /** User-defined OpenAI-compatible providers. */
+  customProviders: CustomProvider[];
 }
 const DEFAULT_SECRETS: SecretPayload = {
   providerKeys: {},
@@ -84,7 +86,11 @@ const DEFAULT_SECRETS: SecretPayload = {
   lastServerAddress: "",
   lastRepo: null,
   modelPrefs: {},
+  customProviders: [],
 };
+
+/** Wire-format mirror of `protocol.ts`'s `CustomProvider`. */
+type CustomProvider = { id: string; label: string; baseUrl: string };
 
 let secrets: SecretPayload = { ...DEFAULT_SECRETS };
 let secretsPath = "";
@@ -128,6 +134,7 @@ function redactSecrets(s: SecretPayload): {
   lastServerAddress: string;
   lastRepo: SecretPayload["lastRepo"];
   modelPrefs: SecretPayload["modelPrefs"];
+  customProviders: CustomProvider[];
 } {
   return {
     providerKeys: Object.fromEntries(
@@ -137,6 +144,7 @@ function redactSecrets(s: SecretPayload): {
     lastServerAddress: s.lastServerAddress,
     lastRepo: s.lastRepo,
     modelPrefs: s.modelPrefs,
+    customProviders: s.customProviders ?? [],
   };
 }
 
@@ -388,6 +396,30 @@ function registerIpc(): void {
     saveSecrets();
     return redactSecrets(secrets);
   });
+  ipcMain.handle("secrets:addCustomProvider", (_e, custom: CustomProvider & { apiKey?: string }) => {
+    if (!custom?.id || !custom?.label || !custom?.baseUrl) {
+      throw new Error("Custom provider needs id, label, and baseUrl.");
+    }
+    const list = (secrets.customProviders ?? []).filter((c) => c.id !== custom.id);
+    list.push({ id: custom.id, label: custom.label, baseUrl: custom.baseUrl });
+    secrets.customProviders = list;
+    if (custom.apiKey) {
+      secrets.providerKeys[custom.id] = custom.apiKey;
+    }
+    saveSecrets();
+    return redactSecrets(secrets);
+  });
+  ipcMain.handle("secrets:removeCustomProvider", (_e, id: string) => {
+    secrets.customProviders = (secrets.customProviders ?? []).filter((c) => c.id !== id);
+    delete secrets.providerKeys[id];
+    saveSecrets();
+    return redactSecrets(secrets);
+  });
+  ipcMain.handle("secrets:setCustomProviderKey", (_e, id: string, apiKey: string) => {
+    secrets.providerKeys[id] = apiKey;
+    saveSecrets();
+    return redactSecrets(secrets);
+  });
   ipcMain.handle("secrets:clearGithub", () => {
     secrets.githubToken = "";
     saveSecrets();
@@ -409,6 +441,20 @@ function registerIpc(): void {
   ipcMain.handle("app:quit", () => {
     isQuitting = true;
     app.quit();
+  });
+
+  ipcMain.handle("prefs:set", (_e, next: Partial<Prefs>) => {
+    const wasDecided = prefs.closeBehaviorDecided;
+    const wasAlwaysQuit = prefs.alwaysQuitOnClose;
+    prefs = { ...prefs, ...next };
+    savePrefs();
+    // If close behaviour flipped for the first time, mark it decided.
+    if (!wasDecided && prefs.closeBehaviorDecided) {
+      prefs.closeBehaviorDecided = true;
+      savePrefs();
+    }
+    refreshTrayMenu();
+    return { ...prefs, wasAlwaysQuit };
   });
 }
 

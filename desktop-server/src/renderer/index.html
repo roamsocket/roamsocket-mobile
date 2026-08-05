@@ -9,32 +9,121 @@
   </head>
   <body>
     <div id="app">
+      <!-- ───── Sidebar ───── -->
       <aside class="sidebar">
-        <div class="brand">
-          <div class="logo">CM</div>
-          <div class="brand-text">
-            <div class="brand-title">Code Mobile AI</div>
-            <div class="brand-sub" id="server-status">starting…</div>
+        <div class="sidebar-top">
+          <div class="tabs" role="tablist">
+            <button class="tab active" data-tab="home" type="button">
+              <span class="tab-icon" aria-hidden="true">⌂</span>
+              <span>Home</span>
+            </button>
+            <button class="tab" data-tab="code" type="button">
+              <span class="tab-icon" aria-hidden="true">&lt;/&gt;</span>
+              <span>Code</span>
+            </button>
           </div>
         </div>
-        <nav class="nav">
-          <a href="#/home" data-route="home">Home</a>
-          <a href="#/history" data-route="history">History</a>
-          <a href="#/settings" data-route="settings">Settings</a>
+
+        <nav class="sidebar-nav">
+          <button class="nav-item primary" data-action="new" type="button">
+            <span class="nav-icon" aria-hidden="true">+</span>
+            <span>New chat</span>
+          </button>
         </nav>
-        <div class="pairing-card">
-          <div class="pairing-label">Pairing code</div>
-          <div class="pairing-code" id="pairing-code">------</div>
-          <button class="ghost-btn" id="copy-code">Copy</button>
+
+        <div class="recents">
+          <div class="recents-head">
+            <span>Recents</span>
+          </div>
+          <div class="recents-list" id="recents-list">
+            <!-- populated by main.ts -->
+          </div>
+        </div>
+
+        <div class="sidebar-bottom">
+          <div class="sidebar-actions">
+            <button class="text-btn" data-action="open-settings" type="button">
+              <span class="nav-icon" aria-hidden="true">⚙</span>
+              <span>Settings</span>
+            </button>
+          </div>
+
+          <button class="user-chip" type="button" id="user-chip">
+            <span class="avatar" id="user-avatar">JC</span>
+            <span class="user-name" id="user-name">JC</span>
+            <span class="user-plan">Pro</span>
+            <svg class="chev" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4"/></svg>
+          </button>
         </div>
       </aside>
 
-      <main class="content">
-        <section id="view-home" class="view"></section>
-        <section id="view-history" class="view hidden"></section>
-        <section id="view-settings" class="view hidden"></section>
+      <!-- ───── Main ───── -->
+      <main class="main">
+        <header class="main-header">
+          <div class="crumbs" id="crumbs">
+            <span class="crumb-tab">Home</span>
+          </div>
+        </header>
+
+        <!-- Home view: large greeting + single composer pill -->
+        <section class="view" id="view-home">
+          <div class="hero">
+            <h1 class="greeting">
+              <span class="greeting-icon" aria-hidden="true">✻</span>
+              <span id="greeting-text">Hello, JC</span>
+            </h1>
+          </div>
+          <div class="composer-wrap home-composer">
+            <!-- composer rendered here -->
+          </div>
+          <div class="home-disclaimer">Code Mobile AI can make mistakes. Please double-check cited sources.</div>
+        </section>
+
+        <!-- Code view: repo/model pickers + session + composer -->
+        <section class="view hidden" id="view-code">
+          <!-- populated by main.ts -->
+        </section>
       </main>
     </div>
+
+    <!-- ───── Settings modal overlay ───── -->
+    <div class="modal-backdrop hidden" id="settings-backdrop"></div>
+    <div class="modal hidden" id="settings-modal" role="dialog" aria-modal="true" aria-label="Settings">
+      <button class="modal-close" id="settings-close" type="button" aria-label="Close">×</button>
+      <div class="modal-search">
+        <span class="search-icon">�</span>
+        <input id="settings-search" type="text" placeholder="Search settings" autocomplete="off" />
+      </div>
+      <div class="modal-body">
+        <nav class="modal-nav" id="settings-nav">
+          <div class="nav-group-label">Settings</div>
+          <button class="modal-nav-item active" data-section="general" type="button">
+            <span class="mni-icon">⚙</span>General
+          </button>
+          <button class="modal-nav-item" data-section="providers" type="button">
+            <span class="mni-icon">⌬</span>Providers
+          </button>
+          <button class="modal-nav-item" data-section="github" type="button">
+            <span class="mni-icon">⌥</span>GitHub
+          </button>
+          <button class="modal-nav-item" data-section="pairing" type="button">
+            <span class="mni-icon">⇄</span>Pairing
+          </button>
+          <button class="modal-nav-item" data-section="window" type="button">
+            <span class="mni-icon">▢</span>Window
+          </button>
+
+          <div class="nav-group-label">About</div>
+          <button class="modal-nav-item" data-section="about" type="button">
+            <span class="mni-icon">ⓘ</span>About
+          </button>
+        </nav>
+        <div class="modal-panel" id="settings-panel">
+          <!-- section content rendered by main.ts -->
+        </div>
+      </div>
+    </div>
+
     <script type="module" src="./main.ts"></script>
   </body>
 </html>

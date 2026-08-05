@@ -48,7 +48,7 @@ struct ModelPickerSheet: View {
                         Divider().overlay(Theme.separator)
                     }
                 } else if let error = result.error {
-                    Text("\(result.provider.displayName): \(error)")
+                    Text("\(state.displayName(for: result.provider)): \(error)")
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.textTertiary)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -59,10 +59,11 @@ struct ModelPickerSheet: View {
     }
 
     private func subtitle(_ model: AIModel, provider: ProviderID) -> String {
+        let name = state.displayName(for: provider)
         if let ctx = model.contextWindow {
-            return "\(provider.displayName) · \(ctx / 1000)K context"
+            return "\(name) · \(ctx / 1000)K context"
         }
-        return provider.displayName
+        return name
     }
 
     private var effortRow: some View {

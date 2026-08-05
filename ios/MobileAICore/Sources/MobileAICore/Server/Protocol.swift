@@ -65,12 +65,17 @@ public struct ModelSelection: Codable, Hashable, Sendable {
     public var model: String
     public var effort: Effort
     public var apiKey: String
+    /// When set, override the built-in base URL for `provider`. The provider
+    /// must be one of the OpenAI-compatible ids. Mirrors the server's
+    /// `ModelSelection.customBaseUrl`.
+    public var customBaseUrl: String?
 
-    public init(provider: ProviderID, model: String, effort: Effort = .high, apiKey: String) {
+    public init(provider: ProviderID, model: String, effort: Effort = .high, apiKey: String, customBaseUrl: String? = nil) {
         self.provider = provider
         self.model = model
         self.effort = effort
         self.apiKey = apiKey
+        self.customBaseUrl = customBaseUrl
     }
 }
 

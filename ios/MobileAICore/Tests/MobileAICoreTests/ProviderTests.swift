@@ -85,4 +85,36 @@ final class ProviderTests: XCTestCase {
         XCTAssertTrue(openai.models.isEmpty)
         XCTAssertNotNil(openai.error)
     }
+
+    func testCustomProviderHitsBaseURL() async throws {
+        let http = MockHTTPClient(routes: [(
+            match: "proxy.example.com/v1/models",
+            status: 200,
+            body: json(#"{"data":[{"id":"llama-3.3-70b","context_length":131072}]}"#)
+        )])
+        let provider: ProviderID = .custom("internal")
+        let url = URL(string: "https://proxy.example.com/v1")!
+        let models = try await OpenAICompatibleProvider(
+            id: provider, http: http, baseURLOverride: url
+        ).listModels(apiKey: "x")
+        XCTAssertEqual(models.count, 1)
+        XCTAssertEqual(models[0].modelID, "llama-3.3-70b")
+        XCTAssertEqual(models[0].provider, provider)
+    }
+
+    func testCustomProviderIDRoundTrips() throws {
+        let original: ProviderID = .custom("internal")
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(ProviderID.self, from: data)
+        XCTAssertEqual(decoded, original)
+        XCTAssertEqual(decoded.rawValue, "custom:internal")
+    }
+
+    func testCustomProviderIDAcceptsBareSlug() throws {
+        // Defensive: a server pre-fix might send a bare slug without the
+        // `custom:` prefix; still parse it as a custom provider.
+        let data = Data("\"legacy-slug\"".utf8)
+        let decoded = try JSONDecoder().decode(ProviderID.self, from: data)
+        XCTAssertEqual(decoded, .custom("legacy-slug"))
+    }
 }

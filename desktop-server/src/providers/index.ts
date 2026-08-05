@@ -13,8 +13,19 @@ export * from "./types.js";
  * xAI, Mistral) drive the coding agent loop. Google Gemini is supported for
  * chat and model-listing directly from the app; its coding-agent adapter is
  * not implemented yet, so requesting it here fails fast with a clear message.
+ *
+ * If `customBaseUrl` is supplied, an OpenAI-compatible adapter is built
+ * pointed at that URL regardless of the chosen built-in provider id. The id
+ * is still required so the agent loop knows the request shape (tools,
+ * messages, streaming contract).
  */
-export function getAgentAdapter(provider: ProviderId): ProviderAdapter {
+export function getAgentAdapter(
+  provider: ProviderId,
+  customBaseUrl?: string,
+): ProviderAdapter {
+  if (customBaseUrl) {
+    return makeOpenAICompatibleAdapter(provider, customBaseUrl);
+  }
   switch (provider) {
     case "anthropic":
       return anthropicAdapter;

@@ -18,6 +18,7 @@ struct ClaudeSettingsView: View {
     @State private var showMCP = false
     @State private var showAbout = false
     @State private var showProviderKeys = false
+    @State private var showAddCustomProvider = false
 
     var body: some View {
         ZStack {
@@ -59,6 +60,9 @@ struct ClaudeSettingsView: View {
         }
         .sheet(isPresented: $showProviderKeys) {
             ProviderKeysView()
+        }
+        .sheet(isPresented: $showAddCustomProvider) {
+            AddCustomProviderSheet()
         }
     }
 
@@ -112,6 +116,30 @@ struct ClaudeSettingsView: View {
 
             Divider().background(Theme.separator)
 
+            providerKeysRow
+        }
+    }
+
+    /// "Provider API keys" row with a leading `+` button to add a custom
+    /// OpenAI-compatible provider. The `+` opens `AddCustomProviderSheet`.
+    private var providerKeysRow: some View {
+        HStack(spacing: 0) {
+            Button {
+                showAddCustomProvider = true
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Add custom provider")
+
+            Divider()
+                .background(Theme.separator)
+                .frame(height: 28)
+
             Button {
                 showProviderKeys = true
             } label: {
@@ -120,6 +148,7 @@ struct ClaudeSettingsView: View {
                     title: "Provider API keys",
                     trailing: providerKeysStatus
                 )
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
         }
@@ -130,8 +159,10 @@ struct ClaudeSettingsView: View {
     }
 
     private var providerKeysStatus: String {
-        let count = ProviderID.allCases.filter { !state.apiKey(for: $0).isEmpty }.count
-        let total = ProviderID.allCases.count
+        let builtin = ProviderID.allCases.filter { !state.apiKey(for: $0).isEmpty }.count
+        let custom = state.customProviders.filter { !state.apiKey(for: $0.providerID).isEmpty }.count
+        let total = ProviderID.allCases.count + state.customProviders.count
+        let count = builtin + custom
         return count == 0 ? "Not set" : "\(count)/\(total)"
     }
 
@@ -297,22 +328,44 @@ struct ClaudeSettingsView: View {
 private struct ProviderKeysView: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
+    @State private var showAddCustom = false
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("Provider API keys") {
+                Section("Built-in providers") {
                     ForEach(ProviderID.allCases) { provider in
                         ProviderKeyRow(provider: provider)
                     }
                 }
+
+                if !state.customProviders.isEmpty {
+                    Section("Custom providers") {
+                        ForEach(state.customProviders) { custom in
+                            CustomProviderRow(custom: custom)
+                        }
+                        .onDelete { offsets in
+                            for idx in offsets {
+                                let cp = state.customProviders[idx]
+                                state.deleteCustomProvider(cp)
+                            }
+                        }
+                    }
+                }
+
                 Section {
+                    Button {
+                        showAddCustom = true
+                    } label: {
+                        Label("Add custom provider", systemImage: "plus.circle.fill")
+                    }
                     Button("Refresh models") {
                         Task { await state.refreshModels() }
                     }
                 }
+
                 Section {
-                    Text("Keys are stored in the iOS Keychain. Tap a row to edit.")
+                    Text("Keys are stored in the iOS Keychain. Tap a row to edit. Custom providers are OpenAI-compatible endpoints (any base URL).")
                         .font(.footnote)
                         .foregroundStyle(Theme.textTertiary)
                 }
@@ -325,6 +378,9 @@ private struct ProviderKeysView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
+            }
+            .sheet(isPresented: $showAddCustom) {
+                AddCustomProviderSheet()
             }
         }
         .preferredColorScheme(.dark)
@@ -339,7 +395,7 @@ private struct ProviderKeyRow: View {
 
     var body: some View {
         HStack {
-            Text(provider.displayName)
+            Text(state.displayName(for: provider))
             Spacer()
             if editing {
                 SecureField("API key", text: $key)
@@ -361,6 +417,139 @@ private struct ProviderKeyRow: View {
     private func save() {
         state.setAPIKey(key, for: provider)
         editing = false
+    }
+}
+
+private struct CustomProviderRow: View {
+    @EnvironmentObject var state: AppState
+    let custom: CustomProvider
+    @State private var key = ""
+    @State private var editing = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(custom.label)
+                Spacer()
+                if editing {
+                    SecureField("API key", text: $key)
+                        .multilineTextAlignment(.trailing)
+                        .textInputAutocapitalization(.never)
+                        .onSubmit(save)
+                    Button("Save", action: save)
+                } else {
+                    Text(state.apiKey(for: custom.providerID).isEmpty ? "Not set" : "••••••")
+                        .foregroundStyle(Theme.textSecondary)
+                    Button("Edit") {
+                        key = state.apiKey(for: custom.providerID)
+                        editing = true
+                    }
+                }
+            }
+            Text(custom.baseURL)
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.textTertiary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+    }
+
+    private func save() {
+        state.setAPIKey(key, for: custom.providerID)
+        editing = false
+    }
+}
+
+// MARK: - Add custom provider sheet
+
+/// Sheet for adding a new custom OpenAI-compatible provider. The user picks
+/// a label and base URL; the API key is optional (it can be filled in later
+/// from the keys list). The slug is derived from the label.
+struct AddCustomProviderSheet: View {
+    @EnvironmentObject var state: AppState
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var label: String = ""
+    @State private var baseURL: String = ""
+    @State private var apiKey: String = ""
+    @State private var saveError: String?
+
+    private var canSave: Bool {
+        let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedLabel.isEmpty, !trimmedURL.isEmpty else { return false }
+        guard URL(string: trimmedURL) != nil else { return false }
+        let slug = AppState.slugify(trimmedLabel)
+        guard !slug.isEmpty else { return false }
+        return state.customProviderConflict(slug: slug) == nil
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Custom provider") {
+                    TextField("Display label (e.g. Internal LLM)", text: $label)
+                        .textInputAutocapitalization(.words)
+                        .autocorrectionDisabled()
+                    TextField("Base URL (e.g. https://llm.example.com/v1)", text: $baseURL)
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.URL)
+                        .autocorrectionDisabled()
+                    SecureField("API key (optional)", text: $apiKey)
+                        .textInputAutocapitalization(.never)
+                }
+
+                if let slug = AppState.slugify(label.trimmingCharacters(in: .whitespacesAndNewlines)) as String?,
+                   !slug.isEmpty,
+                   let conflict = state.customProviderConflict(slug: slug) {
+                    Section {
+                        Label(conflict, systemImage: "exclamationmark.triangle.fill")
+                            .font(.footnote)
+                            .foregroundStyle(.yellow)
+                    }
+                }
+
+                if let saveError {
+                    Section {
+                        Label(saveError, systemImage: "xmark.octagon.fill")
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    }
+                }
+
+                Section {
+                    Text("Custom providers talk any OpenAI-compatible `/v1/models` and `/v1/chat/completions` endpoint. The desktop agent uses the same path with your base URL.")
+                        .font(.footnote)
+                        .foregroundStyle(Theme.textTertiary)
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(Theme.background)
+            .navigationTitle("Add custom provider")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save", action: save)
+                        .disabled(!canSave)
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    private func save() {
+        guard let created = state.addCustomProvider(label: label, baseURL: baseURL, apiKey: apiKey) else {
+            saveError = "Couldn't add this provider. Check the label and base URL."
+            return
+        }
+        // Refresh models in the background so the new provider shows up in the picker.
+        Task { await state.refreshModels() }
+        // Logging only — the parent sheet closes itself; this sheet just dismisses.
+        _ = created
+        dismiss()
     }
 }
 
@@ -440,6 +629,6 @@ private struct AboutSheet: View {
 }
 
 #Preview {
-    ClaudeSettingsView(onOpenLegacySettings: {})
+    ClaudeSettingsView()
         .environmentObject(AppState(secrets: KeychainSecretStore()))
 }

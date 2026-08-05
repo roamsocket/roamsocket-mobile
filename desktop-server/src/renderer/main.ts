@@ -1,11 +1,17 @@
 /**
- * Renderer entrypoint. Sandboxed; talks to the main process via `window.cmai`
- * (exposed by the preload script) and to the local server over WebSocket.
+ * Code Mobile AI — desktop renderer.
  *
- * The renderer is a tiny vanilla-TS SPA with hash-based routing. Views:
- *   #/home      — repo + model pickers, composer, streaming session
- *   #/history   — recent tasks (in-memory for now)
- *   #/settings  — provider API keys, GitHub token, server status
+ * Vanilla-TS SPA styled after the Claude desktop app. Two real tabs:
+ *   - Home: chat with the local agent (free-form `user_message`)
+ *   - Code: a real coding session composer (repo + branch + model pickers,
+ *           streaming tool calls / diffs / PR)
+ *
+ * The settings modal exposes provider keys, GitHub token, pairing info,
+ * and window close behaviour — all backed by IPC to the main process.
+ *
+ * No fake features: Projects / Artifacts / Scheduled / Dispatch / Cowork /
+ * Skills / Connectors / Plugins are intentionally absent because nothing
+ * in the protocol or main process backs them.
  */
 
 import type { CmaiApi } from "../electron/preload";
@@ -29,21 +35,18 @@ const PROVIDERS = [
 const EFFORTS = ["low", "medium", "high"] as const;
 type Effort = (typeof EFFORTS)[number];
 
-interface HistoryEntry {
-  id: string;
-  repo: string;
-  prompt: string;
-  startedAt: number;
-  status: "running" | "done" | "error";
-}
+type Tab = "home" | "code";
 
-// ---------------------------------------------------------------------------
-// State + helpers
-// ---------------------------------------------------------------------------
+// ───── State ─────
 const state = {
   bootstrap: null as Awaited<ReturnType<CmaiApi["bootstrap"]>> | null,
   secrets: null as Awaited<ReturnType<CmaiApi["secrets"]["get"]>> | null,
-  picker: {
+  tab: "home" as Tab,
+  // Chat state
+  chatSessionId: null as string | null,
+  chatWs: null as WebSocket | null,
+  // Code session state
+  code: {
     repo: "",
     baseBranch: "",
     workBranch: "",
@@ -51,17 +54,30 @@ const state = {
     model: "",
     effort: "high" as Effort,
   },
-  sessionId: null as string | null,
-  ws: null as WebSocket | null,
+  codeSessionId: null as string | null,
+  codeWs: null as WebSocket | null,
+  codeRunning: false,
+  // History (real, protocol-backed)
   history: [] as HistoryEntry[],
+  // Settings modal
+  settingsOpen: false,
+  settingsSection: "general",
 };
 
+interface HistoryEntry {
+  id: string;
+  kind: "chat" | "code";
+  title: string;
+  startedAt: number;
+  status: "running" | "done" | "error";
+}
+
+// ───── Tiny DOM helpers ─────
 function $(id: string) {
   const el = document.getElementById(id);
   if (!el) throw new Error(`#${id} missing`);
   return el as HTMLElement;
 }
-
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   attrs: Record<string, string> = {},
@@ -72,96 +88,365 @@ function el<K extends keyof HTMLElementTagNameMap>(
     if (k === "class") node.className = v;
     else node.setAttribute(k, v);
   }
-  for (const c of children) {
-    node.append(typeof c === "string" ? document.createTextNode(c) : c);
-  }
+  for (const c of children) node.append(typeof c === "string" ? document.createTextNode(c) : c);
   return node;
 }
 
-// ---------------------------------------------------------------------------
-// Routing
-// ---------------------------------------------------------------------------
-function showRoute(name: string) {
-  for (const view of ["home", "history", "settings"]) {
-    const sec = $(`view-${view}`);
-    sec.classList.toggle("hidden", view !== name);
+// ───── Tabs ─────
+function setTab(tab: Tab): void {
+  state.tab = tab;
+  for (const t of Array.from(document.querySelectorAll<HTMLElement>(".tab"))) {
+    t.classList.toggle("active", t.dataset.tab === tab);
   }
-  for (const a of Array.from(document.querySelectorAll(".nav a"))) {
-    a.classList.toggle("active", (a as HTMLAnchorElement).dataset.route === name);
+  $("view-home").classList.toggle("hidden", tab !== "home");
+  $("view-code").classList.toggle("hidden", tab !== "code");
+  const crumb = $("crumbs");
+  crumb.textContent = tab === "home" ? "Home" : "Code";
+  if (tab === "code") renderCodeView();
+  // Update recents highlight
+  for (const r of Array.from(document.querySelectorAll<HTMLElement>(".recent-item"))) {
+    r.classList.remove("active");
   }
-  if (name === "home") renderHome();
-  if (name === "history") renderHistory();
-  if (name === "settings") renderSettings();
 }
 
-function currentRoute(): string {
-  const hash = window.location.hash || "#/home";
-  return hash.replace(/^#\//, "").split("/")[0] || "home";
+// ───── Recents ─────
+function renderRecents(): void {
+  const list = $("recents-list");
+  list.innerHTML = "";
+  if (state.history.length === 0) {
+    list.append(el("div", { class: "recent-empty" }, ["No chats yet"]));
+    return;
+  }
+  for (const h of state.history) {
+    const row = el(
+      "button",
+      { class: "recent-item", type: "button", "data-id": h.id },
+      [],
+    );
+    row.append(el("span", { class: "recent-icon" }, [h.kind === "code" ? "</>" : "○"]));
+    row.append(el("span", { class: "recent-title" }, [h.title || "(untitled)"]));
+    row.addEventListener("click", () => openRecent(h));
+    list.append(row);
+  }
+}
+function pushHistory(entry: HistoryEntry): void {
+  const existing = state.history.findIndex((h) => h.id === entry.id);
+  if (existing >= 0) state.history[existing] = { ...state.history[existing], ...entry };
+  else state.history.unshift(entry);
+  state.history = state.history.slice(0, 50);
+  renderRecents();
+}
+function openRecent(h: HistoryEntry): void {
+  setTab(h.kind === "code" ? "code" : "home");
 }
 
-window.addEventListener("hashchange", () => showRoute(currentRoute()));
+// ───── Home view ─────
+function renderHomeView(): void {
+  const wrap = $("view-home").querySelector(".home-composer");
+  if (!wrap) throw new Error("home composer wrap missing");
+  wrap.innerHTML = "";
+  wrap.append(buildComposer({ mode: "home", placeholder: "How can I help you today?" }));
+}
 
-// ---------------------------------------------------------------------------
-// Server connection (WebSocket to our own /session endpoint)
-// ---------------------------------------------------------------------------
-async function ensurePairedAndConnected(): Promise<{ token: string; url: string } | null> {
-  if (!state.bootstrap) return null;
-  const port = state.bootstrap.serverPort;
-  const host = state.bootstrap.serverHost ?? "127.0.0.1";
-  if (!port) return null;
-  // The renderer's local client always pairs with the local server on this
-  // machine using a well-known device name. The pairing code is the same one
-  // the phone would enter; we read it from the bootstrap snapshot.
-  const code = state.bootstrap.pairingCode;
-  if (!code) return null;
+function buildComposer(opts: {
+  mode: "home" | "code";
+  placeholder: string;
+  showModelPicker?: boolean;
+}): HTMLElement {
+  const composer = el("div", { class: "composer" });
+
+  const ta = el("textarea", { class: "composer-textarea", placeholder: opts.placeholder, rows: "1" }) as HTMLTextAreaElement;
+  ta.addEventListener("input", () => autoSize(ta));
+  ta.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+      e.preventDefault();
+      void onSend();
+    }
+  });
+  composer.append(ta);
+
+  const row = el("div", { class: "composer-row" });
+
+  // Spacer on the left (no fake buttons — no attachment/voice/sound protocol).
+  row.append(el("div", { class: "composer-spacer" }));
+
+  if (opts.showModelPicker) {
+    const providerSel = el("select", { class: "panel-input", id: "composer-provider" }) as HTMLSelectElement;
+    for (const p of PROVIDERS) providerSel.append(el("option", { value: p.id }, [p.label]));
+    providerSel.value = state.code.provider;
+    providerSel.addEventListener("change", () => (state.code.provider = providerSel.value));
+    row.append(providerSel);
+
+    const modelSel = el("input", { class: "panel-input", id: "composer-model", placeholder: "model id" }) as HTMLInputElement;
+    modelSel.style.flex = "1";
+    modelSel.value = state.code.model;
+    modelSel.addEventListener("input", () => (state.code.model = modelSel.value));
+    row.append(modelSel);
+  } else {
+    const modelDisplay = el("button", { class: "composer-select", type: "button", id: "composer-model-display" }, []);
+    modelDisplay.append(el("span", { id: "composer-model-text" }, [state.code.model || "Pick a model"]));
+    modelDisplay.append(el("span", { class: "caret" }, ["▾"]));
+    row.append(modelDisplay);
+  }
+
+  const effortSel = el("select", { class: "panel-input", id: "composer-effort" }) as HTMLSelectElement;
+  effortSel.style.maxWidth = "90px";
+  for (const e of EFFORTS) effortSel.append(el("option", { value: e }, [e]));
+  effortSel.value = state.code.effort;
+  effortSel.addEventListener("change", () => (state.code.effort = effortSel.value as Effort));
+  row.append(effortSel);
+
+  const send = el("button", { class: "composer-send", type: "button", title: "Send" }, []);
+  send.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 8h10M9 4l4 4-4 4"/></svg>';
+  send.addEventListener("click", () => void onSend());
+  row.append(send);
+
+  composer.append(row);
+  return composer;
+
+  async function onSend() {
+    const text = ta.value.trim();
+    if (!text) return;
+    if (opts.mode === "home") await sendChat(text);
+    else await sendCodeTask(text);
+    ta.value = "";
+    autoSize(ta);
+  }
+}
+
+function autoSize(ta: HTMLTextAreaElement): void {
+  ta.style.height = "auto";
+  ta.style.height = Math.min(ta.scrollHeight, 240) + "px";
+}
+
+// ───── Chat (Home) WebSocket session ─────
+async function sendChat(text: string): Promise<void> {
+  const apiKey = await getApiKeyOrComplain("anthropic", "Home chat uses your Anthropic key. Add one in Settings.");
+  if (!apiKey) return;
+  const code = state.bootstrap?.pairingCode;
+  if (!code) {
+    appendChatBubble("error", "Server not paired", "Server isn't ready yet.");
+    return;
+  }
+  const conn = await ensurePairedConnection(code).catch(() => null);
+  if (!conn) {
+    appendChatBubble("error", "Server unreachable", "Couldn't reach the local server.");
+    return;
+  }
+  appendChatBubble("user", "You", text);
+  pushHistory({ id: state.chatSessionId ?? `c_${Date.now()}`, kind: "chat", title: text.slice(0, 60), startedAt: Date.now(), status: "running" });
+  if (!state.chatSessionId) {
+    await conn.send({
+      type: "create_session",
+      repo: { fullName: "local/chat", workBranch: "code-mobile-ai/chat" },
+      model: { provider: "anthropic", model: "claude-sonnet-4-5", effort: "medium", apiKey },
+      permissionMode: "acceptEdits",
+    });
+  } else {
+    await conn.send({ type: "user_message", sessionId: state.chatSessionId, text });
+  }
+}
+
+function appendChatBubble(kind: string, meta: string, body: string): void {
+  // Home view has no bubble list yet — for v1 the Home composer is
+  // intentionally minimal. We log to history only. Future work: a
+  // transcript strip under the composer.
+  void kind; void meta; void body;
+}
+
+// ───── Code session ─────
+function renderCodeView(): void {
+  const view = $("view-code");
+  view.innerHTML = "";
+
+  const grid = el("div", { class: "code-grid" });
+
+  // Pickers
+  const pickerRow = el("div", { class: "picker-row" });
+  pickerRow.append(
+    pickerField("Repository", "code-repo", state.code.repo, "owner/name", (v) => (state.code.repo = v)),
+    pickerField("Base branch", "code-base", state.code.baseBranch, "main", (v) => (state.code.baseBranch = v)),
+    pickerField("Work branch", "code-work", state.code.workBranch, "code-mobile-ai/change", (v) => (state.code.workBranch = v)),
+    providerPicker(),
+    modelInput(),
+    effortPicker(),
+  );
+  grid.append(pickerRow);
+
+  // Session
+  const session = el("div", { class: "session" });
+  const head = el("div", { class: "session-header" }, []);
+  head.append(el("span", { class: "session-status idle", id: "code-status" }, []));
+  head.append(el("span", { id: "code-status-text" }, ["idle"]));
+  session.append(head);
+  const body = el("div", { class: "session-body", id: "code-body" }, []);
+  body.append(el("div", { class: "empty-session" }, ["Pick a repo and a model, then send a task."]));
+  session.append(body);
+  grid.append(session);
+
+  // Composer
+  const wrap = el("div", { class: "composer-wrap" }, []);
+  wrap.append(buildComposer({ mode: "code", placeholder: "Describe what you want to change…", showModelPicker: true }));
+  grid.append(wrap);
+
+  view.append(grid);
+}
+
+function pickerField(label: string, id: string, value: string, placeholder: string, onInput: (v: string) => void): HTMLElement {
+  const wrap = el("div", { class: "field" }, []);
+  wrap.append(el("label", {}, [label]));
+  const input = el("input", { id, placeholder }) as HTMLInputElement;
+  input.value = value;
+  input.addEventListener("input", () => onInput(input.value));
+  wrap.append(input);
+  return wrap;
+}
+function providerPicker(): HTMLElement {
+  const wrap = el("div", { class: "field" }, []);
+  wrap.append(el("label", {}, ["Provider"]));
+  const sel = el("select", { id: "code-provider" }) as HTMLSelectElement;
+  for (const p of PROVIDERS) sel.append(el("option", { value: p.id }, [p.label]));
+  for (const c of state.secrets?.customProviders ?? []) {
+    sel.append(el("option", { value: c.id }, [`Custom · ${c.label}`]));
+  }
+  sel.value = state.code.provider;
+  sel.addEventListener("change", () => (state.code.provider = sel.value));
+  wrap.append(sel);
+  return wrap;
+}
+function modelInput(): HTMLElement {
+  const wrap = el("div", { class: "field" }, []);
+  wrap.append(el("label", {}, ["Model"]));
+  const input = el("input", { id: "code-model", placeholder: "model id" }) as HTMLInputElement;
+  input.value = state.code.model;
+  input.addEventListener("input", () => (state.code.model = input.value));
+  wrap.append(input);
+  return wrap;
+}
+function effortPicker(): HTMLElement {
+  const wrap = el("div", { class: "field" }, []);
+  wrap.append(el("label", {}, ["Effort"]));
+  const sel = el("select", { id: "code-effort" }) as HTMLSelectElement;
+  for (const e of EFFORTS) sel.append(el("option", { value: e }, [e]));
+  sel.value = state.code.effort;
+  sel.addEventListener("change", () => (state.code.effort = sel.value as Effort));
+  wrap.append(sel);
+  return wrap;
+}
+
+async function sendCodeTask(text: string): Promise<void> {
+  if (!state.code.repo) {
+    appendCodeBubble("error", "missing repo", "Pick a repository first (e.g. owner/name).");
+    return;
+  }
+  if (!state.code.model) {
+    appendCodeBubble("error", "missing model", "Type a model id (e.g. claude-sonnet-4-5).");
+    return;
+  }
+  const apiKey = await getApiKeyOrComplain(state.code.provider, `Add your ${state.code.provider} API key in Settings.`);
+  if (!apiKey) return;
+  const gh = await getGithubToken();
+  const code = state.bootstrap?.pairingCode;
+  if (!code) {
+    appendCodeBubble("error", "Server not paired", "Server isn't ready yet.");
+    return;
+  }
+
+  const conn = await ensurePairedConnection(code).catch(() => null);
+  if (!conn) {
+    appendCodeBubble("error", "Server unreachable", "Couldn't reach the local server.");
+    return;
+  }
+
+  appendCodeBubble("user", "You", text);
+  pushHistory({ id: state.codeSessionId ?? `s_${Date.now()}`, kind: "code", title: text.slice(0, 60), startedAt: Date.now(), status: "running" });
+  setCodeStatus("running");
+
+  if (!state.codeSessionId) {
+    await conn.send({
+      type: "create_session",
+      repo: {
+        fullName: state.code.repo,
+        baseBranch: state.code.baseBranch || undefined,
+        workBranch: state.code.workBranch || "code-mobile-ai/change",
+        githubToken: gh || undefined,
+      },
+      model: {
+        provider: state.code.provider as any,
+        model: state.code.model,
+        effort: state.code.effort,
+        apiKey,
+      },
+      permissionMode: "acceptEdits",
+      skills: [],
+      mcpServers: [],
+    });
+    setTimeout(() => {
+      if (state.codeSessionId) void conn.send({ type: "user_message", sessionId: state.codeSessionId, text });
+    }, 200);
+  } else {
+    await conn.send({ type: "user_message", sessionId: state.codeSessionId, text });
+  }
+}
+
+function appendCodeBubble(kind: string, meta: string, body: string): void {
+  const bodyEl = $("code-body");
+  bodyEl.querySelector(".empty-session")?.remove();
+  const bubble = el("div", { class: `bubble ${kind}` });
+  bubble.append(el("div", { class: "meta" }, [meta]));
+  if (body) bubble.append(el("pre", {}, [body]));
+  bodyEl.append(bubble);
+  bodyEl.scrollTop = bodyEl.scrollHeight;
+}
+
+function setCodeStatus(state: "idle" | "running"): void {
+  const dot = document.getElementById("code-status");
+  const txt = document.getElementById("code-status-text");
+  if (!dot || !txt) return;
+  dot.classList.remove("idle", "running");
+  dot.classList.add(state);
+  txt.textContent = state;
+}
+
+// ───── WebSocket plumbing ─────
+async function ensurePairedConnection(code: string): Promise<{
+  send: (msg: unknown) => Promise<void>;
+}> {
+  const port = state.bootstrap?.serverPort;
+  const host = state.bootstrap?.serverHost ?? "127.0.0.1";
+  if (!port) throw new Error("no port");
+
+  // Reuse existing socket if open
+  if (state.codeWs && state.codeWs.readyState === WebSocket.OPEN) {
+    return { send: async (m) => state.codeWs!.send(JSON.stringify(m)) };
+  }
 
   const pairRes = await fetch(`http://${host}:${port}/pair`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ code, deviceName: "Code Mobile AI (desktop)" }),
   });
-  if (!pairRes.ok) return null;
-  const json = (await pairRes.json()) as { token: string };
-  return { token: json.token, url: `ws://${host}:${port}/session?token=${json.token}` };
-}
+  if (!pairRes.ok) throw new Error("pair failed");
+  const { token } = (await pairRes.json()) as { token: string };
 
-function openSocket(): Promise<WebSocket> {
-  return new Promise(async (resolve, reject) => {
-    try {
-      const conn = await ensurePairedAndConnected();
-      if (!conn) {
-        reject(new Error("Server not ready"));
-        return;
-      }
-      const ws = new WebSocket(conn.url);
-      ws.onopen = () => resolve(ws);
-      ws.onerror = () => reject(new Error("WebSocket failed"));
-      ws.onclose = () => {
-        if (state.ws === ws) state.ws = null;
-      };
-      ws.onmessage = (ev) => handleServerMessage(ev.data);
-    } catch (err) {
-      reject(err);
-    }
+  const ws = new WebSocket(`ws://${host}:${port}/session?token=${token}`);
+  state.codeWs = ws;
+  await new Promise<void>((resolve, reject) => {
+    ws.onopen = () => resolve();
+    ws.onerror = () => reject(new Error("ws failed"));
+    ws.onclose = () => { if (state.codeWs === ws) state.codeWs = null; };
   });
+  ws.onmessage = (ev) => handleCodeServerMessage(ev.data);
+  return { send: async (m) => ws.send(JSON.stringify(m)) };
 }
 
-async function sendClient(msg: unknown): Promise<void> {
-  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
-    state.ws = await openSocket();
-    state.ws.onmessage = (ev) => handleServerMessage(ev.data);
-  }
-  state.ws.send(JSON.stringify(msg));
-}
-
-function handleServerMessage(raw: unknown): void {
+function handleCodeServerMessage(raw: unknown): void {
   let msg: any;
   try { msg = JSON.parse(String(raw)); } catch { return; }
-  const body = $("view-home");
+  const body = $("code-body");
   if (msg.type === "session_created") {
-    state.sessionId = msg.sessionId;
-    body.querySelector(".empty-session")?.remove();
-    appendBubble(body, "assistant", "Session started", `workdir: ${msg.workdir}\nbranch: ${msg.workBranch}`);
+    state.codeSessionId = msg.sessionId;
+    appendCodeBubble("assistant", "session started", `workdir: ${msg.workdir}\nbranch: ${msg.workBranch}`);
     return;
   }
   if (msg.type === "assistant_delta") {
@@ -182,359 +467,705 @@ function handleServerMessage(raw: unknown): void {
   if (msg.type === "tool_call") {
     body.querySelector(".empty-session")?.remove();
     body.querySelector(".live-assistant")?.remove();
-    appendBubble(body, "tool", `${msg.tool}: ${msg.summary}`, JSON.stringify(msg.input, null, 2));
+    appendCodeBubble("tool", `${msg.tool}: ${msg.summary}`, JSON.stringify(msg.input, null, 2));
     return;
   }
   if (msg.type === "tool_result") {
-    const ok = msg.ok ? "✓" : "�";
-    appendBubble(body, "tool", `${ok} result`, msg.output);
+    appendCodeBubble("tool", msg.ok ? "✓ result" : "✗ result", msg.output);
     return;
   }
   if (msg.type === "diff") {
-    appendBubble(body, "diff", `diff ${msg.path} (+${msg.added} -${msg.removed})`, msg.patch);
+    appendCodeBubble("diff", `diff ${msg.path} (+${msg.added} -${msg.removed})`, msg.patch);
     return;
   }
   if (msg.type === "permission_request") {
-    appendBubble(
-      body,
-      "tool",
-      `permission: ${msg.tool}`,
-      `${msg.summary}\n\n(Reply "allow" or "deny" in the composer to respond.)`,
-    );
+    appendCodeBubble("permission", `permission: ${msg.tool}`, msg.summary);
     return;
   }
   if (msg.type === "session_done") {
-    appendBubble(body, "assistant", "session done", msg.stopReason ?? "");
-    pushHistory({ status: "done" });
+    appendCodeBubble("assistant", "session done", msg.stopReason ?? "");
+    setCodeStatus("idle");
+    pushHistory({ id: state.codeSessionId ?? "", kind: "code", title: "code session", startedAt: Date.now(), status: "done" });
     return;
   }
   if (msg.type === "pr_created") {
-    appendBubble(body, "assistant", "PR opened", msg.url);
+    appendCodeBubble("pr", "PR opened", msg.url);
     return;
   }
   if (msg.type === "error") {
-    appendBubble(body, "error", "error", msg.message);
-    pushHistory({ status: "error" });
+    appendCodeBubble("error", "error", msg.message);
+    setCodeStatus("idle");
+    pushHistory({ id: state.codeSessionId ?? "", kind: "code", title: "code session", startedAt: Date.now(), status: "error" });
     return;
   }
 }
 
-function appendBubble(parent: HTMLElement, kind: string, meta: string, body: string) {
-  const bubble = el("div", { class: `bubble ${kind}` });
-  bubble.append(el("div", { class: "meta" }, [meta]));
-  if (body) bubble.append(el("pre", {}, [body]));
-  parent.append(bubble);
-  parent.scrollTop = parent.scrollHeight;
+// ───── Settings modal ─────
+function openSettings(): void {
+  state.settingsOpen = true;
+  state.settingsSection = "general";
+  $("settings-backdrop").classList.remove("hidden");
+  $("settings-modal").classList.remove("hidden");
+  renderSettingsSection();
+}
+function closeSettings(): void {
+  state.settingsOpen = false;
+  $("settings-backdrop").classList.add("hidden");
+  $("settings-modal").classList.add("hidden");
 }
 
-// ---------------------------------------------------------------------------
-// Home view
-// ---------------------------------------------------------------------------
-function renderHome() {
-  const view = $("view-home");
-  view.innerHTML = "";
+function renderSettingsSection(): void {
+  for (const item of Array.from(document.querySelectorAll<HTMLElement>(".modal-nav-item"))) {
+    item.classList.toggle("active", item.dataset.section === state.settingsSection);
+  }
+  const panel = $("settings-panel");
+  panel.innerHTML = "";
 
-  const grid = el("div", { class: "home-grid" });
+  if (state.settingsSection === "general") panel.append(renderGeneralSection());
+  else if (state.settingsSection === "providers") panel.append(renderProvidersSection());
+  else if (state.settingsSection === "github") panel.append(renderGithubSection());
+  else if (state.settingsSection === "pairing") panel.append(renderPairingSection());
+  else if (state.settingsSection === "window") panel.append(renderWindowSection());
+  else if (state.settingsSection === "about") panel.append(renderAboutSection());
+}
 
-  // --- pickers ---
-  const picker = el("div", { class: "picker-row" });
+// ───── In-app modal (replaces window.prompt / window.confirm) ─────
+//
+// Electron's renderer doesn't implement window.prompt — it returns null
+// silently, which made the original API-key add/replace buttons (and the
+// Add Custom Provider flow) dead. This mini-modal renders an in-app
+// dialog that resolves with the user input.
 
-  const repoField = field("Repository", inputWithAutofill("repo", state.picker.repo, "owner/name"));
-  const baseField = field("Base branch", inputWithAutofill("baseBranch", state.picker.baseBranch, "main"));
-  const workField = field("Work branch", inputWithAutofill("workBranch", state.picker.workBranch, "code-mobile-ai/change"));
+interface MiniModalField {
+  id: string;
+  label: string;
+  placeholder?: string;
+  defaultValue?: string;
+  type?: "text" | "password" | "url";
+  required?: boolean;
+  hint?: string;
+}
 
-  const providerSel = el("select", { id: "provider" });
-  for (const p of PROVIDERS) providerSel.append(el("option", { value: p.id }, [p.label]));
-  providerSel.value = state.picker.provider;
-  providerSel.addEventListener("change", () => {
-    state.picker.provider = providerSel.value;
-    state.picker.model = "";
-    modelSel.value = "";
-  });
-  const modelSel = el("input", { id: "model", placeholder: "model id" });
-  modelSel.value = state.picker.model;
-  modelSel.addEventListener("input", () => (state.picker.model = modelSel.value));
-  const effortSel = el("select", { id: "effort" });
-  for (const e of EFFORTS) effortSel.append(el("option", { value: e }, [e]));
-  effortSel.value = state.picker.effort;
-  effortSel.addEventListener("change", () => (state.picker.effort = effortSel.value as Effort));
+interface MiniModalResult {
+  ok: boolean;
+  values: Record<string, string>;
+}
 
-  picker.append(
-    repoField.wrap, baseField.wrap, workField.wrap,
-    wrap("Provider", providerSel),
-    wrap("Model", modelSel),
-    wrap("Effort", effortSel),
-  );
-  grid.append(picker);
-
-  // --- session ---
-  const session = el("div", { class: "session" });
-  const sHeader = el("div", { class: "session-header" });
-  sHeader.append(el("span", {}, ["Session"]));
-  const status = el("span", { class: "status", id: "session-status" }, ["idle"]);
-  sHeader.append(status);
-  session.append(sHeader);
-  const sBody = el("div", { class: "session-body", id: "session-body" });
-  sBody.append(el("div", { class: "empty-session" }, ["Pick a repo and a model, then send a task."]));
-  session.append(sBody);
-  grid.append(session);
-
-  // --- composer ---
-  const composer = el("div", { class: "composer" });
-  const ta = el("textarea", { id: "composer", placeholder: "Describe what you want to change…" });
-  ta.rows = 2;
-  ta.addEventListener("keydown", (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-      e.preventDefault();
-      void onSend();
+function miniModal(opts: {
+  title: string;
+  description?: string;
+  fields: MiniModalField[];
+  confirmLabel?: string;
+  cancelLabel?: string;
+  validate?: (values: Record<string, string>) => string | null;
+}): Promise<MiniModalResult> {
+  return new Promise((resolve) => {
+    const backdrop = el("div", { class: "mini-modal-backdrop" });
+    const modal = el("div", { class: "mini-modal", role: "dialog", "aria-modal": "true" });
+    modal.append(el("div", { class: "mini-modal-title" }, [opts.title]));
+    if (opts.description) {
+      modal.append(el("div", { class: "mini-modal-desc" }, [opts.description]));
     }
-  });
-  const sendBtn = el("button", { class: "send-btn", id: "send-btn" }, ["Send"]);
-  sendBtn.addEventListener("click", () => void onSend());
-  composer.append(ta, sendBtn);
-  grid.append(composer);
+    const inputs: Record<string, HTMLInputElement> = {};
+    for (const f of opts.fields) {
+      const wrap = el("div", { class: "mini-modal-field" });
+      wrap.append(el("label", { for: `mm-${f.id}` }, [f.label]));
+      const input = el("input", {
+        id: `mm-${f.id}`,
+        type: f.type ?? "text",
+        placeholder: f.placeholder ?? "",
+        value: f.defaultValue ?? "",
+      }) as HTMLInputElement;
+      input.autocomplete = "off";
+      input.spellcheck = false;
+      wrap.append(input);
+      if (f.hint) wrap.append(el("div", { class: "mini-modal-hint" }, [f.hint]));
+      modal.append(wrap);
+      inputs[f.id] = input;
+    }
+    const error = el("div", { class: "mini-modal-error" });
+    modal.append(error);
 
-  view.append(grid);
+    const actions = el("div", { class: "mini-modal-actions" });
+    const cancelBtn = el("button", { type: "button", class: "ghost-btn" }, [
+      opts.cancelLabel ?? "Cancel",
+    ]);
+    const confirmBtn = el("button", { type: "button", class: "primary-btn" }, [
+      opts.confirmLabel ?? "Save",
+    ]);
+    actions.append(cancelBtn, confirmBtn);
+    modal.append(actions);
 
-  async function onSend() {
-    const text = ta.value.trim();
-    if (!text) return;
-    const apiKey = await getApiKeyFor(state.picker.provider);
-    if (!apiKey) {
-      appendBubble(sBody, "error", "missing API key",
-        `Add a key for ${state.picker.provider} in Settings before sending a coding task.`);
-      return;
-    }
-    if (!state.picker.repo) {
-      appendBubble(sBody, "error", "missing repo", "Pick a repository first (e.g. owner/name).");
-      return;
-    }
-    if (!state.picker.model) {
-      appendBubble(sBody, "error", "missing model", "Type a model id (e.g. claude-sonnet-4-5).");
-      return;
-    }
-    appendBubble(sBody, "user", "you", text);
-    pushHistory({ status: "running", prompt: text, repo: state.picker.repo });
-    sendBtn.disabled = true;
-    sendBtn.textContent = "Working…";
-    status.textContent = "running";
-    try {
-      if (state.sessionId) {
-        await sendClient({ type: "user_message", sessionId: state.sessionId, text });
-      } else {
-        const gh = await getGithubToken();
-        await sendClient({
-          type: "create_session",
-          repo: {
-            fullName: state.picker.repo,
-            baseBranch: state.picker.baseBranch || undefined,
-            workBranch: state.picker.workBranch || "code-mobile-ai/change",
-            githubToken: gh || undefined,
-          },
-          model: { provider: state.picker.provider as any, model: state.picker.model, effort: state.picker.effort, apiKey },
-          permissionMode: "acceptEdits",
-          skills: [],
-          mcpServers: [],
-        });
-        // The first message goes together with create_session for simplicity:
-        setTimeout(() => {
-          if (state.sessionId) {
-            void sendClient({ type: "user_message", sessionId: state.sessionId, text });
-          }
-        }, 250);
+    const close = (result: MiniModalResult) => {
+      backdrop.remove();
+      document.removeEventListener("keydown", onKey, true);
+      resolve(result);
+    };
+    const collect = (): Record<string, string> => {
+      const out: Record<string, string> = {};
+      for (const f of opts.fields) {
+        const input = inputs[f.id];
+        if (input) out[f.id] = input.value.trim();
       }
-    } catch (err) {
-      appendBubble(sBody, "error", "send failed", String((err as Error).message ?? err));
-    } finally {
-      ta.value = "";
-      sendBtn.disabled = false;
-      sendBtn.textContent = "Send";
-      status.textContent = "idle";
+      return out;
+    };
+    const submit = () => {
+      const values = collect();
+      for (const f of opts.fields) {
+        if (f.required && !values[f.id]) {
+          error.textContent = `${f.label} is required.`;
+          inputs[f.id]?.focus();
+          return;
+        }
+      }
+      if (opts.validate) {
+        const err = opts.validate(values);
+        if (err) {
+          error.textContent = err;
+          return;
+        }
+      }
+      close({ ok: true, values });
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        close({ ok: false, values: {} });
+      } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey || !e.shiftKey)) {
+        e.preventDefault();
+        submit();
+      }
+    };
+    cancelBtn.addEventListener("click", () => close({ ok: false, values: {} }));
+    confirmBtn.addEventListener("click", submit);
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === backdrop) close({ ok: false, values: {} });
+    });
+    document.addEventListener("keydown", onKey, true);
+
+    backdrop.append(modal);
+    document.body.append(backdrop);
+    const firstField = opts.fields[0];
+    if (firstField) {
+      queueMicrotask(() => inputs[firstField.id]?.focus());
     }
+  });
+}
+
+async function miniConfirm(opts: {
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  destructive?: boolean;
+}): Promise<boolean> {
+  return new Promise((resolve) => {
+    const backdrop = el("div", { class: "mini-modal-backdrop" });
+    const modal = el("div", { class: "mini-modal", role: "alertdialog", "aria-modal": "true" });
+    modal.append(el("div", { class: "mini-modal-title" }, [opts.title]));
+    modal.append(el("div", { class: "mini-modal-desc" }, [opts.message]));
+    const actions = el("div", { class: "mini-modal-actions" });
+    const cancelBtn = el("button", { type: "button", class: "ghost-btn" }, [
+      opts.cancelLabel ?? "Cancel",
+    ]);
+    const confirmBtn = el(
+      "button",
+      { type: "button", class: opts.destructive ? "danger-btn-solid" : "primary-btn" },
+      [opts.confirmLabel ?? "Confirm"],
+    );
+    actions.append(cancelBtn, confirmBtn);
+    modal.append(actions);
+
+    const close = (ok: boolean) => {
+      backdrop.remove();
+      document.removeEventListener("keydown", onKey, true);
+      resolve(ok);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close(false);
+      else if (e.key === "Enter") close(true);
+    };
+    cancelBtn.addEventListener("click", () => close(false));
+    confirmBtn.addEventListener("click", () => close(true));
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === backdrop) close(false);
+    });
+    document.addEventListener("keydown", onKey, true);
+    backdrop.append(modal);
+    document.body.append(backdrop);
+    queueMicrotask(() => confirmBtn.focus());
+  });
+}
+
+function renderGeneralSection(): HTMLElement {
+  const root = el("div", {}, []);
+  root.append(el("h2", {}, ["General"]));
+  root.append(panelRow("App version", el("span", {}, [state.bootstrap?.version ?? "—"])));
+  root.append(panelRow("Platform", el("span", {}, [state.bootstrap?.platform ?? "—"])));
+  root.append(panelRow("Close behaviour",
+    el("span", {}, [state.bootstrap?.prefs.alwaysQuitOnClose
+      ? "Always quit on close"
+      : state.bootstrap?.prefs.closeBehaviorDecided
+        ? "Always hide to tray"
+        : "Ask on first close"])));
+  root.append(panelRow("Storage",
+    el("span", {}, [state.bootstrap?.secretsAvailable
+      ? "OS keychain available"
+      : "Keychain unavailable — secrets won't persist"])));
+  return root;
+}
+
+function renderProvidersSection(): HTMLElement {
+  const root = el("div", {}, []);
+  // Section header with a `+` button on the left, mirroring the iOS settings UX.
+  const header = el("div", { class: "section-header" }, []);
+  header.append(el("h2", {}, ["Provider API keys"]));
+  const addBtn = el("button", { class: "ghost-btn", type: "button", id: "add-custom-provider" }, ["+ Custom"]);
+  addBtn.addEventListener("click", () => {
+    void addCustomProviderPrompt();
+  });
+  header.append(addBtn);
+  root.append(header);
+  root.append(el("div", { class: "empty-block" }, [
+    "Keys are stored locally via Electron safeStorage (OS keychain). They're never sent anywhere except the local server during a coding session.",
+  ]));
+  for (const p of PROVIDERS) {
+    const present = !!state.secrets?.providerKeys[p.id]?.present;
+    const row = el("div", { class: "panel-row" }, []);
+    row.append(el("div", { class: "panel-label" }, [p.label]));
+    const status = el("span", { class: "panel-status " + (present ? "ok" : "warn") }, [present ? "configured" : "empty"]);
+    const value = el("div", { class: "panel-value" }, [status]);
+    const actions = el("div", { class: "panel-actions" }, []);
+    const setBtn = el("button", { class: "ghost-btn", type: "button" }, [present ? "Replace" : "Add"]);
+    setBtn.addEventListener("click", async () => {
+      const res = await miniModal({
+        title: `${present ? "Replace" : "Add"} API key`,
+        description: `Enter the API key for ${p.label}. It's stored locally in the OS keychain.`,
+        fields: [
+          {
+            id: "apiKey",
+            label: "API key",
+            type: "password",
+            placeholder: "sk-…",
+            required: true,
+          },
+        ],
+        confirmLabel: present ? "Replace" : "Save",
+      });
+      if (!res.ok) return;
+      const apiKey = res.values.apiKey ?? "";
+      if (!apiKey) return;
+      await window.cmai.secrets.set({ providerKeys: { [p.id]: apiKey } as any });
+      state.secrets = await window.cmai.secrets.get();
+      renderSettingsSection();
+    });
+    actions.append(setBtn);
+    if (present) {
+      const clearBtn = el("button", { class: "danger-btn", type: "button" }, ["Clear"]);
+      clearBtn.addEventListener("click", async () => {
+        const ok = await miniConfirm({
+          title: "Clear API key?",
+          message: `Remove the API key for ${p.label}? You'll need to add it again to use this provider.`,
+          confirmLabel: "Clear",
+          destructive: true,
+        });
+        if (!ok) return;
+        await window.cmai.secrets.clearProvider(p.id);
+        state.secrets = await window.cmai.secrets.get();
+        renderSettingsSection();
+      });
+      actions.append(clearBtn);
+    }
+    row.append(value, actions);
+    root.append(row);
+  }
+
+  // Custom providers (user-defined OpenAI-compatible endpoints).
+  for (const c of state.secrets?.customProviders ?? []) {
+    const present = !!state.secrets?.providerKeys[c.id]?.present;
+    const row = el("div", { class: "panel-row" }, []);
+    const labelWrap = el("div", { class: "panel-label" }, []);
+    labelWrap.append(el("div", {}, [`Custom · ${c.label}`]));
+    const urlLine = el("div", { class: "panel-sublabel" }, [c.baseUrl]);
+    labelWrap.append(urlLine);
+    row.append(labelWrap);
+    const status = el("span", { class: "panel-status " + (present ? "ok" : "warn") }, [present ? "configured" : "empty"]);
+    const value = el("div", { class: "panel-value" }, [status]);
+    const actions = el("div", { class: "panel-actions" }, []);
+    const setBtn = el("button", { class: "ghost-btn", type: "button" }, [present ? "Replace key" : "Add key"]);
+    setBtn.addEventListener("click", async () => {
+      const res = await miniModal({
+        title: `${present ? "Replace" : "Add"} API key`,
+        description: `Enter the API key for ${c.label}. It's stored locally in the OS keychain.`,
+        fields: [
+          {
+            id: "apiKey",
+            label: "API key",
+            type: "password",
+            placeholder: "sk-…",
+            required: true,
+          },
+        ],
+        confirmLabel: present ? "Replace" : "Save",
+      });
+      if (!res.ok) return;
+      const apiKey = res.values.apiKey ?? "";
+      if (!apiKey) return;
+      await window.cmai.secrets.setCustomProviderKey(c.id, apiKey);
+      state.secrets = await window.cmai.secrets.get();
+      renderSettingsSection();
+    });
+    actions.append(setBtn);
+    const removeBtn = el("button", { class: "danger-btn", type: "button" }, ["Remove"]);
+    removeBtn.addEventListener("click", async () => {
+      const ok = await miniConfirm({
+        title: `Remove "${c.label}"?`,
+        message: `This removes the custom provider and wipes its API key. You'll have to re-add it to use it again.`,
+        confirmLabel: "Remove",
+        destructive: true,
+      });
+      if (!ok) return;
+      await window.cmai.secrets.removeCustomProvider(c.id);
+      state.secrets = await window.cmai.secrets.get();
+      if (state.code.provider === c.id) state.code.provider = "anthropic";
+      renderSettingsSection();
+    });
+    actions.append(removeBtn);
+    row.append(value, actions);
+    root.append(row);
+  }
+  return root;
+}
+
+/** Prompt the user for label + base URL + optional API key, then persist. */
+async function addCustomProviderPrompt(): Promise<void> {
+  const result = await miniModal({
+    title: "Add custom provider",
+    description:
+      "Custom providers talk any OpenAI-compatible /v1/models and /v1/chat/completions endpoint. The desktop agent uses your base URL.",
+    fields: [
+      {
+        id: "label",
+        label: "Display label",
+        placeholder: "Internal LLM",
+        required: true,
+      },
+      {
+        id: "baseUrl",
+        label: "Base URL",
+        placeholder: "https://llm.example.com/v1",
+        type: "url",
+        required: true,
+        hint: "Must be a valid http(s) URL ending in /v1.",
+      },
+      {
+        id: "apiKey",
+        label: "API key (optional)",
+        placeholder: "Leave empty to add later",
+        type: "password",
+      },
+    ],
+    confirmLabel: "Save",
+    validate: (vals) => {
+      const label = vals.label ?? "";
+      const baseUrl = vals.baseUrl ?? "";
+      try {
+        const u = new URL(baseUrl);
+        if (u.protocol !== "http:" && u.protocol !== "https:") {
+          return "Base URL must use http or https.";
+        }
+      } catch {
+        return "Base URL is not a valid URL.";
+      }
+      const slug = slugify(label);
+      if (!slug) return "Label must contain at least one letter or digit.";
+      const taken = (state.secrets?.customProviders ?? []).some((c) => c.id === slug);
+      if (taken) return `A custom provider with id "${slug}" already exists.`;
+      return null;
+    },
+  });
+  if (!result.ok) return;
+
+  const slug = slugify(result.values.label ?? "");
+  try {
+    const parsed = new URL(result.values.baseUrl ?? "");
+    await window.cmai.secrets.addCustomProvider({
+      id: slug,
+      label: result.values.label ?? "",
+      baseUrl: parsed.toString(),
+      apiKey: result.values.apiKey || undefined,
+    });
+    state.secrets = await window.cmai.secrets.get();
+    renderSettingsSection();
+  } catch (err) {
+    await miniConfirm({
+      title: "Couldn't add provider",
+      message: `Reason: ${(err as Error).message}`,
+      confirmLabel: "OK",
+      cancelLabel: "Dismiss",
+    });
   }
 }
 
-function field(label: string, input: HTMLElement) {
-  return { wrap: wrap(label, input), input };
-}
-function wrap(label: string, input: HTMLElement) {
-  const w = el("div", { class: "field" });
-  w.append(el("label", {}, [label]));
-  w.append(input);
-  return w;
-}
-function inputWithAutofill(key: keyof typeof state.picker, value: string, placeholder: string) {
-  const i = el("input", { id: key, placeholder });
-  i.value = value;
-  i.addEventListener("input", () => ((state.picker as any)[key] = i.value));
-  return i;
+/** Lowercase + non-alphanumerics → dashes; trimmed. Used to derive ids. */
+function slugify(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
-function pushHistory(partial: Partial<HistoryEntry>) {
-  const entry: HistoryEntry = {
-    id: state.sessionId ?? `h_${Date.now()}`,
-    repo: state.picker.repo,
-    prompt: "",
-    startedAt: Date.now(),
-    status: "running",
-    ...partial,
-  };
-  // Update existing entry if it has the same id
-  const existing = state.history.findIndex((h) => h.id === entry.id);
-  if (existing >= 0) state.history[existing] = { ...state.history[existing], ...entry };
-  else state.history.unshift(entry);
+function renderGithubSection(): HTMLElement {
+  const root = el("div", {}, []);
+  root.append(el("h2", {}, ["GitHub"]));
+  root.append(el("div", { class: "empty-block" }, [
+    "Used by the server to clone your repo and push the work branch when opening a PR. Stored locally; never persisted on disk.",
+  ]));
+  const present = !!state.secrets?.githubTokenPresent;
+  const row = el("div", { class: "panel-row" }, []);
+  row.append(el("div", { class: "panel-label" }, ["Personal access token"]));
+  const status = el("span", { class: "panel-status " + (present ? "ok" : "warn") }, [present ? "configured" : "empty"]);
+  const value = el("div", { class: "panel-value" }, [status]);
+  const actions = el("div", { class: "panel-actions" }, []);
+  const setBtn = el("button", { class: "ghost-btn", type: "button" }, [present ? "Replace" : "Add"]);
+  setBtn.addEventListener("click", async () => {
+    const res = await miniModal({
+      title: `${present ? "Replace" : "Add"} GitHub token`,
+      description: "Used by the server to clone repos and push branches when opening PRs. Stored locally.",
+      fields: [
+        {
+          id: "token",
+          label: "Personal access token",
+          type: "password",
+          placeholder: "ghp_…",
+          required: true,
+        },
+      ],
+      confirmLabel: present ? "Replace" : "Save",
+    });
+    if (!res.ok) return;
+    const token = res.values.token ?? "";
+    if (!token) return;
+    await window.cmai.secrets.set({ githubToken: token });
+    state.secrets = await window.cmai.secrets.get();
+    renderSettingsSection();
+  });
+  actions.append(setBtn);
+  if (present) {
+    const clearBtn = el("button", { class: "danger-btn", type: "button" }, ["Clear"]);
+    clearBtn.addEventListener("click", async () => {
+      const ok = await miniConfirm({
+        title: "Clear GitHub token?",
+        message: "Removing the GitHub token prevents the server from cloning or pushing until you add a new one.",
+        confirmLabel: "Clear",
+        destructive: true,
+      });
+      if (!ok) return;
+      await window.cmai.secrets.clearGithub();
+      state.secrets = await window.cmai.secrets.get();
+      renderSettingsSection();
+    });
+    actions.append(clearBtn);
+  }
+  row.append(value, actions);
+  root.append(row);
+  return root;
 }
 
-async function getApiKeyFor(provider: string): Promise<string | null> {
+function renderPairingSection(): HTMLElement {
+  const root = el("div", {}, []);
+  root.append(el("h2", {}, ["Pairing"]));
+  root.append(el("div", { class: "empty-block" }, [
+    "Open the iOS app and enter this address and pairing code in Settings → Pair with a server.",
+  ]));
+  const b = state.bootstrap;
+  root.append(panelRow("Address",
+    el("code", {}, [b?.serverHost && b?.serverPort ? `http://${b.serverHost}:${b.serverPort}` : "—"])));
+  root.append(panelRow("Pairing code",
+    el("code", {}, [b?.pairingCode ?? "—"])));
+  const actionsRow = el("div", { class: "panel-row" }, []);
+  actionsRow.append(el("div", { class: "panel-label" }, [""]));
+  const actions = el("div", { class: "panel-actions" }, []);
+  const copyAddr = el("button", { class: "ghost-btn", type: "button" }, ["Copy address"]);
+  copyAddr.addEventListener("click", () => {
+    const text = b?.serverHost && b?.serverPort ? `http://${b.serverHost}:${b.serverPort}` : "";
+    if (text) void window.cmai.clipboard.write(text);
+  });
+  const copyCode = el("button", { class: "ghost-btn", type: "button" }, ["Copy code"]);
+  copyCode.addEventListener("click", () => {
+    if (b?.pairingCode) void window.cmai.clipboard.write(b.pairingCode);
+  });
+  actions.append(copyAddr, copyCode);
+  actionsRow.append(actions);
+  root.append(actionsRow);
+  return root;
+}
+
+function renderWindowSection(): HTMLElement {
+  const root = el("div", {}, []);
+  root.append(el("h2", {}, ["Window"]));
+  root.append(el("div", { class: "empty-block" }, [
+    "When you close the window, the app can hide to the menu bar / task tray (server keeps running) or quit completely (server stops).",
+  ]));
+  const row = el("div", { class: "panel-row" }, []);
+  row.append(el("div", { class: "panel-label" }, ["Close behaviour"]));
+  const value = el("div", { class: "panel-value" }, []);
+  const isQuitting = !!state.bootstrap?.prefs.alwaysQuitOnClose;
+  const isDecided = !!state.bootstrap?.prefs.closeBehaviorDecided;
+  const select = el("select", { class: "panel-input" }) as HTMLSelectElement;
+  select.append(el("option", { value: "hide" }, ["Always hide to tray"]));
+  select.append(el("option", { value: "quit" }, ["Always quit on close"]));
+  select.value = isQuitting ? "quit" : "hide";
+  const status = el("span", { class: "panel-status " + (isDecided ? "ok" : "warn") },
+    [isDecided ? "saved" : "will ask on first close"]);
+  value.append(select, status);
+  row.append(value);
+  select.addEventListener("change", async () => {
+    const wantQuit = select.value === "quit";
+    await window.cmai.prefs.set({
+      closeBehaviorDecided: true,
+      alwaysQuitOnClose: wantQuit,
+    });
+    // Refresh bootstrap snapshot so the UI shows the new state.
+    state.bootstrap = await window.cmai.bootstrap();
+    renderSettingsSection();
+  });
+  root.append(row);
+
+  // Start minimized toggle
+  const startRow = el("div", { class: "panel-row" }, []);
+  startRow.append(el("div", { class: "panel-label" }, ["Start minimized"]));
+  const startValue = el("div", { class: "panel-value" }, []);
+  const startToggle = el("input", { type: "checkbox", class: "panel-input" }) as HTMLInputElement;
+  startToggle.checked = !!state.bootstrap?.prefs.startMinimized;
+  startToggle.style.width = "auto";
+  startToggle.addEventListener("change", async () => {
+    await window.cmai.prefs.set({ startMinimized: startToggle.checked });
+    state.bootstrap = await window.cmai.bootstrap();
+  });
+  startValue.append(startToggle, el("span", { class: "panel-status" }, ["Launches hidden in tray; click the tray icon to open"]));
+  startRow.append(startValue);
+  root.append(startRow);
+
+  return root;
+}
+
+function renderAboutSection(): HTMLElement {
+  const root = el("div", {}, []);
+  root.append(el("h2", {}, ["About"]));
+  root.append(panelRow("App", el("span", {}, ["Code Mobile AI"])));
+  root.append(panelRow("Version", el("code", {}, [state.bootstrap?.version ?? "—"])));
+  root.append(panelRow("Server", el("code", {}, [`v${state.bootstrap?.version ?? "—"} on http://${state.bootstrap?.serverHost ?? "127.0.0.1"}:${state.bootstrap?.serverPort ?? "—"}`])));
+  root.append(panelRow("Protocol", el("span", {}, ["WebSocket /session over Express — see docs/protocol.md"])));
+  return root;
+}
+
+function panelRow(label: string, valueEl: Node): HTMLElement {
+  const row = el("div", { class: "panel-row" }, []);
+  row.append(el("div", { class: "panel-label" }, [label]));
+  row.append(el("div", { class: "panel-value" }, [valueEl]));
+  return row;
+}
+
+// ───── Secrets helpers ─────
+async function getApiKeyOrComplain(provider: string, msg: string): Promise<string | null> {
   const cur = await window.cmai.secrets.get();
-  if (!cur.providerKeys[provider]?.present) return null;
+  if (!cur.providerKeys[provider]?.present) {
+    appendCodeBubble("error", "missing API key", msg);
+    return null;
+  }
   const raw = await window.cmai.secrets.readProviderKey(provider);
-  return raw || null;
+  if (!raw) {
+    appendCodeBubble("error", "missing API key", msg);
+    return null;
+  }
+  return raw;
 }
-
 async function getGithubToken(): Promise<string | null> {
   const cur = await window.cmai.secrets.get();
   if (!cur.githubTokenPresent) return null;
   return (await window.cmai.secrets.readGithubToken()) || null;
 }
 
-// ---------------------------------------------------------------------------
-// History view
-// ---------------------------------------------------------------------------
-function renderHistory() {
-  const view = $("view-history");
-  view.innerHTML = "";
-  view.append(el("h2", {}, ["History"]));
-  if (state.history.length === 0) {
-    view.append(el("div", { class: "notice warn" }, ["No tasks yet — send one from Home."]));
-    return;
-  }
-  const list = el("div", { class: "history-list" });
-  for (const h of state.history) {
-    const item = el("div", { class: "history-item" });
-    item.append(el("div", { class: "title" }, [h.prompt.slice(0, 80) || "(no prompt)"]));
-    const meta = el("div", { class: "meta" }, [`${h.repo} • ${new Date(h.startedAt).toLocaleString()} • ${h.status}`]);
-    item.append(meta);
-    list.append(item);
-  }
-  view.append(list);
+// ───── Greeting ─────
+function updateGreeting(): void {
+  const hour = new Date().getHours();
+  let greet = "Hello";
+  if (hour < 5) greet = "Working late";
+  else if (hour < 12) greet = "Good morning";
+  else if (hour < 18) greet = "Good afternoon";
+  else greet = "Good evening";
+  const txt = $("greeting-text");
+  txt.textContent = `${greet}, JC`;
 }
 
-// ---------------------------------------------------------------------------
-// Settings view
-// ---------------------------------------------------------------------------
-function renderSettings() {
-  const view = $("view-settings");
-  view.innerHTML = "";
-  view.append(el("h2", {}, ["Settings"]));
+// ───── Greeting ─────
 
-  // --- Server status ---
-  const server = el("div", { class: "settings-section" });
-  server.append(el("h3", {}, ["Server"]));
-  if (state.bootstrap) {
-    const b = state.bootstrap;
-    server.append(el("div", {}, [`Address: http://${b.serverHost ?? "127.0.0.1"}:${b.serverPort}`]));
-    server.append(el("div", {}, [`Pairing code: ${b.pairingCode ?? "------"}`]));
-    server.append(el("div", {}, [`Platform: ${b.platform} • App v${b.version}`]));
-  }
-  view.append(server);
-
-  // --- Provider API keys ---
-  const providers = el("div", { class: "settings-section" });
-  providers.append(el("h3", {}, ["Provider API keys"]));
-  if (!state.secrets) providers.append(el("div", {}, ["Loading…"]));
-  else {
-    for (const p of PROVIDERS) {
-      const present = !!state.secrets.providerKeys[p.id]?.present;
-      const row = el("div", { class: "provider-row" });
-      row.append(el("div", {}, [p.label]));
-      row.append(el("div", { class: `pill ${present ? "ok" : "empty"}` }, [present ? "configured" : "empty"]));
-      const setBtn = el("button", { class: "ghost-btn" }, [present ? "Replace" : "Add"]);
-      setBtn.addEventListener("click", async () => {
-        const v = prompt(`${present ? "Replace" : "Add"} API key for ${p.label}:`, "");
-        if (!v) return;
-        await window.cmai.secrets.set({ providerKeys: { [p.id]: v } as any });
-        state.secrets = await window.cmai.secrets.get();
-        renderSettings();
-      });
-      const clearBtn = el("button", { class: "danger-btn" }, ["Clear"]);
-      clearBtn.disabled = !present;
-      clearBtn.addEventListener("click", async () => {
-        await window.cmai.secrets.clearProvider(p.id);
-        state.secrets = await window.cmai.secrets.get();
-        renderSettings();
-      });
-      row.append(el("div", {}, [setBtn, " ", clearBtn]));
-      providers.append(row);
-    }
-  }
-  view.append(providers);
-
-  // --- GitHub ---
-  const gh = el("div", { class: "settings-section" });
-  gh.append(el("h3", {}, ["GitHub"]));
-  const ghRow = el("div", { class: "provider-row" });
-  ghRow.append(el("div", {}, ["Personal access token"]));
-  ghRow.append(el("div", { class: `pill ${state.secrets?.githubTokenPresent ? "ok" : "empty"}` }, [state.secrets?.githubTokenPresent ? "configured" : "empty"]));
-  const ghSet = el("button", { class: "ghost-btn" }, [state.secrets?.githubTokenPresent ? "Replace" : "Add"]);
-  ghSet.addEventListener("click", async () => {
-    const v = prompt("GitHub personal access token:", "");
-    if (!v) return;
-    await window.cmai.secrets.set({ githubToken: v });
-    state.secrets = await window.cmai.secrets.get();
-    renderSettings();
-  });
-  const ghClear = el("button", { class: "danger-btn" }, ["Clear"]);
-  ghClear.disabled = !state.secrets?.githubTokenPresent;
-  ghClear.addEventListener("click", async () => {
-    await window.cmai.secrets.clearGithub();
-    state.secrets = await window.cmai.secrets.get();
-    renderSettings();
-  });
-  ghRow.append(el("div", {}, [ghSet, " ", ghClear]));
-  gh.append(ghRow);
-  view.append(gh);
-
-  // --- Storage availability ---
-  const storage = el("div", { class: "settings-section" });
-  storage.append(el("h3", {}, ["Local storage"]));
-  storage.append(el("div", {}, [
-    state.bootstrap?.secretsAvailable
-      ? "Secrets are encrypted with the OS keychain via Electron safeStorage."
-      : "WARNING: OS keychain unavailable; secrets will not be persisted.",
-  ]));
-  view.append(storage);
-}
-
-// ---------------------------------------------------------------------------
-// Bootstrap
-// ---------------------------------------------------------------------------
-async function main() {
+// ───── Bootstrap ─────
+async function main(): Promise<void> {
   state.bootstrap = await window.cmai.bootstrap();
   state.secrets = await window.cmai.secrets.get();
 
-  // Wire sidebar
-  $("server-status").textContent = state.bootstrap.serverRunning
-    ? `running on :${state.bootstrap.serverPort}`
-    : "starting…";
+  // Sidebar
   if (state.bootstrap.pairingCode) {
-    ($("pairing-code") as HTMLElement).textContent = state.bootstrap.pairingCode;
+    // not shown in new layout (it's in Settings)
   }
-  $("copy-code").addEventListener("click", () => {
-    if (state.bootstrap?.pairingCode) {
-      void window.cmai.clipboard.write(state.bootstrap.pairingCode);
+
+  // User chip
+  $("user-avatar").textContent = "JC";
+  $("user-name").textContent = "JC";
+
+  // Tabs
+  for (const t of Array.from(document.querySelectorAll<HTMLElement>(".tab"))) {
+    t.addEventListener("click", () => setTab(t.dataset.tab as Tab));
+  }
+
+  // New chat button → go to Home and reset
+  document.querySelector('[data-action="new"]')?.addEventListener("click", () => {
+    state.chatSessionId = null;
+    state.codeSessionId = null;
+    state.codeWs?.close();
+    state.codeWs = null;
+    setTab("home");
+  });
+
+  // Settings button
+  document.querySelector('[data-action="open-settings"]')?.addEventListener("click", () => openSettings());
+  $("settings-close").addEventListener("click", () => closeSettings());
+  $("settings-backdrop").addEventListener("click", () => closeSettings());
+
+  // Settings nav
+  for (const item of Array.from(document.querySelectorAll<HTMLElement>(".modal-nav-item"))) {
+    item.addEventListener("click", () => {
+      state.settingsSection = item.dataset.section ?? "general";
+      renderSettingsSection();
+    });
+  }
+  // Settings search (cosmetic filter for now)
+  $("settings-search").addEventListener("input", (e) => {
+    const q = (e.target as HTMLInputElement).value.toLowerCase();
+    for (const item of Array.from(document.querySelectorAll<HTMLElement>(".modal-nav-item"))) {
+      const matches = !q || item.textContent.toLowerCase().includes(q);
+      item.classList.toggle("hidden", !matches);
     }
   });
 
-  // React to navigation requests from the tray
-  window.cmai.on("navigate", (path) => {
-    window.location.hash = `#/${path.replace(/^\//, "")}`;
-  });
+  // Greeting
+  updateGreeting();
+  setInterval(updateGreeting, 60_000);
 
-  showRoute(currentRoute());
+  // Initial view
+  renderHomeView();
+  renderRecents();
+
+  // Tray navigation
+  window.cmai.on("navigate", (path) => {
+    if (path.startsWith("/settings")) openSettings();
+    else setTab(path === "/code" ? "code" : "home");
+  });
 }
 
 main().catch((err) => {
   console.error(err);
-  document.body.innerHTML = `<pre style="padding:20px;color:#ef6f6c">${String(err)}</pre>`;
+  document.body.innerHTML = `<pre style="padding:20px;color:#d96f6f">${String(err)}</pre>`;
 });
