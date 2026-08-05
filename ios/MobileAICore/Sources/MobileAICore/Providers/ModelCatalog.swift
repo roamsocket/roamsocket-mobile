@@ -7,12 +7,15 @@ public struct ModelCatalog: Sendable {
     public init(http: HTTPClient = URLSessionHTTPClient()) { self.http = http }
 
     /// Build the client for a provider.
-    public func provider(_ id: ProviderID) -> ModelProvider {
+    public func provider(_ id: ProviderID, customBaseURL: URL? = nil) -> ModelProvider {
         switch id {
         case .anthropic: return AnthropicProvider(http: http)
         case .google: return GoogleProvider(http: http)
         case .openai, .groq, .openrouter, .xai, .mistral:
             return OpenAICompatibleProvider(id: id, http: http)
+        case .custom:
+            // Custom providers are OpenAI-compatible at their own base URL.
+            return OpenAICompatibleProvider(id: id, http: http, baseURLOverride: customBaseURL)
         }
     }
 
@@ -22,6 +25,12 @@ public struct ModelCatalog: Sendable {
         public let models: [AIModel]
         public let error: String?
         public var id: String { provider.rawValue }
+
+        public init(provider: ProviderID, models: [AIModel], error: String? = nil) {
+            self.provider = provider
+            self.models = models
+            self.error = error
+        }
     }
 
     /// Fetch models from all providers that have a non-empty key, concurrently.

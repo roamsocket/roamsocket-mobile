@@ -38,8 +38,11 @@ function toOpenAIMessages(system: string, messages: NormalizedMessage[]): unknow
   return out;
 }
 
-export function makeOpenAICompatibleAdapter(id: ProviderId): ProviderAdapter {
-  const baseUrl = BASE_URLS[id] ?? BASE_URLS.openai!;
+export function makeOpenAICompatibleAdapter(
+  id: ProviderId,
+  baseUrlOverride?: string,
+): ProviderAdapter {
+  const baseUrl = baseUrlOverride || BASE_URLS[id] || BASE_URLS.openai!;
   return {
     id,
     async *stream(req: CompletionRequest, signal?: AbortSignal): AsyncGenerator<ProviderEvent> {

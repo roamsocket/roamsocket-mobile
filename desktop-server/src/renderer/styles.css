@@ -1,36 +1,41 @@
-/* Code Mobile AI desktop — Claude-style dark theme.
-   Tokens approximate Anthropic's desktop palette; layout mirrors the
-   sidebar + centered composer shell. Only real, protocol-backed features
-   are exposed. */
+/* Code Mobile AI desktop — Claude Code palette.
+   Sampled from the Claude Code desktop reference: a deep olive-brown page,
+   slightly lighter sidebar, warm off-white text, brown/tan accents
+   (not bright gold). */
 
 :root {
-  /* Surfaces */
-  --bg: #1f1d1a;          /* page bg, slightly warm dark */
-  --bg-elev: #26241f;     /* sidebar, modal, cards */
-  --bg-elev-2: #2f2c27;   /* hover, inputs */
-  --bg-input: #2a2723;    /* composer, text fields */
-  --line: #3a352d;        /* hairline divider */
-  --line-strong: #4a4438;
+  /* Surfaces — warm brown/olive, slightly desaturated */
+  --bg: #1f1d18;          /* page bg */
+  --bg-elev: #252319;     /* sidebar, modal */
+  --bg-elev-2: #2e2b21;   /* hover, inputs */
+  --bg-input: #2a2720;    /* composer, text fields */
+  --line: #353126;        /* hairline divider */
+  --line-strong: #48402f;
 
   /* Text */
-  --text: #f3eee3;
-  --text-dim: #c2b89e;
-  --text-mute: #8c8270;
-  --text-link: #d9b86f;
+  --text: #efe9dc;
+  --text-dim: #c0b59b;
+  --text-mute: #8a7f6a;
+  --text-link: #b8a980;
 
-  /* Accents */
-  --accent: #d9b86f;          /* warm gold, like Claude's */
-  --accent-dim: #4a3f29;
-  --ok: #9bc6a3;
-  --warn: #d9a86f;
-  --err: #d96f6f;
+  /* Accents — warm brown, not bright gold */
+  --accent: #b8956a;          /* primary accent (tab active, send button) */
+  --accent-dim: #5b4a32;
+  --accent-bg: #3b3022;       /* subtle tinted background for active states */
+  --banner-bg: #4a2e16;       /* top safety banner (brown) */
+  --banner-fg: #f0c590;
 
-  /* Bubbles (Code session streaming) */
-  --bubble-user: #3a342a;
-  --bubble-assistant: #2f2c27;
-  --bubble-tool: #1c1b18;
-  --diff-add: #2a4432;
-  --diff-del: #442a2a;
+  /* Status */
+  --ok: #97b48f;
+  --warn: #c69560;
+  --err: #c66863;
+
+  /* Session bubbles */
+  --bubble-user: #3a3122;
+  --bubble-assistant: #2b2820;
+  --bubble-tool: #1d1b16;
+  --diff-add: #2f4332;
+  --diff-del: #4a2e2e;
 
   --radius-sm: 8px;
   --radius: 12px;
@@ -61,13 +66,13 @@ input, textarea, select { font: inherit; color: inherit; }
   align-items: center;
   gap: 10px;
   padding: 8px 16px;
-  background: #5a3b1a;
-  color: #f5d9a3;
+  background: var(--banner-bg);
+  color: var(--banner-fg);
   font-size: 13px;
 }
 .top-banner .dot {
   width: 14px; height: 14px; border-radius: 50%;
-  background: #d97a2c; flex-shrink: 0;
+  background: #b8632a; flex-shrink: 0;
   display: inline-grid; place-items: center;
 }
 .top-banner .dot::after {
@@ -77,7 +82,7 @@ input, textarea, select { font: inherit; color: inherit; }
 .top-banner .banner-cta {
   background: rgba(255, 255, 255, 0.12);
   border: 1px solid rgba(255, 255, 255, 0.18);
-  color: #f5d9a3;
+  color: var(--banner-fg);
   padding: 4px 12px;
   border-radius: 6px;
 }
@@ -124,7 +129,7 @@ body:has(.top-banner:not([hidden])) #app { height: calc(100vh - 38px); }
 .tab:hover { color: var(--text); }
 .tab.active {
   background: var(--bg-elev);
-  color: var(--text);
+  color: var(--accent);
   box-shadow: 0 0 0 1px var(--line);
 }
 .tab-icon {
@@ -208,26 +213,6 @@ body:has(.top-banner:not([hidden])) #app { height: calc(100vh - 38px); }
 
 .sidebar-bottom { padding: 6px 0 0; display: flex; flex-direction: column; gap: 6px; }
 
-.update-card {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--bg-elev-2);
-  margin-bottom: 4px;
-}
-.update-card .leaf { font-size: 18px; }
-.update-card .update-meta { flex: 1; min-width: 0; }
-.update-card .update-title { font-size: 12.5px; font-weight: 500; }
-.update-card .update-version { font-size: 11px; color: var(--text-mute); }
-.update-card .update-cta {
-  display: inline-grid; place-items: center;
-  width: 22px; height: 22px;
-  border-radius: 6px;
-  color: var(--text-dim);
-}
-.update-card .update-cta:hover { background: var(--bg-input); color: var(--text); }
-
 .sidebar-actions {
   display: flex;
   gap: 2px;
@@ -256,11 +241,12 @@ body:has(.top-banner:not([hidden])) #app { height: calc(100vh - 38px); }
 .user-chip .avatar {
   width: 22px; height: 22px;
   border-radius: 50%;
-  background: var(--accent-dim);
-  color: var(--text);
+  background: var(--accent-bg);
+  color: var(--accent);
   font-size: 11px; font-weight: 600;
   display: inline-grid; place-items: center;
   flex-shrink: 0;
+  border: 1px solid var(--line-strong);
 }
 .user-chip .user-name { font-weight: 500; }
 .user-chip .user-plan {
@@ -520,7 +506,7 @@ body:has(.top-banner:not([hidden])) #app { height: calc(100vh - 38px); }
   width: 30px; height: 30px;
   border-radius: 50%;
   background: var(--accent);
-  color: #1f1d1a;
+  color: #1c1a14;
   flex-shrink: 0;
 }
 .composer-send:disabled { background: var(--accent-dim); color: var(--text-mute); cursor: not-allowed; }

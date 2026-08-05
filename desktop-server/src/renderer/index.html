@@ -8,15 +8,6 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <!-- Top safety banner. Shown by the renderer once we know the user
-         hasn't acknowledged a recent session. Pure decoration for now;
-         the renderer can hide it via a click handler. -->
-    <div class="top-banner" id="top-banner" hidden>
-      <span class="dot"></span>
-      <span class="msg">For your security, sign in again to keep using Code Mobile AI.</span>
-      <button class="banner-cta" id="banner-cta" type="button">Sign in again</button>
-    </div>
-
     <div id="app">
       <!-- ───── Sidebar ───── -->
       <aside class="sidebar">
@@ -43,9 +34,6 @@
         <div class="recents">
           <div class="recents-head">
             <span>Recents</span>
-            <button class="icon-btn" id="recents-filter" type="button" title="Sort">
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h12M4 8h8M6 12h4"/></svg>
-            </button>
           </div>
           <div class="recents-list" id="recents-list">
             <!-- populated by main.ts -->
@@ -53,17 +41,6 @@
         </div>
 
         <div class="sidebar-bottom">
-          <div class="update-card" id="update-card" hidden>
-            <span class="leaf">🍃</span>
-            <div class="update-meta">
-              <div class="update-title">Relaunch to update</div>
-              <div class="update-version" id="update-version">v—</div>
-            </div>
-            <button class="update-cta" type="button" aria-label="Relaunch">
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 8h10M9 4l4 4-4 4"/></svg>
-            </button>
-          </div>
-
           <div class="sidebar-actions">
             <button class="text-btn" data-action="open-settings" type="button">
               <span class="nav-icon" aria-hidden="true">⚙</span>
@@ -72,7 +49,7 @@
           </div>
 
           <button class="user-chip" type="button" id="user-chip">
-            <span class="avatar" id="user-avatar">JS</span>
+            <span class="avatar" id="user-avatar">JC</span>
             <span class="user-name" id="user-name">JC</span>
             <span class="user-plan">Pro</span>
             <svg class="chev" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4"/></svg>

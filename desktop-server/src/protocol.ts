@@ -10,7 +10,15 @@
  */
 import { z } from "zod";
 
-/** Provider identifiers understood by both the app and the server. */
+/**
+ * Provider identifiers understood by both the app and the server.
+ *
+ * Built-in providers are enumerated; user-defined OpenAI-compatible
+ * endpoints ride on top of one of the OpenAI-compatible ids (e.g. `openai`)
+ * by populating `ModelSelection.customBaseUrl`. The `provider` field on the
+ * wire stays a known id so the existing switch in the agent loop keeps type
+ * safety.
+ */
 export const ProviderId = z.enum([
   "anthropic",
   "openai",
@@ -21,6 +29,17 @@ export const ProviderId = z.enum([
   "mistral",
 ]);
 export type ProviderId = z.infer<typeof ProviderId>;
+
+/** A user-defined OpenAI-compatible provider, surfaced via the desktop UI. */
+export const CustomProvider = z.object({
+  /** Stable id (slug). */
+  id: z.string(),
+  /** Human-readable label shown in the UI. */
+  label: z.string(),
+  /** OpenAI-compatible base URL, e.g. `https://llm.example.com/v1`. */
+  baseUrl: z.string(),
+});
+export type CustomProvider = z.infer<typeof CustomProvider>;
 
 /** Permission mode, mirroring the composer's permission pill. */
 export const PermissionMode = z.enum(["acceptEdits", "plan", "ask"]);
@@ -67,6 +86,13 @@ export const ModelSelection = z.object({
   effort: z.enum(["low", "medium", "high"]).default("high"),
   /** Provider API key the server uses for this session's agent calls. */
   apiKey: z.string(),
+  /**
+   * When set, override the built-in base URL for the chosen provider. The
+   * `provider` field must still be a known OpenAI-compatible id
+   * (`openai`, `groq`, `openrouter`, `xai`, `mistral`). Used for custom
+   * user-defined providers.
+   */
+  customBaseUrl: z.string().url().optional(),
 });
 export type ModelSelection = z.infer<typeof ModelSelection>;
 

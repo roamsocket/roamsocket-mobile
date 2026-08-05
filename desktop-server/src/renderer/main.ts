@@ -151,7 +151,6 @@ function renderHomeView(): void {
 function buildComposer(opts: {
   mode: "home" | "code";
   placeholder: string;
-  showModeToggle?: boolean;
   showModelPicker?: boolean;
 }): HTMLElement {
   const composer = el("div", { class: "composer" });
@@ -168,33 +167,9 @@ function buildComposer(opts: {
 
   const row = el("div", { class: "composer-row" });
 
-  // Left cluster: attach button + optional mode toggle
-  const leftCluster = el("div", { class: "left-cluster" }, []);
-  const attach = el("button", { class: "composer-pill-btn", type: "button", title: "Attach file (not yet wired)" }, ["+"]);
-  attach.disabled = true; // honest: no attachment protocol yet
-  leftCluster.append(attach);
-
-  if (opts.showModeToggle) {
-    const mode = el("div", { class: "composer-mode" }, []);
-    const chat = el("button", { class: "active", type: "button", "data-mode": "chat" }, ["Chat"]);
-    chat.addEventListener("click", () => {
-      chat.classList.add("active"); cowork.classList.remove("active");
-    });
-    const cowork = el("button", { type: "button", "data-mode": "cowork" }, ["Cowork"]);
-    cowork.disabled = true; // honest: no cowork protocol
-    cowork.title = "Not available — the desktop server doesn't implement cowork yet";
-    cowork.addEventListener("click", () => {
-      cowork.classList.add("active"); chat.classList.remove("active");
-    });
-    mode.append(chat, cowork);
-    leftCluster.append(mode);
-  }
-  row.append(leftCluster);
-
-  // Spacer
+  // Spacer on the left (no fake buttons — no attachment/voice/sound protocol).
   row.append(el("div", { class: "composer-spacer" }));
 
-  // Right cluster: model picker, mic, waveform, send
   if (opts.showModelPicker) {
     const providerSel = el("select", { class: "panel-input", id: "composer-provider" }) as HTMLSelectElement;
     for (const p of PROVIDERS) providerSel.append(el("option", { value: p.id }, [p.label]));
@@ -221,14 +196,6 @@ function buildComposer(opts: {
   effortSel.addEventListener("change", () => (state.code.effort = effortSel.value as Effort));
   row.append(effortSel);
 
-  const mic = el("button", { class: "composer-pill-btn", type: "button", title: "Voice (not yet wired)" }, ["🎙"]);
-  mic.disabled = true;
-  row.append(mic);
-
-  const wave = el("button", { class: "composer-pill-btn", type: "button", title: "Sound (not yet wired)" }, ["≈"]);
-  wave.disabled = true;
-  row.append(wave);
-
   const send = el("button", { class: "composer-send", type: "button", title: "Send" }, []);
   send.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 8h10M9 4l4 4-4 4"/></svg>';
   send.addEventListener("click", () => void onSend());
@@ -240,12 +207,8 @@ function buildComposer(opts: {
   async function onSend() {
     const text = ta.value.trim();
     if (!text) return;
-
-    if (opts.mode === "home") {
-      await sendChat(text);
-    } else {
-      await sendCodeTask(text);
-    }
+    if (opts.mode === "home") await sendChat(text);
+    else await sendCodeTask(text);
     ta.value = "";
     autoSize(ta);
   }
@@ -343,6 +306,9 @@ function providerPicker(): HTMLElement {
   wrap.append(el("label", {}, ["Provider"]));
   const sel = el("select", { id: "code-provider" }) as HTMLSelectElement;
   for (const p of PROVIDERS) sel.append(el("option", { value: p.id }, [p.label]));
+  for (const c of state.secrets?.customProviders ?? []) {
+    sel.append(el("option", { value: c.id }, [`Custom · ${c.label}`]));
+  }
   sel.value = state.code.provider;
   sel.addEventListener("change", () => (state.code.provider = sel.value));
   wrap.append(sel);
@@ -583,7 +549,15 @@ function renderGeneralSection(): HTMLElement {
 
 function renderProvidersSection(): HTMLElement {
   const root = el("div", {}, []);
-  root.append(el("h2", {}, ["Provider API keys"]));
+  // Section header with a `+` button on the left, mirroring the iOS settings UX.
+  const header = el("div", { class: "section-header" }, []);
+  header.append(el("h2", {}, ["Provider API keys"]));
+  const addBtn = el("button", { class: "ghost-btn", type: "button", id: "add-custom-provider" }, ["+ Custom"]);
+  addBtn.addEventListener("click", () => {
+    void addCustomProviderPrompt();
+  });
+  header.append(addBtn);
+  root.append(header);
   root.append(el("div", { class: "empty-block" }, [
     "Keys are stored locally via Electron safeStorage (OS keychain). They're never sent anywhere except the local server during a coding session.",
   ]));
@@ -615,7 +589,68 @@ function renderProvidersSection(): HTMLElement {
     row.append(value, actions);
     root.append(row);
   }
+
+  // Custom providers (user-defined OpenAI-compatible endpoints).
+  for (const c of state.secrets?.customProviders ?? []) {
+    const present = !!state.secrets?.providerKeys[c.id]?.present;
+    const row = el("div", { class: "panel-row" }, []);
+    const labelWrap = el("div", { class: "panel-label" }, []);
+    labelWrap.append(el("div", {}, [`Custom · ${c.label}`]));
+    const urlLine = el("div", { class: "panel-sublabel" }, [c.baseUrl]);
+    labelWrap.append(urlLine);
+    row.append(labelWrap);
+    const status = el("span", { class: "panel-status " + (present ? "ok" : "warn") }, [present ? "configured" : "empty"]);
+    const value = el("div", { class: "panel-value" }, [status]);
+    const actions = el("div", { class: "panel-actions" }, []);
+    const setBtn = el("button", { class: "ghost-btn", type: "button" }, [present ? "Replace key" : "Add key"]);
+    setBtn.addEventListener("click", async () => {
+      const v = prompt(`${present ? "Replace" : "Add"} API key for ${c.label}:`, "");
+      if (!v) return;
+      await window.cmai.secrets.setCustomProviderKey(c.id, v);
+      state.secrets = await window.cmai.secrets.get();
+      renderSettingsSection();
+    });
+    actions.append(setBtn);
+    const removeBtn = el("button", { class: "danger-btn", type: "button" }, ["Remove"]);
+    removeBtn.addEventListener("click", async () => {
+      if (!confirm(`Remove custom provider "${c.label}"? Its key is also wiped.`)) return;
+      await window.cmai.secrets.removeCustomProvider(c.id);
+      state.secrets = await window.cmai.secrets.get();
+      if (state.code.provider === c.id) state.code.provider = "anthropic";
+      renderSettingsSection();
+    });
+    actions.append(removeBtn);
+    row.append(value, actions);
+    root.append(row);
+  }
   return root;
+}
+
+/** Prompt the user for label + base URL + optional API key, then persist. */
+async function addCustomProviderPrompt(): Promise<void> {
+  const label = prompt("Custom provider label (e.g. Internal LLM):", "");
+  if (!label) return;
+  const slug = label
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (!slug) {
+    alert("Label must contain at least one letter or digit.");
+    return;
+  }
+  const baseUrl = prompt("OpenAI-compatible base URL (e.g. https://llm.example.com/v1):", "");
+  if (!baseUrl) return;
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    alert("Invalid base URL.");
+    return;
+  }
+  const apiKey = prompt(`API key for ${label} (optional — leave empty to add later):`, "") ?? "";
+  await window.cmai.secrets.addCustomProvider({ id: slug, label, baseUrl: parsed.toString(), apiKey });
+  state.secrets = await window.cmai.secrets.get();
+  renderSettingsSection();
 }
 
 function renderGithubSection(): HTMLElement {
@@ -692,24 +727,42 @@ function renderWindowSection(): HTMLElement {
   row.append(el("div", { class: "panel-label" }, ["Close behaviour"]));
   const value = el("div", { class: "panel-value" }, []);
   const isQuitting = !!state.bootstrap?.prefs.alwaysQuitOnClose;
+  const isDecided = !!state.bootstrap?.prefs.closeBehaviorDecided;
   const select = el("select", { class: "panel-input" }) as HTMLSelectElement;
   select.append(el("option", { value: "hide" }, ["Always hide to tray"]));
   select.append(el("option", { value: "quit" }, ["Always quit on close"]));
   select.value = isQuitting ? "quit" : "hide";
-  select.addEventListener("change", () => {
-    // We update via the existing flow — re-prompting the user is fine since
-    // they just toggled the setting in the UI.
-    void window.cmai.app.quit; // no-op type guard
-    void (async () => {
-      // Ask main to flip the pref; simplest path: trigger app:quit which the
-      // main process interprets as a normal close decision. Instead, expose
-      // a dedicated setter in a real product.
-      alert("Restart the app for close-behaviour changes to take effect.");
-    })();
-  });
-  value.append(select);
+  const status = el("span", { class: "panel-status " + (isDecided ? "ok" : "warn") },
+    [isDecided ? "saved" : "will ask on first close"]);
+  value.append(select, status);
   row.append(value);
+  select.addEventListener("change", async () => {
+    const wantQuit = select.value === "quit";
+    await window.cmai.prefs.set({
+      closeBehaviorDecided: true,
+      alwaysQuitOnClose: wantQuit,
+    });
+    // Refresh bootstrap snapshot so the UI shows the new state.
+    state.bootstrap = await window.cmai.bootstrap();
+    renderSettingsSection();
+  });
   root.append(row);
+
+  // Start minimized toggle
+  const startRow = el("div", { class: "panel-row" }, []);
+  startRow.append(el("div", { class: "panel-label" }, ["Start minimized"]));
+  const startValue = el("div", { class: "panel-value" }, []);
+  const startToggle = el("input", { type: "checkbox", class: "panel-input" }) as HTMLInputElement;
+  startToggle.checked = !!state.bootstrap?.prefs.startMinimized;
+  startToggle.style.width = "auto";
+  startToggle.addEventListener("change", async () => {
+    await window.cmai.prefs.set({ startMinimized: startToggle.checked });
+    state.bootstrap = await window.cmai.bootstrap();
+  });
+  startValue.append(startToggle, el("span", { class: "panel-status" }, ["Launches hidden in tray; click the tray icon to open"]));
+  startRow.append(startValue);
+  root.append(startRow);
+
   return root;
 }
 
@@ -762,12 +815,7 @@ function updateGreeting(): void {
   txt.textContent = `${greet}, JC`;
 }
 
-// ───── Banner (honest: always show a static reminder; no real "sign in" flow) ─────
-function maybeShowBanner(): void {
-  // We don't have a sign-in system, so the banner is decorative. Hide it
-  // for now to avoid faking a sign-in flow.
-  $("top-banner").hidden = true;
-}
+// ───── Greeting ─────
 
 // ───── Bootstrap ─────
 async function main(): Promise<void> {
@@ -817,9 +865,6 @@ async function main(): Promise<void> {
       item.classList.toggle("hidden", !matches);
     }
   });
-
-  // Banner
-  maybeShowBanner();
 
   // Greeting
   updateGreeting();

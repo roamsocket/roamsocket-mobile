@@ -22,6 +22,7 @@ interface RedactedSecrets {
   lastServerAddress: string;
   lastRepo: { fullName: string; baseBranch: string; workBranch: string } | null;
   modelPrefs: Record<string, { model: string; effort: "low" | "medium" | "high" }>;
+  customProviders: { id: string; label: string; baseUrl: string }[];
 }
 
 interface SecretPayload {
@@ -30,6 +31,14 @@ interface SecretPayload {
   lastServerAddress: string;
   lastRepo: { fullName: string; baseBranch: string; workBranch: string } | null;
   modelPrefs: Record<string, { model: string; effort: "low" | "medium" | "high" }>;
+  customProviders: { id: string; label: string; baseUrl: string }[];
+}
+
+interface CustomProviderDraft {
+  id: string;
+  label: string;
+  baseUrl: string;
+  apiKey?: string;
 }
 
 const api = {
@@ -41,13 +50,23 @@ const api = {
       ipcRenderer.invoke("secrets:set", next),
     clearProvider: (providerId: string): Promise<RedactedSecrets> =>
       ipcRenderer.invoke("secrets:clearProvider", providerId),
-    clearGithub: (): Promise<RedactedSecrets> => ipcRenderer.invoke("secrets:clearGithub"),
+    clearGithub: (): Promise<RedactedSecrets> =>
+      ipcRenderer.invoke("secrets:clearGithub"),
     /** Pull the raw value of one provider's API key. Used by the composer when sending a task. */
     readProviderKey: (providerId: string): Promise<string | null> =>
       ipcRenderer.invoke("secrets:readProviderKey", providerId),
     /** Pull the raw GitHub token. */
     readGithubToken: (): Promise<string | null> =>
       ipcRenderer.invoke("secrets:readGithubToken"),
+    /** Add a user-defined OpenAI-compatible provider. */
+    addCustomProvider: (custom: CustomProviderDraft): Promise<RedactedSecrets> =>
+      ipcRenderer.invoke("secrets:addCustomProvider", custom),
+    /** Remove a user-defined provider and clear its key. */
+    removeCustomProvider: (id: string): Promise<RedactedSecrets> =>
+      ipcRenderer.invoke("secrets:removeCustomProvider", id),
+    /** Set / replace the API key for a custom provider id. */
+    setCustomProviderKey: (id: string, apiKey: string): Promise<RedactedSecrets> =>
+      ipcRenderer.invoke("secrets:setCustomProviderKey", id, apiKey),
   },
 
   clipboard: { write: (text: string): Promise<void> => ipcRenderer.invoke("clipboard:write", text) },
@@ -55,6 +74,10 @@ const api = {
 
   window: { hide: (): Promise<void> => ipcRenderer.invoke("window:hide") },
   app: { quit: (): Promise<void> => ipcRenderer.invoke("app:quit") },
+  prefs: {
+    set: (next: { closeBehaviorDecided?: boolean; alwaysQuitOnClose?: boolean; startMinimized?: boolean }): Promise<{ closeBehaviorDecided: boolean; alwaysQuitOnClose: boolean; startMinimized: boolean }> =>
+      ipcRenderer.invoke("prefs:set", next),
+  },
 
   on: (channel: "navigate", listener: (path: string) => void) => {
     const handler = (_e: unknown, p: string) => listener(p);

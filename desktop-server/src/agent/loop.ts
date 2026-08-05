@@ -42,7 +42,8 @@ export class AgentSession {
   private readonly systemPrompt: string;
 
   constructor(private readonly deps: AgentDeps) {
-    this.adapter = deps.adapter ?? getAgentAdapter(deps.model.provider);
+    this.adapter =
+      deps.adapter ?? getAgentAdapter(deps.model.provider, deps.model.customBaseUrl);
     this.systemPrompt = this.buildSystemPrompt();
   }
 
