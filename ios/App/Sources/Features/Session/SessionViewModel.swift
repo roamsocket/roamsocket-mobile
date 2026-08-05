@@ -70,26 +70,6 @@ final class SessionViewModel: ObservableObject {
         }
         isRunning = false
     }
-        } catch {
-            connectionError = error.localizedDescription
-        }
-        isRunning = false
-    }
-        } catch {
-            connectionError = error.localizedDescription
-        }
-        isRunning = false
-    }
-        } catch {
-            connectionError = error.localizedDescription
-        }
-        isRunning = false
-    }
-        } catch {
-            connectionError = error.localizedDescription
-        }
-        isRunning = false
-    }
 
     func sendUserMessage(_ text: String) {
         appendNotice("You: \(text)")

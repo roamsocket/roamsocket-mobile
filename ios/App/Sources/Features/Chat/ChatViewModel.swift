@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import UIKit
 import MobileAICore
 
 /// ViewModel for the Chat feature, handling messages, MCP tools, skills, and connectors
@@ -11,7 +12,6 @@ final class ChatViewModel: ObservableObject {
     @Published var inputText: String = ""
     @Published var isProcessing: Bool = false
     @Published var selectedConnectors: Set<String> = []
-    @Published var selectedSkills: Set<String> = []
     @Published var showThoughtProcess: Bool = false
     @Published var currentThoughtProcess: String?
     @Published var showAddToChatSheet: Bool = false
@@ -28,7 +28,6 @@ final class ChatViewModel: ObservableObject {
     
     let mcpClient: MCPClient
     let connectors: [Connector]
-    let skills: [Skill]
     
     // MARK: - Tool Access
     
@@ -40,15 +39,13 @@ final class ChatViewModel: ObservableObject {
     
     // MARK: - Init
     
-    init(mcpClient: MCPClient = MCPClient()) {
-        self.mcpClient = mcpClient
+    init(mcpClient: MCPClient? = nil) {
+        self.mcpClient = mcpClient ?? MCPClient()
         self.connectors = Connector.sampleConnectors
-        self.skills = Skill.sampleSkills
-        
+
         // Initialize with some default connectors
         selectedConnectors = ["gmail", "google-calendar", "google-drive"]
-        selectedSkills = ["web-search"]
-        
+
         // Add welcome message
         messages.append(ChatMessage(
             role: .assistant,
@@ -141,22 +138,6 @@ final class ChatViewModel: ObservableObject {
     /// Check if a connector is selected
     func isConnectorSelected(_ connector: Connector) -> Bool {
         selectedConnectors.contains(connector.id)
-    }
-    
-    // MARK: - Skills
-    
-    /// Toggle skill selection
-    func toggleSkill(_ skill: Skill) {
-        if selectedSkills.contains(skill.id) {
-            selectedSkills.remove(skill.id)
-        } else {
-            selectedSkills.insert(skill.id)
-        }
-    }
-    
-    /// Check if a skill is selected
-    func isSkillSelected(_ skill: Skill) -> Bool {
-        selectedSkills.contains(skill.id)
     }
     
     // MARK: - Message Actions

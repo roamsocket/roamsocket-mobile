@@ -1,7 +1,7 @@
 import Foundation
 
 /// Represents a message in the chat conversation
-struct ChatMessage: Identifiable, Equatable {
+struct ChatMessage: Identifiable {
     let id: UUID
     let role: Role
     var content: String
@@ -43,7 +43,7 @@ struct ChatMessage: Identifiable, Equatable {
 }
 
 /// Represents a tool call made by the assistant
-struct ToolCall: Identifiable, Equatable {
+struct ToolCall: Identifiable {
     let id: UUID
     let name: String
     let parameters: [String: Any]

@@ -6,6 +6,7 @@ import MobileAICore
 struct SettingsView: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
+
     @State private var showSkills = false
     @State private var showMCP = false
 
@@ -20,21 +21,41 @@ struct SettingsView: View {
             }
             .scrollContentBackground(.hidden)
             .background(Theme.background)
-            .navigationTitle("Settings")
+            .navigationTitle("Advanced settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
             }
+            .sheet(isPresented: $showSkills) {
+                NavigationStack {
+                    InstalledSkillsView()
+                        .navigationTitle("Skills")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Done") { showSkills = false }
+                            }
+                        }
+                }
+                .preferredColorScheme(.dark)
+            }
+            .sheet(isPresented: $showMCP) {
+                NavigationStack {
+                    MCPManagerView()
+                        .navigationTitle("MCP Servers")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Done") { showMCP = false }
+                            }
+                        }
+                }
+                .preferredColorScheme(.dark)
+            }
         }
         .preferredColorScheme(.dark)
-        .sheet(isPresented: $showSkills) {
-            InstalledSkillsView()
-        }
-        .sheet(isPresented: $showMCP) {
-            MCPManagerView()
-        }
     }
 
     // MARK: Provider keys
@@ -92,51 +113,9 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: Skills
-
-    private var skillsSection: some View {
-        Section("Skills") {
-            Button {
-                showSkills = true
-            } label: {
-                HStack {
-                    Label("Manage Skills", systemImage: "sparkles")
-                    Spacer()
-                    let count = state.skillManager.installedSkills.count
-                    if count > 0 {
-                        Text("\(count) installed")
-                            .foregroundStyle(Theme.textTertiary)
-                    }
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 14))
-                        .foregroundStyle(Theme.textTertiary)
-                }
-            }
-        }
-    }
-
-    // MARK: MCP
-
-    private var mcpSection: some View {
-        Section("MCP Servers") {
-            Button {
-                showMCP = true
-            } label: {
-                HStack {
-                    Label("Manage MCP Servers", systemImage: "server.rack")
-                    Spacer()
-                    let count = state.mcpManager.configuredServers.count
-                    if count > 0 {
-                        Text("\(count) configured")
-                            .foregroundStyle(Theme.textTertiary)
-                    }
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 14))
-                        .foregroundStyle(Theme.textTertiary)
-                }
-            }
-        }
-    }
+    // MARK: Skills / MCP live in the Claude-style settings sheet. This
+    // legacy form is the place to edit the underlying secrets and tokens
+    // without preview/UX scaffolding.
 }
 
 private struct ProviderKeyRow: View {

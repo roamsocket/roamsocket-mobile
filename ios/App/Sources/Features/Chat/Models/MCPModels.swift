@@ -3,7 +3,7 @@ import Foundation
 /// Model Context Protocol (MCP) related types
 
 /// MCP Tool definition
-struct MCPTool: Identifiable, Equatable {
+struct MCPTool: Identifiable {
     let id: String
     let name: String
     let description: String
