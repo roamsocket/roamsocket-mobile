@@ -1,20 +1,105 @@
-# Node
-node_modules/
-desktop-server/dist/
-*.log
-npm-debug.log*
-
-# macOS
+# ---------- OS ----------
 .DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
 
-# Xcode / SwiftPM
-.build/
+# ---------- Editors / IDEs ----------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.nano-stats.json
+.cursor/
+.zed/
+*.iml
+
+# ---------- Node / npm ----------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+.npm/
+.eslintcache
+.stylelintcache
+.parcel-cache/
+.cache/
+coverage/
+.nyc_output/
+
+# Project build outputs (desktop server)
+desktop-server/dist/
+desktop-server/build/
+desktop-server/out/
+desktop-server/coverage/
+desktop-server/.vite/
+desktop-server/node_modules/.vite/
+# Electron Forge packaging output
+desktop-server/out/make/
+
+# ---------- Env / Secrets ----------
+.env
+.env.*
+!.env.example
+.envrc
+*.pem
+*.key
+secrets.*
+
+# ---------- Xcode / iOS ----------
+build/
 DerivedData/
 *.xcodeproj/xcuserdata/
 *.xcworkspace/xcuserdata/
-ios/CodeMobileAI.xcodeproj/
-.swiftpm/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcuserstate
+xcuserdata/
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+*.hprof
 
-# Env
-.env
-.env.local
+# Swift Package Manager
+.swiftpm/
+.build/
+Packages/
+Package.resolved
+
+# CocoaPods (if added later)
+Pods/
+*.xcworkspace/xcshareddata/swiftpm/Package.resolved
+
+# Fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/
+fastlane/test_output/
+
+# Misc iOS artifacts
+*.log
+*.tmp
+*.swp
+
+# ---------- Logs / Temp ----------
+*.log
+logs/
+tmp/
+temp/
+
+# ---------- Tooling caches ----------
+.turbo
+.next/
+.nuxt/
+.svelte-kit/
+.vite/

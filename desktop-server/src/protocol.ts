@@ -35,6 +35,30 @@ export const EnvironmentConfig = z.object({
 });
 export type EnvironmentConfig = z.infer<typeof EnvironmentConfig>;
 
+/** A skill that provides guidance to the agent. */
+export const Skill = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string(),
+  content: z.string(),
+  category: z.string(),
+  source: z.enum(["official", "community", "custom"]),
+  isEnabled: z.boolean(),
+});
+export type Skill = z.infer<typeof Skill>;
+
+/** An MCP server configuration. */
+export const MCPServer = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string(),
+  command: z.string(),
+  args: z.array(z.string()).default([]),
+  env: z.record(z.string()).default({}),
+  isEnabled: z.boolean(),
+});
+export type MCPServer = z.infer<typeof MCPServer>;
+
 /** The model + provider the agent should run with. */
 export const ModelSelection = z.object({
   provider: ProviderId,
@@ -86,6 +110,10 @@ export const CreateSessionMsg = z.object({
   environment: EnvironmentConfig.optional(),
   model: ModelSelection,
   permissionMode: PermissionMode.default("acceptEdits"),
+  /** Skill content strings to inject into the system prompt. */
+  skills: z.array(z.string()).default([]),
+  /** MCP server configurations for tool integration. */
+  mcpServers: z.array(MCPServer).default([]),
 });
 export type CreateSessionMsg = z.infer<typeof CreateSessionMsg>;
 

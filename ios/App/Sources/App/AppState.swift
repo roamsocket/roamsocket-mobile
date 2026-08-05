@@ -11,6 +11,8 @@ final class AppState: ObservableObject {
     let secrets: SecretStore
     let catalog: ModelCatalog
     let serverClient = ServerClient()
+    let skillManager = SkillManager()
+    let mcpManager = MCPManager()
 
     /// Your GitHub OAuth app client id for Device Flow. Replace before shipping;
     /// can also be provided at runtime via Settings.
@@ -34,6 +36,15 @@ final class AppState: ObservableObject {
     @Published var serverEndpoint: ServerClient.Endpoint?
     @Published var serverToken: String?
     @Published var serverName: String?
+
+    // Chat state
+    @Published var showChat = false
+    @Published var chatConnectors: Set<String> = ["gmail", "google-calendar", "google-drive"]
+    @Published var chatSkills: Set<String> = ["web-search"]
+    @Published var chatWebSearchEnabled = true
+    @Published var chatResearchEnabled = false
+    @Published var chatHealthEnabled = false
+    @Published var chatConnectorDiscoveryEnabled = true
 
     private let environmentsKey = "environments.v1"
 

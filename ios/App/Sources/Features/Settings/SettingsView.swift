@@ -16,7 +16,7 @@ struct SettingsView: View {
             }
             .scrollContentBackground(.hidden)
             .background(Theme.background)
-            .navigationTitle("Settings")
+            .navigationTitle("Advanced settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -81,6 +81,10 @@ struct SettingsView: View {
             }
         }
     }
+
+    // MARK: Skills / MCP live in the Claude-style settings sheet. This
+    // legacy form is the place to edit the underlying secrets and tokens
+    // without preview/UX scaffolding.
 }
 
 private struct ProviderKeyRow: View {
