@@ -7,17 +7,12 @@ struct SettingsView: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
 
-    @State private var showSkills = false
-    @State private var showMCP = false
-
     var body: some View {
         NavigationStack {
             Form {
                 providerKeysSection
                 gitHubSection
                 serverSection
-                skillsSection
-                mcpSection
             }
             .scrollContentBackground(.hidden)
             .background(Theme.background)
@@ -27,32 +22,6 @@ struct SettingsView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
-            }
-            .sheet(isPresented: $showSkills) {
-                NavigationStack {
-                    InstalledSkillsView()
-                        .navigationTitle("Skills")
-                        .navigationBarTitleDisplayMode(.inline)
-                        .toolbar {
-                            ToolbarItem(placement: .confirmationAction) {
-                                Button("Done") { showSkills = false }
-                            }
-                        }
-                }
-                .preferredColorScheme(.dark)
-            }
-            .sheet(isPresented: $showMCP) {
-                NavigationStack {
-                    MCPManagerView()
-                        .navigationTitle("MCP Servers")
-                        .navigationBarTitleDisplayMode(.inline)
-                        .toolbar {
-                            ToolbarItem(placement: .confirmationAction) {
-                                Button("Done") { showMCP = false }
-                            }
-                        }
-                }
-                .preferredColorScheme(.dark)
             }
         }
         .preferredColorScheme(.dark)
