@@ -11,6 +11,7 @@ struct SessionView: View {
     @State private var showPRSheet = false
     @State private var prTitle = ""
     @State private var showTools = false
+    @State private var detailTool: SessionViewModel.Item?
 
     private let config: SessionConfig
 
@@ -57,6 +58,11 @@ struct SessionView: View {
             SessionToolsView()
         }
         .sheet(isPresented: $showPRSheet) { prSheet }
+        .sheet(item: $detailTool) { item in
+            if case let .tool(_, tool, summary, ok, output) = item {
+                ToolDetailSheet(tool: tool, summary: summary, ok: ok, output: output)
+            }
+        }
         .onChange(of: model.prURL) { _, url in
             if let url { openURL(url) }
         }
@@ -100,7 +106,12 @@ struct SessionView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
         case let .tool(_, tool, summary, ok, output):
-            ToolCard(tool: tool, summary: summary, ok: ok, output: output)
+            Button {
+                detailTool = item
+            } label: {
+                ToolCard(tool: tool, summary: summary, ok: ok, output: output)
+            }
+            .buttonStyle(.plain)
 
         case let .diff(_, path, patch, added, removed):
             DiffCard(path: path, patch: patch, added: added, removed: removed)
@@ -136,22 +147,43 @@ struct SessionView: View {
 
     private var inputBar: some View {
         HStack(spacing: 10) {
-            TextField("", text: $followUp, prompt: Text("Reply…").foregroundColor(Theme.textTertiary), axis: .vertical)
-                .font(.system(size: 16))
-                .foregroundStyle(Theme.textPrimary)
-                .lineLimit(1...4)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(Theme.field, in: RoundedRectangle(cornerRadius: 20))
+            TextField(
+                "",
+                text: $followUp,
+                prompt: Text(model.isRunning ? "Queue for after this turn…" : "Reply…")
+                    .foregroundColor(Theme.textTertiary),
+                axis: .vertical
+            )
+            .font(.system(size: 16))
+            .foregroundStyle(Theme.textPrimary)
+            .lineLimit(1...4)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Theme.field, in: RoundedRectangle(cornerRadius: 20))
+            .onChange(of: model.isRunning) { _, isRunning in
+                // When the agent transitions from running → idle, flush
+                // any queued follow-up so the user doesn't have to retap.
+                if !isRunning { model.sendQueuedMessageIfNeeded() }
+            }
 
             if model.isRunning {
-                Button { model.interrupt() } label: {
-                    Image(systemName: "stop.fill")
-                        .foregroundStyle(.white)
-                        .frame(width: 44, height: 44)
-                        .background(Theme.surfaceElevated, in: Circle())
+                if canSend {
+                    Button(action: queueFollowUp) {
+                        Image(systemName: "text.append")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(Theme.accent)
+                            .frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Button { model.interrupt() } label: {
+                        Image(systemName: "stop.fill")
+                            .foregroundStyle(.white)
+                            .frame(width: 44, height: 44)
+                            .background(Theme.surfaceElevated, in: Circle())
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             } else {
                 Button(action: send) {
                     Image(systemName: "arrow.up")
@@ -200,6 +232,13 @@ struct SessionView: View {
         let text = followUp.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         model.sendUserMessage(text)
+        followUp = ""
+    }
+
+    private func queueFollowUp() {
+        let text = followUp.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        model.queueMessage(text)
         followUp = ""
     }
 }
@@ -257,6 +296,102 @@ private struct ToolCard: View {
         case .some(false): return .red
         case .none: return Theme.textTertiary
         }
+    }
+}
+
+/// Detail sheet for a single tool invocation. Shows the command/summary
+/// at the top and the full output (with syntax-style highlighting for
+/// `git`-style output) below.
+private struct ToolDetailSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let tool: String
+    let summary: String
+    let ok: Bool?
+    let output: String?
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("Command")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Theme.textSecondary)
+                        Spacer()
+                        if let ok {
+                            Text(ok ? "OK" : "Failed")
+                                .font(.system(size: 12, weight: .semibold))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 2)
+                                .background((ok ? Color.green : Color.red).opacity(0.2), in: Capsule())
+                                .foregroundStyle(ok ? .green : .red)
+                        }
+                    }
+                    Text(displayName)
+                        .font(.system(size: 14, design: .monospaced))
+                        .foregroundStyle(Theme.textPrimary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                        .padding(12)
+                        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
+                    if let output, !output.isEmpty {
+                        Text("Output")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Theme.textSecondary)
+                        ScrollView(.horizontal) {
+                            VStack(alignment: .leading, spacing: 0) {
+                                ForEach(Array(output.split(separator: "\n", omittingEmptySubsequences: false).enumerated()), id: \.offset) { _, line in
+                                    Text(String(line))
+                                        .font(.system(size: 12, design: .monospaced))
+                                        .foregroundStyle(color(for: String(line)))
+                                        .textSelection(.enabled)
+                                }
+                            }
+                            .padding(12)
+                        }
+                        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
+                    } else {
+                        Text("No output yet.")
+                            .font(.system(size: 14))
+                            .foregroundStyle(Theme.textTertiary)
+                    }
+                }
+                .padding(16)
+            }
+            .background(Theme.background)
+            .navigationTitle(toolLabel)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .preferredColorScheme(.dark)
+    }
+
+    private var toolLabel: String {
+        switch tool {
+        case "bash": return "Bash"
+        case "read_file", "write_file", "edit_file": return "File"
+        default: return tool.capitalized
+        }
+    }
+
+    private var displayName: String {
+        // The summary field carries the human summary; the raw command is
+        // in the `input` blob stored on the model. For now we just show
+        // the summary.
+        summary
+    }
+
+    private func color(for line: String) -> Color {
+        if line.hasPrefix("+") { return .green }
+        if line.hasPrefix("-") { return .red }
+        if line.hasPrefix("On branch ") || line.hasPrefix("----") { return Theme.textSecondary }
+        if line.contains("nothing to commit") || line.contains("working tree clean") { return Theme.textSecondary }
+        return Theme.textPrimary
     }
 }
 

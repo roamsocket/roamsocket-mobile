@@ -186,9 +186,18 @@ struct AddToChatSheet: View {
     }
     
     // MARK: - Connectors Row
-    
+
     private var connectorsRow: some View {
-        Button(action: { viewModel.showConnectorsView = true }) {
+        Button(action: {
+            // The connectors view is presented from ChatView as a sibling
+            // sheet; presenting a sheet from inside a sheet on iOS is
+            // unreliable, so we dismiss first and ask the host to open
+            // the connectors sheet on the next runloop tick.
+            dismiss()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                viewModel.showConnectorsView = true
+            }
+        }) {
             HStack(spacing: 14) {
                 Image(systemName: "square.grid.2x2")
                     .font(.system(size: 20))
