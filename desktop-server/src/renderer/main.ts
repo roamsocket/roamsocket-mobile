@@ -306,6 +306,9 @@ function providerPicker(): HTMLElement {
   wrap.append(el("label", {}, ["Provider"]));
   const sel = el("select", { id: "code-provider" }) as HTMLSelectElement;
   for (const p of PROVIDERS) sel.append(el("option", { value: p.id }, [p.label]));
+  for (const c of state.secrets?.customProviders ?? []) {
+    sel.append(el("option", { value: c.id }, [`Custom · ${c.label}`]));
+  }
   sel.value = state.code.provider;
   sel.addEventListener("change", () => (state.code.provider = sel.value));
   wrap.append(sel);
@@ -526,30 +529,12 @@ function renderSettingsSection(): void {
   else if (state.settingsSection === "about") panel.append(renderAboutSection());
 }
 
-function renderGeneralSection(): HTMLElement {
-  const root = el("div", {}, []);
-  root.append(el("h2", {}, ["General"]));
-  root.append(panelRow("App version", el("span", {}, [state.bootstrap?.version ?? "—"])));
-  root.append(panelRow("Platform", el("span", {}, [state.bootstrap?.platform ?? "—"])));
-  root.append(panelRow("Close behaviour",
-    el("span", {}, [state.bootstrap?.prefs.alwaysQuitOnClose
-      ? "Always quit on close"
-      : state.bootstrap?.prefs.closeBehaviorDecided
-        ? "Always hide to tray"
-        : "Ask on first close"])));
-  root.append(panelRow("Storage",
-    el("span", {}, [state.bootstrap?.secretsAvailable
-      ? "OS keychain available"
-      : "Keychain unavailable — secrets won't persist"])));
-  return root;
-}
-
 // ───── In-app modal (replaces window.prompt / window.confirm) ─────
 //
 // Electron's renderer doesn't implement window.prompt — it returns null
-// silently, which made the original API-key add/replace buttons (and our
-// new "Add custom provider" flow) dead. This mini-modal renders an
-// in-app dialog that resolves with the user input.
+// silently, which made the original API-key add/replace buttons (and the
+// Add Custom Provider flow) dead. This mini-modal renders an in-app
+// dialog that resolves with the user input.
 
 interface MiniModalField {
   id: string;
@@ -660,7 +645,6 @@ function miniModal(opts: {
 
     backdrop.append(modal);
     document.body.append(backdrop);
-    // Focus the first field.
     const firstField = opts.fields[0];
     if (firstField) {
       queueMicrotask(() => inputs[firstField.id]?.focus());
@@ -713,9 +697,35 @@ async function miniConfirm(opts: {
   });
 }
 
+function renderGeneralSection(): HTMLElement {
+  const root = el("div", {}, []);
+  root.append(el("h2", {}, ["General"]));
+  root.append(panelRow("App version", el("span", {}, [state.bootstrap?.version ?? "—"])));
+  root.append(panelRow("Platform", el("span", {}, [state.bootstrap?.platform ?? "—"])));
+  root.append(panelRow("Close behaviour",
+    el("span", {}, [state.bootstrap?.prefs.alwaysQuitOnClose
+      ? "Always quit on close"
+      : state.bootstrap?.prefs.closeBehaviorDecided
+        ? "Always hide to tray"
+        : "Ask on first close"])));
+  root.append(panelRow("Storage",
+    el("span", {}, [state.bootstrap?.secretsAvailable
+      ? "OS keychain available"
+      : "Keychain unavailable — secrets won't persist"])));
+  return root;
+}
+
 function renderProvidersSection(): HTMLElement {
   const root = el("div", {}, []);
-  root.append(el("h2", {}, ["Provider API keys"]));
+  // Section header with a `+` button on the left, mirroring the iOS settings UX.
+  const header = el("div", { class: "section-header" }, []);
+  header.append(el("h2", {}, ["Provider API keys"]));
+  const addBtn = el("button", { class: "ghost-btn", type: "button", id: "add-custom-provider" }, ["+ Custom"]);
+  addBtn.addEventListener("click", () => {
+    void addCustomProviderPrompt();
+  });
+  header.append(addBtn);
+  root.append(header);
   root.append(el("div", { class: "empty-block" }, [
     "Keys are stored locally via Electron safeStorage (OS keychain). They're never sent anywhere except the local server during a coding session.",
   ]));
@@ -766,6 +776,61 @@ function renderProvidersSection(): HTMLElement {
       });
       actions.append(clearBtn);
     }
+    row.append(value, actions);
+    root.append(row);
+  }
+
+  // Custom providers (user-defined OpenAI-compatible endpoints).
+  for (const c of state.secrets?.customProviders ?? []) {
+    const present = !!state.secrets?.providerKeys[c.id]?.present;
+    const row = el("div", { class: "panel-row" }, []);
+    const labelWrap = el("div", { class: "panel-label" }, []);
+    labelWrap.append(el("div", {}, [`Custom · ${c.label}`]));
+    const urlLine = el("div", { class: "panel-sublabel" }, [c.baseUrl]);
+    labelWrap.append(urlLine);
+    row.append(labelWrap);
+    const status = el("span", { class: "panel-status " + (present ? "ok" : "warn") }, [present ? "configured" : "empty"]);
+    const value = el("div", { class: "panel-value" }, [status]);
+    const actions = el("div", { class: "panel-actions" }, []);
+    const setBtn = el("button", { class: "ghost-btn", type: "button" }, [present ? "Replace key" : "Add key"]);
+    setBtn.addEventListener("click", async () => {
+      const res = await miniModal({
+        title: `${present ? "Replace" : "Add"} API key`,
+        description: `Enter the API key for ${c.label}. It's stored locally in the OS keychain.`,
+        fields: [
+          {
+            id: "apiKey",
+            label: "API key",
+            type: "password",
+            placeholder: "sk-…",
+            required: true,
+          },
+        ],
+        confirmLabel: present ? "Replace" : "Save",
+      });
+      if (!res.ok) return;
+      const apiKey = res.values.apiKey ?? "";
+      if (!apiKey) return;
+      await window.cmai.secrets.setCustomProviderKey(c.id, apiKey);
+      state.secrets = await window.cmai.secrets.get();
+      renderSettingsSection();
+    });
+    actions.append(setBtn);
+    const removeBtn = el("button", { class: "danger-btn", type: "button" }, ["Remove"]);
+    removeBtn.addEventListener("click", async () => {
+      const ok = await miniConfirm({
+        title: `Remove "${c.label}"?`,
+        message: `This removes the custom provider and wipes its API key. You'll have to re-add it to use it again.`,
+        confirmLabel: "Remove",
+        destructive: true,
+      });
+      if (!ok) return;
+      await window.cmai.secrets.removeCustomProvider(c.id);
+      state.secrets = await window.cmai.secrets.get();
+      if (state.code.provider === c.id) state.code.provider = "anthropic";
+      renderSettingsSection();
+    });
+    actions.append(removeBtn);
     row.append(value, actions);
     root.append(row);
   }
