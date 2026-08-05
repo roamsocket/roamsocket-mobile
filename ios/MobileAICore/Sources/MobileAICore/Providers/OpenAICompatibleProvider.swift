@@ -55,4 +55,42 @@ public struct OpenAICompatibleProvider: ModelProvider {
             throw ProviderError.decoding(String(describing: error))
         }
     }
+
+    private struct ChatRequest: Encodable {
+        let model: String
+        let messages: [Msg]
+        struct Msg: Encodable { let role: String; let content: String }
+    }
+
+    private struct ChatResponse: Decodable {
+        struct Choice: Decodable {
+            struct Msg: Decodable { let role: String; let content: String }
+            let message: Msg
+        }
+        let choices: [Choice]
+    }
+
+    public func chat(model: String, apiKey: String, messages: [ProviderChatMessage], effort: Effort?) async throws -> String {
+        guard !apiKey.isEmpty else { throw ProviderError.missingKey }
+        let turns = messages.map { Msg(role: $0.role.rawValue, content: $0.content) }
+        let body = ChatRequest(model: model, messages: turns)
+        let req = ProviderHTTP.post(
+            baseURL.appendingPathComponent("chat/completions"),
+            headers: [
+                "Authorization": "Bearer \(apiKey)",
+                "content-type": "application/json",
+            ],
+            body: try JSONEncoder().encode(body)
+        )
+        let (data, response) = try await http.data(for: req)
+        try ProviderHTTP.validate(data, response)
+        do {
+            let parsed = try JSONDecoder().decode(ChatResponse.self, from: data)
+            return parsed.choices.first?.message.content ?? ""
+        } catch {
+            throw ProviderError.decoding(String(describing: error))
+        }
+    }
+
+    private typealias Msg = ChatRequest.Msg
 }

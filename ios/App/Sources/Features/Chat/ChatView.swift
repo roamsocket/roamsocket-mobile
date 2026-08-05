@@ -17,6 +17,9 @@ struct ChatView: View {
 
             VStack(spacing: 0) {
                 if isEffectivelyEmpty {
+                    if viewModel.error != nil {
+                        errorBanner
+                    }
                     greeting
                 } else {
                     messageList
@@ -24,15 +27,38 @@ struct ChatView: View {
                 composer
             }
         }
+        .onAppear { viewModel.state = state }
         .sheet(isPresented: $viewModel.showAddToChatSheet) {
             AddToChatSheet(viewModel: viewModel)
         }
         .sheet(isPresented: $viewModel.showConnectorsView) {
             ConnectorsView(viewModel: viewModel)
         }
-        .sheet(isPresented: $viewModel.showThoughtProcess) {
-            ThoughtProcessView(thoughtProcess: viewModel.currentThoughtProcess ?? "")
+        .sheet(isPresented: $viewModel.showModelPicker) {
+            ModelPickerSheet()
         }
+    }
+
+    private var errorBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.yellow)
+            Text(viewModel.error ?? "")
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.textPrimary)
+                .lineLimit(2)
+            Spacer()
+            Button { viewModel.error = nil } label: {
+                Image(systemName: "xmark")
+                    .foregroundStyle(Theme.textSecondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
     }
 
     /// True when there are no real user messages yet. The single welcome
@@ -71,13 +97,8 @@ struct ChatView: View {
                             message: message,
                             onCopy: { viewModel.copyMessage(message) },
                             onShare: { viewModel.shareMessage(message) },
-                            onStar: { viewModel.starMessage(message) },
                             onDelete: { viewModel.deleteMessage(message) },
-                            onRegenerate: { Task { await viewModel.regenerateResponse(for: message) } },
-                            onThoughtProcess: {
-                                viewModel.currentThoughtProcess = message.thoughtProcess
-                                viewModel.showThoughtProcess = true
-                            }
+                            onRegenerate: { Task { await viewModel.regenerateResponse(for: message) } }
                         )
                         .id(message.id)
                     }
@@ -112,39 +133,8 @@ struct ChatView: View {
     }
 
     private var composerSurface: some View {
-        HStack(alignment: .center, spacing: 8) {
-            // Plus: opens the AddToChat sheet
-            Button(action: { viewModel.showAddToChatSheet = true }) {
-                Image(systemName: "plus")
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(Theme.textPrimary)
-                    .frame(width: 36, height: 36)
-            }
-            .buttonStyle(.plain)
-            .layoutPriority(2)
-
-            // Model pill — inline with the field; truncated if needed.
-            Button(action: {
-                // Future: route into ModelPickerSheet.
-            }) {
-                HStack(spacing: 6) {
-                    Text(modelPillTitle)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(Theme.textPrimary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Theme.textSecondary)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Theme.surfaceElevated, in: Capsule())
-            }
-            .buttonStyle(.plain)
-            .layoutPriority(1)
-
-            // Flexible text field with built-in placeholder.
+        VStack(spacing: 8) {
+            // Top: text field on its own row — full width, room to breathe.
             TextField("Chat with Claude", text: $viewModel.inputText, axis: .vertical)
                 .lineLimit(1...4)
                 .font(.system(size: 16))
@@ -153,29 +143,59 @@ struct ChatView: View {
                 .frame(minHeight: 24, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
 
-            // Mic
-            Button(action: {}) {
-                Image(systemName: "mic")
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(Theme.textPrimary)
-                    .frame(width: 36, height: 36)
-            }
-            .buttonStyle(.plain)
-            .layoutPriority(2)
+            // Bottom: controls row — +, model pill, mic, send.
+            HStack(alignment: .center, spacing: 8) {
+                // Plus: opens the AddToChat sheet
+                Button(action: { viewModel.showAddToChatSheet = true }) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(Theme.textPrimary)
+                        .frame(width: 36, height: 36)
+                }
+                .buttonStyle(.plain)
 
-            // Send
-            Button(action: {
-                Task { await viewModel.sendMessage() }
-            }) {
-                Image(systemName: "waveform")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 36, height: 36)
-                    .background(sendBackground, in: Circle())
+                // Model pill
+                Button(action: { viewModel.showModelPicker = true }) {
+                    HStack(spacing: 6) {
+                        Text(modelPillTitle)
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(Theme.textPrimary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Theme.textSecondary)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Theme.surfaceElevated, in: Capsule())
+                }
+                .buttonStyle(.plain)
+
+                Spacer(minLength: 0)
+
+                // Mic
+                Button(action: {}) {
+                    Image(systemName: "mic")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(Theme.textPrimary)
+                        .frame(width: 36, height: 36)
+                }
+                .buttonStyle(.plain)
+
+                // Send
+                Button(action: {
+                    Task { await viewModel.sendMessage() }
+                }) {
+                    Image(systemName: "waveform")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 36, height: 36)
+                        .background(sendBackground, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            .buttonStyle(.plain)
-            .disabled(viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .layoutPriority(2)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)

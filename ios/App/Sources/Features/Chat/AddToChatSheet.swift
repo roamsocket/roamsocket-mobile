@@ -1,36 +1,25 @@
 import SwiftUI
 
-/// Add to Chat sheet with options for Camera, Files, Project, Tool Access, Skills, and Connectors
+/// Add to Chat sheet with options for Files, Project, Tool Access,
+/// Skills, and Connectors.
 struct AddToChatSheet: View {
     @ObservedObject var viewModel: ChatViewModel
     @Environment(\.dismiss) private var dismiss
-    
+
     var body: some View {
         SheetScaffold(
             title: "Add to Chat",
-            trailing: AnyView(
-                Button("All photos") {}
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(Theme.textSecondary)
-            ),
+            trailing: AnyView(EmptyView()),
             onClose: { dismiss() }
         ) {
             ScrollView {
                 VStack(spacing: 0) {
-                    // Camera and recent photos row
-                    cameraAndPhotosRow
-                        .padding(.horizontal, 16)
-                        .padding(.top, 8)
-                    
-                    // Options section
                     optionsSection
                         .padding(.top, 16)
-                    
-                    // Skills toggles section
+
                     skillsSection
                         .padding(.top, 16)
-                    
-                    // Connectors row
+
                     connectorsRow
                         .padding(.top, 16)
                         .padding(.bottom, 24)
@@ -38,47 +27,18 @@ struct AddToChatSheet: View {
             }
         }
         .presentationDetents([.large])
-    }
-    
-    // MARK: - Camera and Photos
-    
-    private var cameraAndPhotosRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 12) {
-                // Camera button
-                Button(action: {
-                    // Open camera
-                }) {
-                    VStack(spacing: 8) {
-                        Image(systemName: "camera")
-                            .font(.system(size: 28))
-                            .foregroundStyle(Theme.textPrimary)
-                        Text("Camera")
-                            .font(.system(size: 14))
-                            .foregroundStyle(Theme.textPrimary)
-                    }
-                    .frame(width: 120, height: 120)
-                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.cardRadius))
-                }
-                .buttonStyle(.plain)
-                
-                // Recent photo thumbnails (placeholder)
-                ForEach(0..<3) { i in
-                    RoundedRectangle(cornerRadius: Theme.cardRadius)
-                        .fill(Theme.surfaceElevated)
-                        .frame(width: 120, height: 120)
-                        .overlay {
-                            Text("Photo \(i + 1)")
-                                .font(.system(size: 12))
-                                .foregroundStyle(Theme.textTertiary)
-                        }
-                }
+        .fileImporter(
+            isPresented: $viewModel.showFilePicker,
+            allowedContentTypes: [.item]
+        ) { result in
+            if case .success(let url) = result {
+                viewModel.attachedFileURLs.append(url)
             }
         }
     }
-    
+
     // MARK: - Options Section
-    
+
     private var optionsSection: some View {
         VStack(spacing: 0) {
             // Add files
@@ -86,9 +46,9 @@ struct AddToChatSheet: View {
                 systemImage: "doc.badge.plus",
                 title: "Add files"
             ) {
-                // Open file picker
+                viewModel.showFilePicker = true
             }
-            
+
             Divider().background(Theme.separator).padding(.leading, 50)
             
             // Add to project

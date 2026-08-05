@@ -47,6 +47,23 @@ public protocol ModelProvider: Sendable {
     var id: ProviderID { get }
     /// Fetch the models this key can access. Throws `ProviderError`.
     func listModels(apiKey: String) async throws -> [AIModel]
+    /// Send a single-turn chat completion. Returns the assistant's reply text.
+    /// Throws `ProviderError`.
+    func chat(model: String, apiKey: String, messages: [ProviderChatMessage], effort: Effort?) async throws -> String
+}
+
+/// A single message in a chat turn, scoped to provider APIs.
+public struct ProviderChatMessage: Codable, Sendable, Hashable {
+    public enum Role: String, Codable, Sendable {
+        case system, user, assistant
+    }
+    public let role: Role
+    public let content: String
+
+    public init(role: Role, content: String) {
+        self.role = role
+        self.content = content
+    }
 }
 
 /// Shared helpers for building requests and validating responses.
@@ -55,6 +72,14 @@ enum ProviderHTTP {
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
         for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
+        return req
+    }
+
+    static func post(_ url: URL, headers: [String: String], body: Data) -> URLRequest {
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
+        req.httpBody = body
         return req
     }
 

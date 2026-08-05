@@ -11,7 +11,6 @@ struct RootView: View {
 
     @State private var sidebarOpen: Bool = false
     @State private var showSettings: Bool = false
-    @State private var showLegacySettings: Bool = false
     @State private var path: [RootRoute] = []
 
     var body: some View {
@@ -23,12 +22,6 @@ struct RootView: View {
                         switch route {
                         case .projects:
                             ProjectsListView(history: history)
-                        case .artifacts:
-                            PlaceholderListView(title: "Artifacts", systemImage: "square.stack.3d.up")
-                        case .code:
-                            PlaceholderListView(title: "Code", systemImage: "chevron.left.forwardslash.chevron.right")
-                        case .dispatch:
-                            PlaceholderListView(title: "Dispatch", systemImage: "paperplane")
                         case .projectDetail(let project):
                             ProjectDetailView(project: project, history: history)
                         }
@@ -73,10 +66,7 @@ struct RootView: View {
             }
         }
         .sheet(isPresented: $showSettings) {
-            ClaudeSettingsView(onOpenLegacySettings: { showLegacySettings = true })
-        }
-        .sheet(isPresented: $showLegacySettings) {
-            SettingsView()
+            ClaudeSettingsView()
         }
     }
 
@@ -116,15 +106,6 @@ struct RootView: View {
         case .projects:
             path = [.projects]
             withAnimation(.easeInOut(duration: 0.25)) { sidebarOpen = false }
-        case .artifacts:
-            path = [.artifacts]
-            withAnimation(.easeInOut(duration: 0.25)) { sidebarOpen = false }
-        case .code:
-            path = [.code]
-            withAnimation(.easeInOut(duration: 0.25)) { sidebarOpen = false }
-        case .dispatch:
-            path = [.dispatch]
-            withAnimation(.easeInOut(duration: 0.25)) { sidebarOpen = false }
         case .chat(let item):
             history.recents.removeAll { $0.id == item.id }
             history.recents.insert(item, at: 0)
@@ -139,8 +120,5 @@ struct RootView: View {
 
 enum RootRoute: Hashable {
     case projects
-    case artifacts
-    case code
-    case dispatch
     case projectDetail(ProjectItem)
 }

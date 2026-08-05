@@ -44,18 +44,6 @@ struct ProjectsListView: View {
         }
         .navigationTitle("Projects")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button(action: {}) {
-                    Image(systemName: "line.3.horizontal.decrease")
-                        .font(.system(size: 18, weight: .medium))
-                        .foregroundStyle(Theme.textPrimary)
-                        .frame(width: 44, height: 44)
-                        .background(Theme.surfaceElevated, in: Circle())
-                }
-                .buttonStyle(.plain)
-            }
-        }
     }
 
     private var filtered: [ProjectItem] {
@@ -103,31 +91,5 @@ struct ProjectsListView: View {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
         return formatter.localizedString(for: date, relativeTo: Date())
-    }
-}
-
-/// Catch-all placeholder for the top-level destinations (Artifacts / Code /
-/// Dispatch) until those features ship.
-struct PlaceholderListView: View {
-    let title: String
-    let systemImage: String
-
-    var body: some View {
-        ZStack {
-            Theme.background.ignoresSafeArea()
-            VStack(spacing: 16) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 40, weight: .light))
-                    .foregroundStyle(Theme.textSecondary)
-                Text(title)
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(Theme.textPrimary)
-                Text("Coming soon")
-                    .font(.system(size: 15))
-                    .foregroundStyle(Theme.textSecondary)
-            }
-        }
-        .navigationTitle(title)
-        .navigationBarTitleDisplayMode(.inline)
     }
 }

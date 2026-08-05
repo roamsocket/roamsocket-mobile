@@ -23,35 +23,6 @@ struct ProjectDetailView: View {
         }
         .navigationTitle(project.name)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button(action: {}) {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Theme.textPrimary)
-                        .frame(width: 36, height: 36)
-                }
-                .buttonStyle(.plain)
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                HStack(spacing: 8) {
-                    Button(action: {}) {
-                        Image(systemName: "star")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(Theme.textPrimary)
-                            .frame(width: 36, height: 36)
-                    }
-                    .buttonStyle(.plain)
-                    Button(action: {}) {
-                        Image(systemName: "ellipsis")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(Theme.textPrimary)
-                            .frame(width: 36, height: 36)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
         .sheet(isPresented: $showInstructions) {
             InstructionsSheet()
         }
@@ -243,21 +214,6 @@ private struct ProjectFilesSheet: View {
                 .padding(.horizontal, 24)
 
                 Spacer()
-
-                Button(action: {}) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "paperclip")
-                        Text("Add Files")
-                            .font(.system(size: 16, weight: .semibold))
-                    }
-                    .foregroundStyle(.black)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
-                    .background(.white, in: Capsule())
-                }
-                .buttonStyle(.plain)
-                .padding(.horizontal, 16)
-                .padding(.bottom, 24)
             }
         }
         .presentationDetents([.medium, .large])
