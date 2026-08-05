@@ -46,4 +46,8 @@ public struct GoogleProvider: ModelProvider {
             throw ProviderError.decoding(String(describing: error))
         }
     }
+
+    public func chat(model: String, apiKey: String, messages: [ProviderChatMessage], effort: Effort?) async throws -> String {
+        throw ProviderError.transport("Google chat is not yet wired. Use the desktop server for coding.")
+    }
 }

@@ -37,14 +37,7 @@ final class AppState: ObservableObject {
     @Published var serverToken: String?
     @Published var serverName: String?
 
-    // Chat state
-    @Published var showChat = false
-    @Published var chatConnectors: Set<String> = ["gmail", "google-calendar", "google-drive"]
-    @Published var chatSkills: Set<String> = ["web-search"]
-    @Published var chatWebSearchEnabled = true
-    @Published var chatResearchEnabled = false
-    @Published var chatHealthEnabled = false
-    @Published var chatConnectorDiscoveryEnabled = true
+    // Chat state (per-chat toggles live on `ChatViewModel`; nothing here yet.)
 
     private let environmentsKey = "environments.v1"
 

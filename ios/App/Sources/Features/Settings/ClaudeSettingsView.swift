@@ -10,7 +10,7 @@ struct ClaudeSettingsView: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
 
-    let onOpenLegacySettings: () -> Void
+    let onOpenLegacySettings: () -> Void = {}
 
     @State private var showGitHubLink = false
     @State private var showServerPair = false

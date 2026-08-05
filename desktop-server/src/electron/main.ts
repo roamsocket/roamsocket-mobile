@@ -289,20 +289,73 @@ function createWindow(): void {
   });
   mainWindow.on("hide", refreshTrayMenu);
 
+  // Surface renderer load failures to the main process console so a blank
+  // window has a visible cause instead of being a mystery.
+  const wc = mainWindow.webContents;
+  wc.on("did-fail-load", (_e, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (!isMainFrame) return;
+    console.error(`[cmai] renderer failed to load: ${validatedURL} — ${errorCode} ${errorDescription}`);
+  });
+  wc.on("render-process-gone", (_e, details) => {
+    console.error(`[cmai] renderer process gone: reason=${details.reason} exitCode=${details.exitCode}`);
+  });
+  wc.on("preload-error", (_e, preloadPath, error) => {
+    console.error(`[cmai] preload error in ${preloadPath}: ${(error as Error).message}`);
+  });
+  wc.on("console-message", (_e, level, message, line, source) => {
+    const lvl = level >= 2 ? "error" : level === 1 ? "warn" : "log";
+    console[level >= 2 ? "error" : "log"](`[cmai:renderer:${lvl}] ${message} (${source}:${line})`);
+  });
+
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: "deny" };
   });
 
   // Dev: Vite serves the renderer with HMR; the URL is injected as
-  // MAIN_WINDOW_VITE_DEV_SERVER_URL by the Forge plugin.
+  // MAIN_WINDOW_VITE_DEV_SERVER_URL by the Forge plugin. We retry a couple
+  // of times if the dev server is still starting up — its URL is announced
+  // slightly after our preload bundle, so the first attempt can race.
   // Prod: the bundled HTML lives at `.vite/renderer/main_window/index.html`.
   const devUrl = process.env["MAIN_WINDOW_VITE_DEV_SERVER_URL" as keyof NodeJS.ProcessEnv] as string | undefined;
   if (devUrl) {
-    void mainWindow.loadURL(devUrl);
+    console.log(`[cmai] loading renderer from dev URL: ${devUrl}`);
+    void loadWithRetry(mainWindow, devUrl, 5, 500);
   } else {
     const indexHtml = path.join(__dirname, "..", "renderer", "main_window", "index.html");
-    mainWindow.loadFile(indexHtml);
+    console.log(`[cmai] loading renderer from bundled HTML: ${indexHtml}`);
+    void mainWindow.loadFile(indexHtml).catch((err) => {
+      console.error(`[cmai] loadFile failed: ${(err as Error).message}`);
+    });
+  }
+}
+
+async function loadWithRetry(
+  win: BrowserWindow,
+  url: string,
+  attempts: number,
+  delayMs: number,
+): Promise<void> {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      await win.loadURL(url);
+      console.log(`[cmai] renderer loaded from ${url}`);
+      return;
+    } catch (err) {
+      const last = i === attempts - 1;
+      console.warn(
+        `[cmai] renderer load attempt ${i + 1}/${attempts} failed: ${(err as Error).message}` +
+        (last ? " (giving up)" : `, retrying in ${delayMs}ms`),
+      );
+      if (last) {
+        // Final fallback: load the bundled HTML so the user isn't staring
+        // at a blank window.
+        const indexHtml = path.join(__dirname, "..", "renderer", "main_window", "index.html");
+        await win.loadFile(indexHtml).catch(() => undefined);
+        return;
+      }
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
   }
 }
 

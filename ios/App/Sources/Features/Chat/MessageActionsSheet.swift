@@ -15,10 +15,13 @@ struct MessageActionsSheet: View {
             Theme.background.ignoresSafeArea()
             
             VStack(spacing: 0) {
-                // Title
-                Text("Plenty of Fish profile blurb")
+                // Title — preview of the message the actions apply to.
+                Text(messagePreview)
                     .font(.system(size: 15))
                     .foregroundStyle(Theme.textSecondary)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .padding(.horizontal, 24)
                     .padding(.top, 16)
                     .padding(.bottom, 8)
                 
@@ -88,6 +91,11 @@ struct MessageActionsSheet: View {
         .presentationDragIndicator(.visible)
     }
     
+    private var messagePreview: String {
+        let trimmed = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "(empty)" : trimmed
+    }
+
     // MARK: - Action Row
     
     private func actionRow(systemImage: String, title: String, color: Color, action: @escaping () -> Void) -> some View {

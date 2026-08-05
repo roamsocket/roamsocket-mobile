@@ -4,9 +4,6 @@ import SwiftUI
 enum SidebarDestination: Hashable {
     case chats
     case projects
-    case artifacts
-    case code
-    case dispatch
     case chat(ChatHistoryItem)
     case project(ProjectItem)
 }
@@ -44,14 +41,6 @@ struct SidebarView: View {
                 .font(.system(size: 30, weight: .semibold))
                 .foregroundStyle(Theme.textPrimary)
             Spacer()
-            Button(action: {}) {
-                Image(systemName: "gift")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(Theme.textPrimary)
-                    .frame(width: 44, height: 44)
-                    .background(Theme.surfaceElevated, in: Circle())
-            }
-            .buttonStyle(.plain)
         }
         .padding(.top, 6)
         .padding(.bottom, 18)
@@ -66,15 +55,6 @@ struct SidebarView: View {
             }
             SidebarRow(systemImage: "tray.full", title: "Projects") {
                 onSelect(.projects)
-            }
-            SidebarRow(systemImage: "square.stack.3d.up", title: "Artifacts") {
-                onSelect(.artifacts)
-            }
-            SidebarRow(systemImage: "chevron.left.forwardslash.chevron.right", title: "Code") {
-                onSelect(.code)
-            }
-            SidebarRow(systemImage: "paperplane", title: "Dispatch") {
-                onSelect(.dispatch)
             }
         }
     }
