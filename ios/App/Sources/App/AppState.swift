@@ -15,6 +15,7 @@ final class AppState: ObservableObject {
     let mcpManager = MCPManager()
     let artifactStore = ArtifactStore()
     let skillsMCPClient = SkillsMCPClient()
+    let codeSessionStore = CodeSessionStore()
 
     /// Your GitHub OAuth app client id for Device Flow. Replace before shipping;
     /// can also be provided at runtime via Settings.

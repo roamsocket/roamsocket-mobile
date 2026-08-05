@@ -1,11 +1,12 @@
 import SwiftUI
+import MobileAICore
 
-/// Connectors list view with discovery toggle. The user's selection (which
-/// connector ids are enabled for a chat) is stored on `ChatViewModel`; the
-/// actual connector list itself is supplied by the desktop server. If no
-/// connectors are available yet, an empty state is shown.
+/// Connectors list view. Reads the configured connectors from
+/// `AppState.mcpManager` (synced from the desktop server's git repo via
+/// the WebSocket), and tracks per-chat enablement via `ChatViewModel`.
 struct ConnectorsView: View {
     @ObservedObject var viewModel: ChatViewModel
+    @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -17,14 +18,7 @@ struct ConnectorsView: View {
                     header
                     ScrollView {
                         VStack(spacing: 0) {
-                            discoveryToggle
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 16)
-                                .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.cardRadius))
-                                .padding(.horizontal, 16)
-                                .padding(.top, 16)
-
-                            if viewModel.connectors.isEmpty {
+                            if state.mcpManager.configuredServers.isEmpty {
                                 emptyState
                                     .padding(.top, 16)
                             } else {
@@ -125,14 +119,15 @@ struct ConnectorsView: View {
 
     private var connectorsList: some View {
         VStack(spacing: 0) {
-            ForEach(Array(viewModel.connectors.enumerated()), id: \.element.id) { index, connector in
-                ConnectorRow(
-                    connector: connector,
-                    isSelected: viewModel.isConnectorSelected(connector),
-                    onTap: { viewModel.toggleConnector(connector) }
-                )
+            ForEach(Array(state.mcpManager.configuredServers.enumerated()), id: \.element.id) { index, server in
+                ConnectorServerRow(
+                    server: server,
+                    isSelected: server.isEnabled
+                ) {
+                    state.mcpManager.toggleServer(server.id)
+                }
 
-                if index < viewModel.connectors.count - 1 {
+                if index < state.mcpManager.configuredServers.count - 1 {
                     Divider()
                         .background(Theme.separator)
                         .padding(.leading, 60)
@@ -145,33 +140,35 @@ struct ConnectorsView: View {
     }
 }
 
-/// Individual connector row
-struct ConnectorRow: View {
-    let connector: Connector
+/// Individual connector row, backed by a real `MCPServer` from the desktop-synced
+/// list. Tapping the row toggles its enabled state.
+struct ConnectorServerRow: View {
+    let server: MCPServer
     let isSelected: Bool
     var onTap: () -> Void
 
     var body: some View {
         Button(action: onTap) {
             HStack(spacing: 14) {
-                Image(systemName: connector.iconName)
+                Image(systemName: iconName(for: server))
                     .font(.system(size: 20))
                     .foregroundStyle(Theme.textPrimary)
                     .frame(width: 32, height: 32)
                     .background(Theme.surfaceElevated, in: RoundedRectangle(cornerRadius: 8))
 
-                Text(connector.name)
-                    .font(.system(size: 17))
-                    .foregroundStyle(Theme.textPrimary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(server.name)
+                        .font(.system(size: 17))
+                        .foregroundStyle(Theme.textPrimary)
+                    if !server.description.isEmpty {
+                        Text(server.description)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.textTertiary)
+                            .lineLimit(1)
+                    }
+                }
 
                 Spacer()
-
-                Text("\(connector.itemCount)")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.white)
-                    .frame(minWidth: 28, minHeight: 28)
-                    .padding(.horizontal, 8)
-                    .background(Theme.selection, in: Capsule())
 
                 Image(systemName: isSelected ? "checkmark" : "chevron.right")
                     .font(.system(size: 14, weight: .medium))
@@ -183,8 +180,22 @@ struct ConnectorRow: View {
         }
         .buttonStyle(.plain)
     }
+
+    private func iconName(for server: MCPServer) -> String {
+        // Heuristic icon picks — overridable per-server via env later.
+        let lower = server.name.lowercased()
+        if lower.contains("gmail") || lower.contains("mail") { return "envelope" }
+        if lower.contains("drive") { return "folder" }
+        if lower.contains("calendar") { return "calendar" }
+        if lower.contains("github") { return "chevron.left.forwardslash.chevron.right" }
+        if lower.contains("slack") { return "bubble.left.and.bubble.right" }
+        if lower.contains("figma") { return "paintpalette" }
+        if lower.contains("postgres") || lower.contains("sql") { return "cylinder" }
+        return "puzzlepiece"
+    }
 }
 
 #Preview {
     ConnectorsView(viewModel: ChatViewModel())
+        .environmentObject(AppState(secrets: KeychainSecretStore()))
 }

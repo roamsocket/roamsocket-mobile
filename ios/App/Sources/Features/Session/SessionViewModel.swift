@@ -35,6 +35,10 @@ final class SessionViewModel: ObservableObject {
     @Published var prURL: URL?
     @Published var sessionID: String = "s_\(UUID().uuidString.prefix(8))"
     @Published var connectionError: String?
+    /// Text the user typed while the agent is running. Sent when the
+    /// current turn finishes. Mirrors the Claude app's "Queue for after
+    /// this turn…" placeholder.
+    @Published var queuedMessage: String = ""
 
     private let config: SessionConfig
     private let client: ServerClient
@@ -78,6 +82,20 @@ final class SessionViewModel: ObservableObject {
         Task {
             try? await client.send(.userMessage(sessionId: sessionID, text: text))
         }
+    }
+
+    /// Queue a follow-up that will fire after the current turn finishes.
+    func queueMessage(_ text: String) {
+        queuedMessage = text
+    }
+
+    /// Send the queued message (called from `.onChange(of: isRunning)` when
+    /// the agent transitions from running to idle).
+    func sendQueuedMessageIfNeeded() {
+        let text = queuedMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        queuedMessage = ""
+        sendUserMessage(text)
     }
 
     func respond(to permission: PendingPermission, allow: Bool) {
