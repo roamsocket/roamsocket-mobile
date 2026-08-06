@@ -1,11 +1,20 @@
 /** Shared types for agent tools. */
 import path from "node:path";
 
+export interface NetworkPolicy {
+  /** What the app's environment config selected. */
+  access: "trusted" | "limited" | "none" | "custom";
+  /** Allowed hostnames when `access === "custom"`. */
+  allowedDomains: string[];
+}
+
 export interface ToolContext {
   /** Absolute path to the session's cloned working directory. */
   workdir: string;
   /** Emit a line of streaming output (e.g. bash stdout) to the app. */
   onOutput?: (chunk: string) => void;
+  /** Network policy from the session's environment config. */
+  network?: NetworkPolicy;
 }
 
 export interface ToolResult {
