@@ -25,7 +25,7 @@ struct RootView: View {
                         case .artifacts:
                             ArtifactsListView()
                         case .code:
-                            CodeHomeView()
+                            CodeHomeView(onOpenSidebar: { sidebarOpen = true })
                         case .projectDetail(let project):
                             ProjectDetailView(project: project, history: history, path: $path)
                         case .projectChat(let project, let chat):

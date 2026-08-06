@@ -1,8 +1,13 @@
 /** Anthropic Messages API adapter with streaming tool-use (/v1/messages, SSE). */
+import type { ProviderId } from "../protocol.js";
 import type { ProviderAdapter, CompletionRequest, ProviderEvent, NormalizedMessage } from "./types.js";
 
-const API = "https://api.anthropic.com/v1/messages";
+const DEFAULT_BASE = "https://api.anthropic.com/v1";
 const VERSION = "2023-06-01";
+
+function stripTrailingSlash(url: string): string {
+  return url.replace(/\/+$/, "");
+}
 
 /** Convert normalized messages into Anthropic's content-block format. */
 function toAnthropicMessages(messages: NormalizedMessage[]): unknown[] {
@@ -39,9 +44,15 @@ function effortToTokens(effort: string): number {
   return effort === "low" ? 4096 : effort === "medium" ? 8192 : 16384;
 }
 
-export const anthropicAdapter: ProviderAdapter = {
-  id: "anthropic",
-  async *stream(req: CompletionRequest, signal?: AbortSignal): AsyncGenerator<ProviderEvent> {
+export function makeAnthropicAdapter(
+  id: ProviderId = "anthropic",
+  baseUrlOverride?: string,
+): ProviderAdapter {
+  const baseUrl = stripTrailingSlash(baseUrlOverride || DEFAULT_BASE);
+  const endpoint = `${baseUrl}/messages`;
+  return {
+    id,
+    async *stream(req: CompletionRequest, signal?: AbortSignal): AsyncGenerator<ProviderEvent> {
     const body = {
       model: req.model,
       max_tokens: effortToTokens(req.effort),
@@ -55,7 +66,7 @@ export const anthropicAdapter: ProviderAdapter = {
       stream: true,
     };
 
-    const res = await fetch(API, {
+    const res = await fetch(endpoint, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -67,7 +78,7 @@ export const anthropicAdapter: ProviderAdapter = {
     });
     if (!res.ok || !res.body) {
       const errText = await res.text().catch(() => res.statusText);
-      throw new Error(`Anthropic API error ${res.status}: ${errText}`);
+      throw new Error(`Anthropic API error ${res.status} (${endpoint}): ${errText}`);
     }
 
     // Track in-progress tool_use blocks by index to assemble streamed JSON.
@@ -124,7 +135,11 @@ export const anthropicAdapter: ProviderAdapter = {
     }
     yield { kind: "done", stopReason };
   },
-};
+  };
+}
+
+/** Default Anthropic cloud adapter. */
+export const anthropicAdapter: ProviderAdapter = makeAnthropicAdapter("anthropic");
 
 /** Minimal SSE line parser over a fetch ReadableStream. */
 async function* parseSSE(

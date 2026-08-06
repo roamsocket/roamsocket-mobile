@@ -86,12 +86,31 @@ public struct ModelSelection: Codable, Hashable, Sendable {
     public var model: String
     public var effort: Effort
     public var apiKey: String
+    /// Optional override for custom / proxy endpoints (e.g. `https://host/v1`).
+    public var baseURL: String?
+    /// API shape when `baseURL` is set. Defaults to OpenAI-compatible on the server.
+    public var apiStyle: CustomProviderStyle?
 
-    public init(provider: ProviderID, model: String, effort: Effort = .high, apiKey: String) {
+    public init(
+        provider: ProviderID,
+        model: String,
+        effort: Effort = .high,
+        apiKey: String,
+        baseURL: String? = nil,
+        apiStyle: CustomProviderStyle? = nil
+    ) {
         self.provider = provider
         self.model = model
         self.effort = effort
         self.apiKey = apiKey
+        self.baseURL = baseURL
+        self.apiStyle = apiStyle
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case provider, model, effort, apiKey
+        case baseURL = "baseUrl"
+        case apiStyle
     }
 }
 

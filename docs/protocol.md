@@ -40,7 +40,17 @@ Every frame is a JSON object with a `type` discriminator.
 
 `permissionMode` is one of `acceptEdits`, `plan`, `ask` (the composer's
 permission pill). `provider` is one of `anthropic`, `openai`, `google`, `groq`,
-`openrouter`, `xai`, `mistral`.
+`openrouter`, `xai`, `mistral`, or a custom id `custom:<slug>`.
+
+`model` may also include optional fields for user-defined endpoints:
+
+| field | meaning |
+|-------|---------|
+| `baseUrl` | e.g. `http://localhost:11434/v1` — host the agent should call |
+| `apiStyle` | `openai` (Chat Completions) or `anthropic` (Messages API) |
+
+When `baseUrl` is set (or `provider` is `custom:…`), the desktop agent must not
+fall back to the built-in OpenAI / Anthropic cloud hosts.
 
 ### Server → app
 

@@ -1,11 +1,24 @@
 import SwiftUI
 import MobileAICore
 
-/// The "Select model" bottom sheet (IMG_0988): models grouped by provider,
-/// each with a subtitle, plus the Effort row.
+/// "Select model" bottom sheet:
+///   - grouped by provider, each provider gets a section header
+///   - tapping a model selects it
+///   - long-pressing (or the chevron) opens a rename sheet for an alias
+///   - Effort lives at the bottom as before
 struct ModelPickerSheet: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
+
+    @State private var renameTarget: AIModel?
+
+    private var nonEmptyResults: [ModelCatalog.ProviderResult] {
+        state.providerResults.filter { !$0.models.isEmpty }
+    }
+
+    private var emptyResults: [ModelCatalog.ProviderResult] {
+        state.providerResults.filter { $0.models.isEmpty && ($0.error != nil) }
+    }
 
     var body: some View {
         SheetScaffold(title: "Select model", trailing: nil, onClose: { dismiss() }) {
@@ -16,53 +29,108 @@ struct ModelPickerSheet: View {
                     } else if state.allModels.isEmpty {
                         emptyState
                     } else {
-                        modelList
+                        sections
                     }
 
                     effortRow
-                        .padding(.top, 12)
+                        .padding(.top, 16)
                 }
                 .padding(.horizontal, 20)
+            }
+            .task {
+                if state.allModels.isEmpty { await state.refreshModels() }
             }
         }
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
-        .task {
-            if state.allModels.isEmpty { await state.refreshModels() }
+        .sheet(item: $renameTarget) { model in
+            RenameModelSheet(model: model)
         }
     }
 
-    private var modelList: some View {
-        VStack(spacing: 0) {
-            ForEach(state.providerResults) { result in
-                if !result.models.isEmpty {
-                    ForEach(result.models) { model in
-                        SelectableRow(
-                            title: model.displayName,
-                            subtitle: subtitle(model, provider: result.provider),
-                            isSelected: state.selectedModel?.id == model.id
-                        ) {
-                            state.selectedModel = model
-                            dismiss()
-                        }
-                        Divider().overlay(Theme.separator)
-                    }
-                } else if let error = result.error {
-                    Text("\(result.provider.displayName): \(error)")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Theme.textTertiary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 8)
-                }
+    private var sections: some View {
+        VStack(spacing: 18) {
+            ForEach(nonEmptyResults) { result in
+                providerSection(result: result)
+            }
+            ForEach(emptyResults) { result in
+                errorRow(result: result)
             }
         }
     }
 
-    private func subtitle(_ model: AIModel, provider: ProviderID) -> String {
-        if let ctx = model.contextWindow {
-            return "\(provider.displayName) · \(ctx / 1000)K context"
+    @ViewBuilder
+    private func providerSection(result: ModelCatalog.ProviderResult) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(providerTitle(for: result))
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Theme.textSecondary)
+                .textCase(.uppercase)
+                .padding(.horizontal, 4)
+
+            VStack(spacing: 0) {
+                ForEach(Array(result.models.enumerated()), id: \.element.id) { idx, model in
+                    ModelRow(
+                        model: model,
+                        isSelected: state.selectedModel?.id == model.id,
+                        providerDisplayName: providerDisplayName(for: result),
+                        onSelect: {
+                            state.selectedModel = model
+                            dismiss()
+                        },
+                        onRename: { renameTarget = model }
+                    )
+                    if idx < result.models.count - 1 {
+                        Divider().overlay(Theme.separator)
+                    }
+                }
+            }
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 18))
         }
-        return provider.displayName
+    }
+
+    private func providerTitle(for result: ModelCatalog.ProviderResult) -> String {
+        state.customProvider(for: result.provider)?.label ?? result.provider.displayName
+    }
+
+    private func providerDisplayName(for result: ModelCatalog.ProviderResult) -> String {
+        // Subtitle beneath the model name; falls back to provider name.
+        let base = state.customProvider(for: result.provider)?.label ?? result.provider.displayName
+        return base
+    }
+
+    @ViewBuilder
+    private func errorRow(result: ModelCatalog.ProviderResult) -> some View {
+        if let error = result.error {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.yellow)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(result.provider.displayName)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                    Text(error)
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.textTertiary)
+                }
+                Spacer()
+            }
+            .padding(14)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14))
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 12) {
+            Text("No models yet")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(Theme.textPrimary)
+            Text("Add an API key in Settings to load models from your providers.")
+                .font(.system(size: 15))
+                .foregroundStyle(Theme.textSecondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(.vertical, 40)
     }
 
     private var effortRow: some View {
@@ -92,17 +160,120 @@ struct ModelPickerSheet: View {
             .background(Theme.surface, in: Capsule())
         }
     }
+}
 
-    private var emptyState: some View {
-        VStack(spacing: 12) {
-            Text("No models yet")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(Theme.textPrimary)
-            Text("Add an API key in Settings to load models from your providers.")
-                .font(.system(size: 15))
-                .foregroundStyle(Theme.textSecondary)
-                .multilineTextAlignment(.center)
+// MARK: - Row
+
+private struct ModelRow: View {
+    @EnvironmentObject var state: AppState
+    let model: AIModel
+    let isSelected: Bool
+    let providerDisplayName: String
+    var onSelect: () -> Void
+    var onRename: () -> Void
+
+    private var contextSubtitle: String? {
+        if let ctx = model.contextWindow {
+            return "\(providerDisplayName) · \(ctx / 1000)K context"
         }
-        .padding(.vertical, 40)
+        return providerDisplayName
+    }
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(state.displayName(for: model))
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(Theme.textPrimary)
+                    if let contextSubtitle {
+                        Text(contextSubtitle)
+                            .font(.system(size: 13))
+                            .foregroundStyle(Theme.textTertiary)
+                    }
+                }
+                Spacer()
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(Theme.selection)
+                }
+                Button(action: onRename) {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(Theme.textTertiary)
+                        .frame(width: 32, height: 32)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Rename \(state.displayName(for: model))")
+            }
+            .padding(.vertical, 14)
+            .padding(.horizontal, 14)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Rename sheet
+
+private struct RenameModelSheet: View {
+    @EnvironmentObject var state: AppState
+    @Environment(\.dismiss) private var dismiss
+
+    let model: AIModel
+
+    @State private var alias: String = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    HStack {
+                        Text("Original name")
+                            .foregroundStyle(Theme.textSecondary)
+                        Spacer()
+                        Text(model.displayName)
+                            .font(.system(size: 15, design: .monospaced))
+                            .foregroundStyle(Theme.textPrimary)
+                    }
+                } footer: {
+                    Text("This alias only changes how the model appears in this app. The wire-level model id sent to providers is unchanged.")
+                }
+
+                Section("Display name") {
+                    TextField("Alias", text: $alias)
+                        .textInputAutocapitalization(.words)
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(Theme.background)
+            .navigationTitle("Rename model")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        state.setAlias(alias, for: model.provider, modelID: model.modelID)
+                        dismiss()
+                    }
+                    .disabled(alias.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                if !alias.isEmpty {
+                    ToolbarItem(placement: .bottomBar) {
+                        Button("Reset to upstream") {
+                            state.setAlias(nil, for: model.provider, modelID: model.modelID)
+                            dismiss()
+                        }
+                    }
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+        .onAppear {
+            alias = state.displayName(for: model)
+        }
     }
 }

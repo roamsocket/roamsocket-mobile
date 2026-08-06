@@ -70,7 +70,7 @@ final class ChatViewModel: ObservableObject {
             error = "Select a model in Settings first."
             return
         }
-        let key = state.apiKey(for: model.provider)
+        let key = state.resolvedAPIKey(for: model.provider)
         guard !key.isEmpty else {
             error = "Add an API key for \(model.provider.displayName) in Settings."
             return
@@ -87,7 +87,19 @@ final class ChatViewModel: ObservableObject {
         }
 
         do {
-            let reply = try await catalog.provider(model.provider).chat(
+            // Custom providers must hit their configured base URL + API style —
+            // never the built-in OpenAI host just because a model was listed.
+            let baseURL = state.baseURL(for: model.provider)
+            let style = state.apiStyle(for: model.provider)
+            if case .custom = model.provider, baseURL == nil {
+                error = "Custom provider is missing a base URL. Edit it in Settings."
+                return
+            }
+            let reply = try await catalog.provider(
+                model.provider,
+                customBaseURL: baseURL,
+                style: style
+            ).chat(
                 model: model.modelID,
                 apiKey: key,
                 messages: turns,

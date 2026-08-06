@@ -1,6 +1,6 @@
 /**
  * OpenAI-compatible Chat Completions adapter (/v1/chat/completions).
- * Reused for OpenAI, Groq, OpenRouter, xAI, and Mistral by varying baseUrl.
+ * Reused for OpenAI, Groq, OpenRouter, xAI, Mistral, and any custom base URL.
  * Non-streaming for robustness; emits the assistant text as a single event.
  */
 import type { ProviderId } from "../protocol.js";
@@ -13,6 +13,10 @@ const BASE_URLS: Record<string, string> = {
   xai: "https://api.x.ai/v1",
   mistral: "https://api.mistral.ai/v1",
 };
+
+function stripTrailingSlash(url: string): string {
+  return url.replace(/\/+$/, "");
+}
 
 function toOpenAIMessages(system: string, messages: NormalizedMessage[]): unknown[] {
   const out: unknown[] = [{ role: "system", content: system }];
@@ -38,8 +42,13 @@ function toOpenAIMessages(system: string, messages: NormalizedMessage[]): unknow
   return out;
 }
 
-export function makeOpenAICompatibleAdapter(id: ProviderId): ProviderAdapter {
-  const baseUrl = BASE_URLS[id] ?? BASE_URLS.openai!;
+export function makeOpenAICompatibleAdapter(
+  id: ProviderId,
+  baseUrlOverride?: string,
+): ProviderAdapter {
+  const baseUrl = stripTrailingSlash(
+    baseUrlOverride || BASE_URLS[id] || BASE_URLS.openai!,
+  );
   return {
     id,
     async *stream(req: CompletionRequest, signal?: AbortSignal): AsyncGenerator<ProviderEvent> {
@@ -62,7 +71,7 @@ export function makeOpenAICompatibleAdapter(id: ProviderId): ProviderAdapter {
       });
       if (!res.ok) {
         const errText = await res.text().catch(() => res.statusText);
-        throw new Error(`${id} API error ${res.status}: ${errText}`);
+        throw new Error(`${id} API error ${res.status} (${baseUrl}): ${errText}`);
       }
       const json: any = await res.json();
       const choice = json.choices?.[0];

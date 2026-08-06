@@ -79,7 +79,7 @@ struct ModelSelectorPill: View {
     /// sends) bails out earlier — and the pill lets them know.
     var hasUsableModel: Bool {
         guard let model = state.selectedModel else { return false }
-        return !state.apiKey(for: model.provider).isEmpty
+        return !state.resolvedAPIKey(for: model.provider).isEmpty
     }
 }
 
