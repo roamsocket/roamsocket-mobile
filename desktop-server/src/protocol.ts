@@ -29,7 +29,9 @@ export type PermissionMode = z.infer<typeof PermissionMode>;
 /** A cloud-environment configuration created in the app (IMG_0990). */
 export const EnvironmentConfig = z.object({
   name: z.string(),
-  networkAccess: z.enum(["trusted", "limited", "none"]).default("trusted"),
+  networkAccess: z.enum(["trusted", "limited", "none", "custom"]).default("trusted"),
+  /** Domains to allow when `networkAccess === "custom"`. */
+  allowedDomains: z.array(z.string()).default([]),
   /** Parsed `.env` variables: KEY -> value. */
   variables: z.record(z.string()).default({}),
 });

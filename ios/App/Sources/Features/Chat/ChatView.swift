@@ -1,4 +1,5 @@
 import SwiftUI
+import MobileAICore
 
 /// Main chat view, mimicking the Claude iOS UI:
 ///  * On a fresh / empty chat, shows a centered greeting like
@@ -11,10 +12,25 @@ struct ChatView: View {
     @EnvironmentObject var state: AppState
     var onOpenSidebar: () -> Void = {}
 
+    /// Optional project context. When set, the chat's title becomes a
+    /// tappable pill that lets the user jump back to the project.
+    var project: ProjectItem? = nil
+    var chat: ProjectChatItem? = nil
+
+    /// Optional binding to the root navigation path. When provided, the
+    /// project pill in the header pops back to the project detail by
+    /// removing the last route from the path.
+    var path: Binding<[RootRoute]>? = nil
+
     /// Set when the user hits Send and the prerequisites for a coding session
     /// are met (paired server + repo + model with API key). The fullScreenCover
     /// takes over the chat until the session ends.
     @State private var sessionConfig: SessionConfig?
+
+    /// Shown when the user taps the model pill with no usable model
+    /// configured. Lands directly on the providers section of the
+    /// settings screen.
+    @State private var showProviderSettings = false
 
     var body: some View {
         ZStack {
@@ -32,7 +48,26 @@ struct ChatView: View {
                 composer
             }
         }
-        .onAppear { viewModel.state = state }
+        .onAppear {
+            viewModel.state = state
+            if let project {
+                viewModel.currentProject = project.name
+            }
+        }
+        .toolbar {
+            // Center title: when in a project, show a tappable pill with
+            // the folder icon and project name. Otherwise show the default
+            // "New chat" title.
+            ToolbarItem(placement: .principal) {
+                if let project {
+                    projectPill(project)
+                } else {
+                    Text("New chat")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                }
+            }
+        }
         .sheet(isPresented: $viewModel.showAddToChatSheet) {
             AddToChatSheet(viewModel: viewModel) { task in
                 if let config = SessionLauncher.makeConfig(in: state, task: task) {
@@ -46,10 +81,44 @@ struct ChatView: View {
         .sheet(isPresented: $viewModel.showModelPicker) {
             ModelPickerSheet()
         }
+        .sheet(isPresented: $showProviderSettings) {
+            ClaudeSettingsView(initialFocus: .providers)
+        }
         .fullScreenCover(item: $sessionConfig) { config in
             NavigationStack {
                 SessionView(config: config)
             }
+        }
+    }
+
+    private func projectPill(_ project: ProjectItem) -> some View {
+        Button(action: popToProject) {
+            HStack(spacing: 6) {
+                Image(systemName: "archivebox")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                Text(project.name)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Theme.surfaceElevated, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        // Tap the pill to pop back to the project detail. The chat view
+        // is one level deep in the navigation stack (project -> chat),
+        // so popping dismisses the chat and lands on the project.
+        .accessibilityLabel("Go to project \(project.name)")
+    }
+
+    private func popToProject() {
+        // Prefer popping the navigation stack via the bound path; fall back
+        // to the system dismiss action when no path is provided (e.g. the
+        // root landing screen).
+        if let path, !path.wrappedValue.isEmpty {
+            path.wrappedValue.removeLast()
         }
     }
 
@@ -168,23 +237,13 @@ struct ChatView: View {
                 }
                 .buttonStyle(.plain)
 
-                // Model pill
-                Button(action: { viewModel.showModelPicker = true }) {
-                    HStack(spacing: 6) {
-                        Text(modelPillTitle)
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(Theme.textPrimary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(Theme.textSecondary)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Theme.surfaceElevated, in: Capsule())
-                }
-                .buttonStyle(.plain)
+                // Model pill — switches to a "+ Add a model" CTA when
+                // no usable model is configured.
+                ModelSelectorPill(
+                    modelDisplayName: modelPillTitle,
+                    onPick: { viewModel.showModelPicker = true },
+                    onAddModel: { showProviderSettings = true }
+                )
 
                 Spacer(minLength: 0)
 
@@ -224,7 +283,25 @@ struct ChatView: View {
     }
 
     private var modelPillTitle: String {
-        state.selectedModel?.displayName ?? "Sonnet 5 Medium"
+        // Strip the trailing effort token (e.g. "Sonnet 5 (High)") to
+        // match the iOS chat composer. The pill itself decides what to
+        // show when there's no model at all — empty string here lets it
+        // switch into the "+ Add a model" CTA.
+        if let name = state.selectedModel?.displayName {
+            return stripEffort(from: name)
+        }
+        return ""
+    }
+
+    private func stripEffort(from name: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        for suffix in Effort.allCases.reversed() {
+            let token = " " + suffix.displayName
+            if trimmed.lowercased().hasSuffix(token.lowercased()) {
+                return String(trimmed.dropLast(token.count))
+            }
+        }
+        return trimmed
     }
 
     private var hasText: Bool {

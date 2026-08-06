@@ -11,6 +11,10 @@ struct SessionView: View {
     @State private var showPRSheet = false
     @State private var prTitle = ""
     @State private var showTools = false
+    @State private var showModelPicker = false
+    @State private var showEnvironmentPicker = false
+    @State private var showPermissionSheet = false
+    @State private var showProviderSettings = false
     @State private var detailTool: SessionViewModel.Item?
 
     private let config: SessionConfig
@@ -28,7 +32,7 @@ struct SessionView: View {
                 if let permission = model.pendingPermission {
                     permissionBar(permission)
                 }
-                inputBar
+                inputArea
             }
         }
         .navigationTitle(config.repo.fullName)
@@ -58,6 +62,23 @@ struct SessionView: View {
             SessionToolsView()
         }
         .sheet(isPresented: $showPRSheet) { prSheet }
+        .sheet(isPresented: $showModelPicker) {
+            ModelPickerSheet()
+        }
+        .sheet(isPresented: $showProviderSettings) {
+            // Reuse the existing settings screen so the providers UI stays
+            // single-sourced — same body as the entry from the home screen.
+            // Land directly on the providers section when the user came
+            // from the "+ Add a model" pill so they don't have to tap
+            // through again.
+            ClaudeSettingsView(initialFocus: .providers)
+        }
+        .sheet(isPresented: $showEnvironmentPicker) {
+            EnvironmentPickerSheet()
+        }
+        .sheet(isPresented: $showPermissionSheet) {
+            PermissionModeSheet(selection: permissionBinding)
+        }
         .sheet(item: $detailTool) { item in
             if case let .tool(_, tool, summary, ok, output) = item {
                 ToolDetailSheet(tool: tool, summary: summary, ok: ok, output: output)
@@ -145,8 +166,23 @@ struct SessionView: View {
         .background(Theme.surfaceElevated)
     }
 
-    private var inputBar: some View {
-        HStack(spacing: 10) {
+    /// Input area split into two rows: the chat text box on top, then a
+    /// second row with the action pills and send button. Matches the
+    /// Claude Code iOS reference where the prompt lives above the
+    /// controls.
+    private var inputArea: some View {
+        VStack(spacing: 8) {
+            messageBox
+            actionRow
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 10)
+        .background(Theme.background)
+    }
+
+    private var messageBox: some View {
+        HStack(alignment: .bottom, spacing: 10) {
             TextField(
                 "",
                 text: $followUp,
@@ -160,26 +196,33 @@ struct SessionView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
             .background(Theme.field, in: RoundedRectangle(cornerRadius: 20))
+            .frame(maxWidth: .infinity, alignment: .leading)
             .onChange(of: model.isRunning) { _, isRunning in
                 // When the agent transitions from running → idle, flush
                 // any queued follow-up so the user doesn't have to retap.
                 if !isRunning { model.sendQueuedMessageIfNeeded() }
             }
 
+            trailingSendButton
+        }
+    }
+
+    private var trailingSendButton: some View {
+        Group {
             if model.isRunning {
                 if canSend {
                     Button(action: queueFollowUp) {
                         Image(systemName: "text.append")
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(Theme.accent)
-                            .frame(width: 44, height: 44)
+                            .frame(width: 40, height: 40)
                     }
                     .buttonStyle(.plain)
                 } else {
                     Button { model.interrupt() } label: {
                         Image(systemName: "stop.fill")
                             .foregroundStyle(.white)
-                            .frame(width: 44, height: 44)
+                            .frame(width: 40, height: 40)
                             .background(Theme.surfaceElevated, in: Circle())
                     }
                     .buttonStyle(.plain)
@@ -189,15 +232,109 @@ struct SessionView: View {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(.white)
-                        .frame(width: 44, height: 44)
+                        .frame(width: 40, height: 40)
                         .background(canSend ? Theme.accent : Theme.surfaceElevated, in: Circle())
                 }
                 .buttonStyle(.plain)
                 .disabled(!canSend)
             }
         }
-        .padding(12)
-        .background(Theme.background)
+    }
+
+    private var actionRow: some View {
+        HStack(spacing: 8) {
+            Button { /* TODO: attach file / @-mention */ } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                    .frame(width: 32, height: 32)
+                    .background(Theme.surface, in: Circle())
+            }
+            .buttonStyle(.plain)
+
+            ModelSelectorPill(
+                modelDisplayName: modelPillTitle,
+                onPick: { showModelPicker = true },
+                onAddModel: { showProviderSettings = true }
+            )
+            permissionPill
+            environmentPill
+            Spacer(minLength: 0)
+
+            Button { showTools = true } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                    .frame(width: 32, height: 32)
+                    .background(Theme.surface, in: Circle())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var permissionPill: some View {
+        Button {
+            if !model.isRunning { showPermissionSheet = true }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: state.permissionMode.icon)
+                    .font(.system(size: 11, weight: .semibold))
+                Text(state.permissionMode == .acceptEdits ? "Accept edits" : state.permissionMode.displayName)
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .foregroundStyle(model.isRunning ? Theme.textTertiary : Theme.textPrimary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Theme.surfaceElevated, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(model.isRunning)
+        .help(model.isRunning ? "Mode is locked while a session is running" : "Change permission mode")
+    }
+
+    /// Always show the mode captured in the `SessionConfig` once the session
+    /// starts, even if `state.permissionMode` is changed elsewhere. This
+    /// keeps the on-screen pill honest about the mode the server received.
+    private var permissionBinding: Binding<PermissionMode> {
+        Binding(
+            get: { model.isRunning ? config.permissionMode : state.permissionMode },
+            set: { state.permissionMode = $0 }
+        )
+    }
+
+    private var environmentPill: some View {
+        Button { showEnvironmentPicker = true } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "cloud")
+                    .font(.system(size: 11, weight: .semibold))
+                Text(state.selectedEnvironment?.name ?? "Default")
+                    .font(.system(size: 13, weight: .medium))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(Theme.textSecondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Theme.surfaceElevated, in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var modelPillTitle: String {
+        if let name = state.selectedModel?.displayName {
+            return Self.stripEffort(from: name)
+        }
+        return "Select a model"
+    }
+
+    private static func stripEffort(from name: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        for suffix in Effort.allCases.reversed() {
+            let token = " " + suffix.displayName
+            if trimmed.lowercased().hasSuffix(token.lowercased()) {
+                return String(trimmed.dropLast(token.count))
+            }
+        }
+        return trimmed
     }
 
     private var prSheet: some View {

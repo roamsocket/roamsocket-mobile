@@ -4,6 +4,7 @@ import SwiftUI
 struct ProjectsListView: View {
     @ObservedObject var history: ChatHistoryStore
     @State private var search: String = ""
+    @State private var showCreateSheet: Bool = false
 
     var body: some View {
         ZStack {
@@ -38,12 +39,31 @@ struct ProjectsListView: View {
                 .scrollContentBackground(.hidden)
                 .padding(.horizontal, 4)
 
-                searchBar
-                newProjectButton
+                // Bottom-of-screen stack: Search bar sits below the FAB.
+                // The FAB (New project) is right-aligned and floats above
+                // the search bar, matching the iOS Claude layout.
+                ZStack(alignment: .top) {
+                    // Background strip so the search bar has a solid
+                    // background under the FAB shadow.
+                    Theme.background
+                        .ignoresSafeArea(edges: .bottom)
+
+                    VStack(spacing: 12) {
+                        newProjectButton
+                        searchBar
+                    }
+                    .padding(.bottom, 24)
+                }
+                .frame(height: 140)
             }
         }
         .navigationTitle("Projects")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showCreateSheet) {
+            CreateProjectSheet { name, description in
+                history.createProject(name: name, description: description)
+            }
+        }
     }
 
     private var filtered: [ProjectItem] {
@@ -62,13 +82,12 @@ struct ProjectsListView: View {
         .padding(.vertical, 12)
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 22))
         .padding(.horizontal, 16)
-        .padding(.bottom, 12)
     }
 
     private var newProjectButton: some View {
         HStack {
             Spacer()
-            Button(action: { history.createProject() }) {
+            Button(action: { showCreateSheet = true }) {
                 HStack(spacing: 8) {
                     Image(systemName: "plus")
                         .font(.system(size: 15, weight: .semibold))
@@ -83,7 +102,6 @@ struct ProjectsListView: View {
             }
             .buttonStyle(.plain)
             .padding(.trailing, 16)
-            .padding(.bottom, 24)
         }
     }
 

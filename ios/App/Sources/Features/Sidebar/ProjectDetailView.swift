@@ -5,8 +5,11 @@ struct ProjectDetailView: View {
     let project: ProjectItem
     @ObservedObject var history: ChatHistoryStore
     @State private var showInstructions: Bool = false
-    @State private var showFiles: Bool = false
     @State private var showAddFileSheet: Bool = false
+
+    /// When the user taps "New chat", we create a chat in the project and
+    /// navigate to it via the `path` binding on the root NavigationStack.
+    @Binding var path: [RootRoute]
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
@@ -33,11 +36,29 @@ struct ProjectDetailView: View {
 
     private var pillRow: some View {
         HStack(spacing: 8) {
-            Pill(title: "Add files", systemImage: nil) { showAddFileSheet = true }
-                .frame(maxWidth: .infinity)
-            Pill(title: "Instructions", systemImage: nil) { showInstructions = true }
-                .frame(maxWidth: .infinity)
+            // Two 50/50 pills. Use geometry to split the row evenly with
+            // the existing 8pt gap between the two halves.
+            GeometryReader { geo in
+                let gap: CGFloat = 8
+                let pillWidth = (geo.size.width - gap) / 2
+                HStack(spacing: gap) {
+                    ProjectDetailPill(
+                        title: "Add files",
+                        systemImage: nil,
+                        action: { showAddFileSheet = true }
+                    )
+                    .frame(width: pillWidth)
+
+                    ProjectDetailPill(
+                        title: "Instructions",
+                        systemImage: nil,
+                        action: { showInstructions = true }
+                    )
+                    .frame(width: pillWidth)
+                }
+            }
         }
+        .frame(height: 44)
         .padding(.horizontal, 16)
         .padding(.top, 8)
         .padding(.bottom, 4)
@@ -47,38 +68,68 @@ struct ProjectDetailView: View {
         let chats = history.chats(for: project)
         return ScrollView {
             VStack(spacing: 0) {
-                ForEach(chats) { chat in
-                    HStack(spacing: 4) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(chat.title)
-                                .font(.system(size: 17, weight: .regular))
-                                .foregroundStyle(Theme.textPrimary)
-                                .lineLimit(1)
-                            Text(relativeTime(chat.lastMessageAt))
-                                .font(.system(size: 14))
-                                .foregroundStyle(Theme.textSecondary)
+                if chats.isEmpty {
+                    emptyState
+                } else {
+                    ForEach(chats) { chat in
+                        Button {
+                            history.activeProject = project
+                            path.append(.projectChat(project, chat))
+                        } label: {
+                            chatRow(chat)
                         }
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 14, weight: .regular))
-                            .foregroundStyle(Theme.textSecondary)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 14)
-                    .contentShape(Rectangle())
+                        .buttonStyle(.plain)
 
-                    if chat.id != chats.last?.id {
-                        Divider()
-                            .background(Theme.separator)
-                            .padding(.leading, 16)
+                        if chat.id != chats.last?.id {
+                            Divider()
+                                .background(Theme.separator)
+                                .padding(.leading, 16)
+                        }
                     }
                 }
             }
         }
     }
 
+    private func chatRow(_ chat: ProjectChatItem) -> some View {
+        HStack(spacing: 4) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(chat.title)
+                    .font(.system(size: 17, weight: .regular))
+                    .foregroundStyle(Theme.textPrimary)
+                    .lineLimit(1)
+                Text(relativeTime(chat.lastMessageAt))
+                    .font(.system(size: 14))
+                    .foregroundStyle(Theme.textSecondary)
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.system(size: 14, weight: .regular))
+                .foregroundStyle(Theme.textSecondary)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .contentShape(Rectangle())
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            Spacer()
+            Text("No chats yet")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(Theme.textPrimary)
+            Text("Tap New chat to start a conversation in this project.")
+                .font(.system(size: 14))
+                .foregroundStyle(Theme.textSecondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+    }
+
     private var newChatButton: some View {
-        Button(action: { history.startNewChat() }) {
+        Button(action: startNewChat) {
             HStack(spacing: 8) {
                 Image(systemName: "plus")
                     .font(.system(size: 15, weight: .semibold))
@@ -94,10 +145,44 @@ struct ProjectDetailView: View {
         .buttonStyle(.plain)
     }
 
+    private func startNewChat() {
+        let chat = history.startNewChat(in: project)
+        path.append(.projectChat(project, chat))
+    }
+
     private func relativeTime(_ date: Date) -> String {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
         return formatter.localizedString(for: date, relativeTo: Date())
+    }
+}
+
+/// A wider pill button used for the 50/50 row at the top of the project
+/// detail screen. Centers its content and grows to fill the width its
+/// parent gives it.
+private struct ProjectDetailPill: View {
+    let title: String
+    let systemImage: String?
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                if let systemImage {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 13, weight: .semibold))
+                }
+                Text(title)
+                    .font(.system(size: 15, weight: .medium))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(Theme.textPrimary)
+            .frame(maxWidth: .infinity)
+            .frame(height: 36)
+            .background(Theme.surfaceElevated, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .contentShape(Capsule())
     }
 }
 

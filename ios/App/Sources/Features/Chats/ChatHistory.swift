@@ -50,6 +50,11 @@ final class ChatHistoryStore: ObservableObject {
     @Published var projects: [ProjectItem] = []
     @Published var projectChats: [UUID: [ProjectChatItem]] = [:]
 
+    /// Project currently in focus (e.g. when the user is inside a project
+    /// chat). The chat view reads this to show the project pill in its
+    /// header and to associate new messages with the project.
+    @Published var activeProject: ProjectItem?
+
     init() {}
 
     func chats(for project: ProjectItem) -> [ProjectChatItem] {
@@ -60,9 +65,39 @@ final class ChatHistoryStore: ObservableObject {
         recents.insert(ChatHistoryItem(title: "New chat", lastMessageAt: Date()), at: 0)
     }
 
-    func createProject() {
-        let new = ProjectItem(name: "New project", updatedAt: Date())
+    /// Create a new chat scoped to the given project. Returns the new chat
+    /// so callers can navigate straight into it.
+    @discardableResult
+    func startNewChat(in project: ProjectItem) -> ProjectChatItem {
+        let chat = ProjectChatItem(title: "New chat", lastMessageAt: Date())
+        var list = projectChats[project.id] ?? []
+        list.insert(chat, at: 0)
+        projectChats[project.id] = list
+        if let idx = projects.firstIndex(where: { $0.id == project.id }) {
+            projects[idx].updatedAt = Date()
+        }
+        activeProject = project
+        return chat
+    }
+
+    /// Create a new project and return it so callers can navigate or
+    /// immediately start a chat inside it.
+    @discardableResult
+    func createProject(name: String = "New project", description: String = "") -> ProjectItem {
+        let new = ProjectItem(name: name, updatedAt: Date())
         projects.insert(new, at: 0)
         projectChats[new.id] = []
+        return new
+    }
+
+    /// Find a project by its chat's ID. Used by the chat view to look up
+    /// the project for the "project pill" in the header.
+    func project(for chat: ProjectChatItem) -> ProjectItem? {
+        for project in projects {
+            if let list = projectChats[project.id], list.contains(where: { $0.id == chat.id }) {
+                return project
+            }
+        }
+        return nil
     }
 }

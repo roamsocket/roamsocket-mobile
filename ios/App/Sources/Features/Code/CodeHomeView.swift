@@ -99,12 +99,12 @@ final class CodeSessionStore: ObservableObject, @unchecked Sendable {
     }
 }
 
-/// The Code home screen: Devices (recent paired laptops), Sessions
-/// (recent coding sessions with status filters), and the composer that
-/// starts a new session.
+/// The Code home screen: Devices (recent paired laptops) and Sessions
+/// (recent coding sessions with status filters). A floating "New session"
+/// button captures the task and routes through the plan intake sheet.
 /// Builds a `SessionConfig` from the current `AppState`. Centralized so the
-/// composer, the Code home screen, and the "+" sheet all construct sessions
-/// the same way.
+/// Code home screen and the plan intake sheet construct sessions the same
+/// way.
 @MainActor
 enum SessionLauncher {
     /// Build a session config for the given task description. Returns nil when
@@ -190,17 +190,15 @@ extension PermissionMode {
 struct CodeHomeView: View {
     @EnvironmentObject var state: AppState
     @StateObject private var sessionStore = CodeSessionStore()
-    @State private var task: String = ""
     @State private var statusFilter: CodeSession.Status? = nil
     @State private var showFilterSheet = false
     @State private var showEnvironmentPicker = false
     @State private var showModelPicker = false
-    @State private var showPlanIntake = false
-    @State private var planTask: String = ""
+    @State private var showNewSession = false
     @State private var pushSessionConfig: SessionConfig?
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .bottomTrailing) {
             Theme.background.ignoresSafeArea()
             VStack(spacing: 0) {
                 header
@@ -211,10 +209,14 @@ struct CodeHomeView: View {
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
-                    .padding(.bottom, 24)
+                    // Leave room for the FAB so the last row never tucks
+                    // underneath it.
+                    .padding(.bottom, 96)
                 }
-                composer
             }
+            newSessionFAB
+                .padding(.trailing, 18)
+                .padding(.bottom, 22)
         }
         .navigationBarHidden(true)
         .navigationDestination(item: $pushSessionConfig) { config in
@@ -229,14 +231,10 @@ struct CodeHomeView: View {
         .sheet(isPresented: $showModelPicker) {
             ModelPickerSheet()
         }
-        .sheet(isPresented: $showPlanIntake) {
-            PlanIntakeSheet(
-                task: planTask,
-                onStart: { deliveryMode in
-                    showPlanIntake = false
-                    startSession(deliveryMode: deliveryMode)
-                }
-            )
+        .fullScreenCover(isPresented: $showNewSession) {
+            NewSessionView { config, task in
+                startSession(config: config, title: task)
+            }
         }
     }
 
@@ -381,15 +379,81 @@ struct CodeHomeView: View {
                         .font(.system(size: 12))
                     Text("·")
                         .font(.system(size: 12))
+                    Text(session.workBranch)
+                        .font(.system(size: 12))
+                    Text("·")
+                        .font(.system(size: 12))
                     Text(relativeTime(session.updatedAt))
                         .font(.system(size: 12))
                 }
                 .foregroundStyle(Theme.textTertiary)
+                .lineLimit(1)
             }
             Spacer()
+            gitStatusBadge(for: session)
         }
         .padding(14)
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    /// Compact git-status pill for the trailing edge of each session row.
+    /// Falls back to a baseline "clean" indicator when the session hasn't
+    /// reported any activity yet. The mapping is intentionally lightweight —
+    /// it doesn't read real ahead/behind counts, it just reflects what
+    /// state we know about locally.
+    private func gitStatusBadge(for session: CodeSession) -> some View {
+        let badge = gitStatus(for: session)
+        return HStack(spacing: 4) {
+            Image(systemName: badge.icon)
+                .font(.system(size: 11, weight: .semibold))
+            Text(badge.label)
+                .font(.system(size: 11, weight: .semibold))
+        }
+        .foregroundStyle(badge.tint)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(badge.tint.opacity(0.15), in: Capsule())
+    }
+
+    private struct GitStatusBadge {
+        let icon: String
+        let label: String
+        let tint: Color
+    }
+
+    private func gitStatus(for session: CodeSession) -> GitStatusBadge {
+        switch session.status {
+        case .working:
+            return GitStatusBadge(
+                icon: "arrow.up.circle.fill",
+                label: "ahead",
+                tint: Theme.accent
+            )
+        case .needsInput:
+            return GitStatusBadge(
+                icon: "exclamationmark.circle.fill",
+                label: "blocked",
+                tint: .orange
+            )
+        case .readyForReview:
+            return GitStatusBadge(
+                icon: "checkmark.circle.fill",
+                label: "ready",
+                tint: Theme.selection
+            )
+        case .completed:
+            return GitStatusBadge(
+                icon: "checkmark.seal.fill",
+                label: "merged",
+                tint: Theme.textSecondary
+            )
+        case .archived:
+            return GitStatusBadge(
+                icon: "archivebox.fill",
+                label: "archived",
+                tint: Theme.textTertiary
+            )
+        }
     }
 
     private var sessionsEmpty: some View {
@@ -412,140 +476,33 @@ struct CodeHomeView: View {
         }
     }
 
-    // MARK: - Composer
+    // MARK: - New session FAB
 
-    private var composer: some View {
-        VStack(spacing: 10) {
-            if let _ = state.selectedRepo {
-                HStack {
-                    Button { showEnvironmentPicker = true } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "cloud")
-                            Text(state.selectedEnvironment?.name ?? "Default")
-                        }
-                        .font(.system(size: 13))
-                        .foregroundStyle(Theme.textSecondary)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Theme.surfaceElevated, in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    Spacer()
-                }
-                .padding(.horizontal, 16)
+    private var newSessionFAB: some View {
+        Button {
+            showNewSession = true
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "square.and.pencil")
+                    .font(.system(size: 15, weight: .semibold))
+                Text("New session")
+                    .font(.system(size: 15, weight: .semibold))
             }
-            HStack(spacing: 8) {
-                Button { /* TODO: file picker */ } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 18, weight: .medium))
-                        .foregroundStyle(Theme.textPrimary)
-                        .frame(width: 36, height: 36)
-                }
-                .buttonStyle(.plain)
-
-                TextField(
-                    canStart ? "Code anything…" : "Pick a repo + model first",
-                    text: $task,
-                    axis: .vertical
-                )
-                .lineLimit(1...3)
-                .font(.system(size: 16))
-                .foregroundStyle(Theme.textPrimary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
-                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 18))
-
-                if state.isLoadingModels {
-                    ProgressView().tint(Theme.textSecondary).frame(width: 36, height: 36)
-                } else {
-                    Button { showModelPicker = true } label: {
-                        Text(modelPillTitle)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(Theme.textPrimary)
-                            .lineLimit(1)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(Theme.surfaceElevated, in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                Button { /* TODO: accept-edits pill tap */ } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "chevron.left.forwardslash.chevron.right")
-                            .font(.system(size: 11, weight: .semibold))
-                        Text(state.permissionMode == .acceptEdits ? "Accept edits" : state.permissionMode.displayName)
-                            .font(.system(size: 13, weight: .medium))
-                    }
-                    .foregroundStyle(Theme.textPrimary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Theme.surfaceElevated, in: Capsule())
-                }
-                .buttonStyle(.plain)
-
-                Button(action: sendTapped) {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 36, height: 36)
-                        .background(canStart ? Theme.accent : Theme.surfaceElevated, in: Circle())
-                }
-                .buttonStyle(.plain)
-                .disabled(!canStart)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 24))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(Theme.accent, in: Capsule())
+            .shadow(color: .black.opacity(0.35), radius: 8, x: 0, y: 4)
         }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 12)
-        .background(Theme.background)
-    }
-
-    private var modelPillTitle: String {
-        if let name = state.selectedModel?.displayName {
-            return Self.stripEffort(from: name)
-        }
-        return "Select a model"
-    }
-
-    private static func stripEffort(from name: String) -> String {
-        let trimmed = name.trimmingCharacters(in: .whitespaces)
-        for suffix in Effort.allCases.reversed() {
-            let token = " " + suffix.displayName
-            if trimmed.lowercased().hasSuffix(token.lowercased()) {
-                return String(trimmed.dropLast(token.count))
-            }
-        }
-        return trimmed
-    }
-
-    private var canStart: Bool {
-        state.canStartSession && !task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private func sendTapped() {
-        let text = task.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        // Open the plan intake sheet — the user picks a delivery mode
-        // before the session actually starts.
-        planTask = text
-        task = ""
-        showPlanIntake = true
+        .buttonStyle(.plain)
+        .accessibilityLabel("Start a new coding session")
     }
 
     // MARK: - Session lifecycle
 
-    private func startSession(deliveryMode: PlanIntakeSheet.DeliveryMode) {
-        let text = planTask
-        guard let config = SessionLauncher.makeConfig(
-            in: state,
-            task: PlanIntakeSheet.decorate(text: text, mode: deliveryMode)
-        ) else { return }
+    private func startSession(config: SessionConfig, title: String) {
         let session = CodeSession(
-            title: text,
+            title: title,
             repoFullName: config.repo.fullName,
             baseBranch: config.repo.baseBranch ?? "main",
             workBranch: config.repo.workBranch
@@ -590,153 +547,7 @@ struct CodeHomeView: View {
     }
 }
 
-// MARK: - Plan intake sheet
-
-struct PlanIntakeSheet: View {
-    let task: String
-    var onStart: (DeliveryMode) -> Void
-    @Environment(\.dismiss) private var dismiss
-
-    enum DeliveryMode: String, CaseIterable, Identifiable {
-        case e2eFramework = "Set up E2E framework"
-        case unitUI = "Component/unit UI tests"
-        case manualRun = "Manually run & screenshot"
-        case recommend = "Just explore & recommend"
-        case other = "Other"
-
-        var id: String { rawValue }
-
-        var body: String {
-            switch self {
-            case .e2eFramework:
-                return "Add Playwright (or similar), wire up a config + first smoke tests that load the app in a real browser, and add a CI workflow. Best for testing real user flows across the Astro island apps / PWA."
-            case .unitUI:
-                return "Add Vitest + React Testing Library for fast, isolated tests of React components (SiteNav, modals, portal views). Runs in jsdom, no browser."
-            case .manualRun:
-                return "No new test framework — just launch the app(s) with the pre-installed Chromium/Playwright and capture screenshots to verify the UI renders/works right now."
-            case .recommend:
-                return "Don't write code yet — audit the UI surface, propose a testing strategy and stack, and let you decide before implementing."
-            case .other:
-                return ""
-            }
-        }
-
-        var title: String { rawValue }
-    }
-
-    @State private var selection: DeliveryMode = .e2eFramework
-    @State private var customText: String = ""
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    HStack {
-                        Text("<")
-                        Text("1 of \(DeliveryMode.allCases.count - 1)")
-                        Spacer()
-                        Text(">")
-                    }
-                    .font(.system(size: 14))
-                    .foregroundStyle(Theme.textTertiary)
-                    .padding(.top, 8)
-
-                    HStack(alignment: .top) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("What do you want \"\(task)\" to deliver?")
-                                .font(.system(size: 22, weight: .semibold))
-                                .foregroundStyle(Theme.textPrimary)
-                        }
-                        Spacer()
-                        Button { dismiss() } label: {
-                            Image(systemName: "xmark")
-                                .foregroundStyle(Theme.textSecondary)
-                                .frame(width: 32, height: 32)
-                        }
-                        .buttonStyle(.plain)
-                    }
-
-                    ForEach(DeliveryMode.allCases.filter { $0 != .other }) { mode in
-                        Button {
-                            selection = mode
-                        } label: {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(mode.title)
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundStyle(Theme.textPrimary)
-                                Text(mode.body)
-                                    .font(.system(size: 14))
-                                    .foregroundStyle(Theme.textSecondary)
-                                    .multilineTextAlignment(.leading)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(14)
-                            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(selection == mode ? Theme.selection : Color.clear, lineWidth: 2)
-                            )
-                        }
-                        .buttonStyle(.plain)
-                    }
-
-                    Text("Other")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Theme.textTertiary)
-                        .padding(.top, 8)
-                    TextField("", text: $customText, prompt: Text("Describe a custom delivery mode").foregroundColor(Theme.textTertiary))
-                        .textFieldStyle(.plain)
-                        .padding(10)
-                        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
-
-                    HStack {
-                        Spacer()
-                        Button {
-                            if selection == .other {
-                                onStart(.other)
-                            } else {
-                                onStart(selection)
-                            }
-                        } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: "arrow.right")
-                                Text("Next")
-                            }
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 18)
-                            .padding(.vertical, 10)
-                            .background(Theme.textPrimary, in: Capsule())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, 20)
-            }
-            .background(Theme.background)
-            .presentationDetents([.large])
-        }
-        .preferredColorScheme(.dark)
-    }
-
-    static func decorate(text: String, mode: DeliveryMode) -> String {
-        // The session's first message leads with the delivery context so
-        // the agent knows what shape of answer to produce.
-        switch mode {
-        case .e2eFramework:
-            return "E2E framework (Playwright + CI): \(text)"
-        case .unitUI:
-            return "Component/unit UI tests (Vitest + RTL): \(text)"
-        case .manualRun:
-            return "Manual run + screenshots: \(text)"
-        case .recommend:
-            return "Audit + recommend only (no code): \(text)"
-        case .other:
-            return text
-        }
-    }
-}
+// MARK: - New session prompt removed
 
 // MARK: - Filter sheet
 

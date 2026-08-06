@@ -20,6 +20,7 @@
 		4114491C6A1C079454CDA058 /* ChatMessageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89ACA54EEF2D90D733D07319 /* ChatMessageView.swift */; };
 		431C6E901D116DFC9D36D044 /* EnvironmentPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3ABFBFBD3F859859EF38713 /* EnvironmentPickerSheet.swift */; };
 		4566952DA0132D77A8EE9591 /* AddMCPServerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EB4EE65C4258698A46CAA4B /* AddMCPServerView.swift */; };
+		466ABA2F18FE2093C283BCF9 /* CreateProjectSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BBA7BF7E56F0C342A158026 /* CreateProjectSheet.swift */; };
 		49F54C9BBC4D10C1D6090781 /* MCPManagerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2ADFE0A53FD2B4D3C2A580A /* MCPManagerView.swift */; };
 		4E1B983D123B955705CF21F5 /* MessageActionsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92B8B37187ABF4B1D38C035C /* MessageActionsSheet.swift */; };
 		4F2F4C5E065A3D39CE07B457 /* ServerPairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2859EE3164B1E6B9B8FC413E /* ServerPairingView.swift */; };
@@ -30,6 +31,7 @@
 		8F3DB8FE8D6A9AD4B378545A /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51A6F3760C3F554FB30618FD /* SidebarView.swift */; };
 		966A4F9BE180EA171CB53E18 /* CodeMobileAIApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C43F44FA114A49D5E4DBA077 /* CodeMobileAIApp.swift */; };
 		98F75671DEBF97911DECB3F6 /* CodeHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 725C268E921DE1E981A9205A /* CodeHomeView.swift */; };
+		N0E5I0N00NS1G0N1D0000002 /* NewSessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = N0E5I0N00NS1G0N1D0000001 /* NewSessionView.swift */; };
 		9FC14E8AA0CA56C6EA91813A /* ProjectDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8852D1BF14C291064F9472EF /* ProjectDetailView.swift */; };
 		A072A2EF329B1CD94113290B /* AddToChatSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD9D6DBBFFD549911826E178 /* AddToChatSheet.swift */; };
 		A76F958B233AC6B0D85194D1 /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BC526BDB273DB5767242AF8 /* ChatViewModel.swift */; };
@@ -70,6 +72,7 @@
 		725C268E921DE1E981A9205A /* CodeHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeHomeView.swift; sourceTree = "<group>"; };
 		75B98B2E1CADCBFDDA17E24C /* MobileAICore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = MobileAICore; path = MobileAICore; sourceTree = SOURCE_ROOT; };
 		7A9266305EC58D214BBBD767 /* SessionToolsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionToolsView.swift; sourceTree = "<group>"; };
+		7BBA7BF7E56F0C342A158026 /* CreateProjectSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateProjectSheet.swift; sourceTree = "<group>"; };
 		7BC526BDB273DB5767242AF8 /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModel.swift; sourceTree = "<group>"; };
 		7E89F2166AA9386334E1525F /* NewEnvironmentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewEnvironmentView.swift; sourceTree = "<group>"; };
 		8852D1BF14C291064F9472EF /* ProjectDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectDetailView.swift; sourceTree = "<group>"; };
@@ -79,6 +82,7 @@
 		98A147B53BE46B0A986DAD1D /* SessionViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionViewModel.swift; sourceTree = "<group>"; };
 		9D7CABD64FA1C5A2F2BA7B73 /* SkillDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillDetailView.swift; sourceTree = "<group>"; };
 		9E872F29975B35FDB239FE78 /* ClaudeSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeSettingsView.swift; sourceTree = "<group>"; };
+		N0E5I0N00NS1G0N1D0000001 /* NewSessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewSessionView.swift; sourceTree = "<group>"; };
 		A39D4A74CD479B5EF31ECE03 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		A3B588A401A8084CA0142E13 /* ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMessage.swift; sourceTree = "<group>"; };
 		AACDD9E331ED815DA4DD0880 /* MCPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPClient.swift; sourceTree = "<group>"; };
@@ -120,6 +124,7 @@
 		09313BA3F4B8F2E45A0FE859 /* Sidebar */ = {
 			isa = PBXGroup;
 			children = (
+				7BBA7BF7E56F0C342A158026 /* CreateProjectSheet.swift */,
 				8852D1BF14C291064F9472EF /* ProjectDetailView.swift */,
 				51C6E64C1BCD37594F885EF5 /* ProjectsListView.swift */,
 				51A6F3760C3F554FB30618FD /* SidebarView.swift */,
@@ -281,6 +286,7 @@
 			isa = PBXGroup;
 			children = (
 				8D34F1A752BCD74456273A7F /* SessionConfig.swift */,
+				N0E5I0N00NS1G0N1D0000001 /* NewSessionView.swift */,
 				7A9266305EC58D214BBBD767 /* SessionToolsView.swift */,
 				FB90650912DA1C3BDF22884F /* SessionView.swift */,
 				98A147B53BE46B0A986DAD1D /* SessionViewModel.swift */,
@@ -390,6 +396,7 @@
 				708303123A73B0994A4E725C /* Components.swift in Sources */,
 				7E231F1EB73CF1A624BB4718 /* Connector.swift in Sources */,
 				3F478CBE217FA3282FB4F237 /* ConnectorsView.swift in Sources */,
+				466ABA2F18FE2093C283BCF9 /* CreateProjectSheet.swift in Sources */,
 				E2C2A9BB2F6603AC805CC55E /* CustomTextSkillEditor.swift in Sources */,
 				431C6E901D116DFC9D36D044 /* EnvironmentPickerSheet.swift in Sources */,
 				D9BB72E307E7AEEF83FBE81F /* GitHubLinkView.swift in Sources */,
@@ -410,6 +417,7 @@
 				1072C0160A63C0832C5F7CBE /* SessionToolsView.swift in Sources */,
 				1347BD5A9264B8548C6839F1 /* SessionView.swift in Sources */,
 				2DBAC3E0633EC6A20A506961 /* SessionViewModel.swift in Sources */,
+				N0E5I0N00NS1G0N1D0000002 /* NewSessionView.swift in Sources */,
 				8F3DB8FE8D6A9AD4B378545A /* SidebarView.swift in Sources */,
 				BA8E87D07DED459879286F5C /* SkillDetailView.swift in Sources */,
 				3E18683E4498A15C1F022244 /* SkillMarketplaceView.swift in Sources */,

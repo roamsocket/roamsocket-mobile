@@ -18,13 +18,27 @@ public enum PermissionMode: String, Codable, Sendable, CaseIterable {
 }
 
 public enum NetworkAccess: String, Codable, Sendable, CaseIterable {
-    case trusted, limited, none
+    case trusted, limited, none, custom
 
     public var displayName: String {
         switch self {
         case .trusted: return "Trusted network access"
         case .limited: return "Limited network access"
         case .none: return "No network access"
+        case .custom: return "Custom"
+        }
+    }
+
+    public var subtitle: String {
+        switch self {
+        case .trusted:
+            return "Downloads packages from verified sources."
+        case .limited:
+            return "Unrestricted internet access for maximum flexibility."
+        case .none:
+            return "Blocks internet access for maximum security."
+        case .custom:
+            return "Create a list of allowed domains."
         }
     }
 }
@@ -32,13 +46,20 @@ public enum NetworkAccess: String, Codable, Sendable, CaseIterable {
 public struct EnvironmentConfig: Codable, Hashable, Sendable, Identifiable {
     public var name: String
     public var networkAccess: NetworkAccess
+    public var allowedDomains: [String]
     public var variables: [String: String]
 
     public var id: String { name }
 
-    public init(name: String, networkAccess: NetworkAccess = .trusted, variables: [String: String] = [:]) {
+    public init(
+        name: String,
+        networkAccess: NetworkAccess = .trusted,
+        allowedDomains: [String] = [],
+        variables: [String: String] = [:]
+    ) {
         self.name = name
         self.networkAccess = networkAccess
+        self.allowedDomains = allowedDomains
         self.variables = variables
     }
 
