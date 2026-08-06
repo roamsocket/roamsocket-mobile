@@ -12,11 +12,17 @@ struct RootView: View {
     @State private var sidebarOpen: Bool = false
     @State private var showSettings: Bool = false
     @State private var path: [RootRoute] = []
+    /// Bumps when the user picks a recent chat so ChatView reloads messages.
+    @State private var chatResumeToken = UUID()
 
     var body: some View {
         ZStack {
             NavigationStack(path: $path) {
-                ChatView(onOpenSidebar: { sidebarOpen = true })
+                ChatView(
+                    onOpenSidebar: { sidebarOpen = true },
+                    history: history,
+                    resumeToken: chatResumeToken
+                )
                     .toolbar { toolbar }
                     .navigationDestination(for: RootRoute.self) { route in
                         switch route {
@@ -29,7 +35,13 @@ struct RootView: View {
                         case .projectDetail(let project):
                             ProjectDetailView(project: project, history: history, path: $path)
                         case .projectChat(let project, let chat):
-                            ChatView(project: project, chat: chat, path: $path)
+                            ChatView(
+                                project: project,
+                                chat: chat,
+                                path: $path,
+                                history: history,
+                                resumeToken: chatResumeToken
+                            )
                         }
                     }
             }
@@ -37,7 +49,7 @@ struct RootView: View {
                 if state.allModels.isEmpty { await state.refreshModels() }
             }
 
-            // Sidebar drawer overlay
+            // Full-height edge drawer (not a floating card)
             if sidebarOpen {
                 Color.black.opacity(0.4)
                     .ignoresSafeArea()
@@ -52,6 +64,7 @@ struct RootView: View {
                         },
                         onNewChat: {
                             history.startNewChat()
+                            chatResumeToken = UUID()
                             path = []
                             withAnimation(.easeInOut(duration: 0.25)) { sidebarOpen = false }
                         },
@@ -61,14 +74,14 @@ struct RootView: View {
                         }
                     )
                     .frame(width: 300)
-                    .background(Theme.background)
-                    .clipShape(RoundedRectangle(cornerRadius: 24))
-                    .padding(.vertical, 12)
-                    .padding(.leading, 8)
-                    .transition(.move(edge: .leading).combined(with: .opacity))
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    // Paint under the status bar, but keep content in the safe area.
+                    .background(Theme.background.ignoresSafeArea(edges: .vertical))
+                    .transition(.move(edge: .leading))
 
                     Spacer(minLength: 0)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             }
         }
         .sheet(isPresented: $showSettings) {
@@ -119,8 +132,8 @@ struct RootView: View {
             path = [.code]
             withAnimation(.easeInOut(duration: 0.25)) { sidebarOpen = false }
         case .chat(let item):
-            history.recents.removeAll { $0.id == item.id }
-            history.recents.insert(item, at: 0)
+            history.openChat(item)
+            chatResumeToken = UUID()
             path = []
             withAnimation(.easeInOut(duration: 0.25)) { sidebarOpen = false }
         case .project(let project):

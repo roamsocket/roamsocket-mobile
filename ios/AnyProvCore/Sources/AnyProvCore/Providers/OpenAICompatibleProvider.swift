@@ -28,7 +28,7 @@ public struct OpenAICompatibleProvider: ModelProvider {
         case .openrouter: return URL(string: "https://openrouter.ai/api/v1")
         case .xai: return URL(string: "https://api.x.ai/v1")
         case .mistral: return URL(string: "https://api.mistral.ai/v1")
-        case .anthropic, .google, .custom:
+        case .anthropic, .google, .localMetal, .custom:
             return nil
         }
     }

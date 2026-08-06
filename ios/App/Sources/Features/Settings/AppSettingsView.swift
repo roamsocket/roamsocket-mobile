@@ -13,6 +13,7 @@ struct AppSettingsView: View {
     @State private var showMCP = false
     @State private var showAbout = false
     @State private var showProviderKeys = false
+    @State private var showLocalMetal = false
     @State private var syncInFlight = false
     @State private var syncMessage: String?
     @State private var syncError: String?
@@ -91,6 +92,9 @@ struct AppSettingsView: View {
         .sheet(isPresented: $showProviderKeys) {
             ProviderKeysView()
         }
+        .sheet(isPresented: $showLocalMetal) {
+            LocalMetalSettingsView()
+        }
     }
 
     // MARK: - Header
@@ -153,6 +157,19 @@ struct AppSettingsView: View {
                 )
             }
             .buttonStyle(.plain)
+
+            Divider().background(Theme.separator)
+
+            Button {
+                showLocalMetal = true
+            } label: {
+                row(
+                    systemImage: "cpu",
+                    title: "On-device (Metal)",
+                    trailing: "Chat only"
+                )
+            }
+            .buttonStyle(.plain)
         }
     }
 
@@ -164,7 +181,7 @@ struct AppSettingsView: View {
     /// (custom hosts count even when the key is blank — Ollama-style).
     private var providerKeysStatus: String {
         let builtIn = ProviderID.allBuiltInCases
-            .filter { !state.apiKey(for: $0).isEmpty }
+            .filter { $0.requiresAPIKey && !state.apiKey(for: $0).isEmpty }
             .count
         let count = builtIn + state.customProviders.count
         if count == 0 { return "Add +" }
@@ -188,6 +205,8 @@ struct AppSettingsView: View {
             }
             .buttonStyle(.plain)
 
+            Divider().background(Theme.separator)
+
             VStack(alignment: .leading, spacing: 6) {
                 Text("Branch prefix")
                     .font(.system(size: 15, weight: .medium))
@@ -195,6 +214,7 @@ struct AppSettingsView: View {
                 Text("Each coding session gets its own branch: \(previewBranchExample)")
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
                 TextField("apc", text: $state.codeBranchPrefix)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -202,13 +222,16 @@ struct AppSettingsView: View {
                     .background(Theme.field, in: RoundedRectangle(cornerRadius: 10))
                     .foregroundStyle(Theme.textPrimary)
             }
-            .padding(.top, 8)
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 14)
 
             if let msg = state.reconnectMessage, !msg.isEmpty {
                 Text(msg)
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.textSecondary)
-                    .padding(.top, 4)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
             }
         }
     }
@@ -337,7 +360,8 @@ struct AppSettingsView: View {
 
     private func pushSettings() {
         guard let token = state.githubToken, !token.isEmpty else {
-            syncError = "Link GitHub first."
+            syncError = nil
+            showGitHubLink = true
             return
         }
         syncInFlight = true
@@ -363,7 +387,8 @@ struct AppSettingsView: View {
 
     private func pullSettings() {
         guard let token = state.githubToken, !token.isEmpty else {
-            syncError = "Link GitHub first."
+            syncError = nil
+            showGitHubLink = true
             return
         }
         syncInFlight = true
@@ -540,7 +565,7 @@ private struct ProviderKeysView: View {
         NavigationStack {
             Form {
                 Section("Provider API keys") {
-                    ForEach(ProviderID.allCases) { provider in
+                    ForEach(ProviderID.allCases.filter(\.requiresAPIKey)) { provider in
                         ProviderKeyRow(provider: provider)
                     }
                 }

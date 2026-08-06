@@ -12,7 +12,18 @@ interface BootstrapInfo {
   serverPort: number | null;
   serverHost: string | null;
   serverRunning: boolean;
-  prefs: { closeBehaviorDecided: boolean; alwaysQuitOnClose: boolean; startMinimized: boolean };
+  prefs: {
+    closeBehaviorDecided: boolean;
+    alwaysQuitOnClose: boolean;
+    startMinimized: boolean;
+    remoteAccessEnabled: boolean;
+    remoteAccessUrl: string;
+    remoteAccessProvider: string;
+    allowLanDiscovery: boolean;
+    autoTunnelOnPair: boolean;
+    showPairingCodePopup: boolean;
+    rotateCodeAfterPair: boolean;
+  };
   secretsAvailable: boolean;
 }
 
@@ -34,6 +45,16 @@ interface SecretPayload {
 
 const api = {
   bootstrap: (): Promise<BootstrapInfo> => ipcRenderer.invoke("app:getBootstrap"),
+
+  prefs: {
+    set: (patch: Record<string, unknown>): Promise<BootstrapInfo["prefs"]> =>
+      ipcRenderer.invoke("prefs:set", patch),
+  },
+
+  pairing: {
+    showCode: (): Promise<string | null> => ipcRenderer.invoke("pairing:showCode"),
+    rotateCode: (): Promise<string | null> => ipcRenderer.invoke("pairing:rotateCode"),
+  },
 
   secrets: {
     get: (): Promise<RedactedSecrets> => ipcRenderer.invoke("secrets:get"),
@@ -101,7 +122,7 @@ const api = {
   app: { quit: (): Promise<void> => ipcRenderer.invoke("app:quit") },
 
   on: (
-    channel: "navigate" | "tools:installLog" | "tools:installDone",
+    channel: "navigate" | "tools:installLog" | "tools:installDone" | "pairing:code",
     listener: (payload: any) => void,
   ) => {
     const handler = (_e: unknown, p: any) => listener(p);

@@ -103,6 +103,26 @@ export async function readFile(
   return { content, truncated, diff: diff || undefined };
 }
 
+const MAX_WRITE = 2 * 1024 * 1024; // 2 MB
+
+/** Write (create or overwrite) a UTF-8 text file inside the workdir. */
+export async function writeFile(
+  workdir: string,
+  rel: string,
+  content: string,
+): Promise<void> {
+  if (typeof content !== "string") throw new Error("Content must be a string.");
+  if (Buffer.byteLength(content, "utf8") > MAX_WRITE) {
+    throw new Error(`File too large to write (max ${MAX_WRITE / 1024} KB).`);
+  }
+  const absolute = path.resolve(workdir, rel);
+  if (!absolute.startsWith(path.resolve(workdir) + path.sep) && absolute !== path.resolve(workdir)) {
+    throw new Error("Path escapes workdir.");
+  }
+  await fs.mkdir(path.dirname(absolute), { recursive: true });
+  await fs.writeFile(absolute, content, "utf8");
+}
+
 /**
  * Working-tree status map: relative path → short status (M/A/D/?/…).
  * Covers staged, unstaged, and untracked files.

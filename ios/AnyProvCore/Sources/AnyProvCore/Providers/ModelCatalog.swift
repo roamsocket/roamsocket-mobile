@@ -22,6 +22,8 @@ public struct ModelCatalog: Sendable {
             return GoogleProvider(http: http, baseURL: customBaseURL)
         case .openai, .groq, .openrouter, .xai, .mistral:
             return OpenAICompatibleProvider(id: id, http: http, baseURL: customBaseURL)
+        case .localMetal:
+            return LocalMetalProvider()
         case .custom:
             let resolvedStyle = style ?? .openAI
             switch resolvedStyle {
@@ -52,7 +54,11 @@ public struct ModelCatalog: Sendable {
         customBaseURLs: [ProviderID: URL],
         styles: [ProviderID: CustomProviderStyle] = [:]
     ) async -> [ProviderResult] {
-        let configured = keys.filter { !$0.value.isEmpty }
+        var configured = keys.filter { !$0.value.isEmpty }
+        // Always list on-device Metal models for chat (no API key).
+        if configured[.localMetal] == nil {
+            configured[.localMetal] = "local"
+        }
         return await withTaskGroup(of: ProviderResult.self) { group in
             for (id, key) in configured {
                 let baseURL = customBaseURLs[id]

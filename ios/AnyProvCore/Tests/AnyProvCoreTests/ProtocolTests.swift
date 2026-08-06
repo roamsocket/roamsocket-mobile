@@ -28,6 +28,30 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(obj["text"] as? String, "hello")
     }
 
+    func testFileWriteEncoding() throws {
+        let data = try JSONEncoder().encode(ClientMessage.fileWrite(
+            sessionId: "s1",
+            path: "src/App.swift",
+            content: "print(1)\n"))
+        let obj = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        XCTAssertEqual(obj["type"] as? String, "file_write")
+        XCTAssertEqual(obj["sessionId"] as? String, "s1")
+        XCTAssertEqual(obj["path"] as? String, "src/App.swift")
+        XCTAssertEqual(obj["content"] as? String, "print(1)\n")
+    }
+
+    func testDecodeFileWriteResult() throws {
+        let msg = try JSONDecoder().decode(ServerMessage.self, from: json(
+            #"{"type":"file_write_result","sessionId":"s1","path":"a.md","ok":true,"message":"Saved a.md"}"#))
+        guard case let .fileWriteResult(sessionId, path, ok, message) = msg else {
+            return XCTFail("expected fileWriteResult")
+        }
+        XCTAssertEqual(sessionId, "s1")
+        XCTAssertEqual(path, "a.md")
+        XCTAssertTrue(ok)
+        XCTAssertEqual(message, "Saved a.md")
+    }
+
     func testCreateSessionEncodesFullMCPServers() throws {
         let mcp = MCPServerConfig(
             id: "fs",
@@ -118,6 +142,18 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(tunnels.count, 1)
         XCTAssertEqual(tunnels[0].url, "https://x.loca.lt")
         XCTAssertEqual(providers, ["localtunnel", "cloudflare"])
+    }
+
+    func testDecodeRemoteEndpoint() throws {
+        let msg = try JSONDecoder().decode(ServerMessage.self, from: json(
+            #"{"type":"remote_endpoint","status":"up","url":"https://abc.trycloudflare.com","provider":"cloudflare"}"#))
+        guard case let .remoteEndpoint(status, url, provider, err) = msg else {
+            return XCTFail("wrong case")
+        }
+        XCTAssertEqual(status, "up")
+        XCTAssertEqual(url, "https://abc.trycloudflare.com")
+        XCTAssertEqual(provider, "cloudflare")
+        XCTAssertNil(err)
     }
 
     func testDecodeServerMessages() throws {

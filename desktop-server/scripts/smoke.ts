@@ -70,7 +70,14 @@ async function main(): Promise<void> {
 
   const server = spawn("npx", ["tsx", "src/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, PORT: String(PORT), APC_MOCK: "1" },
+    env: {
+      ...process.env,
+      PORT: String(PORT),
+      APC_MOCK: "1",
+      APC_ADVERTISE: "0",
+      APC_AUTO_TUNNEL: "0",
+      APC_CLI_SETTINGS: "0",
+    },
   });
 
   try {

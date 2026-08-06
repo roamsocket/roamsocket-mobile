@@ -20,8 +20,13 @@ npm run dev          # watch mode (tsx)
 npm start            # from a prior `npm run build`
 ```
 
-On start it prints a **pairing code** and a QR payload. Enter the address
-(`http://<your-ip>:4319`) and code in the app's *Pair with a server* screen.
+On start it prints a **large pairing code** and an **ASCII QR** (JSON payload
+`{"host","code"}`). Scan it in the iOS app under *Pair server → Scan desktop QR*,
+or type the 6-digit code after picking a nearby server.
+
+Headless TTY sessions also open a **CLI settings** prompt (`settings>`) for
+LAN discovery, auto-tunnel, and code display. Type `h` for help, `q` to leave
+the menu (server keeps running).
 
 ### Electron app (GUI)
 
@@ -43,8 +48,15 @@ To really quit: tray menu → *Quit AnyProv Code*, or `Cmd-Q` on macOS.
 | Var | Default | Purpose |
 |-----|---------|---------|
 | `PORT` | `4319` | HTTP + WebSocket port |
-| `APC_NAME` | `anyprov-code desktop` | shown when pairing |
+| `APC_HOST` | `0.0.0.0` | bind address (`0.0.0.0` = LAN-reachable) |
+| `APC_NAME` | `anyprov-code desktop` | shown when pairing / Bonjour |
+| `APC_ADVERTISE` | on | set `0` to disable Bonjour/mDNS LAN broadcast |
+| `APC_AUTO_TUNNEL` | on | set `0` to disable auto public tunnel after phone pair |
+| `APC_CLI_SETTINGS` | on (TTY) | set `0` to skip the interactive settings prompt |
 | `APC_MOCK` | unset | `1` runs a deterministic offline agent (no API key) |
+
+Shared connection prefs live in `~/.anyprov-code/desktop-prefs.json` (Electron
+settings UI and the CLI menu edit the same file).
 
 ## Verify
 

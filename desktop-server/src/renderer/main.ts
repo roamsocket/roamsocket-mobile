@@ -439,11 +439,86 @@ function renderSettings() {
   server.append(el("h3", {}, ["Server"]));
   if (state.bootstrap) {
     const b = state.bootstrap;
-    server.append(el("div", {}, [`Address: http://${b.serverHost ?? "127.0.0.1"}:${b.serverPort}`]));
-    server.append(el("div", {}, [`Pairing code: ${b.pairingCode ?? "------"}`]));
+    const bindHost = b.serverHost ?? "0.0.0.0";
+    server.append(el("div", {}, [`Listening: http://${bindHost}:${b.serverPort}`]));
+    server.append(
+      el(
+        "div",
+        { class: "muted" },
+        [
+          "On your phone open Settings → Desktop server, pick this machine (or scan the QR from the terminal), then enter the pairing code.",
+        ],
+      ),
+    );
+    const codeRow = el("div", { class: "provider-row" });
+    codeRow.append(el("div", {}, [`Pairing code: ${b.pairingCode ?? "------"}`]));
+    const showCode = el("button", { class: "ghost-btn" }, ["Show popup"]);
+    showCode.addEventListener("click", () => void window.apc.pairing.showCode());
+    const rotateCode = el("button", { class: "ghost-btn" }, ["Rotate"]);
+    rotateCode.addEventListener("click", async () => {
+      const next = await window.apc.pairing.rotateCode();
+      if (next && state.bootstrap) {
+        state.bootstrap.pairingCode = next;
+        ($("pairing-code") as HTMLElement).textContent = next;
+        renderSettings();
+      }
+    });
+    codeRow.append(el("div", {}, [showCode, " ", rotateCode]));
+    server.append(codeRow);
     server.append(el("div", {}, [`Platform: ${b.platform} • App v${b.version}`]));
   }
   view.append(server);
+
+  // --- Connection permissions (auto-connect / discovery / tunnel) ---
+  const perms = el("div", { class: "settings-section" });
+  perms.append(el("h3", {}, ["Connection permissions"]));
+  perms.append(el("p", { class: "settings-hint" }, [
+    "Control how phones find this desktop and whether a public tunnel starts after pairing so the session stays up off Wi‑Fi.",
+  ]));
+  const p = state.bootstrap?.prefs;
+  const addToggle = (
+    parent: HTMLElement,
+    label: string,
+    key: "allowLanDiscovery" | "autoTunnelOnPair" | "showPairingCodePopup" | "rotateCodeAfterPair" | "alwaysQuitOnClose" | "startMinimized",
+    hint: string,
+  ) => {
+    const row = el("div", { class: "provider-row" });
+    const left = el("div", {});
+    left.append(el("div", {}, [label]));
+    left.append(el("div", { class: "settings-hint" }, [hint]));
+    row.append(left);
+    const on = !!(p as any)?.[key];
+    const btn = el("button", { class: on ? "ghost-btn" : "danger-btn" }, [on ? "On" : "Off"]);
+    btn.addEventListener("click", async () => {
+      const next = await window.apc.prefs.set({ [key]: !on });
+      if (state.bootstrap) state.bootstrap.prefs = { ...state.bootstrap.prefs, ...next } as any;
+      renderSettings();
+    });
+    row.append(btn);
+    parent.append(row);
+  };
+  addToggle(perms, "LAN discovery (Bonjour)", "allowLanDiscovery", "Phones can find this machine on the same Wi‑Fi. Restart to re-advertise.");
+  addToggle(perms, "Auto tunnel after pair", "autoTunnelOnPair", "Start Cloudflare/ngrok/localtunnel and send the public URL to the phone.");
+  addToggle(perms, "Show pairing code popup", "showPairingCodePopup", "Large verification-style code window when the app starts.");
+  addToggle(perms, "Rotate code after pair", "rotateCodeAfterPair", "Issue a new 6-digit code after each successful pair.");
+  addToggle(perms, "Start minimized", "startMinimized", "Launch hidden to the tray.");
+  addToggle(perms, "Quit on window close", "alwaysQuitOnClose", "Otherwise closing the window keeps the server in the tray.");
+
+  const provRow = el("div", { class: "provider-row" });
+  provRow.append(el("div", {}, ["Tunnel provider"]));
+  const provSelect = el("select", {}) as HTMLSelectElement;
+  for (const id of ["auto", "cloudflare", "ngrok", "localtunnel", "bore"]) {
+    const opt = el("option", { value: id }, [id]);
+    if ((p?.remoteAccessProvider ?? "auto") === id) opt.selected = true;
+    provSelect.append(opt);
+  }
+  provSelect.addEventListener("change", async () => {
+    const next = await window.apc.prefs.set({ remoteAccessProvider: provSelect.value });
+    if (state.bootstrap) state.bootstrap.prefs = { ...state.bootstrap.prefs, ...next } as any;
+  });
+  provRow.append(provSelect);
+  perms.append(provRow);
+  view.append(perms);
 
   // --- Provider API keys ---
   const providers = el("div", { class: "settings-section" });
@@ -738,6 +813,11 @@ async function main() {
   // React to navigation requests from the tray
   window.apc.on("navigate", (path) => {
     window.location.hash = `#/${path.replace(/^\//, "")}`;
+  });
+  window.apc.on("pairing:code", (code: string) => {
+    if (state.bootstrap) state.bootstrap.pairingCode = code;
+    const node = document.getElementById("pairing-code");
+    if (node) node.textContent = code;
   });
 
   $("sidebar-toggle").addEventListener("click", () => {

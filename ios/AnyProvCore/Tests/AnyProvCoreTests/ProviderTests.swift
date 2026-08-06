@@ -77,13 +77,15 @@ final class ProviderTests: XCTestCase {
         let results = await ModelCatalog(http: http).fetchAll(keys: [
             .anthropic: "a", .openai: "b",
         ])
-        XCTAssertEqual(results.count, 2)
+        // +1 for always-listed on-device Metal (chat only).
+        XCTAssertEqual(results.count, 3)
         let anthropic = results.first { $0.provider == .anthropic }!
         let openai = results.first { $0.provider == .openai }!
         XCTAssertEqual(anthropic.models.count, 1)
         XCTAssertNil(anthropic.error)
         XCTAssertTrue(openai.models.isEmpty)
         XCTAssertNotNil(openai.error)
+        XCTAssertNotNil(results.first { $0.provider == .localMetal })
     }
 
     func testCustomProviderIDDoesNotCollapseToOpenAI() throws {
@@ -127,10 +129,11 @@ final class ProviderTests: XCTestCase {
             customBaseURLs: [custom: URL(string: "http://127.0.0.1:9999/v1")!],
             styles: [custom: .openAI]
         )
-        XCTAssertEqual(results.count, 1)
-        XCTAssertEqual(results[0].provider, custom)
-        XCTAssertEqual(results[0].models.map(\.modelID), ["proxy-model"])
-        XCTAssertNil(results[0].error)
+        // custom + always-listed local Metal
+        XCTAssertEqual(results.count, 2)
+        let customResult = results.first { $0.provider == custom }!
+        XCTAssertEqual(customResult.models.map(\.modelID), ["proxy-model"])
+        XCTAssertNil(customResult.error)
     }
 
     func testModelSelectionEncodesBaseUrlAndApiStyle() throws {

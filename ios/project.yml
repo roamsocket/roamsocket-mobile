@@ -8,6 +8,22 @@ options:
 packages:
   AnyProvCore:
     path: AnyProvCore
+  MarkdownUI:
+    url: https://github.com/gonzalezreal/swift-markdown-ui
+    from: 2.4.0
+  Highlightr:
+    url: https://github.com/raspu/Highlightr
+    from: 2.2.0
+  # On-device Metal chat (MLX). Coding sessions never use these products.
+  mlx-swift-lm:
+    url: https://github.com/ml-explore/mlx-swift-lm
+    from: 3.31.3
+  swift-huggingface:
+    url: https://github.com/huggingface/swift-huggingface
+    from: 0.9.0
+  swift-transformers:
+    url: https://github.com/huggingface/swift-transformers
+    from: 1.3.0
 
 targets:
   AnyProvCode:
@@ -17,6 +33,20 @@ targets:
       - path: App/Sources
     dependencies:
       - package: AnyProvCore
+      - package: MarkdownUI
+        product: MarkdownUI
+      - package: Highlightr
+        product: Highlightr
+      - package: mlx-swift-lm
+        product: MLXLLM
+      - package: mlx-swift-lm
+        product: MLXLMCommon
+      - package: mlx-swift-lm
+        product: MLXHuggingFace
+      - package: swift-huggingface
+        product: HuggingFace
+      - package: swift-transformers
+        product: Tokenizers
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.anyprovcode.app
@@ -24,6 +54,8 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1,2"
+        # MLX / Metal needs the increased default stack on device.
+        OTHER_LDFLAGS: ["$(inherited)", "-lc++"]
     entitlements:
       path: App/AnyProvCode.entitlements
       properties:
@@ -42,5 +74,9 @@ targets:
           NSAllowsArbitraryLoads: true
           NSAllowsLocalNetworking: true
         NSLocalNetworkUsageDescription: "Connect to your desktop coding server on the local network."
+        NSCameraUsageDescription: "Scan the pairing QR code shown on your desktop or terminal."
+        # Required for NWBrowser to discover `_anyprov-code._tcp` (desktop Bonjour).
+        NSBonjourServices:
+          - "_anyprov-code._tcp"
         NSHealthShareUsageDescription: "AnyProv Code reads your Apple Health data when you turn on Health in chat, so the assistant can answer questions about steps, sleep, workouts, and other stats you choose to share."
         NSHealthUpdateUsageDescription: "AnyProv Code does not write to Apple Health. This permission is required by the system HealthKit entitlement."

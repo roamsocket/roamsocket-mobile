@@ -18,21 +18,19 @@ struct SidebarView: View {
     var onShowSettings: () -> Void
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            VStack(spacing: 0) {
-                header
-                navList
-                Spacer(minLength: 0)
-                recents
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 12)
-            .padding(.bottom, 100) // leave room for the floating New chat button
-
-            newChatButton
-            profileChip
+        VStack(spacing: 0) {
+            header
+            navList
+            recents
+                .frame(maxHeight: .infinity, alignment: .top)
+            bottomBar
         }
-        .background(Theme.background.ignoresSafeArea())
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        // Background can extend edge-to-edge; content respects the safe area.
+        .background(Theme.background.ignoresSafeArea(edges: .vertical))
     }
 
     // MARK: - Header
@@ -40,12 +38,11 @@ struct SidebarView: View {
     private var header: some View {
         HStack(alignment: .center) {
             Text("AnyProv Code")
-                .font(.system(size: 30, weight: .semibold))
+                .font(.system(size: 28, weight: .semibold))
                 .foregroundStyle(Theme.textPrimary)
             Spacer()
         }
-        .padding(.top, 6)
-        .padding(.bottom, 18)
+        .padding(.bottom, 16)
     }
 
     // MARK: - Top nav
@@ -77,24 +74,50 @@ struct SidebarView: View {
                 .padding(.top, 20)
                 .padding(.bottom, 8)
 
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 14) {
-                    ForEach(history.recents) { item in
-                        RecentRow(item: item) {
-                            onSelect(.chat(item))
+            // List is required for swipeActions to work.
+            List {
+                ForEach(history.activeRecents) { item in
+                    RecentRow(item: item) {
+                        onSelect(.chat(item))
+                    }
+                    .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button {
+                            history.archiveChat(item.id)
+                        } label: {
+                            Label("Archive", systemImage: "archivebox")
                         }
+                        .tint(Theme.accent)
                     }
                 }
-                .padding(.bottom, 24)
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .scrollIndicators(.hidden)
         }
     }
 
-    // MARK: - Floating buttons
+    // MARK: - Bottom bar (profile + new chat, pinned to edge)
 
-    private var newChatButton: some View {
-        HStack {
-            Spacer()
+    private var bottomBar: some View {
+        HStack(spacing: 12) {
+            Button(action: onShowSettings) {
+                ZStack {
+                    Circle()
+                        .fill(Theme.surfaceElevated)
+                        .frame(width: 40, height: 40)
+                    Text("JS")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Settings")
+
+            Spacer(minLength: 0)
+
             Button(action: onNewChat) {
                 HStack(spacing: 8) {
                     Image(systemName: "plus")
@@ -102,38 +125,15 @@ struct SidebarView: View {
                     Text("New chat")
                         .font(.system(size: 15, weight: .semibold))
                 }
-                .foregroundStyle(.black)
-                .padding(.horizontal, 18)
-                .padding(.vertical, 12)
-                .background(.white, in: Capsule())
-                .shadow(color: .black.opacity(0.4), radius: 18, y: 8)
+                .foregroundStyle(Theme.background)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 11)
+                .background(Theme.accent, in: Capsule())
             }
             .buttonStyle(.plain)
-            .padding(.trailing, 16)
-            .padding(.bottom, 56)
         }
-    }
-
-    private var profileChip: some View {
-        VStack {
-            Spacer()
-            HStack {
-                Button(action: onShowSettings) {
-                    ZStack {
-                        Circle()
-                            .fill(Theme.surfaceElevated)
-                            .frame(width: 40, height: 40)
-                        Text("JS")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(Theme.textPrimary)
-                    }
-                }
-                .buttonStyle(.plain)
-                Spacer()
-            }
-            .padding(.leading, 16)
-            .padding(.bottom, 18)
-        }
+        .padding(.top, 12)
+        .padding(.bottom, 4)
     }
 }
 

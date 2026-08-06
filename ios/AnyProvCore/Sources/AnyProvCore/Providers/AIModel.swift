@@ -13,6 +13,8 @@ public enum ProviderID: Hashable, Sendable, Identifiable, Codable {
     case openrouter
     case xai
     case mistral
+    /// On-device Metal (MLX) — **chat only**, not coding sessions.
+    case localMetal
     case custom(String)
 
     public var id: String { rawValue }
@@ -27,6 +29,7 @@ public enum ProviderID: Hashable, Sendable, Identifiable, Codable {
         case .openrouter: return "openrouter"
         case .xai: return "xai"
         case .mistral: return "mistral"
+        case .localMetal: return "local-metal"
         case .custom(let slug): return "custom:\(slug)"
         }
     }
@@ -40,6 +43,7 @@ public enum ProviderID: Hashable, Sendable, Identifiable, Codable {
         case "openrouter": self = .openrouter
         case "xai": self = .xai
         case "mistral": self = .mistral
+        case "local-metal", "local", "metal": self = .localMetal
         default:
             guard rawValue.hasPrefix("custom:") else { return nil }
             let slug = String(rawValue.dropFirst("custom:".count))
@@ -50,7 +54,7 @@ public enum ProviderID: Hashable, Sendable, Identifiable, Codable {
 
     /// Built-in providers only (excludes user-defined `.custom`).
     public static var allBuiltInCases: [ProviderID] {
-        [.anthropic, .openai, .google, .groq, .openrouter, .xai, .mistral]
+        [.anthropic, .openai, .google, .groq, .openrouter, .xai, .mistral, .localMetal]
     }
 
     /// Alias used by settings UIs that list first-party providers.
@@ -66,14 +70,24 @@ public enum ProviderID: Hashable, Sendable, Identifiable, Codable {
         case .openrouter: return "OpenRouter"
         case .xai: return "xAI"
         case .mistral: return "Mistral"
+        case .localMetal: return "On-device (Metal)"
         case .custom(let slug): return slug
         }
     }
 
     /// Whether the desktop coding agent can drive this provider today.
+    /// Local Metal runs on the phone for **chat only**.
     public var supportsCodingAgent: Bool {
         switch self {
-        case .google: return false
+        case .google, .localMetal: return false
+        default: return true
+        }
+    }
+
+    /// Cloud API key required for network providers.
+    public var requiresAPIKey: Bool {
+        switch self {
+        case .localMetal: return false
         default: return true
         }
     }

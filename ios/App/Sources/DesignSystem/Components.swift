@@ -73,12 +73,11 @@ struct ModelSelectorPill: View {
         .buttonStyle(.plain)
     }
 
-    /// A usable model needs an entry AND an API key for its provider.
-    /// The picker-only path stays open without a key so the user can
-    /// still browse, but anything that *uses* the model (sessions,
-    /// sends) bails out earlier — and the pill lets them know.
+    /// A usable model needs an entry AND (for cloud providers) an API key.
+    /// On-device Metal is chat-only and needs no key.
     var hasUsableModel: Bool {
         guard let model = state.selectedModel else { return false }
+        if !model.provider.requiresAPIKey { return true }
         return !state.resolvedAPIKey(for: model.provider).isEmpty
     }
 }

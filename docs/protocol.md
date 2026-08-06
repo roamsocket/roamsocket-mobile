@@ -6,11 +6,40 @@ in `desktop-server/src/protocol.ts` (zod) and are mirrored by the Swift Codable
 types in `ios/AnyProvCore/Sources/AnyProvCore/Server/Protocol.swift`. Keep all
 three in sync.
 
+## Local discovery (Bonjour / mDNS)
+
+The desktop companion advertises itself on the LAN so phones can list nearby
+servers without typing an IP:
+
+| | |
+|--|--|
+| Service type | `_anyprov-code._tcp` |
+| Port | HTTP listen port (default `4319`) |
+| TXT | `name` (server display name), `version`, `path` (`/`) |
+
+The pairing code is **not** published — the app still needs the 6-digit code
+from the desktop UI / console. Disable advertising with `APC_ADVERTISE=0`.
+Default listen address is `0.0.0.0` (all interfaces); override with `APC_HOST`.
+
+## Auto tunnel (stable off-LAN URL)
+
+After a successful `/pair` (or when a session WebSocket connects), the desktop
+starts a public reverse tunnel to its own listen port (Cloudflare quick tunnel
+preferred, then ngrok, then localtunnel via npx). It then pushes:
+
+```json
+{ "type": "remote_endpoint", "status": "up", "url": "https://….trycloudflare.com", "provider": "cloudflare" }
+```
+
+The iOS app updates its saved base URL to that HTTPS origin while **keeping
+the same bearer token**, so coding keeps working after leaving home Wi‑Fi.
+Disable with `APC_AUTO_TUNNEL=0`.
+
 ## HTTP
 
 ### `GET /health`
 ```json
-{ "ok": true, "name": "anyprov-code desktop", "version": "0.1.0" }
+{ "ok": true, "name": "anyprov-code desktop", "version": "0.1.0", "publicUrl": "https://…", "tunnelStatus": "up" }
 ```
 
 ### `POST /pair`
@@ -20,9 +49,10 @@ Request:
 ```
 Response `200`:
 ```json
-{ "token": "…", "serverName": "anyprov-code desktop", "serverVersion": "0.1.0" }
+{ "token": "…", "serverName": "anyprov-code desktop", "serverVersion": "0.1.0", "publicUrl": "https://…?" }
 ```
-`401` on a wrong code. The `token` is a bearer token used to open the WebSocket.
+`publicUrl` is set only if a tunnel is already up. `401` on a wrong code. The
+`token` is a bearer token used to open the WebSocket.
 
 ## WebSocket `GET /session?token=…`
 
@@ -43,6 +73,7 @@ Every frame is a JSON object with a `type` discriminator.
 | `terminal_kill`       | `terminalId` |
 | `file_list`           | `sessionId`, `path` |
 | `file_read`           | `sessionId`, `path` |
+| `file_write`          | `sessionId`, `path`, `content` |
 | `port_list`           | `sessionId` |
 | `tunnel_start`        | `sessionId`, `port`, `provider` (`auto`\|`ngrok`\|`cloudflare`\|`localtunnel`\|`bore`) |
 | `tunnel_stop`         | `sessionId`, `tunnelId` |
@@ -77,6 +108,7 @@ fall back to the built-in OpenAI / Anthropic cloud hosts.
 | `git_result`         | `sessionId`, `action`, `ok`, `detail`, `url?` |
 | `file_list_result`   | `sessionId`, `path`, `entries[]`, `diff?`, `changes?` |
 | `file_read_result`   | `sessionId`, `path`, `content`, `truncated`, `diff?` |
+| `file_write_result`  | `sessionId`, `path`, `ok`, `message?` |
 | `port_list_result`   | `sessionId`, `ports[]` |
 | `tunnel_status`      | `sessionId`, `tunnels[]`, `availableProviders[]` |
 | `terminal_data`      | `terminalId`, `stream`, `data` |

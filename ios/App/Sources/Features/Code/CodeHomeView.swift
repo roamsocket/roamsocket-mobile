@@ -3,6 +3,40 @@ import AnyProvCore
 
 /// A locally-tracked coding session. Persisted to UserDefaults so the user
 /// can re-open recent sessions from the Code home screen.
+/// One line of a coding-session transcript, persisted with the session for archives.
+struct SessionTranscriptLine: Codable, Identifiable, Hashable {
+    enum Kind: String, Codable { case user, assistant, tool, diff, notice }
+
+    var id: String
+    var kind: Kind
+    var text: String
+    var tool: String?
+    var ok: Bool?
+    var path: String?
+    var added: Int?
+    var removed: Int?
+
+    init(
+        id: String,
+        kind: Kind,
+        text: String,
+        tool: String? = nil,
+        ok: Bool? = nil,
+        path: String? = nil,
+        added: Int? = nil,
+        removed: Int? = nil
+    ) {
+        self.id = id
+        self.kind = kind
+        self.text = text
+        self.tool = tool
+        self.ok = ok
+        self.path = path
+        self.added = added
+        self.removed = removed
+    }
+}
+
 struct CodeSession: Codable, Identifiable, Hashable {
     let id: UUID
     var title: String
@@ -21,6 +55,10 @@ struct CodeSession: Codable, Identifiable, Hashable {
     var status: Status
     /// Total tool-call count for the "Ready for review" filter heuristic.
     var toolCount: Int
+    /// Conversation snapshot (kept when archived so chats survive disconnect).
+    var transcript: [SessionTranscriptLine]
+    /// If true, leave the desktop agent running after archive; phone disconnects on next idle.
+    var disconnectWhenDone: Bool
 
     enum Status: String, Codable, CaseIterable, Identifiable {
         case needsInput = "Needs input"
@@ -40,6 +78,14 @@ struct CodeSession: Codable, Identifiable, Hashable {
             case .archived: return "archivebox"
             }
         }
+
+        /// Desktop agent may still be mid-turn.
+        var mayBeRunning: Bool {
+            switch self {
+            case .working, .needsInput: return true
+            default: return false
+            }
+        }
     }
 
     init(
@@ -54,7 +100,9 @@ struct CodeSession: Codable, Identifiable, Hashable {
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         status: Status = .working,
-        toolCount: Int = 0
+        toolCount: Int = 0,
+        transcript: [SessionTranscriptLine] = [],
+        disconnectWhenDone: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -68,11 +116,14 @@ struct CodeSession: Codable, Identifiable, Hashable {
         self.updatedAt = updatedAt
         self.status = status
         self.toolCount = toolCount
+        self.transcript = transcript
+        self.disconnectWhenDone = disconnectWhenDone
     }
 
     enum CodingKeys: String, CodingKey {
         case id, title, repoFullName, baseBranch, workBranch
         case wireSessionId, environment, prURL, createdAt, updatedAt, status, toolCount
+        case transcript, disconnectWhenDone
     }
 
     init(from decoder: Decoder) throws {
@@ -90,6 +141,8 @@ struct CodeSession: Codable, Identifiable, Hashable {
         updatedAt = try c.decode(Date.self, forKey: .updatedAt)
         status = try c.decode(Status.self, forKey: .status)
         toolCount = try c.decodeIfPresent(Int.self, forKey: .toolCount) ?? 0
+        transcript = try c.decodeIfPresent([SessionTranscriptLine].self, forKey: .transcript) ?? []
+        disconnectWhenDone = try c.decodeIfPresent(Bool.self, forKey: .disconnectWhenDone) ?? false
     }
 }
 
@@ -99,6 +152,15 @@ final class CodeSessionStore: ObservableObject, @unchecked Sendable {
     private let key = "codeSessions.v1"
 
     init() { load() }
+
+    var activeSessions: [CodeSession] {
+        sessions.filter { $0.status != .archived }
+    }
+
+    var archivedSessions: [CodeSession] {
+        sessions.filter { $0.status == .archived }
+            .sorted { $0.updatedAt > $1.updatedAt }
+    }
 
     func add(_ session: CodeSession) {
         sessions.insert(session, at: 0)
@@ -114,9 +176,32 @@ final class CodeSessionStore: ObservableObject, @unchecked Sendable {
         save()
     }
 
+    func session(id: UUID) -> CodeSession? {
+        sessions.first { $0.id == id }
+    }
+
     func remove(_ id: UUID) {
         sessions.removeAll { $0.id == id }
         save()
+    }
+
+    /// Mark archived and optionally keep the desktop agent alive until idle.
+    func archive(_ id: UUID, disconnectWhenDone: Bool) {
+        update(id) {
+            $0.status = .archived
+            $0.disconnectWhenDone = disconnectWhenDone
+        }
+    }
+
+    func unarchive(_ id: UUID) {
+        update(id) {
+            $0.status = .completed
+            $0.disconnectWhenDone = false
+        }
+    }
+
+    func saveTranscript(_ id: UUID, lines: [SessionTranscriptLine]) {
+        update(id) { $0.transcript = lines }
     }
 
     private func load() {
@@ -227,35 +312,102 @@ extension PermissionMode {
 
 struct CodeHomeView: View {
     @EnvironmentObject var state: AppState
-    @StateObject private var sessionStore = CodeSessionStore()
     @State private var statusFilter: CodeSession.Status? = nil
     @State private var showFilterSheet = false
     @State private var showEnvironmentPicker = false
     @State private var showModelPicker = false
     @State private var showNewSession = false
+    @State private var showArchived = false
     @State private var pushSessionConfig: SessionConfig?
+    @State private var archiveCandidate: CodeSession?
+    @State private var showArchiveKillConfirm = false
 
     /// Opens the root sidebar drawer. Wired from `RootView` so Code can open
     /// the same destinations as Chat even though this screen hides the
     /// system navigation bar.
     var onOpenSidebar: () -> Void = {}
 
+    private var sessionStore: CodeSessionStore { state.codeSessionStore }
+
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             Theme.background.ignoresSafeArea()
             VStack(spacing: 0) {
                 header
-                ScrollView {
-                    VStack(spacing: 24) {
-                        devicesSection
-                        sessionsSection
+                // Single List so swipe-to-archive works (swipeActions need List rows).
+                List {
+                    Section {
+                        if state.serverName == nil {
+                            devicesEmpty
+                                .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                                .listRowBackground(Color.clear)
+                                .listRowSeparator(.hidden)
+                        } else {
+                            deviceRow(name: state.serverName ?? "", time: "Now")
+                                .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                                .listRowBackground(Color.clear)
+                                .listRowSeparator(.hidden)
+                        }
+                    } header: {
+                        Text("Devices")
+                            .font(.system(size: 17))
+                            .foregroundStyle(Theme.textSecondary)
+                            .textCase(nil)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
-                    // Leave room for the FAB so the last row never tucks
-                    // underneath it.
-                    .padding(.bottom, 96)
+
+                    Section {
+                        if filteredSessions.isEmpty {
+                            sessionsEmpty
+                                .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                                .listRowBackground(Color.clear)
+                                .listRowSeparator(.hidden)
+                        } else {
+                            ForEach(filteredSessions) { session in
+                                Button {
+                                    reattach(session: session)
+                                } label: {
+                                    sessionCard(session)
+                                }
+                                .buttonStyle(.plain)
+                                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                                .listRowBackground(Color.clear)
+                                .listRowSeparator(.hidden)
+                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                    Button {
+                                        requestArchive(session)
+                                    } label: {
+                                        Label("Archive", systemImage: "archivebox")
+                                    }
+                                    .tint(Theme.accent)
+                                }
+                            }
+                        }
+                    } header: {
+                        HStack {
+                            Text("Sessions")
+                                .font(.system(size: 17))
+                                .foregroundStyle(Theme.textSecondary)
+                            Spacer()
+                            Button {
+                                showFilterSheet = true
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Text(statusFilter?.rawValue ?? "All")
+                                        .font(.system(size: 14))
+                                        .foregroundStyle(Theme.textPrimary)
+                                    Image(systemName: "chevron.down")
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(Theme.textTertiary)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .textCase(nil)
+                    }
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .padding(.bottom, 80)
             }
             newSessionFAB
                 .padding(.trailing, 18)
@@ -274,10 +426,35 @@ struct CodeHomeView: View {
         .sheet(isPresented: $showModelPicker) {
             ModelPickerSheet()
         }
+        .sheet(isPresented: $showArchived) {
+            ArchivedSessionsView { session in
+                showArchived = false
+                reattach(session: session)
+            }
+            .environmentObject(state)
+        }
         .fullScreenCover(isPresented: $showNewSession) {
             NewSessionView { config, task in
                 startSession(config: config, title: task)
             }
+        }
+        .confirmationDialog(
+            "Stop work on the desktop?",
+            isPresented: $showArchiveKillConfirm,
+            titleVisibility: .visible,
+            presenting: archiveCandidate
+        ) { session in
+            Button("Stop agent and archive", role: .destructive) {
+                performArchive(session, killAgent: true)
+            }
+            Button("Keep running, archive chat") {
+                performArchive(session, killAgent: false)
+            }
+            Button("Cancel", role: .cancel) {
+                archiveCandidate = nil
+            }
+        } message: { session in
+            Text("“\(session.title)” may still be running on the desktop. Stop it, or leave it running and just archive this chat?")
         }
     }
 
@@ -299,6 +476,29 @@ struct CodeHomeView: View {
                 .font(.system(size: 22, weight: .semibold))
                 .foregroundStyle(Theme.textPrimary)
             Spacer()
+            Button {
+                showArchived = true
+            } label: {
+                Image(systemName: "archivebox")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(Theme.textPrimary)
+                    .frame(width: 44, height: 44)
+                    .background(Theme.surfaceElevated, in: Circle())
+                    .overlay(alignment: .topTrailing) {
+                        let n = sessionStore.archivedSessions.count
+                        if n > 0 {
+                            Text(n > 9 ? "9+" : "\(n)")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(Theme.background)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(Theme.accent, in: Capsule())
+                                .offset(x: 4, y: -2)
+                        }
+                    }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Archived sessions")
         }
         .padding(.horizontal, 16)
         .padding(.top, 14)
@@ -306,19 +506,6 @@ struct CodeHomeView: View {
     }
 
     // MARK: - Devices
-
-    private var devicesSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Devices")
-                .font(.system(size: 17))
-                .foregroundStyle(Theme.textSecondary)
-            if state.serverName == nil {
-                devicesEmpty
-            } else {
-                deviceRow(name: state.serverName ?? "", time: "Now")
-            }
-        }
-    }
 
     private var devicesEmpty: some View {
         VStack(spacing: 12) {
@@ -365,49 +552,13 @@ struct CodeHomeView: View {
 
     // MARK: - Sessions
 
-    private var sessionsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Sessions")
-                    .font(.system(size: 17))
-                    .foregroundStyle(Theme.textSecondary)
-                Spacer()
-                Button {
-                    showFilterSheet = true
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(statusFilter?.rawValue ?? "All")
-                            .font(.system(size: 14))
-                            .foregroundStyle(Theme.textPrimary)
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Theme.textTertiary)
-                    }
-                }
-                .buttonStyle(.plain)
-            }
-            if filteredSessions.isEmpty {
-                sessionsEmpty
-            } else {
-                VStack(spacing: 8) {
-                    ForEach(filteredSessions) { session in
-                        Button {
-                            reattach(session: session)
-                        } label: {
-                            sessionCard(session)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-        }
-    }
-
     private var filteredSessions: [CodeSession] {
-        if let filter = statusFilter {
-            return sessionStore.sessions.filter { $0.status == filter }
+        let active = sessionStore.activeSessions
+        if let filter = statusFilter, filter != .archived {
+            return active.filter { $0.status == filter }
         }
-        return sessionStore.sessions
+        // Main list never shows archived rows (use header archive button).
+        return active
     }
 
     private func sessionCard(_ session: CodeSession) -> some View {
@@ -553,6 +704,50 @@ struct CodeHomeView: View {
 
     // MARK: - Session lifecycle
 
+    // MARK: - Archive
+
+    private func requestArchive(_ session: CodeSession) {
+        if session.status.mayBeRunning {
+            archiveCandidate = session
+            showArchiveKillConfirm = true
+        } else {
+            performArchive(session, killAgent: false)
+        }
+    }
+
+    private func performArchive(_ session: CodeSession, killAgent: Bool) {
+        archiveCandidate = nil
+        if killAgent {
+            Task { await interruptRemoteAgent(wireSessionId: session.wireSessionId) }
+            sessionStore.archive(session.id, disconnectWhenDone: false)
+        } else {
+            // Leave desktop work running; phone should drop the WS when the turn ends.
+            sessionStore.archive(session.id, disconnectWhenDone: session.status.mayBeRunning)
+        }
+        // If this session is open full-screen, close it so the connection policy applies.
+        if pushSessionConfig?.localSessionId == session.id {
+            if killAgent {
+                pushSessionConfig = nil
+            }
+            // When keeping agent running, SessionViewModel observes disconnectWhenDone
+            // and tears down the phone socket on session_done.
+        }
+    }
+
+    private func interruptRemoteAgent(wireSessionId: String) async {
+        guard let endpoint = state.serverEndpoint, let token = state.serverToken else { return }
+        let client = ServerClient()
+        do {
+            _ = try await client.connect(endpoint: endpoint, token: token)
+            try await client.send(.interrupt(sessionId: wireSessionId))
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            await client.disconnect()
+        } catch {
+            // Best-effort — archive still proceeds.
+            await client.disconnect()
+        }
+    }
+
     private func startSession(config: SessionConfig, title: String) {
         let session = CodeSession(
             title: title,
@@ -626,6 +821,72 @@ struct CodeHomeView: View {
 }
 
 // MARK: - New session prompt removed
+
+// MARK: - Archived sessions
+
+struct ArchivedSessionsView: View {
+    @EnvironmentObject var state: AppState
+    @Environment(\.dismiss) private var dismiss
+    var onOpen: (CodeSession) -> Void
+
+    private var sessions: [CodeSession] { state.codeSessionStore.archivedSessions }
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if sessions.isEmpty {
+                    ContentUnavailableView(
+                        "No archived sessions",
+                        systemImage: "archivebox",
+                        description: Text("Swipe right on a session to archive it.")
+                    )
+                } else {
+                    List {
+                        ForEach(sessions) { session in
+                            Button {
+                                onOpen(session)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(session.title)
+                                        .font(.system(size: 16, weight: .medium))
+                                        .foregroundStyle(Theme.textPrimary)
+                                        .lineLimit(2)
+                                    Text("\(session.repoFullName) · \(session.transcript.count) messages")
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(Theme.textTertiary)
+                                }
+                                .padding(.vertical, 4)
+                            }
+                            .swipeActions(edge: .trailing) {
+                                Button(role: .destructive) {
+                                    state.codeSessionStore.remove(session.id)
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                                Button {
+                                    state.codeSessionStore.unarchive(session.id)
+                                } label: {
+                                    Label("Restore", systemImage: "arrow.uturn.backward")
+                                }
+                                .tint(Theme.accent)
+                            }
+                        }
+                    }
+                    .scrollContentBackground(.hidden)
+                }
+            }
+            .background(Theme.background)
+            .navigationTitle("Archived")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+}
 
 // MARK: - Filter sheet
 

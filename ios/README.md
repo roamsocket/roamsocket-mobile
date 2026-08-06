@@ -12,7 +12,33 @@ xcodegen generate      # reads project.yml → AnyProvCode.xcodeproj
 open AnyProvCode.xcodeproj
 ```
 
-The app target depends on the local `AnyProvCore` Swift package.
+The app target depends on the local `AnyProvCore` Swift package plus
+**mlx-swift-lm** (and Hugging Face tokenizer/hub packages) for on-device
+Metal chat.
+
+### On-device Metal (chat only)
+
+Local models use [mlx-swift-lm](https://github.com/ml-explore/mlx-swift-lm).
+They appear under **Settings → On-device (Metal)** and only in the **chat**
+model picker — coding sessions never use them
+(`ProviderID.localMetal.supportsCodingAgent == false`).
+
+First CLI build may need:
+
+```bash
+# Once per machine (Xcode 16+): Metal shader compiler for mlx-swift Cmlx
+xcodebuild -downloadComponent MetalToolchain
+
+# Trust SPM build plugins (mlx-swift ships a Linux CudaBuild plugin)
+xcodebuild -project AnyProvCode.xcodeproj -scheme AnyProvCode \
+  -destination 'platform=iOS Simulator,name=iPhone 16' \
+  -skipPackagePluginValidation -skipMacroValidation \
+  build
+```
+
+In the Xcode UI, accept the package plugin / macro prompts when first
+resolving packages. Weights download from Hugging Face on first chat with
+an enabled model.
 
 ## AnyProvCore (buildable/testable without Xcode)
 

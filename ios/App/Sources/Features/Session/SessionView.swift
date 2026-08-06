@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import AnyProvCore
 
 /// The coding-session transcript: streamed assistant text, tool cards, diffs,
@@ -75,6 +76,15 @@ struct SessionView: View {
         ZStack {
             Theme.background.ignoresSafeArea()
             VStack(spacing: 0) {
+                EnvironmentConnectionPill(environment: config.environment)
+                if let status = model.connectionStatusLine {
+                    Text(status)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(model.connectionError != nil ? Color.red.opacity(0.9) : Theme.textTertiary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 4)
+                }
                 transcript
                 if let permission = model.pendingPermission {
                     permissionBar(permission)
@@ -84,8 +94,30 @@ struct SessionView: View {
         }
         .navigationTitle(config.repo.fullName)
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            model.state = state
+            model.loadPersistedTranscript(from: state.codeSessionStore)
+        }
+        .onDisappear {
+            model.persistTranscript()
+        }
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if model.hasDiffs {
+                    let stats = model.totalDiffStats
+                    Text("+\(stats.added) −\(stats.removed)")
+                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(Theme.selection)
+                }
+                Button {
+                    openGitAction()
+                } label: {
+                    Image(systemName: "arrow.triangle.branch")
+                        .foregroundStyle(Theme.textPrimary)
+                }
+                .accessibilityLabel(model.prURL != nil ? "Open pull request" : "Git · \(model.workBranch)")
+
+                // Far-right workspace menu (shell / files / ports).
                 Menu {
                     Button {
                         showTerminal = true
@@ -118,21 +150,6 @@ struct SessionView: View {
                         .foregroundStyle(Theme.textPrimary)
                 }
                 .accessibilityLabel("Workspace menu")
-            }
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                if model.hasDiffs {
-                    let stats = model.totalDiffStats
-                    Text("+\(stats.added) −\(stats.removed)")
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(Theme.selection)
-                }
-                Button {
-                    openGitAction()
-                } label: {
-                    Image(systemName: "arrow.triangle.branch")
-                        .foregroundStyle(Theme.textPrimary)
-                }
-                .accessibilityLabel(model.prURL != nil ? "Open pull request" : "Git · \(model.workBranch)")
             }
         }
         .sheet(isPresented: $showTerminal) {
@@ -236,19 +253,23 @@ struct SessionView: View {
     @ViewBuilder
     private func row(for item: SessionViewModel.Item) -> some View {
         switch item {
+        case let .user(_, text):
+            SessionUserBubble(text: text)
+
         case let .assistant(_, text):
-            Text(text)
-                .font(.system(size: 16))
-                .foregroundStyle(Theme.textPrimary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            SessionAssistantMessage(
+                text: text,
+                alwaysExpandThinking: state.alwaysExpandThinking
+            )
 
         case let .tool(_, tool, summary, ok, output):
-            Button {
-                detailTool = item
-            } label: {
-                ToolCard(tool: tool, summary: summary, ok: ok, output: output)
-            }
-            .buttonStyle(.plain)
+            ToolCard(
+                tool: tool,
+                summary: summary,
+                ok: ok,
+                output: output,
+                onOpenDetail: { detailTool = item }
+            )
 
         case let .diff(_, path, patch, added, removed):
             DiffCard(path: path, patch: patch, added: added, removed: removed)
@@ -302,7 +323,7 @@ struct SessionView: View {
             TextField(
                 "",
                 text: $followUp,
-                prompt: Text(model.isRunning ? "Queue for after this turn…" : "Reply…")
+                prompt: Text(composerPrompt)
                     .foregroundColor(Theme.textTertiary),
                 axis: .vertical
             )
@@ -313,6 +334,7 @@ struct SessionView: View {
             .padding(.vertical, 10)
             .background(Theme.field, in: RoundedRectangle(cornerRadius: 20))
             .frame(maxWidth: .infinity, alignment: .leading)
+            .disabled(!model.canAcceptInput)
             .onChange(of: model.isRunning) { _, isRunning in
                 // When the agent transitions from running → idle, flush
                 // any queued follow-up so the user doesn't have to retap.
@@ -323,9 +345,37 @@ struct SessionView: View {
         }
     }
 
+    private var composerPrompt: String {
+        if !model.isSessionReady {
+            return model.connectionError != nil ? "Not connected…" : "Connecting to desktop…"
+        }
+        if model.isRunning {
+            return "Queue for after this turn…"
+        }
+        return "Reply…"
+    }
+
     private var trailingSendButton: some View {
         Group {
-            if model.isRunning {
+            if model.connectionError != nil {
+                // Same slot as Send — red alert; tap retries the desktop link.
+                Button {
+                    model.retryConnection()
+                } label: {
+                    Image(systemName: "exclamationmark")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 40, height: 40)
+                        .background(Color.red.opacity(0.9), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Connection failed. Tap to retry.")
+                .help(model.connectionError ?? "Connection failed")
+            } else if !model.isSessionReady {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: 40, height: 40)
+            } else if model.isRunning {
                 if canSend {
                     Button(action: queueFollowUp) {
                         Image(systemName: "text.append")
@@ -334,6 +384,7 @@ struct SessionView: View {
                             .frame(width: 40, height: 40)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Queue message")
                 } else {
                     Button { model.interrupt() } label: {
                         Image(systemName: "stop.fill")
@@ -342,6 +393,7 @@ struct SessionView: View {
                             .background(Theme.surfaceElevated, in: Circle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Stop")
                 }
             } else {
                 Button(action: send) {
@@ -353,6 +405,7 @@ struct SessionView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!canSend)
+                .accessibilityLabel("Send")
             }
         }
     }
@@ -467,8 +520,8 @@ struct SessionView: View {
             )
         }
         .buttonStyle(.plain)
-        .disabled(model.isPublishing)
-        .opacity(model.isPublishing ? 0.55 : 1)
+        .disabled(model.isPublishing || !model.isSessionReady)
+        .opacity(model.isPublishing || !model.isSessionReady ? 0.45 : 1)
     }
 
     private func openGitSheet(_ action: GitSheetAction) {
@@ -649,33 +702,109 @@ struct SessionView: View {
     }
 }
 
-/// Collapsible tool-call card.
+/// Outgoing user message — same bubble treatment as chat.
+private struct SessionUserBubble: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 17))
+            .foregroundStyle(Theme.textPrimary)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+            .background(Theme.surfaceElevated, in: RoundedRectangle(cornerRadius: 20))
+            .frame(maxWidth: 320, alignment: .trailing)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+}
+
+/// Assistant text with thinking collapsed behind a disclosure (matches chat).
+private struct SessionAssistantMessage: View {
+    let text: String
+    let alwaysExpandThinking: Bool
+
+    @State private var thinkingExpandedOverride: Bool?
+
+    private var thinkingExpanded: Bool {
+        thinkingExpandedOverride ?? alwaysExpandThinking
+    }
+
+    private var resolved: (thinking: String?, content: String) {
+        let parsed = ThinkingExtractor.extract(from: text)
+        return (parsed.thinking, parsed.content)
+    }
+
+    var body: some View {
+        let resolved = resolved
+        return VStack(alignment: .leading, spacing: 12) {
+            if let thinking = resolved.thinking, !thinking.isEmpty {
+                ThinkingBlock(
+                    text: thinking,
+                    expanded: thinkingExpanded,
+                    onToggle: {
+                        withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+                            thinkingExpandedOverride = !thinkingExpanded
+                        }
+                    }
+                )
+            }
+
+            if !resolved.content.isEmpty {
+                MarkdownContentView(text: resolved.content, fontSize: 17)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Collapsible tool-call card. Summary row is always visible; command output
+/// stays collapsed until the user taps to expand. Long-press opens full detail.
 private struct ToolCard: View {
     let tool: String
     let summary: String
     let ok: Bool?
     let output: String?
+    var onOpenDetail: (() -> Void)? = nil
     @State private var expanded = false
+
+    private var hasOutput: Bool {
+        guard let output else { return false }
+        return !output.isEmpty
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Button { expanded.toggle() } label: {
+            Button {
+                guard hasOutput else {
+                    onOpenDetail?()
+                    return
+                }
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.88)) {
+                    expanded.toggle()
+                }
+            } label: {
                 HStack(spacing: 8) {
                     Image(systemName: statusIcon)
                         .foregroundStyle(statusColor)
                     Text(summary)
                         .font(.system(size: 14, design: .monospaced))
                         .foregroundStyle(Theme.textPrimary)
-                        .lineLimit(1)
-                    Spacer()
-                    if output != nil {
-                        Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                            .font(.system(size: 12))
+                        .lineLimit(expanded ? nil : 1)
+                        .multilineTextAlignment(.leading)
+                    Spacer(minLength: 0)
+                    if hasOutput {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(Theme.textTertiary)
+                            .rotationEffect(.degrees(expanded ? 90 : 0))
                     }
                 }
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(hasOutput
+                ? (expanded ? "Collapse command output" : "Expand command output")
+                : summary)
+            .accessibilityHint(hasOutput ? "Shows the tool’s full output" : "No output yet")
 
             if expanded, let output, !output.isEmpty {
                 Text(output)
@@ -683,10 +812,34 @@ private struct ToolCard: View {
                     .foregroundStyle(Theme.textSecondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
+                    .padding(.top, 2)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .padding(12)
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+        .contentShape(RoundedRectangle(cornerRadius: 12))
+        .onLongPressGesture(minimumDuration: 0.4) {
+            onOpenDetail?()
+        }
+        .contextMenu {
+            if onOpenDetail != nil {
+                Button {
+                    onOpenDetail?()
+                } label: {
+                    Label("View details", systemImage: "doc.text.magnifyingglass")
+                }
+            }
+            if hasOutput, let output {
+                Button {
+                    #if canImport(UIKit)
+                    UIPasteboard.general.string = output
+                    #endif
+                } label: {
+                    Label("Copy output", systemImage: "doc.on.doc")
+                }
+            }
+        }
     }
 
     private var statusIcon: String {

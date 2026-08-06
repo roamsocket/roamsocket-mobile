@@ -40,8 +40,18 @@ final class AppState: ObservableObject {
     /// Branch name prefix for new coding sessions, e.g. `apc/fix-login-a1b2c3d4`.
     @AppStorage("codeBranchPrefix.v1") var codeBranchPrefix: String = "apc"
 
-    /// Last paired desktop base URL (e.g. `http://192.168.1.20:4319`).
+    /// Active desktop base URL currently used for API/WS (local or tunnel).
     @AppStorage("serverHost.v1") var serverHost: String = ""
+
+    /// LAN address captured at pair time (kept even when active path is tunnel).
+    @AppStorage("serverLocalHost.v1") var serverLocalHost: String = ""
+
+    /// Public tunnel URL when the desktop has published one.
+    @AppStorage("serverTunnelHost.v1") var serverTunnelHost: String = ""
+
+    /// How the app chooses between LAN and tunnel.
+    /// Raw value persisted in AppStorage.
+    @AppStorage("serverConnectionPreference.v1") var connectionPreferenceRaw: String = ServerConnectionPreference.smart.rawValue
 
     /// When non-nil, the iOS app will push its settings to this GitHub
     /// repo on every change (and pull on launch when a token is linked).
@@ -72,6 +82,159 @@ final class AppState: ObservableObject {
     @Published var isReconnecting = false
     @Published var reconnectMessage: String?
 
+    /// How the phone reaches the desktop: offline, same network, or public tunnel.
+    enum ServerConnectionPath: Equatable {
+        case offline
+        case local
+        case tunnel
+
+        var label: String {
+            switch self {
+            case .offline: return "Not paired"
+            case .local: return "Local"
+            case .tunnel: return "Tunnel"
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .offline: return "bolt.slash"
+            case .local: return "wifi"
+            case .tunnel: return "lock.shield"
+            }
+        }
+    }
+
+    /// User preference for which path to use when both LAN and tunnel exist.
+    enum ServerConnectionPreference: String, CaseIterable, Identifiable {
+        case smart
+        case alwaysLocal
+        case alwaysTunnel
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .smart: return "Smart switch"
+            case .alwaysLocal: return "Always local"
+            case .alwaysTunnel: return "Always tunnel"
+            }
+        }
+
+        var subtitle: String {
+            switch self {
+            case .smart: return "Prefer tunnel when available, fall back to local."
+            case .alwaysLocal: return "Stay on the LAN address only."
+            case .alwaysTunnel: return "Stay on the public tunnel only."
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .smart: return "arrow.triangle.2.circlepath"
+            case .alwaysLocal: return "wifi"
+            case .alwaysTunnel: return "lock.shield"
+            }
+        }
+    }
+
+    var connectionPreference: ServerConnectionPreference {
+        get { ServerConnectionPreference(rawValue: connectionPreferenceRaw) ?? .smart }
+        set { connectionPreferenceRaw = newValue.rawValue }
+    }
+
+    /// Classify the current paired endpoint as LAN/local or remote tunnel.
+    var serverConnectionPath: ServerConnectionPath {
+        guard serverToken != nil, let endpoint = serverEndpoint else { return .offline }
+        return Self.connectionPath(for: endpoint)
+    }
+
+    var localEndpoint: ServerClient.Endpoint? {
+        endpoint(fromStored: serverLocalHost)
+    }
+
+    var tunnelEndpoint: ServerClient.Endpoint? {
+        endpoint(fromStored: serverTunnelHost)
+    }
+
+    static func connectionPath(for endpoint: ServerClient.Endpoint) -> ServerConnectionPath {
+        let url = endpoint.baseURL
+        guard let host = url.host?.lowercased(), !host.isEmpty else { return .offline }
+        if host == "localhost" || host == "127.0.0.1" || host == "::1" || host.hasSuffix(".local") {
+            return .local
+        }
+        if isPrivateLANHost(host) { return .local }
+        // Public HTTPS (or any non-private host) is treated as tunnel / remote.
+        return .tunnel
+    }
+
+    private static func isPrivateLANHost(_ host: String) -> Bool {
+        // IPv4 private ranges: 10/8, 172.16–31/12, 192.168/16, link-local 169.254/16
+        let parts = host.split(separator: ".").compactMap { Int($0) }
+        guard parts.count == 4 else { return false }
+        let a = parts[0], b = parts[1]
+        if a == 10 { return true }
+        if a == 192 && b == 168 { return true }
+        if a == 172 && (16...31).contains(b) { return true }
+        if a == 169 && b == 254 { return true }
+        return false
+    }
+
+    private func endpoint(fromStored raw: String) -> ServerClient.Endpoint? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !trimmed.isEmpty else { return nil }
+        return ServerClient.Endpoint(host: trimmed)
+    }
+
+    private func normalizeHostString(_ raw: String) -> String {
+        raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+
+    /// Remember an endpoint under local and/or tunnel slots without wiping the other.
+    private func recordEndpoint(_ endpoint: ServerClient.Endpoint) {
+        let path = Self.connectionPath(for: endpoint)
+        let host = endpoint.baseURL.absoluteString
+        switch path {
+        case .local:
+            serverLocalHost = host
+        case .tunnel:
+            serverTunnelHost = host
+        case .offline:
+            break
+        }
+    }
+
+    /// Point the active endpoint at `endpoint` and re-key the token for restore.
+    private func activateEndpoint(_ endpoint: ServerClient.Endpoint) {
+        guard let token = serverToken, !token.isEmpty else { return }
+        let host = endpoint.baseURL.absoluteString
+        if !serverHost.isEmpty, serverHost != host {
+            // Keep token readable from the previous host key during migration.
+            secrets.set(token, for: SecretKey.serverToken(serverHost))
+        }
+        serverEndpoint = endpoint
+        serverHost = host
+        secrets.set(token, for: SecretKey.serverToken(host))
+        // Also store under local/tunnel keys so either path can restore the token.
+        if !serverLocalHost.isEmpty {
+            secrets.set(token, for: SecretKey.serverToken(serverLocalHost))
+        }
+        if !serverTunnelHost.isEmpty {
+            secrets.set(token, for: SecretKey.serverToken(serverTunnelHost))
+        }
+        // Keep local/tunnel slots populated from whichever path we just used.
+        recordEndpoint(endpoint)
+        objectWillChange.send()
+    }
+
+    /// Called when a coding session successfully opens a socket on a path —
+    /// keeps Settings / the status pill in sync with the live connection.
+    func activateEndpointForSession(_ endpoint: ServerClient.Endpoint) {
+        activateEndpoint(endpoint)
+    }
+
     // Chat state (per-chat toggles live on `ChatViewModel`; nothing here yet.)
 
     private let environmentsKey = "environments.v1"
@@ -82,10 +245,16 @@ final class AppState: ObservableObject {
     private let customProvidersKey = "customProviders.v1"
     private let modelAliasesKey = "modelAliases.v1"
     private let serverNameKey = "serverName.v1"
+    private var bag = Set<AnyCancellable>()
 
     init(secrets: SecretStore) {
         self.secrets = secrets
         self.catalog = ModelCatalog()
+        // Code home observes AppState; forward session-store mutations so lists refresh.
+        codeSessionStore.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &bag)
         loadEnvironments()
         loadSyncedRepos()
         loadCustomProviders()
@@ -98,69 +267,317 @@ final class AppState: ObservableObject {
     // MARK: - Desktop pairing persistence + auto-reconnect
 
     /// Persist a successful pair so cold launch can reconnect.
+    /// Call this with the address the user paired against (LAN or tunnel URL).
+    /// A following `applyRemoteEndpoint` may add the other path without wiping this one.
     func savePairing(endpoint: ServerClient.Endpoint, token: String, serverName: String) {
-        self.serverEndpoint = endpoint
+        // Clear any previous host keys so we don't leave orphan tokens.
+        for host in [serverHost, serverLocalHost, serverTunnelHost] where !host.isEmpty {
+            if host != endpoint.baseURL.absoluteString {
+                secrets.set(nil, for: SecretKey.serverToken(host))
+            }
+        }
         self.serverToken = token
         self.serverName = serverName
-        serverHost = endpoint.baseURL.absoluteString
-        secrets.set(token, for: SecretKey.serverToken(serverHost))
         UserDefaults.standard.set(serverName, forKey: serverNameKey)
+
+        // Fresh pair resets both slots, then records this endpoint as local or tunnel.
+        serverLocalHost = ""
+        serverTunnelHost = ""
+        recordEndpoint(endpoint)
+        activateEndpoint(endpoint)
+    }
+
+    /// Remember the desktop's public tunnel URL while keeping the LAN address.
+    /// Activates tunnel when preference is Smart or Always tunnel.
+    @discardableResult
+    func applyRemoteEndpoint(urlString: String) -> Bool {
+        let trimmed = normalizeHostString(urlString)
+        guard !trimmed.isEmpty, let endpoint = ServerClient.Endpoint(host: trimmed) else {
+            return false
+        }
+        guard serverToken != nil, !(serverToken ?? "").isEmpty else { return false }
+
+        let previousTunnel = normalizeHostString(serverTunnelHost)
+        serverTunnelHost = trimmed
+        secrets.set(serverToken, for: SecretKey.serverToken(trimmed))
+
+        let shouldActivate: Bool = {
+            switch connectionPreference {
+            case .alwaysLocal: return false
+            case .alwaysTunnel, .smart: return true
+            }
+        }()
+
+        if shouldActivate {
+            activateEndpoint(endpoint)
+            reconnectMessage = "Remote access ready — using secure tunnel."
+        } else {
+            reconnectMessage = "Tunnel available (preference is Always local)."
+        }
+        return previousTunnel.caseInsensitiveCompare(trimmed) != .orderedSame || shouldActivate
+    }
+
+    /**
+     After a LAN pair, open the session WebSocket and wait for the desktop to
+     publish a public tunnel URL, then record it (and switch if preference allows).
+     Returns a short status line for the pairing UI.
+     */
+    func upgradePairingToTunnel(timeoutSeconds: TimeInterval = 50) async -> String {
+        // Prefer a known LAN endpoint for the wait socket.
+        let listenEndpoint = localEndpoint ?? serverEndpoint
+        guard let endpoint = listenEndpoint, let token = serverToken, !token.isEmpty else {
+            return "Paired (no tunnel)."
+        }
+        // Already on a tunnel path with no separate LAN — nothing to upgrade.
+        if Self.connectionPath(for: endpoint) == .tunnel,
+           localEndpoint == nil {
+            serverTunnelHost = endpoint.baseURL.absoluteString
+            return "Paired via \(endpoint.baseURL.host ?? "remote")."
+        }
+        do {
+            let client = ServerClient()
+            let result = try await client.waitForRemoteEndpoint(
+                endpoint: endpoint,
+                token: token,
+                timeoutSeconds: timeoutSeconds
+            )
+            if applyRemoteEndpoint(urlString: result.url) {
+                let provider = result.provider.map { " via \($0)" } ?? ""
+                switch connectionPreference {
+                case .alwaysLocal:
+                    return "Paired on LAN. Tunnel ready\(provider) (preference is Local)."
+                case .alwaysTunnel, .smart:
+                    return "Paired. Secure tunnel ready\(provider)."
+                }
+            }
+            return "Paired (tunnel \(result.url))."
+        } catch {
+            return "Paired on LAN. Tunnel unavailable: \(error.localizedDescription)"
+        }
+    }
+
+    /// Change connection preference and re-resolve active endpoint.
+    func setConnectionPreference(_ preference: ServerConnectionPreference) {
+        connectionPreference = preference
+        Task { await applyConnectionPreference(healthCheck: true) }
+    }
+
+    /**
+     Pick the active endpoint from local/tunnel slots according to preference.
+     Smart mode prefers tunnel when its health check passes, otherwise local.
+     */
+    func applyConnectionPreference(healthCheck: Bool = true) async {
+        guard serverToken != nil, !(serverToken ?? "").isEmpty else { return }
+
+        let local = localEndpoint
+        let tunnel = tunnelEndpoint
+
+        // Seed slots from the current active host if they were never split.
+        if local == nil, tunnel == nil, let active = serverEndpoint {
+            recordEndpoint(active)
+        }
+
+        let localNow = localEndpoint
+        let tunnelNow = tunnelEndpoint
+
+        switch connectionPreference {
+        case .alwaysLocal:
+            if let localNow {
+                let ok = healthCheck ? await isEndpointReachable(localNow) : true
+                if ok {
+                    activateEndpoint(localNow)
+                    reconnectMessage = nil
+                    return
+                }
+                reconnectMessage = "Local desktop not reachable."
+            } else {
+                reconnectMessage = "No local address saved — pair on the same Wi‑Fi first."
+            }
+
+        case .alwaysTunnel:
+            if let tunnelNow {
+                let ok = healthCheck ? await isEndpointReachable(tunnelNow) : true
+                if ok {
+                    activateEndpoint(tunnelNow)
+                    reconnectMessage = nil
+                    return
+                }
+                reconnectMessage = "Tunnel not reachable."
+            } else {
+                reconnectMessage = "No tunnel URL yet — enable remote access on the desktop."
+            }
+
+        case .smart:
+            // Prefer tunnel, fall back to local.
+            if let tunnelNow {
+                let ok = healthCheck ? await isEndpointReachable(tunnelNow) : true
+                if ok {
+                    activateEndpoint(tunnelNow)
+                    reconnectMessage = nil
+                    return
+                }
+            }
+            if let localNow {
+                let ok = healthCheck ? await isEndpointReachable(localNow) : true
+                if ok {
+                    activateEndpoint(localNow)
+                    reconnectMessage = tunnelNow == nil
+                        ? nil
+                        : "Tunnel unreachable — using local."
+                    return
+                }
+            }
+            // Last resort: still point at preferred path so UI shows intent.
+            if let tunnelNow {
+                activateEndpoint(tunnelNow)
+                reconnectMessage = "Desktop not reachable on tunnel or local."
+            } else if let localNow {
+                activateEndpoint(localNow)
+                reconnectMessage = "Desktop not reachable."
+            }
+        }
     }
 
     func clearPairing() {
-        if !serverHost.isEmpty {
-            secrets.set(nil, for: SecretKey.serverToken(serverHost))
+        for host in [serverHost, serverLocalHost, serverTunnelHost] where !host.isEmpty {
+            secrets.set(nil, for: SecretKey.serverToken(host))
         }
         serverEndpoint = nil
         serverToken = nil
         serverName = nil
         serverHost = ""
+        serverLocalHost = ""
+        serverTunnelHost = ""
         UserDefaults.standard.removeObject(forKey: serverNameKey)
     }
 
     private func restorePairingFromDisk() {
-        let host = serverHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !host.isEmpty, let endpoint = ServerClient.Endpoint(host: host) else { return }
-        let token = secrets.get(SecretKey.serverToken(host))
-        guard let token, !token.isEmpty else { return }
-        serverEndpoint = endpoint
+        // Try active host first, then local, then tunnel.
+        let candidates = [serverHost, serverLocalHost, serverTunnelHost]
+            .map { normalizeHostString($0) }
+            .filter { !$0.isEmpty }
+        var token: String?
+        var restoredHost: String?
+        for host in candidates {
+            if let t = secrets.get(SecretKey.serverToken(host)), !t.isEmpty {
+                token = t
+                restoredHost = host
+                break
+            }
+        }
+        guard let token, let restoredHost, let restored = ServerClient.Endpoint(host: restoredHost) else {
+            return
+        }
         serverToken = token
+        serverEndpoint = restored
+        if serverHost.isEmpty { serverHost = restoredHost }
+        // Backfill slots from the restored path.
+        recordEndpoint(restored)
+        // If serverHost points elsewhere, prefer that as active.
+        if let active = endpoint(fromStored: serverHost) {
+            serverEndpoint = active
+        }
         serverName = UserDefaults.standard.string(forKey: serverNameKey)
     }
 
-    /// Health-check the last paired desktop and keep the token if reachable.
+    /// Health-check preferred endpoints and settle on the best path.
     func attemptServerReconnect() async {
-        guard let endpoint = serverEndpoint, let token = serverToken, !token.isEmpty else {
+        guard serverToken != nil, !(serverToken ?? "").isEmpty else {
             reconnectMessage = nil
             return
         }
         isReconnecting = true
         defer { isReconnecting = false }
+
+        await applyConnectionPreference(healthCheck: true)
+
+        guard let endpoint = serverEndpoint, let token = serverToken else {
+            reconnectMessage = "Not paired."
+            return
+        }
+
+        // Validate token with a short-lived WebSocket on the chosen path.
         do {
-            var req = URLRequest(url: endpoint.baseURL.appendingPathComponent("health"))
-            req.timeoutInterval = 4
-            let (data, response) = try await URLSession.shared.data(for: req)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                reconnectMessage = "Desktop not reachable — pair again when on the same network (or enable remote access on the desktop)."
-                return
-            }
-            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let name = obj["name"] as? String {
+            if let name = await fetchServerName(endpoint: endpoint) {
                 serverName = name
                 UserDefaults.standard.set(name, forKey: serverNameKey)
             }
-            // Validate the token by opening a short-lived WebSocket.
             let client = ServerClient()
             let stream = try await client.connect(endpoint: endpoint, token: token)
-            // If connect didn't throw unauthorized close immediately, treat as OK.
-            // Give the server a moment; then disconnect.
             try? await Task.sleep(nanoseconds: 300_000_000)
             await client.disconnect()
             _ = stream
-            reconnectMessage = nil
+            if reconnectMessage == nil {
+                reconnectMessage = nil
+            }
+        } catch {
+            // If smart/local failed the WS step, try the other path once.
+            if connectionPreference == .smart {
+                await tryAlternatePath(after: endpoint, error: error)
+            } else {
+                reconnectMessage = "Could not reconnect: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func tryAlternatePath(after failed: ServerClient.Endpoint, error: Error) async {
+        let failedPath = Self.connectionPath(for: failed)
+        let alternate: ServerClient.Endpoint? = {
+            switch failedPath {
+            case .tunnel: return localEndpoint
+            case .local: return tunnelEndpoint
+            case .offline: return localEndpoint ?? tunnelEndpoint
+            }
+        }()
+        guard let alternate, let token = serverToken else {
+            reconnectMessage = "Could not reconnect: \(error.localizedDescription)"
+            return
+        }
+        guard await isEndpointReachable(alternate) else {
+            reconnectMessage = "Could not reconnect: \(error.localizedDescription)"
+            return
+        }
+        activateEndpoint(alternate)
+        do {
+            let client = ServerClient()
+            let stream = try await client.connect(endpoint: alternate, token: token)
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            await client.disconnect()
+            _ = stream
+            reconnectMessage = failedPath == .tunnel
+                ? "Tunnel failed — switched to local."
+                : "Local failed — switched to tunnel."
         } catch {
             reconnectMessage = "Could not reconnect: \(error.localizedDescription)"
         }
+    }
+
+    private func isEndpointReachable(_ endpoint: ServerClient.Endpoint) async -> Bool {
+        do {
+            var req = URLRequest(url: endpoint.baseURL.appendingPathComponent("health"))
+            req.timeoutInterval = 3.5
+            let (_, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse else { return false }
+            return (200..<300).contains(http.statusCode)
+        } catch {
+            return false
+        }
+    }
+
+    private func fetchServerName(endpoint: ServerClient.Endpoint) async -> String? {
+        do {
+            var req = URLRequest(url: endpoint.baseURL.appendingPathComponent("health"))
+            req.timeoutInterval = 3.5
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                return nil
+            }
+            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let name = obj["name"] as? String {
+                return name
+            }
+        } catch {}
+        return nil
     }
 
     // MARK: - Custom providers
@@ -314,6 +731,8 @@ final class AppState: ObservableObject {
     func resolvedAPIKey(for provider: ProviderID) -> String {
         let stored = apiKey(for: provider)
         if !stored.isEmpty { return stored }
+        // On-device Metal never needs a cloud key (chat only).
+        if provider == .localMetal { return "local" }
         if case .custom = provider, apiStyle(for: provider) == .openAI {
             return "local"
         }
@@ -342,6 +761,10 @@ final class AppState: ObservableObject {
         var customBaseURLs: [ProviderID: URL] = [:]
         var styles: [ProviderID: CustomProviderStyle] = [:]
         for provider in ProviderID.allBuiltInCases {
+            if provider == .localMetal {
+                keys[provider] = "local"
+                continue
+            }
             let key = apiKey(for: provider)
             if !key.isEmpty { keys[provider] = key }
         }
@@ -414,8 +837,10 @@ final class AppState: ObservableObject {
     // MARK: Model selection for a session
 
     /// Build the `ModelSelection` the server needs, pulling the key from Keychain.
+    /// Local Metal models are chat-only and never sent to the coding agent.
     func modelSelectionForSession() -> ModelSelection? {
         guard let model = selectedModel else { return nil }
+        guard model.provider.supportsCodingAgent else { return nil }
         let key = resolvedAPIKey(for: model.provider)
         guard !key.isEmpty else { return nil }
         let custom = customProvider(for: model.provider)

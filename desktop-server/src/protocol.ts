@@ -107,6 +107,11 @@ export const PairResponse = z.object({
   token: z.string(),
   serverName: z.string(),
   serverVersion: z.string(),
+  /**
+   * Public HTTPS base URL for this desktop (Cloudflare / ngrok / …), when a
+   * tunnel is already up at pair time. The phone prefers this for reconnect.
+   */
+  publicUrl: z.string().optional(),
 });
 export type PairResponse = z.infer<typeof PairResponse>;
 
@@ -265,6 +270,15 @@ export const FileReadMsg = z.object({
 });
 export type FileReadMsg = z.infer<typeof FileReadMsg>;
 
+/** Create or overwrite a text file in the session workdir (mobile editor). */
+export const FileWriteMsg = z.object({
+  type: z.literal("file_write"),
+  sessionId: z.string(),
+  path: z.string(),
+  content: z.string(),
+});
+export type FileWriteMsg = z.infer<typeof FileWriteMsg>;
+
 export const PortListMsg = z.object({
   type: z.literal("port_list"),
   sessionId: z.string(),
@@ -313,6 +327,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
   TerminalKillMsg,
   FileListMsg,
   FileReadMsg,
+  FileWriteMsg,
   PortListMsg,
   TunnelStartMsg,
   TunnelStopMsg,
@@ -485,6 +500,15 @@ export const FileReadResultMsg = z.object({
 });
 export type FileReadResultMsg = z.infer<typeof FileReadResultMsg>;
 
+export const FileWriteResultMsg = z.object({
+  type: z.literal("file_write_result"),
+  sessionId: z.string(),
+  path: z.string(),
+  ok: z.boolean(),
+  message: z.string().optional(),
+});
+export type FileWriteResultMsg = z.infer<typeof FileWriteResultMsg>;
+
 export const PortListResultMsg = z.object({
   type: z.literal("port_list_result"),
   sessionId: z.string(),
@@ -511,6 +535,21 @@ export const TunnelStatusMsg = z.object({
 });
 export type TunnelStatusMsg = z.infer<typeof TunnelStatusMsg>;
 
+/**
+ * Public base URL for the coding server (not a preview-app port).
+ * Sent after pair / session WS connect once the auto tunnel is ready so the
+ * phone can switch off LAN while keeping the same bearer token.
+ */
+export const RemoteEndpointMsg = z.object({
+  type: z.literal("remote_endpoint"),
+  status: z.enum(["starting", "up", "error"]),
+  /** e.g. https://random.trycloudflare.com — omit while starting / on error */
+  url: z.string().optional(),
+  provider: z.string().optional(),
+  error: z.string().optional(),
+});
+export type RemoteEndpointMsg = z.infer<typeof RemoteEndpointMsg>;
+
 export const ServerMessage = z.discriminatedUnion("type", [
   SessionCreatedMsg,
   AssistantDeltaMsg,
@@ -528,8 +567,10 @@ export const ServerMessage = z.discriminatedUnion("type", [
   TerminalControlMsg,
   FileListResultMsg,
   FileReadResultMsg,
+  FileWriteResultMsg,
   PortListResultMsg,
   TunnelStatusMsg,
+  RemoteEndpointMsg,
 ]);
 export type ServerMessage = z.infer<typeof ServerMessage>;
 

@@ -22,6 +22,11 @@ struct ChatView: View {
     /// removing the last route from the path.
     var path: Binding<[RootRoute]>? = nil
 
+    /// Shared sidebar history (persisted). When nil, chat is ephemeral.
+    var history: ChatHistoryStore? = nil
+    /// Changes when the user picks New chat / a recent row so we reload.
+    var resumeToken: UUID = UUID()
+
     /// Set when the user hits Send and the prerequisites for a coding session
     /// are met (paired server + repo + model with API key). The fullScreenCover
     /// takes over the chat until the session ends.
@@ -38,33 +43,30 @@ struct ChatView: View {
 
             VStack(spacing: 0) {
                 if isEffectivelyEmpty {
-                    if viewModel.error != nil {
-                        errorBanner
-                    }
-                    greeting
+                    emptyHome
                 } else {
                     messageList
                 }
                 composer
             }
         }
-        .onAppear {
-            viewModel.state = state
-            if let project {
-                viewModel.currentProject = project.name
-            }
-        }
+        .onAppear { bindAndLoad() }
+        .onChange(of: resumeToken) { _ in bindAndLoad() }
+        .onDisappear { viewModel.persistNow() }
+        // Keep the bar compact — large-title mode reserves a tall blank band
+        // under the chrome and makes the empty home look top-padded.
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             // Center title: when in a project, show a tappable pill with
-            // the folder icon and project name. Otherwise show the default
-            // "New chat" title.
+            // the folder icon and project name. Otherwise show the chat title.
             ToolbarItem(placement: .principal) {
                 if let project {
                     projectPill(project)
                 } else {
-                    Text("New chat")
+                    Text(chatTitle)
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(Theme.textPrimary)
+                        .lineLimit(1)
                 }
             }
         }
@@ -88,6 +90,31 @@ struct ChatView: View {
             NavigationStack {
                 SessionView(config: config)
             }
+        }
+    }
+
+    private var chatTitle: String {
+        if let id = viewModel.activeChatID,
+           let item = history?.recents.first(where: { $0.id == id }),
+           !item.title.isEmpty {
+            return item.title
+        }
+        return "New chat"
+    }
+
+    private func bindAndLoad() {
+        viewModel.state = state
+        guard let history else { return }
+        viewModel.history = history
+        if let project, let chat {
+            viewModel.loadProjectChat(project: project, chat: chat, from: history)
+        } else if let active = history.activeChatID {
+            viewModel.loadChat(id: active, from: history)
+        } else if !history.recents.isEmpty, let first = history.recents.first {
+            // Resume last chat on cold launch.
+            viewModel.loadChat(id: first.id, from: history)
+        } else {
+            viewModel.beginNewChat(in: history)
         }
     }
 
@@ -124,24 +151,57 @@ struct ChatView: View {
 
     private var errorBanner: some View {
         HStack(spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.yellow)
-            Text(viewModel.error ?? "")
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.textPrimary)
-                .lineLimit(2)
-            Spacer()
-            Button { viewModel.error = nil } label: {
+            if viewModel.errorBannerAction != nil {
+                Button(action: handleErrorBannerTap) {
+                    errorBannerLabel
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Opens provider settings to add a model")
+            } else {
+                errorBannerLabel
+            }
+
+            Button { viewModel.clearError() } label: {
                 Image(systemName: "xmark")
                     .foregroundStyle(Theme.textSecondary)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss error")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
         .padding(.horizontal, 16)
-        .padding(.top, 12)
+        .padding(.top, 4)
+    }
+
+    private var errorBannerLabel: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.yellow)
+            Text(viewModel.error ?? "")
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.textPrimary)
+                .multilineTextAlignment(.leading)
+                .lineLimit(2)
+            if viewModel.errorBannerAction == .openProviderSettings {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.textSecondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .contentShape(Rectangle())
+    }
+
+    private func handleErrorBannerTap() {
+        switch viewModel.errorBannerAction {
+        case .openProviderSettings:
+            viewModel.clearError()
+            showProviderSettings = true
+        case .none:
+            break
+        }
     }
 
     /// True when there are no real user messages yet. The single welcome
@@ -152,21 +212,31 @@ struct ChatView: View {
         viewModel.messages.count <= 1
     }
 
-    // MARK: - Greeting (empty state)
+    // MARK: - Empty home (greeting)
+
+    /// Fills the space above the composer and centers the greeting in it.
+    /// Avoids dual expanding Spacers (which left a large dead zone under the
+    /// nav / error banner, especially with the keyboard open).
+    private var emptyHome: some View {
+        VStack(spacing: 0) {
+            if viewModel.error != nil {
+                errorBanner
+            }
+            greeting
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
 
     private var greeting: some View {
-        VStack(spacing: 18) {
-            Spacer()
-            AsterismGlyph()
-                .frame(width: 56, height: 56)
-            Text("Clocking in for the evening shift.")
-                .font(.system(size: 26, weight: .regular, design: .serif))
-                .foregroundStyle(Theme.textPrimary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
-            Spacer()
-        }
-        .frame(maxWidth: .infinity)
+        Text("Clocking in for the evening shift.")
+            .font(.system(size: 26, weight: .regular, design: .serif))
+            .foregroundStyle(Theme.textPrimary)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 32)
+            // Slight upward bias so the block sits closer to true visual center
+            // once the composer (and keyboard) claim the bottom of the screen.
+            .padding(.bottom, 28)
     }
 
     // MARK: - Message list
@@ -383,28 +453,6 @@ struct ProcessingIndicator: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-/// The decorative asterism glyph shown on the empty chat (mimics the
-/// orange burst in the screenshot).
-struct AsterismGlyph: View {
-    var body: some View {
-        ZStack {
-            ForEach(0..<12, id: \.self) { i in
-                Capsule()
-                    .fill(Theme.accent)
-                    .frame(width: 4, height: 22)
-                    .offset(y: -16)
-                    .rotationEffect(.degrees(Double(i) * 30))
-            }
-            // Center dot
-            Circle()
-                .fill(Theme.accent)
-                .frame(width: 6, height: 6)
-        }
-        .frame(width: 56, height: 56)
-        .compositingGroup()
     }
 }
 

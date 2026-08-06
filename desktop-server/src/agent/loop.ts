@@ -162,10 +162,11 @@ export class AgentSession {
         let result = { ok: false, output: `Unknown tool: ${call.name}` };
         if (tool) {
           const gated = MUTATING_TOOLS.has(call.name);
+          // Do NOT stream tool stdout as assistant_delta — that dumped `ls` /
+          // build logs into the chat transcript. Capture completes in
+          // `tool_result` and the iOS ToolCard shows it collapsed-by-default.
           const baseCtx = {
             workdir: this.deps.workdir,
-            onOutput: (chunk: string) =>
-              this.deps.emit({ type: "assistant_delta", sessionId, text: chunk }),
             network: this.deps.environment
               ? {
                   access: this.deps.environment.networkAccess,

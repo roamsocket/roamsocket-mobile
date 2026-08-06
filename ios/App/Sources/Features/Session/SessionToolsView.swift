@@ -81,6 +81,7 @@ enum WorkspaceRPC {
         match: @escaping (ServerMessage) -> T?
     ) async throws -> T {
         let client = ServerClient()
+        // Connect waits for the socket to open before returning.
         let stream = try await client.connect(endpoint: endpoint, token: token)
         try await send(client)
         let deadline = Date().addingTimeInterval(timeoutSeconds)
@@ -609,7 +610,7 @@ struct FileExplorerView: View {
     }
 }
 
-// MARK: - File viewer (source + diff)
+// MARK: - File viewer / editor (source + diff + save)
 
 struct FileViewerSheet: View {
     @EnvironmentObject var state: AppState
@@ -619,14 +620,19 @@ struct FileViewerSheet: View {
     var preferDiff: Bool = false
 
     @State private var content: String = ""
+    @State private var originalContent: String = ""
     @State private var diff: String = ""
     @State private var loading = true
+    @State private var saving = false
     @State private var truncated = false
     @State private var errorMessage: String?
+    @State private var statusMessage: String?
     @State private var tab: ViewerTab
+    @State private var showMarkdownPreview = false
+    @State private var showHTMLPreview = false
 
     enum ViewerTab: String, CaseIterable, Identifiable {
-        case source = "Source"
+        case edit = "Edit"
         case diff = "Diff"
         var id: String { rawValue }
     }
@@ -635,15 +641,22 @@ struct FileViewerSheet: View {
         self.sessionId = sessionId
         self.path = path
         self.preferDiff = preferDiff
-        _tab = State(initialValue: preferDiff ? .diff : .source)
+        _tab = State(initialValue: preferDiff ? .diff : .edit)
     }
+
+    private var language: String? { CodeLanguage.detect(from: path) }
+    private var isMarkdownFile: Bool { CodeLanguage.isMarkdown(path) }
+    private var isHTMLFile: Bool { CodeLanguage.isHTML(path) }
+    private var isDirty: Bool { content != originalContent }
+    private var hasDiff: Bool { !diff.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var canSave: Bool { isDirty && !saving && !truncated && !loading }
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                if hasDiff {
+                if hasDiff || preferDiff {
                     Picker("", selection: $tab) {
-                        ForEach(ViewerTab.allCases) { Text($0.rawValue).tag($0) }
+                        ForEach(availableTabs) { Text($0.rawValue).tag($0) }
                     }
                     .pickerStyle(.segmented)
                     .padding(.horizontal, 16)
@@ -654,32 +667,46 @@ struct FileViewerSheet: View {
                     Text(errorMessage)
                         .font(.system(size: 13))
                         .foregroundStyle(.red)
-                        .padding()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 6)
                 }
 
-                ScrollView([.horizontal, .vertical]) {
-                    Group {
-                        if tab == .diff && hasDiff {
-                            ColorizedDiffView(patch: diff)
-                        } else {
-                            Text(content.isEmpty && !loading ? "(empty file)" : content)
-                                .font(.system(size: 12, design: .monospaced))
-                                .foregroundStyle(Theme.textPrimary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .textSelection(.enabled)
-                        }
-                    }
-                    .padding(12)
+                if let statusMessage {
+                    Text(statusMessage)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Theme.accent)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 6)
                 }
+
+                Group {
+                    if tab == .diff && hasDiff {
+                        ScrollView([.horizontal, .vertical]) {
+                            ColorizedDiffView(patch: diff)
+                                .padding(12)
+                        }
+                    } else {
+                        CodeEditorView(
+                            text: $content,
+                            language: language,
+                            isEditable: !truncated
+                        )
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 if truncated {
-                    Text("Truncated at 256 KB. Open on the desktop for the full file.")
+                    Text("Truncated at 256 KB — editing disabled. Open on the desktop for the full file.")
                         .font(.footnote)
                         .foregroundStyle(Theme.textSecondary)
                         .padding(8)
                         .frame(maxWidth: .infinity)
                         .background(Theme.surfaceElevated)
                 }
+
+                previewBar
             }
             .background(Theme.background)
             .overlay { if loading { ProgressView() } }
@@ -689,14 +716,71 @@ struct FileViewerSheet: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
                 }
+                ToolbarItem(placement: .confirmationAction) {
+                    if saving {
+                        ProgressView()
+                    } else {
+                        Button("Save") {
+                            Task { await save() }
+                        }
+                        .disabled(!canSave)
+                        .fontWeight(.semibold)
+                    }
+                }
             }
+            .interactiveDismissDisabled(isDirty && !saving)
         }
         .preferredColorScheme(.dark)
-        .presentationDetents([.medium, .large])
+        .presentationDetents([.large])
         .task { await load() }
+        .sheet(isPresented: $showMarkdownPreview) {
+            MarkdownPreviewSheet(markdown: content)
+        }
+        .sheet(isPresented: $showHTMLPreview) {
+            HTMLPreviewSheet(html: content, title: (path as NSString).lastPathComponent)
+        }
     }
 
-    private var hasDiff: Bool { !diff.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var availableTabs: [ViewerTab] {
+        hasDiff ? ViewerTab.allCases : [.edit]
+    }
+
+    @ViewBuilder
+    private var previewBar: some View {
+        if isMarkdownFile || isHTMLFile {
+            HStack(spacing: 10) {
+                if isMarkdownFile {
+                    Button {
+                        showMarkdownPreview = true
+                    } label: {
+                        Label("Preview Markdown", systemImage: "eye")
+                            .font(.system(size: 14, weight: .semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(Theme.accent)
+                }
+                if isHTMLFile {
+                    Button {
+                        showHTMLPreview = true
+                    } label: {
+                        Label("Preview in browser", systemImage: "safari")
+                            .font(.system(size: 14, weight: .semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(Theme.accent)
+                }
+                Spacer(minLength: 0)
+                if isDirty {
+                    Text("Unsaved")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Theme.textTertiary)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Theme.surface)
+        }
+    }
 
     private func load() async {
         defer { loading = false }
@@ -722,15 +806,79 @@ struct FileViewerSheet: View {
                 }
             )
             content = result.0
+            originalContent = result.0
             truncated = result.1
             diff = result.2 ?? ""
             if preferDiff && hasDiff {
                 tab = .diff
-            } else if !hasDiff {
-                tab = .source
+            } else {
+                tab = .edit
             }
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func save() async {
+        guard canSave else { return }
+        saving = true
+        statusMessage = nil
+        errorMessage = nil
+        defer { saving = false }
+        guard let endpoint = state.serverEndpoint, let token = state.serverToken else {
+            errorMessage = "Pair a desktop server first."
+            return
+        }
+        do {
+            let result = try await WorkspaceRPC.withConnection(
+                endpoint: endpoint,
+                token: token,
+                timeoutSeconds: 20,
+                send: { client in
+                    try await client.send(.fileWrite(sessionId: sessionId, path: path, content: content))
+                },
+                match: { msg -> (Bool, String?)? in
+                    if case let .fileWriteResult(_, p, ok, message) = msg, p == path {
+                        return (ok, message)
+                    }
+                    if case let .error(_, message) = msg {
+                        errorMessage = message
+                    }
+                    return nil
+                }
+            )
+            if result.0 {
+                originalContent = content
+                statusMessage = result.1 ?? "Saved."
+                // Refresh diff after save so the Diff tab stays honest.
+                await reloadDiffOnly()
+            } else {
+                errorMessage = result.1 ?? "Save failed."
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func reloadDiffOnly() async {
+        guard let endpoint = state.serverEndpoint, let token = state.serverToken else { return }
+        do {
+            let result = try await WorkspaceRPC.withConnection(
+                endpoint: endpoint,
+                token: token,
+                send: { client in
+                    try await client.send(.fileRead(sessionId: sessionId, path: path))
+                },
+                match: { msg -> String? in
+                    if case let .fileReadResult(_, p, _, _, diff) = msg, p == path {
+                        return diff ?? ""
+                    }
+                    return nil
+                }
+            )
+            diff = result
+        } catch {
+            // Soft-fail — content already saved.
         }
     }
 }

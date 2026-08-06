@@ -39,6 +39,12 @@ import {
   isPortHeld,
   killProcesses,
 } from "./instance-cleanup.js";
+import {
+  loadDesktopPrefs,
+  saveDesktopPrefs,
+  type DesktopPrefs,
+  type TunnelProviderPref,
+} from "../desktop-config.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -53,6 +59,9 @@ if (!gotLock) {
 }
 
 // --- Persisted UI prefs. Stored next to userData, plain JSON. -------------
+// Connection permissions also sync to ~/.anyprov-code/desktop-prefs.json
+// so the headless CLI and Electron share the same knobs.
+
 interface Prefs {
   /** First-close "always quit?" decision. Once decided, never asked again. */
   closeBehaviorDecided: boolean;
@@ -68,7 +77,15 @@ interface Prefs {
   /** Last known public URL for the coding server tunnel. */
   remoteAccessUrl: string;
   /** Tunnel provider preference for remote access. */
-  remoteAccessProvider: "auto" | "ngrok" | "cloudflare" | "localtunnel" | "bore";
+  remoteAccessProvider: TunnelProviderPref;
+  /** Phones can discover this machine on the LAN (Bonjour). */
+  allowLanDiscovery: boolean;
+  /** After pair, auto-start public tunnel and send URL to the phone. */
+  autoTunnelOnPair: boolean;
+  /** Show large pairing-code window on launch. */
+  showPairingCodePopup: boolean;
+  /** Rotate pairing code after each successful pair. */
+  rotateCodeAfterPair: boolean;
 }
 const DEFAULT_PREFS: Prefs = {
   closeBehaviorDecided: false,
@@ -77,20 +94,37 @@ const DEFAULT_PREFS: Prefs = {
   remoteAccessEnabled: false,
   remoteAccessUrl: "",
   remoteAccessProvider: "auto",
+  allowLanDiscovery: true,
+  autoTunnelOnPair: true,
+  showPairingCodePopup: true,
+  rotateCodeAfterPair: false,
 };
 
 /** Live remote-access tunnel id (process-local). */
 let remoteAccessTunnelId: string | null = null;
+let codeWindow: BrowserWindow | null = null;
 
 let prefs: Prefs = { ...DEFAULT_PREFS };
 let prefsPath = "";
 function loadPrefs(): void {
   try {
     prefsPath = path.join(app.getPath("userData"), "prefs.json");
+    // Merge shared desktop prefs first, then Electron-local overrides.
+    const shared = loadDesktopPrefs();
+    prefs = {
+      ...DEFAULT_PREFS,
+      allowLanDiscovery: shared.allowLanDiscovery,
+      autoTunnelOnPair: shared.autoTunnelOnPair,
+      remoteAccessProvider: shared.tunnelProvider,
+      showPairingCodePopup: shared.showPairingCodePopup,
+      rotateCodeAfterPair: shared.rotateCodeAfterPair,
+      remoteAccessUrl: shared.remoteAccessUrl,
+      remoteAccessEnabled: shared.remoteAccessEnabled,
+    };
     if (existsSync(prefsPath)) {
       const raw = readFileSync(prefsPath, "utf8");
       const parsed = JSON.parse(raw);
-      prefs = { ...DEFAULT_PREFS, ...parsed };
+      prefs = { ...prefs, ...parsed };
     }
   } catch {
     prefs = { ...DEFAULT_PREFS };
@@ -102,6 +136,69 @@ function savePrefs(): void {
   } catch {
     // best effort
   }
+  // Keep headless CLI in sync for connection permissions.
+  const shared: DesktopPrefs = {
+    allowLanDiscovery: prefs.allowLanDiscovery,
+    autoTunnelOnPair: prefs.autoTunnelOnPair,
+    tunnelProvider: prefs.remoteAccessProvider,
+    showPairingCodePopup: prefs.showPairingCodePopup,
+    rotateCodeAfterPair: prefs.rotateCodeAfterPair,
+    remoteAccessUrl: prefs.remoteAccessUrl,
+    remoteAccessEnabled: prefs.remoteAccessEnabled,
+  };
+  saveDesktopPrefs(shared);
+}
+
+/** Apple-verification style pairing code popup. */
+function showPairingCodeWindow(code: string): void {
+  if (!prefs.showPairingCodePopup) return;
+  const digits = (code || "------").replace(/\D/g, "").padStart(6, "0").slice(0, 6);
+  const spaced = digits.split("").join("  ");
+
+  if (codeWindow && !codeWindow.isDestroyed()) {
+    codeWindow.focus();
+    codeWindow.webContents.executeJavaScript(
+      `document.getElementById('code').textContent=${JSON.stringify(spaced)}`,
+    ).catch(() => undefined);
+    return;
+  }
+
+  codeWindow = new BrowserWindow({
+    width: 420,
+    height: 280,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    alwaysOnTop: true,
+    title: "Pairing code",
+    backgroundColor: "#0b0d10",
+    show: true,
+    webPreferences: {
+      contextIsolation: true,
+      sandbox: true,
+    },
+  });
+  codeWindow.setMenuBarVisibility(false);
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/>
+<style>
+  html,body{height:100%;margin:0;background:#0b0d10;color:#e8ecf1;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
+  .wrap{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px}
+  .label{font-size:13px;color:#9aa3ad;letter-spacing:.04em}
+  .code{font:600 42px/1.1 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    letter-spacing:.08em;padding:18px 22px;border-radius:16px;background:#14181d;
+    border:1px solid #262c34;min-width:280px;text-align:center}
+  .hint{font-size:13px;color:#6b727b;text-align:center;max-width:320px;line-height:1.4}
+</style></head><body><div class="wrap">
+  <div class="label">AnyProv Code</div>
+  <div class="code" id="code">${spaced}</div>
+  <div class="hint">Enter this code on your phone to pair<br/>(Settings → Desktop server)</div>
+</div></body></html>`;
+  codeWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+  codeWindow.on("closed", () => {
+    codeWindow = null;
+  });
 }
 
 // --- Encrypted client-side secrets (API keys, GitHub tokens). ------------
@@ -228,10 +325,20 @@ function refreshTrayMenu(): void {
     {
       label: "Pairing code",
       enabled: !!server,
+      click: () => {
+        if (server?.pairingCode) showPairingCodeWindow(server.pairingCode);
+      },
     },
     {
       label: server ? `  ${server.pairingCode}` : "  (not running)",
       enabled: false,
+    },
+    {
+      label: "Show code popup",
+      enabled: !!server,
+      click: () => {
+        if (server?.pairingCode) showPairingCodeWindow(server.pairingCode);
+      },
     },
     { type: "separator" },
     {
@@ -407,9 +514,44 @@ function registerIpc(): void {
     serverPort: server?.port ?? null,
     serverHost: server?.host ?? null,
     serverRunning: !!server,
-    prefs,
+    prefs: {
+      closeBehaviorDecided: prefs.closeBehaviorDecided,
+      alwaysQuitOnClose: prefs.alwaysQuitOnClose,
+      startMinimized: prefs.startMinimized,
+      remoteAccessEnabled: prefs.remoteAccessEnabled,
+      remoteAccessUrl: prefs.remoteAccessUrl,
+      remoteAccessProvider: prefs.remoteAccessProvider,
+      allowLanDiscovery: prefs.allowLanDiscovery,
+      autoTunnelOnPair: prefs.autoTunnelOnPair,
+      showPairingCodePopup: prefs.showPairingCodePopup,
+      rotateCodeAfterPair: prefs.rotateCodeAfterPair,
+    },
     secretsAvailable: safeStorage.isEncryptionAvailable(),
   }));
+
+  ipcMain.handle(
+    "prefs:set",
+    (_e, patch: Partial<Prefs>) => {
+      prefs = { ...prefs, ...patch };
+      savePrefs();
+      return prefs;
+    },
+  );
+
+  ipcMain.handle("pairing:showCode", () => {
+    if (server?.pairingCode) showPairingCodeWindow(server.pairingCode);
+    return server?.pairingCode ?? null;
+  });
+
+  ipcMain.handle("pairing:rotateCode", () => {
+    const next = server?.rotatePairingCode?.() ?? server?.pairingCode ?? null;
+    if (next) {
+      showPairingCodeWindow(next);
+      mainWindow?.webContents.send("pairing:code", next);
+      refreshTrayMenu();
+    }
+    return next;
+  });
 
   ipcMain.handle("secrets:get", () => redactSecrets(secrets));
   ipcMain.handle("secrets:set", (_e, next: Partial<SecretPayload>) => {
@@ -498,6 +640,8 @@ function registerIpc(): void {
         const info = await ensureRemoteAccessTunnel();
         return { ok: true as const, remote: info };
       }
+      const { stopAccessTunnel } = await import("../workspace/access-tunnel.js");
+      stopAccessTunnel();
       if (remoteAccessTunnelId) {
         stopTunnel(remoteAccessTunnelId);
         remoteAccessTunnelId = null;
@@ -581,7 +725,8 @@ app.whenReady().then(async () => {
   registerIpc();
 
   const port = Number(process.env.PORT ?? 4319);
-  const host = process.env.APC_HOST ?? "127.0.0.1";
+  // Bind all interfaces so phones on the LAN can pair; override with APC_HOST.
+  const host = process.env.APC_HOST ?? "0.0.0.0";
 
   const canStart = await promptKillConflictingInstances(port);
   if (!canStart) {
@@ -639,7 +784,15 @@ app.whenReady().then(async () => {
   createWindow();
   console.log("[apc] tray + window created");
 
+  // Apple-style verification code popup on launch.
+  if (server?.pairingCode && prefs.showPairingCodePopup) {
+    showPairingCodeWindow(server.pairingCode);
+  }
+
   // Auto-start remote-access tunnel when the user left it enabled.
+  if (prefs.remoteAccessEnabled || prefs.autoTunnelOnPair === false) {
+    /* remoteAccessEnabled alone drives always-on tunnel */
+  }
   if (prefs.remoteAccessEnabled) {
     void ensureRemoteAccessTunnel().then((info) => {
       console.log(`[apc] remote access: ${info?.url ?? "(starting)"}`);
@@ -660,27 +813,15 @@ async function ensureRemoteAccessTunnel(): Promise<{
   if (!port) {
     return { enabled: prefs.remoteAccessEnabled, url: prefs.remoteAccessUrl, provider: prefs.remoteAccessProvider, live: null };
   }
-  // Reuse existing live tunnel if still up.
-  if (remoteAccessTunnelId) {
-    const live = listTunnels().find((t) => t.id === remoteAccessTunnelId) ?? null;
-    if (live && (live.status === "up" || live.status === "starting")) {
-      if (live.url) {
-        prefs.remoteAccessUrl = live.url;
-        savePrefs();
-      }
-      return {
-        enabled: true,
-        url: live.url ?? prefs.remoteAccessUrl,
-        provider: live.provider,
-        live,
-      };
-    }
-  }
-  const started = await startTunnel({
+  // Shared singleton with the headless auto-tunnel path so we don't spawn two.
+  const { ensureAccessTunnel, currentAccessTunnel, accessTunnelId } = await import(
+    "../workspace/access-tunnel.js"
+  );
+  const started = await ensureAccessTunnel({
     port,
-    provider: prefs.remoteAccessProvider,
+    provider: prefs.remoteAccessProvider ?? "auto",
   });
-  remoteAccessTunnelId = started.id;
+  remoteAccessTunnelId = accessTunnelId() ?? started.id;
   if (started.url) {
     prefs.remoteAccessUrl = started.url;
     savePrefs();
@@ -689,7 +830,7 @@ async function ensureRemoteAccessTunnel(): Promise<{
     enabled: true,
     url: started.url ?? prefs.remoteAccessUrl,
     provider: started.provider,
-    live: started,
+    live: currentAccessTunnel() ?? started,
   };
 }
 

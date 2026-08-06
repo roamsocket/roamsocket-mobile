@@ -129,6 +129,15 @@ public struct PairResponse: Codable, Sendable {
     public let token: String
     public let serverName: String
     public let serverVersion: String
+    /// Public HTTPS base URL when a tunnel is already up at pair time.
+    public let publicUrl: String?
+
+    public init(token: String, serverName: String, serverVersion: String, publicUrl: String? = nil) {
+        self.token = token
+        self.serverName = serverName
+        self.serverVersion = serverVersion
+        self.publicUrl = publicUrl
+    }
 }
 
 // MARK: app -> server
@@ -167,6 +176,7 @@ public enum ClientMessage: Encodable, Sendable {
     case terminalKill(terminalId: String)
     case fileList(sessionId: String, path: String)
     case fileRead(sessionId: String, path: String)
+    case fileWrite(sessionId: String, path: String, content: String)
     case portList(sessionId: String)
     case tunnelStart(sessionId: String, port: Int, provider: String)
     case tunnelStop(sessionId: String, tunnelId: String)
@@ -252,6 +262,11 @@ public enum ClientMessage: Encodable, Sendable {
             try c.encode("file_read", forKey: .init("type"))
             try c.encode(sessionId, forKey: .init("sessionId"))
             try c.encode(path, forKey: .init("path"))
+        case let .fileWrite(sessionId, path, content):
+            try c.encode("file_write", forKey: .init("type"))
+            try c.encode(sessionId, forKey: .init("sessionId"))
+            try c.encode(path, forKey: .init("path"))
+            try c.encode(content, forKey: .init("content"))
         case let .portList(sessionId):
             try c.encode("port_list", forKey: .init("type"))
             try c.encode(sessionId, forKey: .init("sessionId"))
@@ -330,8 +345,11 @@ public enum ServerMessage: Decodable, Sendable {
     case terminalControl(terminalId: String, event: String, code: Int)
     case fileListResult(sessionId: String, path: String, entries: [FileEntryPayload], diff: String?, changes: [FileChangePayload]?)
     case fileReadResult(sessionId: String, path: String, content: String, truncated: Bool, diff: String?)
+    case fileWriteResult(sessionId: String, path: String, ok: Bool, message: String?)
     case portListResult(sessionId: String, ports: [PortEntryPayload])
     case tunnelStatus(sessionId: String, tunnels: [TunnelPayload], availableProviders: [String])
+    /// Coding-server public URL after auto tunnel starts (phone should switch here).
+    case remoteEndpoint(status: String, url: String?, provider: String?, error: String?)
 
     public struct FileEntryPayload: Codable, Hashable, Sendable {
         public let name: String
@@ -369,6 +387,8 @@ public enum ServerMessage: Decodable, Sendable {
         case name, isDirectory, size, modifiedAt, changeStatus, changes
         case tunnels, availableProviders, provider, status, error, tunnelId
     }
+
+    // CodingKeys already cover remote_endpoint fields: status, url, provider, error
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: K.self)
@@ -456,6 +476,12 @@ public enum ServerMessage: Decodable, Sendable {
                 content: try c.decode(String.self, forKey: .content),
                 truncated: try c.decode(Bool.self, forKey: .truncated),
                 diff: try c.decodeIfPresent(String.self, forKey: .diff))
+        case "file_write_result":
+            self = .fileWriteResult(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                path: try c.decode(String.self, forKey: .path),
+                ok: try c.decode(Bool.self, forKey: .ok),
+                message: try c.decodeIfPresent(String.self, forKey: .message))
         case "port_list_result":
             self = .portListResult(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -465,6 +491,12 @@ public enum ServerMessage: Decodable, Sendable {
                 sessionId: try c.decode(String.self, forKey: .sessionId),
                 tunnels: try c.decode([TunnelPayload].self, forKey: .tunnels),
                 availableProviders: try c.decode([String].self, forKey: .availableProviders))
+        case "remote_endpoint":
+            self = .remoteEndpoint(
+                status: try c.decode(String.self, forKey: .status),
+                url: try c.decodeIfPresent(String.self, forKey: .url),
+                provider: try c.decodeIfPresent(String.self, forKey: .provider),
+                error: try c.decodeIfPresent(String.self, forKey: .error))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .type, in: c, debugDescription: "Unknown server message type: \(type)")

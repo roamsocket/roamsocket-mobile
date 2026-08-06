@@ -66,11 +66,11 @@ struct ProjectDetailView: View {
 
     private var chatList: some View {
         let chats = history.chats(for: project)
-        return ScrollView {
-            VStack(spacing: 0) {
-                if chats.isEmpty {
-                    emptyState
-                } else {
+        return Group {
+            if chats.isEmpty {
+                emptyState
+            } else {
+                List {
                     ForEach(chats) { chat in
                         Button {
                             history.activeProject = project
@@ -79,14 +79,21 @@ struct ProjectDetailView: View {
                             chatRow(chat)
                         }
                         .buttonStyle(.plain)
-
-                        if chat.id != chats.last?.id {
-                            Divider()
-                                .background(Theme.separator)
-                                .padding(.leading, 16)
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Theme.background)
+                        .listRowSeparatorTint(Theme.separator)
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            Button {
+                                history.archiveProjectChat(projectID: project.id, chatID: chat.id)
+                            } label: {
+                                Label("Archive", systemImage: "archivebox")
+                            }
+                            .tint(Theme.accent)
                         }
                     }
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
             }
         }
     }

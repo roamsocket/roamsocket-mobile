@@ -8,6 +8,7 @@ import AnyProvCore
 @MainActor
 final class SessionViewModel: ObservableObject {
     enum Item: Identifiable {
+        case user(id: UUID, text: String)
         case assistant(id: UUID, text: String)
         case tool(id: String, tool: String, summary: String, ok: Bool?, output: String?)
         case diff(id: UUID, path: String, patch: String, added: Int, removed: Int)
@@ -15,6 +16,7 @@ final class SessionViewModel: ObservableObject {
 
         var id: String {
             switch self {
+            case let .user(id, _): return "u-\(id)"
             case let .assistant(id, _): return "a-\(id)"
             case let .tool(id, _, _, _, _): return "t-\(id)"
             case let .diff(id, _, _, _, _): return "d-\(id)"
@@ -30,15 +32,19 @@ final class SessionViewModel: ObservableObject {
     }
 
     @Published var items: [Item] = []
+    /// True while the agent is mid-turn (tools / streaming). Not used for WS connect.
     @Published var isRunning = false
+    /// True after `session_created` — safe to send user messages.
+    @Published private(set) var isSessionReady = false
     @Published var pendingPermission: PendingPermission?
     @Published var prURL: URL?
     /// Wire protocol session id — used by SSH / Files / ports against the desktop.
     @Published private(set) var sessionID: String
     @Published var connectionError: String?
+    /// Short status under the env pill (Connecting… / Disconnected / nil when healthy).
+    @Published var connectionStatusLine: String? = "Connecting…"
     /// Text the user typed while the agent is running. Sent when the
-    /// current turn finishes. Queue for after
-    /// this turn…" placeholder.
+    /// current turn finishes.
     @Published var queuedMessage: String = ""
     /// True while a git_publish request is in flight.
     @Published var isPublishing = false
@@ -51,11 +57,18 @@ final class SessionViewModel: ObservableObject {
     @Published var primaryWebPort: Int?
     @Published var webPreviewURL: URL?
 
+    /// Composer accepts text once the desktop session exists.
+    /// Soft notices (skills sync, project env warnings) must not block input.
+    var canAcceptInput: Bool { isSessionReady }
+
     private let config: SessionConfig
     private let client: ServerClient
     private let catalog = ModelCatalog()
     private var streamTask: Task<Void, Never>?
     private var portsTask: Task<Void, Never>?
+    private var transcriptSaveTask: Task<Void, Never>?
+    /// FIFO of follow-ups typed while the agent was busy (or before ready).
+    private var pendingOutgoing: [String] = []
     weak var state: AppState?
 
     /// Common dev-server ports preferred when choosing a browser target.
@@ -70,17 +83,104 @@ final class SessionViewModel: ObservableObject {
         if let pr = config.prURL { self.prURL = URL(string: pr) }
     }
 
+    /// Hydrate transcript from the persisted session row (archives / re-open).
+    func loadPersistedTranscript(from store: CodeSessionStore) {
+        guard let id = config.localSessionId,
+              let session = store.session(id: id),
+              !session.transcript.isEmpty,
+              items.isEmpty
+        else { return }
+        items = session.transcript.map { Self.item(from: $0) }
+    }
+
+    /// Persist the live transcript onto the Code session row (for archives).
+    func persistTranscript() {
+        guard let id = config.localSessionId else { return }
+        let lines = items.map { Self.line(from: $0) }
+        state?.codeSessionStore.saveTranscript(id, lines: lines)
+    }
+
+    private func scheduleTranscriptSave() {
+        transcriptSaveTask?.cancel()
+        transcriptSaveTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard !Task.isCancelled else { return }
+            persistTranscript()
+        }
+    }
+
+    private static func line(from item: Item) -> SessionTranscriptLine {
+        switch item {
+        case let .user(id, text):
+            return SessionTranscriptLine(id: "u-\(id.uuidString)", kind: .user, text: text)
+        case let .assistant(id, text):
+            return SessionTranscriptLine(id: "a-\(id.uuidString)", kind: .assistant, text: text)
+        case let .tool(id, tool, summary, ok, output):
+            return SessionTranscriptLine(
+                id: "t-\(id)",
+                kind: .tool,
+                text: [summary, output].compactMap { $0 }.joined(separator: "\n"),
+                tool: tool,
+                ok: ok
+            )
+        case let .diff(id, path, patch, added, removed):
+            return SessionTranscriptLine(
+                id: "d-\(id.uuidString)",
+                kind: .diff,
+                text: patch,
+                path: path,
+                added: added,
+                removed: removed
+            )
+        case let .notice(id, text):
+            return SessionTranscriptLine(id: "n-\(id.uuidString)", kind: .notice, text: text)
+        }
+    }
+
+    private static func item(from line: SessionTranscriptLine) -> Item {
+        switch line.kind {
+        case .user:
+            return .user(id: UUID(uuidString: line.id.replacingOccurrences(of: "u-", with: "")) ?? UUID(), text: line.text)
+        case .assistant:
+            return .assistant(id: UUID(uuidString: line.id.replacingOccurrences(of: "a-", with: "")) ?? UUID(), text: line.text)
+        case .tool:
+            let toolId = line.id.hasPrefix("t-") ? String(line.id.dropFirst(2)) : line.id
+            return .tool(id: toolId, tool: line.tool ?? "tool", summary: line.text, ok: line.ok, output: nil)
+        case .diff:
+            return .diff(
+                id: UUID(uuidString: line.id.replacingOccurrences(of: "d-", with: "")) ?? UUID(),
+                path: line.path ?? "file",
+                patch: line.text,
+                added: line.added ?? 0,
+                removed: line.removed ?? 0
+            )
+        case .notice:
+            return .notice(id: UUID(uuidString: line.id.replacingOccurrences(of: "n-", with: "")) ?? UUID(), text: line.text)
+        }
+    }
+
     func start() {
         guard streamTask == nil else { return }
-        isRunning = true
+        isSessionReady = false
+        isRunning = false
+        connectionError = nil
+        connectionStatusLine = "Connecting to desktop…"
         streamTask = Task { await run() }
-        portsTask = Task { await pollPortsLoop() }
+        // Ports are optional UX — wait until the agent session exists so we
+        // don't open extra tunnel sockets during a flaky first connect.
+    }
+
+    /// User-initiated reconnect after a failed or dropped session socket.
+    func retryConnection() {
+        streamTask?.cancel()
+        streamTask = nil
+        portsTask?.cancel()
+        portsTask = nil
+        Task { await client.disconnect() }
+        start()
     }
 
     private func run() async {
-        // Prefer live pairing credentials so a reattached session works after
-        // the app re-paired or auto-reconnected to the desktop.
-        let endpoint = state?.serverEndpoint ?? config.endpoint
         let token = state?.serverToken ?? config.token
         // Refresh API key / model from current settings when resuming so
         // expired keys or model switches still work against the same workdir.
@@ -89,30 +189,133 @@ final class SessionViewModel: ObservableObject {
         if let gh = state?.githubToken, !gh.isEmpty {
             repo.githubToken = gh
         }
-        do {
-            connectionError = nil
-            if config.resuming {
-                appendNotice("Reconnecting to session…")
-            }
-            let stream = try await client.connect(endpoint: endpoint, token: token)
-            try await client.send(.createSession(
-                sessionId: sessionID,
-                repo: repo,
-                environment: config.environment,
-                model: model,
-                permissionMode: config.permissionMode,
-                skills: config.skills,
-                mcpServers: config.mcpServers))
-            for await message in stream {
-                handle(message)
-            }
-        } catch {
-            connectionError = error.localizedDescription
-            if config.resuming {
-                appendNotice("Could not reconnect: \(error.localizedDescription)")
+
+        guard !token.isEmpty else {
+            connectionError = "Not paired with a desktop server."
+            connectionStatusLine = "Not paired"
+            appendNotice("Pair a desktop server in Settings, then try again.")
+            return
+        }
+
+        let candidates = connectionCandidates()
+        guard !candidates.isEmpty else {
+            connectionError = "No server address available."
+            connectionStatusLine = "Failed"
+            appendNotice("Re-pair the desktop server in Settings.")
+            return
+        }
+
+        connectionError = nil
+        if config.resuming {
+            appendNotice("Reconnecting to session…")
+        } else {
+            appendNotice("Connecting… cloning repo on desktop if needed.")
+        }
+
+        var lastError: Error?
+        for (index, endpoint) in candidates.enumerated() {
+            let pathLabel = AppState.connectionPath(for: endpoint).label
+            let host = endpoint.baseURL.host ?? endpoint.baseURL.absoluteString
+            connectionStatusLine = "Connecting via \(pathLabel) (\(host))…"
+            do {
+                // `connect` waits until the WebSocket is open before returning —
+                // sending create_session earlier races and yields "Socket is not connected".
+                let stream = try await client.connect(endpoint: endpoint, token: token)
+                // Remember which path worked so future sends / tools use it.
+                state?.activateEndpointForSession(endpoint)
+                connectionStatusLine = "Connected via \(pathLabel) — starting session…"
+                try await client.send(.createSession(
+                    sessionId: sessionID,
+                    repo: repo,
+                    environment: config.environment,
+                    model: model,
+                    permissionMode: config.permissionMode,
+                    skills: config.skills,
+                    mcpServers: config.mcpServers))
+                connectionStatusLine = "Waiting for session…"
+                for await message in stream {
+                    handle(message)
+                }
+                // Stream ended (desktop closed socket or network drop).
+                if isSessionReady {
+                    connectionError = "Disconnected from desktop."
+                    connectionStatusLine = "Disconnected"
+                    appendNotice("Connection closed. Tap Retry or leave and reopen the session.")
+                } else if connectionError == nil {
+                    connectionError = "Could not start session (connection closed)."
+                    connectionStatusLine = "Failed"
+                    appendNotice("Desktop closed the connection before the session was ready. Check Local vs Tunnel, or re-pair if the desktop restarted.")
+                }
+                lastError = nil
+                break
+            } catch {
+                lastError = error
+                await client.disconnect()
+                let detail = error.localizedDescription
+                let unauthorized = detail.localizedCaseInsensitiveContains("unauthorized")
+                    || detail.localizedCaseInsensitiveContains("re-pair")
+                // Don't burn through fallbacks on a bad token — every path will fail the same way.
+                if unauthorized {
+                    connectionError = detail
+                    connectionStatusLine = "Re-pair required"
+                    appendNotice(detail)
+                    appendNotice("Open Settings → Pair server (desktop tokens reset when the desktop restarts).")
+                    break
+                }
+                let more = index + 1 < candidates.count
+                appendNotice(
+                    more
+                        ? "\(pathLabel) failed (\(detail)). Trying next path…"
+                        : "Could not connect via \(pathLabel): \(detail)"
+                )
             }
         }
+
+        if let lastError, !isSessionReady, connectionError == nil {
+            connectionError = lastError.localizedDescription
+            connectionStatusLine = "Failed"
+        }
+        isSessionReady = false
         isRunning = false
+    }
+
+    /// Ordered endpoints to try for this session: preference first, then fallbacks.
+    private func connectionCandidates() -> [ServerClient.Endpoint] {
+        var ordered: [ServerClient.Endpoint] = []
+        var seen = Set<String>()
+
+        func append(_ endpoint: ServerClient.Endpoint?) {
+            guard let endpoint else { return }
+            let key = endpoint.baseURL.absoluteString
+            guard !seen.contains(key) else { return }
+            seen.insert(key)
+            ordered.append(endpoint)
+        }
+
+        let pref = state?.connectionPreference ?? .smart
+        let active = state?.serverEndpoint ?? config.endpoint
+        let local = state?.localEndpoint
+        let tunnel = state?.tunnelEndpoint
+
+        switch pref {
+        case .alwaysLocal:
+            append(local)
+            append(active)
+            append(tunnel)
+        case .alwaysTunnel:
+            append(tunnel)
+            append(active)
+            append(local)
+        case .smart:
+            // Prefer tunnel, fall back to local (and any active path).
+            append(tunnel)
+            append(local)
+            append(active)
+        }
+
+        // Config snapshot as final fallback (frozen at session open).
+        append(config.endpoint)
+        return ordered
     }
 
     /// Finish the session: commit + push + open PR (never merge).
@@ -224,25 +427,84 @@ final class SessionViewModel: ObservableObject {
     }
 
     func sendUserMessage(_ text: String) {
-        appendNotice("You: \(text)")
+        transmitUserMessage(text, showBubble: true)
+    }
+
+    /// Send (and optionally render) a user message on the live agent socket.
+    private func transmitUserMessage(_ text: String, showBubble: Bool) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        if showBubble {
+            items.append(.user(id: UUID(), text: trimmed))
+            scheduleTranscriptSave()
+        }
+
+        guard isSessionReady else {
+            // Not ready yet (still cloning / connecting) — queue until session_created.
+            if !pendingOutgoing.contains(trimmed) {
+                pendingOutgoing.append(trimmed)
+            }
+            appendNotice("Queued — waiting for desktop session…")
+            return
+        }
+
         isRunning = true
+        connectionStatusLine = nil
+        connectionError = nil
         Task {
-            try? await client.send(.userMessage(sessionId: sessionID, text: text))
+            do {
+                try await client.send(.userMessage(sessionId: sessionID, text: trimmed))
+            } catch {
+                isRunning = false
+                connectionError = error.localizedDescription
+                connectionStatusLine = "Send failed"
+                appendNotice("Could not send message: \(error.localizedDescription)")
+                appendNotice("Tip: switch Local/Tunnel on the status pill, or tap Retry.")
+            }
         }
     }
 
     /// Queue a follow-up that will fire after the current turn finishes.
+    /// Still shows the user bubble immediately (previous behavior hid it).
     func queueMessage(_ text: String) {
-        queuedMessage = text
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        items.append(.user(id: UUID(), text: trimmed))
+        scheduleTranscriptSave()
+        pendingOutgoing.append(trimmed)
+        queuedMessage = trimmed // keep published field for any UI that reads it
+        appendNotice("Queued — will send after this turn.")
     }
 
-    /// Send the queued message (called from `.onChange(of: isRunning)` when
-    /// the agent transitions from running to idle).
+    /// Send the next queued message (called when the agent goes idle).
     func sendQueuedMessageIfNeeded() {
-        let text = queuedMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        queuedMessage = ""
-        sendUserMessage(text)
+        flushPendingOutgoing()
+    }
+
+    private func flushPendingOutgoing() {
+        guard isSessionReady, !isRunning else { return }
+        guard !pendingOutgoing.isEmpty else {
+            queuedMessage = ""
+            return
+        }
+        let next = pendingOutgoing.removeFirst()
+        queuedMessage = pendingOutgoing.last ?? ""
+        // Bubble already shown when queued — only transmit.
+        isRunning = true
+        connectionStatusLine = nil
+        Task {
+            do {
+                try await client.send(.userMessage(sessionId: sessionID, text: next))
+            } catch {
+                isRunning = false
+                connectionError = error.localizedDescription
+                connectionStatusLine = "Send failed"
+                appendNotice("Could not send message: \(error.localizedDescription)")
+                // Put it back so the user can retry by waiting for reconnect/idle.
+                pendingOutgoing.insert(next, at: 0)
+            }
+        }
     }
 
     func respond(to permission: PendingPermission, allow: Bool) {
@@ -389,34 +651,78 @@ final class SessionViewModel: ObservableObject {
     private func handle(_ message: ServerMessage) {
         switch message {
         case let .sessionCreated(_, _, _, workBranch):
+            isSessionReady = true
+            connectionError = nil
+            connectionStatusLine = nil
+            appendNotice("Session ready · branch \(workBranch)")
+            // Start optional ports polling only after the session exists.
+            if portsTask == nil {
+                portsTask = Task { await pollPortsLoop() }
+            }
             if config.resuming {
-                appendNotice("Reconnected · branch \(workBranch)")
                 isRunning = false
+                flushPendingOutgoing()
             } else {
                 // Kick off the first user turn once the repo is cloned.
-                sendUserMessage(config.firstMessage)
+                let first = config.firstMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !first.isEmpty {
+                    // Drop any pre-ready queue of the same opener so we don't double-send.
+                    pendingOutgoing.removeAll { $0 == first }
+                    let alreadyShown = items.contains { item in
+                        if case let .user(_, text) = item { return text == first }
+                        return false
+                    }
+                    transmitUserMessage(first, showBubble: !alreadyShown)
+                } else {
+                    isRunning = false
+                    flushPendingOutgoing()
+                }
             }
 
         case let .assistantDelta(_, text):
+            isRunning = true
+            connectionStatusLine = nil
             appendAssistant(text)
 
         case let .toolCall(_, callId, tool, summary):
+            isRunning = true
             items.append(.tool(id: callId, tool: tool, summary: summary, ok: nil, output: nil))
+            scheduleTranscriptSave()
 
         case let .toolResult(_, callId, ok, output):
             if let idx = items.firstIndex(where: { if case let .tool(id, _, _, _, _) = $0 { return id == callId } else { return false } }),
                case let .tool(id, tool, summary, _, _) = items[idx] {
                 items[idx] = .tool(id: id, tool: tool, summary: summary, ok: ok, output: output)
             }
+            scheduleTranscriptSave()
 
         case let .diff(_, path, patch, added, removed):
             items.append(.diff(id: UUID(), path: path, patch: patch, added: added, removed: removed))
+            scheduleTranscriptSave()
 
         case let .permissionRequest(_, requestId, tool, summary):
             pendingPermission = PendingPermission(id: requestId, tool: tool, summary: summary)
 
         case .sessionDone:
             isRunning = false
+            flushPendingOutgoing()
+            scheduleTranscriptSave()
+            // Archived with "keep running": drop the phone socket once the turn ends.
+            if let localId = config.localSessionId,
+               let row = state?.codeSessionStore.session(id: localId),
+               row.status == .archived || row.disconnectWhenDone {
+                state?.codeSessionStore.update(localId) {
+                    $0.disconnectWhenDone = false
+                    if $0.status != .archived { $0.status = .completed }
+                }
+                persistTranscript()
+                Task {
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                    await client.disconnect()
+                    connectionStatusLine = "Archived — disconnected."
+                    isSessionReady = false
+                }
+            }
 
         case let .prCreated(_, url):
             prURL = URL(string: url)
@@ -434,9 +740,19 @@ final class SessionViewModel: ObservableObject {
             appendNotice(ok ? detail : "Git \(action) failed: \(detail)")
 
         case let .error(_, message):
+            // Soft pre-session noise (skills sync, project env notes) must not
+            // lock the composer or mark the socket as dead.
+            let fatal = Self.isFatalSessionError(message)
             appendNotice("Error: \(message)")
-            isRunning = false
-            isPublishing = false
+            if fatal && !isSessionReady {
+                connectionError = message
+                connectionStatusLine = "Failed"
+            }
+            if isSessionReady {
+                isRunning = false
+                isPublishing = false
+                flushPendingOutgoing()
+            }
 
         case let .skillsSync(skills):
             state?.skillManager.apply(skills: skills)
@@ -444,10 +760,22 @@ final class SessionViewModel: ObservableObject {
         case let .mcpSync(servers):
             state?.mcpManager.apply(servers: servers)
 
-        case .terminalData, .terminalControl, .fileListResult, .fileReadResult, .portListResult, .tunnelStatus:
+        case let .remoteEndpoint(status, url, _, _):
+            if status == "up", let url, !url.isEmpty {
+                _ = state?.applyRemoteEndpoint(urlString: url)
+            }
+
+        case .terminalData, .terminalControl, .fileListResult, .fileReadResult, .fileWriteResult, .portListResult, .tunnelStatus:
             // Handled by the dedicated tools views via their own connection.
             break
         }
+    }
+
+    private static func isFatalSessionError(_ message: String) -> Bool {
+        let m = message.lowercased()
+        if m.contains("skills sync") || m.contains("mcp sync") { return false }
+        if m.contains("env var") || m.contains("project config provided") { return false }
+        return true
     }
 
     private func appendAssistant(_ text: String) {
@@ -456,10 +784,12 @@ final class SessionViewModel: ObservableObject {
         } else {
             items.append(.assistant(id: UUID(), text: text))
         }
+        scheduleTranscriptSave()
     }
 
     private func appendNotice(_ text: String) {
         items.append(.notice(id: UUID(), text: text))
+        scheduleTranscriptSave()
     }
 
     var totalDiffStats: (added: Int, removed: Int) {

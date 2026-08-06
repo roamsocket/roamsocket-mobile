@@ -17,6 +17,24 @@ final class ChatViewModel: ObservableObject {
     @Published var showConnectorsView: Bool = false
     @Published var showModelPicker: Bool = false
     @Published var error: String?
+    /// When set, tapping the error banner runs this (e.g. open provider settings).
+    @Published var errorBannerAction: ChatErrorBannerAction?
+
+    enum ChatErrorBannerAction: Equatable {
+        /// Open Settings → Provider API keys (add / fix a model).
+        case openProviderSettings
+    }
+
+    /// Sets the banner message and optional tap destination.
+    func presentError(_ message: String, action: ChatErrorBannerAction? = nil) {
+        error = message
+        errorBannerAction = action
+    }
+
+    func clearError() {
+        error = nil
+        errorBannerAction = nil
+    }
 
     // Per-chat feature toggles (live in the Add-to-Chat sheet).
     @Published var webSearchEnabled: Bool = true
@@ -44,8 +62,14 @@ final class ChatViewModel: ObservableObject {
     let catalog: ModelCatalog
 
     weak var state: AppState?
+    /// Sidebar history store — set by ChatView for persist / resume.
+    weak var history: ChatHistoryStore?
+    /// Active chat id in the history store (global recents or project chat).
+    var activeChatID: UUID?
+    var activeProjectID: UUID?
 
     private var cancellables = Set<AnyCancellable>()
+    private var persistTask: Task<Void, Never>?
 
     // MARK: - Tool Access
 
@@ -83,7 +107,7 @@ final class ChatViewModel: ObservableObject {
         }
         guard healthService.isHealthDataAvailable else {
             healthEnabled = false
-            error = HealthKitServiceError.unavailable.errorDescription
+            presentError(HealthKitServiceError.unavailable.errorDescription ?? "Health is unavailable.")
             return
         }
         isRequestingHealthAccess = true
@@ -93,7 +117,7 @@ final class ChatViewModel: ObservableObject {
             healthEnabled = true
         } catch {
             healthEnabled = false
-            self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            presentError((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
         }
     }
 
@@ -107,16 +131,29 @@ final class ChatViewModel: ObservableObject {
         guard let state,
               let model = state.selectedModel
         else {
-            error = "Select a model in Settings first."
+            presentError(
+                "Select a model in Settings first.",
+                action: .openProviderSettings
+            )
             return
         }
+        // Local Metal is chat-only and needs no API key.
         let key = state.resolvedAPIKey(for: model.provider)
-        guard !key.isEmpty else {
-            error = "Add an API key for \(model.provider.displayName) in Settings."
+        if model.provider.requiresAPIKey, key.isEmpty {
+            presentError(
+                "Add an API key for \(model.provider.displayName) in Settings.",
+                action: .openProviderSettings
+            )
             return
         }
 
+        // Ensure this conversation has a sidebar row before we write.
+        if activeChatID == nil {
+            activeChatID = history?.ensureActiveChat()
+        }
+
         messages.append(ChatMessage(role: .user, content: text))
+        schedulePersist()
         inputText = ""
         isProcessing = true
         defer { isProcessing = false }
@@ -136,7 +173,7 @@ final class ChatViewModel: ObservableObject {
             } catch {
                 // Don't block the chat; surface a soft warning on the reply path.
                 let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                self.error = "Health data unavailable: \(msg)"
+                presentError("Health data unavailable: \(msg)")
             }
         }
 
@@ -146,7 +183,10 @@ final class ChatViewModel: ObservableObject {
             let baseURL = state.baseURL(for: model.provider)
             let style = state.apiStyle(for: model.provider)
             if case .custom = model.provider, baseURL == nil {
-                error = "Custom provider is missing a base URL. Edit it in Settings."
+                presentError(
+                    "Custom provider is missing a base URL. Edit it in Settings.",
+                    action: .openProviderSettings
+                )
                 return
             }
             let reply = try await catalog.provider(
@@ -165,16 +205,72 @@ final class ChatViewModel: ObservableObject {
                 content: parsed.content,
                 thoughtProcess: parsed.thinking
             ))
+            schedulePersist()
             // Capture long outputs / code blocks as an Artifact (≥ 10 lines OR contains ```).
             // Prefer visible answer content so artifacts aren't polluted with reasoning.
-            state.artifactStore.maybeSave(chatId: nil, content: parsed.content)
+            state.artifactStore.maybeSave(chatId: activeChatID, content: parsed.content)
         } catch {
             let msg = (error as? ProviderError)?.errorDescription ?? error.localizedDescription
-            self.error = msg
+            presentError(msg)
             messages.append(ChatMessage(
                 role: .assistant,
                 content: "I couldn't reach \(model.provider.displayName): \(msg)"
             ))
+            schedulePersist()
+        }
+    }
+
+    // MARK: - History resume / persist
+
+    func loadChat(id: UUID, from store: ChatHistoryStore) {
+        history = store
+        activeChatID = id
+        activeProjectID = nil
+        messages = store.messages(for: id)
+        store.openChat(store.recents.first(where: { $0.id == id }) ?? ChatHistoryItem(
+            id: id,
+            title: "Chat",
+            lastMessageAt: Date(),
+            messages: []
+        ))
+    }
+
+    func loadProjectChat(project: ProjectItem, chat: ProjectChatItem, from store: ChatHistoryStore) {
+        history = store
+        activeChatID = chat.id
+        activeProjectID = project.id
+        currentProject = project.name
+        messages = store.projectChatMessages(projectID: project.id, chatID: chat.id)
+    }
+
+    func beginNewChat(in store: ChatHistoryStore) {
+        history = store
+        let item = store.startNewChat()
+        activeChatID = item.id
+        activeProjectID = nil
+        messages = []
+        clearError()
+    }
+
+    private func schedulePersist() {
+        persistTask?.cancel()
+        persistTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
+            persistNow()
+        }
+    }
+
+    func persistNow() {
+        guard let history else { return }
+        if let projectID = activeProjectID, let chatID = activeChatID {
+            history.saveProjectChatMessages(messages, projectID: projectID, chatID: chatID)
+        } else if let chatID = activeChatID {
+            history.saveMessages(messages, for: chatID)
+        } else if !messages.isEmpty {
+            let id = history.ensureActiveChat()
+            activeChatID = id
+            history.saveMessages(messages, for: id)
         }
     }
 
@@ -209,6 +305,7 @@ final class ChatViewModel: ObservableObject {
     /// Delete a message from the conversation.
     func deleteMessage(_ message: ChatMessage) {
         messages.removeAll { $0.id == message.id }
+        schedulePersist()
     }
 
     /// Regenerate the last assistant response.
@@ -224,6 +321,7 @@ final class ChatViewModel: ObservableObject {
     /// Clear all messages and start fresh.
     func clearChat() {
         messages.removeAll()
+        schedulePersist()
     }
 
     // MARK: - Connectors
