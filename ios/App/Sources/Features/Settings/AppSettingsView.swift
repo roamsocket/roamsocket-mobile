@@ -44,6 +44,7 @@ struct AppSettingsView: View {
                 ScrollView {
                     VStack(spacing: 16) {
                         accountSection
+                        appearanceSection
                         chatSection
                         codingSection
                         settingsBackupSection
@@ -165,7 +166,7 @@ struct AppSettingsView: View {
             } label: {
                 row(
                     systemImage: "cpu",
-                    title: "On-device (Metal)",
+                    title: "Manage models (Metal)",
                     trailing: "Chat only"
                 )
             }
@@ -249,6 +250,34 @@ struct AppSettingsView: View {
         return "Not paired"
     }
 
+    // MARK: - Appearance
+
+    private var appearanceSection: some View {
+        settingsCard(header: "Appearance") {
+            VStack(alignment: .leading, spacing: 10) {
+                ThemeSegmentedControl(
+                    options: AppAppearance.allCases.map { ($0, $0.title) },
+                    selection: appearanceBinding
+                )
+                .accessibilityLabel("Appearance")
+
+                Text(state.appearance.subtitle)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+        }
+    }
+
+    private var appearanceBinding: Binding<AppAppearance> {
+        Binding(
+            get: { state.appearance },
+            set: { state.appearance = $0 }
+        )
+    }
+
     // MARK: - Chat (thinking display)
 
     private var chatSection: some View {
@@ -256,7 +285,7 @@ struct AppSettingsView: View {
             ToggleRow(
                 systemImage: "brain.head.profile",
                 title: "Always expand thinking",
-                subtitle: "Show reasoning blocks expanded instead of collapsed.",
+                subtitle: "Show full reasoning under the summary row (tap still opens Thought process).",
                 iconColor: Theme.accent,
                 isOn: $state.alwaysExpandThinking
             )
@@ -286,7 +315,7 @@ struct AppSettingsView: View {
                         Text(syncButtonTitle)
                             .font(.system(size: 15, weight: .semibold))
                     }
-                    .foregroundStyle(.black)
+                    .foregroundStyle(Theme.background)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
                     .background(Theme.textPrimary, in: Capsule())
@@ -620,7 +649,6 @@ private struct ProviderKeysView: View {
                 AddCustomProviderView()
             }
         }
-        .preferredColorScheme(.dark)
     }
 }
 
@@ -690,7 +718,6 @@ private struct AddCustomProviderView: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
     }
 
     private func save() {
@@ -864,7 +891,6 @@ private struct EditCustomProviderView: View {
                 apiKey = state.apiKey(for: provider.providerID)
             }
         }
-        .preferredColorScheme(.dark)
     }
 }
 
@@ -972,7 +998,6 @@ private struct AboutSheet: View {
             }
         }
         .presentationDetents([.medium])
-        .preferredColorScheme(.dark)
     }
 }
 

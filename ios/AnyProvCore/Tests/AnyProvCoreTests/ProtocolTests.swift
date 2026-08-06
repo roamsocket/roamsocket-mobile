@@ -141,6 +141,18 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(obj["provider"] as? String, "cloudflare")
     }
 
+    func testRemoteEndpointRequestEncoding() throws {
+        let forced = try JSONEncoder().encode(ClientMessage.remoteEndpointRequest(force: true))
+        let forcedObj = try JSONSerialization.jsonObject(with: forced) as! [String: Any]
+        XCTAssertEqual(forcedObj["type"] as? String, "remote_endpoint_request")
+        XCTAssertEqual(forcedObj["force"] as? Bool, true)
+
+        let soft = try JSONEncoder().encode(ClientMessage.remoteEndpointRequest(force: false))
+        let softObj = try JSONSerialization.jsonObject(with: soft) as! [String: Any]
+        XCTAssertEqual(softObj["type"] as? String, "remote_endpoint_request")
+        XCTAssertNil(softObj["force"])
+    }
+
     func testDecodeFileListWithChanges() throws {
         let msg = try JSONDecoder().decode(ServerMessage.self, from: json(
             #"{"type":"file_list_result","sessionId":"s1","path":"","entries":[{"name":"a.ts","path":"a.ts","isDirectory":false,"size":12,"modifiedAt":"2020-01-01T00:00:00.000Z","changeStatus":"M"}],"diff":" a.ts | 1 +\n","changes":[{"path":"a.ts","status":"M"}]}"#))

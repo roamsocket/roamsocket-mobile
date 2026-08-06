@@ -105,7 +105,6 @@ struct AddConnectorView: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
     }
 
     private var isValid: Bool {

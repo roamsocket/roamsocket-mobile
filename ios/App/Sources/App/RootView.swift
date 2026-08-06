@@ -1,10 +1,13 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// Root navigation:
 ///  * `ChatView` is the default landing screen.
 ///  * A left-edge sidebar lists top-level destinations (Chats, Projects,
-///    Artifacts, Code) plus a Recents list and a profile chip.
-///  * Settings is reachable from the sidebar profile.
+///    Artifacts, Code) plus a Recents list and a settings entry.
+///  * Settings is reachable from the toolbar gear and the sidebar.
 struct RootView: View {
     @EnvironmentObject var state: AppState
     @StateObject private var history = ChatHistoryStore()
@@ -19,7 +22,8 @@ struct RootView: View {
         ZStack {
             NavigationStack(path: $path) {
                 ChatView(
-                    onOpenSidebar: { sidebarOpen = true },
+                    onOpenSidebar: { setSidebarOpen(true) },
+                    path: $path,
                     history: history,
                     resumeToken: chatResumeToken
                 )
@@ -31,7 +35,7 @@ struct RootView: View {
                         case .artifacts:
                             ArtifactsListView()
                         case .code:
-                            CodeHomeView(onOpenSidebar: { sidebarOpen = true })
+                            CodeHomeView(onOpenSidebar: { setSidebarOpen(true) })
                         case .projectDetail(let project):
                             ProjectDetailView(project: project, history: history, path: $path)
                         case .projectChat(let project, let chat):
@@ -45,6 +49,9 @@ struct RootView: View {
                         }
                     }
             }
+            // Block interaction with the chat under the drawer (selection /
+            // keyboard should already be cleared via `setSidebarOpen`).
+            .allowsHitTesting(!sidebarOpen)
             .task {
                 if state.allModels.isEmpty { await state.refreshModels() }
             }
@@ -54,7 +61,8 @@ struct RootView: View {
                 Color.black.opacity(0.4)
                     .ignoresSafeArea()
                     .transition(.opacity)
-                    .onTapGesture { withAnimation(.easeInOut(duration: 0.25)) { sidebarOpen = false } }
+                    .onTapGesture { setSidebarOpen(false) }
+                    .zIndex(1)
 
                 HStack(spacing: 0) {
                     SidebarView(
@@ -63,30 +71,69 @@ struct RootView: View {
                             handle(destination: destination)
                         },
                         onNewChat: {
-                            history.startNewChat()
+                            // startNewChat discards any previous blank draft first.
+                            history.startNewChat(selectedModel: state.selectedModel)
                             chatResumeToken = UUID()
                             path = []
-                            withAnimation(.easeInOut(duration: 0.25)) { sidebarOpen = false }
+                            setSidebarOpen(false)
                         },
                         onShowSettings: {
-                            withAnimation(.easeInOut(duration: 0.25)) { sidebarOpen = false }
+                            setSidebarOpen(false)
                             showSettings = true
                         }
                     )
                     .frame(width: 300)
                     .frame(maxHeight: .infinity, alignment: .top)
-                    // Paint under the status bar, but keep content in the safe area.
-                    .background(Theme.background.ignoresSafeArea(edges: .vertical))
+                    // Fully opaque panel under the status bar (content stays safe-area aware).
+                    .background {
+                        Rectangle()
+                            .fill(Theme.background)
+                            .ignoresSafeArea()
+                    }
+                    // Flatten so underlying chat selection chrome can't blend through.
+                    .compositingGroup()
                     .transition(.move(edge: .leading))
 
                     Spacer(minLength: 0)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                .zIndex(2)
             }
         }
         .sheet(isPresented: $showSettings) {
             AppSettingsView()
         }
+        .onChange(of: path) { oldPath, newPath in
+            // Returning to the chat root (e.g. system back from Code) — refresh
+            // so a discarded blank draft doesn't leave a stale empty shell, and
+            // so the composer layout is rebuilt after being covered.
+            guard newPath.isEmpty, !oldPath.isEmpty else { return }
+            chatResumeToken = UUID()
+        }
+    }
+
+    // MARK: - Sidebar
+
+    /// Open/close the drawer. Resigns first responder so carets and text
+    /// selection handles (UIKit layers above SwiftUI) don't float over the panel.
+    private func setSidebarOpen(_ open: Bool) {
+        if open {
+            resignTextSelection()
+        }
+        withAnimation(.easeInOut(duration: 0.25)) {
+            sidebarOpen = open
+        }
+    }
+
+    private func resignTextSelection() {
+        #if canImport(UIKit)
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder),
+            to: nil,
+            from: nil,
+            for: nil
+        )
+        #endif
     }
 
     // MARK: - Toolbar
@@ -94,7 +141,7 @@ struct RootView: View {
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
         ToolbarItem(placement: .topBarLeading) {
-            Button(action: { withAnimation(.easeInOut(duration: 0.25)) { sidebarOpen.toggle() } }) {
+            Button(action: { setSidebarOpen(!sidebarOpen) }) {
                 Image(systemName: "line.3.horizontal")
                     .font(.system(size: 18, weight: .medium))
                     .foregroundStyle(Theme.textPrimary)
@@ -105,13 +152,14 @@ struct RootView: View {
         }
         ToolbarItem(placement: .topBarTrailing) {
             Button(action: { showSettings = true }) {
-                Image(systemName: "person.crop.circle")
-                    .font(.system(size: 22))
+                Image(systemName: "gearshape")
+                    .font(.system(size: 18, weight: .medium))
                     .foregroundStyle(Theme.textPrimary)
                     .frame(width: 44, height: 44)
                     .background(Theme.surfaceElevated, in: Circle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Settings")
         }
     }
 
@@ -120,25 +168,33 @@ struct RootView: View {
     private func handle(destination: SidebarDestination) {
         switch destination {
         case .chats:
+            // "Chats" is the home entry point — always land on a fresh chat.
+            history.startNewChat(selectedModel: state.selectedModel)
+            chatResumeToken = UUID()
             path = []
-            withAnimation(.easeInOut(duration: 0.25)) { sidebarOpen = false }
+            setSidebarOpen(false)
         case .projects:
+            // Leaving the composer — drop unsent "New chat" rows from Recents.
+            history.discardActiveIfBlank()
             path = [.projects]
-            withAnimation(.easeInOut(duration: 0.25)) { sidebarOpen = false }
+            setSidebarOpen(false)
         case .artifacts:
+            history.discardActiveIfBlank()
             path = [.artifacts]
-            withAnimation(.easeInOut(duration: 0.25)) { sidebarOpen = false }
+            setSidebarOpen(false)
         case .code:
+            history.discardActiveIfBlank()
             path = [.code]
-            withAnimation(.easeInOut(duration: 0.25)) { sidebarOpen = false }
+            setSidebarOpen(false)
         case .chat(let item):
             history.openChat(item)
             chatResumeToken = UUID()
             path = []
-            withAnimation(.easeInOut(duration: 0.25)) { sidebarOpen = false }
+            setSidebarOpen(false)
         case .project(let project):
+            history.discardActiveIfBlank()
             path = [.projectDetail(project)]
-            withAnimation(.easeInOut(duration: 0.25)) { sidebarOpen = false }
+            setSidebarOpen(false)
         }
     }
 }

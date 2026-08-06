@@ -27,18 +27,20 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_anyprov-code._tcp</string>
+	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>Scan the pairing QR code shown on your desktop or terminal.</string>
 	<key>NSHealthShareUsageDescription</key>
 	<string>AnyProv Code reads your Apple Health data when you turn on Health in chat, so the assistant can answer questions about steps, sleep, workouts, and other stats you choose to share.</string>
 	<key>NSHealthUpdateUsageDescription</key>
 	<string>AnyProv Code does not write to Apple Health. This permission is required by the system HealthKit entitlement.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Connect to your desktop coding server on the local network.</string>
-	<key>NSCameraUsageDescription</key>
-	<string>Scan the pairing QR code shown on your desktop or terminal.</string>
-	<key>NSBonjourServices</key>
-	<array>
-		<string>_anyprov-code._tcp</string>
-	</array>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>AnyProv Code uses your location when you turn on Location in chat, so the assistant can answer with local context such as nearby places, weather, and time zone.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

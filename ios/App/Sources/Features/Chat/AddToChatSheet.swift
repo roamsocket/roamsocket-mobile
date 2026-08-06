@@ -136,20 +136,23 @@ struct AddToChatSheet: View {
     
     private var skillsSection: some View {
         VStack(spacing: 0) {
-            // Research toggle
+            // Research — multi-query web search + Wikipedia, injected as
+            // live sources for this turn (shown as grey tool status lines).
             skillToggleRow(
                 systemImage: "magnifyingglass",
                 title: "Research",
-                isOn: $viewModel.researchEnabled
+                subtitle: researchSubtitle,
+                isOn: researchToggleBinding
             )
-            
+
             Divider().background(Theme.separator).padding(.leading, 50)
-            
-            // Web search toggle
+
+            // Web search — single SERP for the latest message.
             skillToggleRow(
                 systemImage: "globe",
                 title: "Web search",
-                isOn: $viewModel.webSearchEnabled
+                subtitle: webSearchSubtitle,
+                isOn: webSearchToggleBinding
             )
             
             Divider().background(Theme.separator).padding(.leading, 50)
@@ -193,6 +196,42 @@ struct AddToChatSheet: View {
                     .labelsHidden()
                     .tint(Theme.selection)
                     .disabled(viewModel.isRequestingHealthAccess || !viewModel.healthService.isHealthDataAvailable)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+
+            Divider().background(Theme.separator).padding(.leading, 50)
+
+            // Location — injects a fresh geolocation snapshot into the system
+            // prompt when enabled (permission requested on first enable).
+            HStack(spacing: 14) {
+                Image(systemName: "location.fill")
+                    .font(.system(size: 20))
+                    .foregroundStyle(Theme.accent)
+                    .frame(width: 32, height: 32)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Location")
+                        .font(.system(size: 17))
+                        .foregroundStyle(Theme.textPrimary)
+
+                    Text(locationSubtitle)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textTertiary)
+                        .lineLimit(2)
+                }
+
+                Spacer()
+
+                if viewModel.isRequestingLocationAccess {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+
+                Toggle("", isOn: locationToggleBinding)
+                    .labelsHidden()
+                    .tint(Theme.selection)
+                    .disabled(viewModel.isRequestingLocationAccess || !viewModel.locationService.isLocationServicesEnabled)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
@@ -262,25 +301,82 @@ struct AddToChatSheet: View {
         .buttonStyle(.plain)
     }
     
-    private func skillToggleRow(systemImage: String, title: String, isOn: Binding<Bool>) -> some View {
+    private func skillToggleRow(
+        systemImage: String,
+        title: String,
+        subtitle: String? = nil,
+        isOn: Binding<Bool>
+    ) -> some View {
         HStack(spacing: 14) {
             Image(systemName: systemImage)
                 .font(.system(size: 20))
                 .foregroundStyle(Theme.textSecondary)
                 .frame(width: 32, height: 32)
-            
-            Text(title)
-                .font(.system(size: 17))
-                .foregroundStyle(Theme.textPrimary)
-            
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 17))
+                    .foregroundStyle(Theme.textPrimary)
+
+                if let subtitle, !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textTertiary)
+                        .lineLimit(2)
+                }
+            }
+
             Spacer()
-            
+
             Toggle("", isOn: isOn)
                 .labelsHidden()
                 .tint(Theme.selection)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
+    }
+
+    /// Research is the deep mode; turning it on implies web search.
+    private var researchToggleBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.researchEnabled },
+            set: { newValue in
+                viewModel.researchEnabled = newValue
+                if newValue {
+                    viewModel.webSearchEnabled = true
+                }
+            }
+        )
+    }
+
+    private var webSearchToggleBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.webSearchEnabled || viewModel.researchEnabled },
+            set: { newValue in
+                viewModel.webSearchEnabled = newValue
+                if !newValue {
+                    // Web search is required for research.
+                    viewModel.researchEnabled = false
+                }
+            }
+        )
+    }
+
+    private var researchSubtitle: String {
+        if viewModel.researchEnabled {
+            return "On — multi-query search and Wikipedia for deeper answers."
+        }
+        return "Multi-query web search and Wikipedia for deeper answers."
+    }
+
+    private var webSearchSubtitle: String {
+        if viewModel.researchEnabled {
+            return "On with Research — sources are shared with the model each send."
+        }
+        if viewModel.webSearchEnabled {
+            return "On — live web results are attached on each send."
+        }
+        return "Search the web for the latest message and share sources with the model."
     }
 
     /// Routes the Health switch through async authorization so the first
@@ -308,6 +404,32 @@ struct AddToChatSheet: View {
             return "Apple Health is not available on this device."
         default:
             return "Ask about steps, sleep, workouts, and more."
+        }
+    }
+
+    /// Routes the Location switch through async authorization so the first
+    /// enable presents the system location permission sheet.
+    private var locationToggleBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.locationEnabled },
+            set: { newValue in
+                Task { await viewModel.setLocationEnabled(newValue) }
+            }
+        )
+    }
+
+    private var locationSubtitle: String {
+        if !viewModel.locationService.isLocationServicesEnabled {
+            return "Location Services are off on this device."
+        }
+        if viewModel.locationEnabled {
+            return "Location is on. Your place is shared with the model for this chat."
+        }
+        switch viewModel.locationService.authorizationState {
+        case .denied, .restricted:
+            return "Access denied — enable in Settings → Privacy → Location."
+        default:
+            return "Share where you are for local answers and context."
         }
     }
 }

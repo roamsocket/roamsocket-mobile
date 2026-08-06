@@ -33,7 +33,7 @@ final class SessionViewModel: ObservableObject {
 
     @Published var items: [Item] = []
     /// True while the agent is mid-turn (tools / streaming). Not used for WS connect.
-    @Published var isRunning = false
+    @Published private(set) var isRunning = false
     /// True after `session_created` — safe to send user messages.
     @Published private(set) var isSessionReady = false
     @Published var pendingPermission: PendingPermission?
@@ -43,6 +43,8 @@ final class SessionViewModel: ObservableObject {
     @Published var connectionError: String?
     /// Short status under the env pill (Connecting… / Disconnected / nil when healthy).
     @Published var connectionStatusLine: String? = "Connecting…"
+    /// True when the desktop token is missing/invalid and the user must enter a new pairing code.
+    @Published var needsRePair = false
     /// Text the user typed while the agent is running. Sent when the
     /// current turn finishes.
     @Published var queuedMessage: String = ""
@@ -63,7 +65,6 @@ final class SessionViewModel: ObservableObject {
 
     private let config: SessionConfig
     private let client: ServerClient
-    private let catalog = ModelCatalog()
     private var streamTask: Task<Void, Never>?
     private var portsTask: Task<Void, Never>?
     private var transcriptSaveTask: Task<Void, Never>?
@@ -162,12 +163,20 @@ final class SessionViewModel: ObservableObject {
     func start() {
         guard streamTask == nil else { return }
         isSessionReady = false
-        isRunning = false
+        setAgentRunning(false)
         connectionError = nil
+        needsRePair = false
         connectionStatusLine = "Connecting to desktop…"
         streamTask = Task { await run() }
         // Ports are optional UX — wait until the agent session exists so we
         // don't open extra tunnel sockets during a flaky first connect.
+    }
+
+    /// Updates local `isRunning` and the persisted session flag used by archive.
+    private func setAgentRunning(_ active: Bool) {
+        isRunning = active
+        guard let localId = config.localSessionId else { return }
+        state?.codeSessionStore.setAgentActive(localId, active)
     }
 
     /// User-initiated reconnect after a failed or dropped session socket.
@@ -191,21 +200,28 @@ final class SessionViewModel: ObservableObject {
         }
 
         guard !token.isEmpty else {
-            connectionError = "Not paired with a desktop server."
-            connectionStatusLine = "Not paired"
-            appendNotice("Pair a desktop server in Settings, then try again.")
+            failNeedsRePair(
+                error: "Not paired with a desktop server.",
+                status: "Not paired",
+                notice: "Enter the pairing code shown on the desktop, then try again."
+            )
             return
         }
 
         let candidates = connectionCandidates()
         guard !candidates.isEmpty else {
-            connectionError = "No server address available."
-            connectionStatusLine = "Failed"
-            appendNotice("Re-pair the desktop server in Settings.")
+            failNeedsRePair(
+                error: "No server address available.",
+                status: "Failed",
+                notice: "Enter a new pairing code from the desktop."
+            )
+            state?.markDesktopUnreachable("No server address available.")
             return
         }
 
         connectionError = nil
+        needsRePair = false
+        state?.markDesktopConnecting()
         if config.resuming {
             appendNotice("Reconnecting to session…")
         } else {
@@ -214,7 +230,8 @@ final class SessionViewModel: ObservableObject {
 
         var lastError: Error?
         for (index, endpoint) in candidates.enumerated() {
-            let pathLabel = AppState.connectionPath(for: endpoint).label
+            let path = AppState.connectionPath(for: endpoint)
+            let pathLabel = path.label
             let host = endpoint.baseURL.host ?? endpoint.baseURL.absoluteString
             connectionStatusLine = "Connecting via \(pathLabel) (\(host))…"
             do {
@@ -222,7 +239,9 @@ final class SessionViewModel: ObservableObject {
                 // sending create_session earlier races and yields "Socket is not connected".
                 let stream = try await client.connect(endpoint: endpoint, token: token)
                 // Remember which path worked so future sends / tools use it.
+                // activateEndpointForSession also kicks tunnel regen when we fell back to LAN.
                 state?.activateEndpointForSession(endpoint)
+                needsRePair = false
                 connectionStatusLine = "Connected via \(pathLabel) — starting session…"
                 try await client.send(.createSession(
                     sessionId: sessionID,
@@ -241,10 +260,12 @@ final class SessionViewModel: ObservableObject {
                     connectionError = "Disconnected from desktop."
                     connectionStatusLine = "Disconnected"
                     appendNotice("Connection closed. Tap Retry or leave and reopen the session.")
+                    state?.markDesktopUnreachable("Disconnected from desktop.")
                 } else if connectionError == nil {
                     connectionError = "Could not start session (connection closed)."
                     connectionStatusLine = "Failed"
-                    appendNotice("Desktop closed the connection before the session was ready. Check Local vs Tunnel, or re-pair if the desktop restarted.")
+                    appendNotice("Desktop closed the connection before the session was ready. Check Local vs Tunnel, or enter a new pairing code if the desktop restarted.")
+                    state?.markDesktopUnreachable(connectionError)
                 }
                 lastError = nil
                 break
@@ -252,15 +273,21 @@ final class SessionViewModel: ObservableObject {
                 lastError = error
                 await client.disconnect()
                 let detail = error.localizedDescription
-                let unauthorized = detail.localizedCaseInsensitiveContains("unauthorized")
-                    || detail.localizedCaseInsensitiveContains("re-pair")
                 // Don't burn through fallbacks on a bad token — every path will fail the same way.
-                if unauthorized {
-                    connectionError = detail
-                    connectionStatusLine = "Re-pair required"
-                    appendNotice(detail)
-                    appendNotice("Open Settings → Pair server (desktop tokens reset when the desktop restarts).")
+                if Self.isUnauthorizedError(detail) {
+                    failNeedsRePair(
+                        error: detail,
+                        status: "Re-pair required",
+                        notice: "Desktop tokens reset when the desktop restarts. Enter the new pairing code to continue."
+                    )
+                    state?.markDesktopUnreachable(detail)
                     break
+                }
+                // Dead public tunnel: drop it so candidates/reconnect stop preferring it,
+                // and request a fresh tunnel once LAN connects.
+                if path == .tunnel {
+                    state?.clearTunnelEndpoint(requestRegen: true)
+                    appendNotice("Tunnel failed — falling back to local and refreshing the tunnel.")
                 }
                 let more = index + 1 < candidates.count
                 appendNotice(
@@ -272,11 +299,35 @@ final class SessionViewModel: ObservableObject {
         }
 
         if let lastError, !isSessionReady, connectionError == nil {
-            connectionError = lastError.localizedDescription
-            connectionStatusLine = "Failed"
+            let detail = lastError.localizedDescription
+            if Self.isUnauthorizedError(detail) {
+                failNeedsRePair(
+                    error: detail,
+                    status: "Re-pair required",
+                    notice: "Enter the new pairing code shown on the desktop."
+                )
+            } else {
+                connectionError = detail
+                connectionStatusLine = "Failed"
+            }
+            state?.markDesktopUnreachable(connectionError)
         }
         isSessionReady = false
-        isRunning = false
+        setAgentRunning(false)
+    }
+
+    /// Mark that the session cannot proceed until the user pairs again.
+    private func failNeedsRePair(error: String, status: String, notice: String) {
+        connectionError = error
+        connectionStatusLine = status
+        needsRePair = true
+        appendNotice(notice)
+    }
+
+    static func isUnauthorizedError(_ detail: String) -> Bool {
+        detail.localizedCaseInsensitiveContains("unauthorized")
+            || detail.localizedCaseInsensitiveContains("re-pair")
+            || detail.localizedCaseInsensitiveContains("token expired")
     }
 
     /// Ordered endpoints to try for this session: preference first, then fallbacks.
@@ -449,7 +500,7 @@ final class SessionViewModel: ObservableObject {
             return
         }
 
-        isRunning = true
+        setAgentRunning(true)
         connectionStatusLine = nil
         connectionError = nil
         // Always send the live model selection so mid-session picker changes apply.
@@ -458,7 +509,7 @@ final class SessionViewModel: ObservableObject {
             do {
                 try await client.send(.userMessage(sessionId: sessionID, text: trimmed, model: model))
             } catch {
-                isRunning = false
+                setAgentRunning(false)
                 connectionError = error.localizedDescription
                 connectionStatusLine = "Send failed"
                 appendNotice("Could not send message: \(error.localizedDescription)")
@@ -493,14 +544,14 @@ final class SessionViewModel: ObservableObject {
         let next = pendingOutgoing.removeFirst()
         queuedMessage = pendingOutgoing.last ?? ""
         // Bubble already shown when queued — only transmit.
-        isRunning = true
+        setAgentRunning(true)
         connectionStatusLine = nil
         let model = state?.modelSelectionForSession()
         Task {
             do {
                 try await client.send(.userMessage(sessionId: sessionID, text: next, model: model))
             } catch {
-                isRunning = false
+                setAgentRunning(false)
                 connectionError = error.localizedDescription
                 connectionStatusLine = "Send failed"
                 appendNotice("Could not send message: \(error.localizedDescription)")
@@ -554,7 +605,8 @@ final class SessionViewModel: ObservableObject {
         }
     }
 
-    /// Seed a commit message from the task + diffs, then optionally refine with AI.
+    /// Seed a commit message from the task + diffs, then optionally refine with
+    /// Apple's on-device Foundation Model (same path as chat title generation).
     func prepareCommitMessage(generateWithAI: Bool = true) {
         if commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             commitMessage = fallbackCommitMessage()
@@ -563,57 +615,21 @@ final class SessionViewModel: ObservableObject {
         Task { await generateCommitMessageWithAI() }
     }
 
-    /// Ask the session model for a concise conventional commit message.
+    /// Prefer Apple Intelligence for a concise conventional commit subject;
+    /// keeps the heuristic fallback when the on-device model is unavailable.
     func generateCommitMessageWithAI() async {
         guard !isGeneratingCommitMessage else { return }
         isGeneratingCommitMessage = true
         defer { isGeneratingCommitMessage = false }
 
         let fallback = fallbackCommitMessage()
-        let selection = state?.modelSelectionForSession() ?? config.model
-
-        let diffSummary = diffSummaryForPrompt()
-        let prompt = """
-        Write a single-line git commit message for these changes.
-        Prefer conventional commits style when it fits (e.g. "feat: …", "fix: …").
-        Do not wrap in quotes. No body, only the subject line (max ~72 chars).
-
-        Task: \(config.firstMessage)
-
-        Diff summary:
-        \(diffSummary)
-        """
-
-        do {
-            let baseURL = state?.baseURL(for: selection.provider)
-                ?? selection.baseURL.flatMap(URL.init(string:))
-            let style = state?.apiStyle(for: selection.provider) ?? selection.apiStyle
-            let reply = try await catalog.provider(
-                selection.provider,
-                customBaseURL: baseURL,
-                style: style
-            ).chat(
-                model: selection.model,
-                apiKey: selection.apiKey,
-                messages: [
-                    ProviderChatMessage(role: .system, content: "You write concise git commit messages."),
-                    ProviderChatMessage(role: .user, content: prompt),
-                ],
-                effort: .low
-            )
-            let cleaned = reply
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .split(separator: "\n", omittingEmptySubsequences: true)
-                .first
-                .map(String.init)?
-                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'`"))
-                ?? ""
-            commitMessage = cleaned.isEmpty ? fallback : cleaned
-        } catch {
-            if commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                commitMessage = fallback
-            }
-        }
+        let suggested = await CommitMessageGenerator.suggest(
+            task: config.firstMessage,
+            diffSummary: diffSummaryForPrompt(),
+            fallback: fallback
+        )
+        let trimmed = suggested.trimmingCharacters(in: .whitespacesAndNewlines)
+        commitMessage = trimmed.isEmpty ? fallback : trimmed
     }
 
     private func fallbackCommitMessage() -> String {
@@ -663,7 +679,7 @@ final class SessionViewModel: ObservableObject {
                 portsTask = Task { await pollPortsLoop() }
             }
             if config.resuming {
-                isRunning = false
+                setAgentRunning(false)
                 flushPendingOutgoing()
             } else {
                 // Kick off the first user turn once the repo is cloned.
@@ -677,18 +693,18 @@ final class SessionViewModel: ObservableObject {
                     }
                     transmitUserMessage(first, showBubble: !alreadyShown)
                 } else {
-                    isRunning = false
+                    setAgentRunning(false)
                     flushPendingOutgoing()
                 }
             }
 
         case let .assistantDelta(_, text):
-            isRunning = true
+            setAgentRunning(true)
             connectionStatusLine = nil
             appendAssistant(text)
 
         case let .toolCall(_, callId, tool, summary):
-            isRunning = true
+            setAgentRunning(true)
             items.append(.tool(id: callId, tool: tool, summary: summary, ok: nil, output: nil))
             scheduleTranscriptSave()
 
@@ -707,7 +723,7 @@ final class SessionViewModel: ObservableObject {
             pendingPermission = PendingPermission(id: requestId, tool: tool, summary: summary)
 
         case .sessionDone:
-            isRunning = false
+            setAgentRunning(false)
             flushPendingOutgoing()
             scheduleTranscriptSave()
             // Archived with "keep running": drop the phone socket once the turn ends.
@@ -716,6 +732,7 @@ final class SessionViewModel: ObservableObject {
                row.status == .archived || row.disconnectWhenDone {
                 state?.codeSessionStore.update(localId) {
                     $0.disconnectWhenDone = false
+                    $0.agentActive = false
                     if $0.status != .archived { $0.status = .completed }
                 }
                 persistTranscript()
@@ -752,7 +769,7 @@ final class SessionViewModel: ObservableObject {
                 connectionStatusLine = "Failed"
             }
             if isSessionReady {
-                isRunning = false
+                setAgentRunning(false)
                 isPublishing = false
                 flushPendingOutgoing()
             }
@@ -765,7 +782,11 @@ final class SessionViewModel: ObservableObject {
 
         case let .remoteEndpoint(status, url, _, _):
             if status == "up", let url, !url.isEmpty {
-                _ = state?.applyRemoteEndpoint(urlString: url)
+                // Health-check before switching so a stale auto-push can't yank us
+                // off a working LAN path onto a dead tunnel.
+                Task { @MainActor in
+                    _ = await state?.applyRemoteEndpoint(urlString: url, requireReachable: true)
+                }
             }
 
         case .terminalData, .terminalControl, .fileListResult, .fileReadResult, .fileWriteResult, .portListResult, .tunnelStatus:
@@ -813,6 +834,7 @@ final class SessionViewModel: ObservableObject {
         streamTask = nil
         portsTask?.cancel()
         portsTask = nil
+        setAgentRunning(false)
         Task { await client.disconnect() }
     }
 

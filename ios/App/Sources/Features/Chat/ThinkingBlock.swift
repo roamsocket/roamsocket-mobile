@@ -1,101 +1,142 @@
 import SwiftUI
 import UIKit
 
-/// Collapsed-by-default grey disclosure for model reasoning (`<think>` body).
-/// Used in both chat and coding-session transcripts.
-/// Press-and-hold copies the full thinking text to the clipboard.
+/// Claude-style thinking row: clock on the left, grey summary, chevron on the right.
+/// No card/bubble. Tap opens a **Thought process** sheet with the full reasoning.
+///
+/// When `text` is empty (open tag with no body yet), shows a non-interactive
+/// grey **Thinking...** row so raw markup never leaks.
 struct ThinkingBlock: View {
+    /// Full reasoning body.
     let text: String
-    let expanded: Bool
-    var onToggle: () -> Void
+    /// Optional precomputed one-line label (from Apple Foundation Models).
+    var summary: String? = nil
+    /// When true, also show full reasoning inline under the row
+    /// (Settings → Always expand thinking).
+    var expanded: Bool = false
 
+    @State private var showSheet = false
+    @State private var resolvedSummary: String = ""
+    @State private var isSummarizing = false
     @State private var showCopiedToast = false
 
-    private var firstLine: String {
-        text.split(whereSeparator: \.isNewline).first.map(String.init) ?? text
+    private var hasBody: Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var displaySummary: String {
+        if !hasBody { return "Thinking..." }
+        if !resolvedSummary.isEmpty { return resolvedSummary }
+        if let summary, !summary.isEmpty { return summary }
+        return ThinkingSummaryGenerator.heuristicSummary(from: text)
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(Theme.textTertiary)
-                    .rotationEffect(.degrees(expanded ? 90 : 0))
-                    .frame(width: 14, height: 14)
+        VStack(alignment: .leading, spacing: 8) {
+            summaryRow
 
-                Text("Thinking")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Theme.textTertiary)
-                    .tracking(0.2)
-
-                if !expanded {
-                    Text(firstLine)
-                        .font(.system(size: 13).italic())
-                        .foregroundStyle(Theme.textTertiary.opacity(0.85))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .transition(.opacity.combined(with: .move(edge: .trailing)))
-                }
-
-                Spacer(minLength: 0)
-
-                if showCopiedToast {
-                    Text("Copied")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Theme.accent)
-                        .transition(.opacity.combined(with: .scale(scale: 0.92)))
-                }
-            }
-            .contentShape(Rectangle())
-            .onTapGesture(perform: onToggle)
-            .accessibilityAddTraits(.isButton)
-            .accessibilityLabel(expanded ? "Collapse thinking" : "Expand thinking")
-            .accessibilityHint("Shows the model’s private reasoning. Press and hold to copy.")
-            .accessibilityAction(named: "Copy thinking") { copyThinking() }
-
-            if expanded {
+            if hasBody, expanded {
                 Text(text)
-                    .font(.system(size: 13.5).italic())
+                    .font(.system(size: 14))
                     .foregroundStyle(Theme.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.top, 10)
-                    .transition(
-                        .asymmetric(
-                            insertion: .opacity
-                                .combined(with: .move(edge: .top))
-                                .combined(with: .scale(scale: 0.98, anchor: .top)),
-                            removal: .opacity
-                                .combined(with: .move(edge: .top))
-                        )
-                    )
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Theme.surface.opacity(0.85))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(Theme.separator.opacity(0.55), lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        // Long-press anywhere on the block copies thinking (tap still toggles).
-        .onLongPressGesture(minimumDuration: 0.4, perform: copyThinking)
-        .contextMenu {
-            Button {
-                copyThinking()
-            } label: {
-                Label("Copy thinking", systemImage: "doc.on.doc")
+                    .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .animation(.spring(response: 0.34, dampingFraction: 0.86), value: expanded)
-        .animation(.easeOut(duration: 0.18), value: showCopiedToast)
+        .task(id: summaryTaskID) {
+            await refreshSummaryIfNeeded()
+        }
+        .sheet(isPresented: $showSheet) {
+            ThoughtProcessSheet(text: text) {
+                showSheet = false
+            }
+        }
+    }
+
+    // MARK: - Row
+
+    private var summaryRow: some View {
+        HStack(alignment: .center, spacing: 8) {
+            Image(systemName: "clock")
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(Theme.textTertiary)
+                .frame(width: 16, height: 16)
+
+            Text(displaySummary)
+                .font(.system(size: 14))
+                .foregroundStyle(Theme.textTertiary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if showCopiedToast {
+                Text("Copied")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                    .transition(.opacity)
+            } else if hasBody {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.textTertiary.opacity(0.75))
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard hasBody else { return }
+            showSheet = true
+        }
+        .onLongPressGesture(minimumDuration: 0.4, perform: copyThinking)
+        .contextMenu {
+            if hasBody {
+                Button {
+                    showSheet = true
+                } label: {
+                    Label("View thought process", systemImage: "text.alignleft")
+                }
+                Button {
+                    copyThinking()
+                } label: {
+                    Label("Copy thinking", systemImage: "doc.on.doc")
+                }
+            }
+        }
+        .accessibilityAddTraits(hasBody ? .isButton : [])
+        .accessibilityLabel(hasBody ? "Thought process: \(displaySummary)" : "Thinking")
+        .accessibilityHint(hasBody ? "Shows the model’s private reasoning" : "Model is reasoning")
+        .accessibilityAction(named: "Copy thinking") { copyThinking() }
+    }
+
+    private var summaryTaskID: String {
+        "\(text.hashValue)-\(summary ?? "")"
+    }
+
+    // MARK: - Summary
+
+    private func refreshSummaryIfNeeded() async {
+        // Prefer a parent-provided label (chat persists on-device summaries).
+        if let summary, !summary.isEmpty {
+            resolvedSummary = summary
+            return
+        }
+        guard hasBody else {
+            resolvedSummary = "Thinking..."
+            return
+        }
+        // Instant heuristic, then refine with on-device model when available.
+        if resolvedSummary.isEmpty {
+            resolvedSummary = ThinkingSummaryGenerator.heuristicSummary(from: text)
+        }
+        guard !isSummarizing else { return }
+        isSummarizing = true
+        defer { isSummarizing = false }
+        let refined = await ThinkingSummaryGenerator.summarize(text)
+        guard !Task.isCancelled else { return }
+        if !refined.isEmpty {
+            resolvedSummary = refined
+        }
     }
 
     private func copyThinking() {
@@ -113,5 +154,57 @@ struct ThinkingBlock: View {
                 showCopiedToast = false
             }
         }
+    }
+}
+
+// MARK: - Full thought process sheet (Claude-style)
+
+private struct ThoughtProcessSheet: View {
+    let text: String
+    var onClose: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                Text(text)
+                    .font(.system(size: 17))
+                    .foregroundStyle(Theme.textPrimary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+            }
+            .background(Theme.background.ignoresSafeArea())
+            .navigationTitle("Thought process")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button {
+                        onClose()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(Theme.textTertiary)
+                            .font(.system(size: 22))
+                    }
+                    .accessibilityLabel("Close")
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        #if canImport(UIKit)
+                        UIPasteboard.general.string = text
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        #endif
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .foregroundStyle(Theme.textSecondary)
+                    }
+                    .accessibilityLabel("Copy thought process")
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .presentationBackground(Theme.surface)
     }
 }

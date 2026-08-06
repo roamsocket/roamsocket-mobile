@@ -8,17 +8,20 @@ struct ChatMessage: Identifiable {
     var timestamp: Date
     var isStreaming: Bool
     var thoughtProcess: String?
+    /// One-line label for the collapsed thinking row (on-device summary).
+    var thoughtSummary: String?
+    /// Tool steps (web search, research, …) shown as grey status text.
     var toolCalls: [ToolCall]?
     var attachments: [Attachment]?
     var connectorContext: [ConnectorContext]?
-    
+
     enum Role: String, Equatable {
         case user
         case assistant
         case system
         case tool
     }
-    
+
     init(
         id: UUID = UUID(),
         role: Role,
@@ -26,6 +29,7 @@ struct ChatMessage: Identifiable {
         timestamp: Date = Date(),
         isStreaming: Bool = false,
         thoughtProcess: String? = nil,
+        thoughtSummary: String? = nil,
         toolCalls: [ToolCall]? = nil,
         attachments: [Attachment]? = nil,
         connectorContext: [ConnectorContext]? = nil
@@ -36,33 +40,61 @@ struct ChatMessage: Identifiable {
         self.timestamp = timestamp
         self.isStreaming = isStreaming
         self.thoughtProcess = thoughtProcess
+        self.thoughtSummary = thoughtSummary
         self.toolCalls = toolCalls
         self.attachments = attachments
         self.connectorContext = connectorContext
     }
 }
 
-/// Represents a tool call made by the assistant
-struct ToolCall: Identifiable {
+/// A tool step the assistant ran (or is running) for this turn.
+/// Shown in the UI as grey status text above the reply body.
+struct ToolCall: Identifiable, Equatable {
     let id: UUID
+    /// Machine name: `web_search`, `wikipedia`, `research`, etc.
     let name: String
-    let parameters: [String: Any]
+    /// Human-readable grey line, e.g. `Searched the web for "…"`.
+    var summary: String
+    /// Optional secondary detail (source count, short extract).
+    var detail: String?
     var result: String?
     var status: Status
-    
+
     enum Status: Equatable {
         case pending
         case running
         case completed
         case failed(String)
     }
-    
-    init(id: UUID = UUID(), name: String, parameters: [String: Any], result: String? = nil, status: Status = .pending) {
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        summary: String,
+        detail: String? = nil,
+        result: String? = nil,
+        status: Status = .pending
+    ) {
         self.id = id
         self.name = name
-        self.parameters = parameters
+        self.summary = summary
+        self.detail = detail
         self.result = result
         self.status = status
+    }
+
+    init(from step: WebSearchService.Step) {
+        self.id = step.id
+        self.name = step.name
+        self.summary = step.summary
+        self.detail = step.detail
+        self.result = step.detail
+        switch step.status {
+        case .pending: self.status = .pending
+        case .running: self.status = .running
+        case .completed: self.status = .completed
+        case let .failed(msg): self.status = .failed(msg)
+        }
     }
 }
 

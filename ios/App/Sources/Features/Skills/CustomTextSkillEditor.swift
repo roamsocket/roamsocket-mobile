@@ -61,7 +61,6 @@ struct CustomTextSkillEditor: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
     }
 
     private var isValid: Bool {

@@ -46,7 +46,6 @@ struct EnvironmentConnectionPill: View {
                 .environmentObject(state)
                 .presentationDetents([.medium])
                 .presentationDragIndicator(.visible)
-                .preferredColorScheme(.dark)
         }
     }
 
@@ -91,10 +90,11 @@ struct EnvironmentConnectionPill: View {
     }
 
     private var statusColor: Color {
-        switch path {
-        case .offline: return Theme.textTertiary
-        case .local: return Color.green.opacity(0.9)
-        case .tunnel: return Theme.accent
+        switch state.desktopReachability {
+        case .connected: return Color.green.opacity(0.9)
+        case .connecting: return Color.orange
+        case .unreachable: return Color.red.opacity(0.9)
+        case .unpaired: return Theme.textTertiary
         }
     }
 }
@@ -160,10 +160,9 @@ private struct ConnectionPreferenceSheet: View {
                 return
             }
             applying = true
-            state.setConnectionPreference(pref)
             Task {
-                // Let applyConnectionPreference finish a health pass.
-                try? await Task.sleep(nanoseconds: 200_000_000)
+                // Awaits tunnel open when switching to Always tunnel with no URL yet.
+                await state.setConnectionPreference(pref)
                 applying = false
                 dismiss()
             }
@@ -221,10 +220,11 @@ private struct ConnectionPreferenceSheet: View {
     }
 
     private var statusDot: Color {
-        switch state.serverConnectionPath {
-        case .offline: return Theme.textTertiary
-        case .local: return .green
-        case .tunnel: return Theme.accent
+        switch state.desktopReachability {
+        case .connected: return .green
+        case .connecting: return .orange
+        case .unreachable: return .red
+        case .unpaired: return Theme.textTertiary
         }
     }
 

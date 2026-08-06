@@ -18,7 +18,6 @@ struct SidebarView: View {
     var onShowSettings: () -> Void
 
     @State private var renameTarget: ChatHistoryItem?
-    @State private var renameDraft = ""
     @State private var addToProjectTarget: ChatHistoryItem?
 
     var body: some View {
@@ -33,29 +32,30 @@ struct SidebarView: View {
         .padding(.top, 8)
         .padding(.bottom, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        // Background can extend edge-to-edge; content respects the safe area.
-        .background(Theme.background.ignoresSafeArea(edges: .vertical))
-        .alert("Rename chat", isPresented: Binding(
-            get: { renameTarget != nil },
-            set: { if !$0 { renameTarget = nil } }
-        )) {
-            TextField("Title", text: $renameDraft)
-            Button("Cancel", role: .cancel) {
-                renameTarget = nil
-            }
-            Button("Save") {
-                if let target = renameTarget {
-                    history.renameChat(target.id, title: renameDraft)
+        // Solid fill so chat carets / selection chrome never show through the list.
+        .background {
+            Rectangle()
+                .fill(Theme.background)
+                .ignoresSafeArea(edges: .vertical)
+        }
+        .sheet(item: $renameTarget) { item in
+            RenameChatSheet(
+                initialTitle: item.title,
+                onGenerate: {
+                    await history.suggestTitle(for: item.id)
+                },
+                onSave: { title in
+                    history.renameChat(item.id, title: title)
+                    renameTarget = nil
+                },
+                onCancel: {
+                    renameTarget = nil
                 }
-                renameTarget = nil
-            }
-        } message: {
-            Text("Choose a short name for this chat.")
+            )
         }
         .sheet(item: $addToProjectTarget) { chat in
             AddChatToProjectSheet(history: history, chat: chat)
                 .presentationDetents([.medium])
-                .preferredColorScheme(.dark)
         }
     }
 
@@ -154,6 +154,9 @@ struct SidebarView: View {
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
             .scrollIndicators(.hidden)
+            // Rows use clear backgrounds; pin an opaque fill so nothing from
+            // the chat composer bleeds through the recents list.
+            .background(Theme.background)
         }
     }
 
@@ -196,7 +199,6 @@ struct SidebarView: View {
 
     private func beginRename(_ item: ChatHistoryItem) {
         renameTarget = item
-        renameDraft = item.title
     }
 }
 

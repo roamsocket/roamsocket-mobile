@@ -85,7 +85,6 @@ struct InstalledSkillsView: View {
                 CustomTextSkillEditor()
             }
         }
-        .preferredColorScheme(.dark)
     }
 }
 

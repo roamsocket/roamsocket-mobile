@@ -88,8 +88,9 @@ private struct HighlightingTextView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> UITextView {
         let highlightr = Highlightr()
-        highlightr?.setTheme(to: "atom-one-dark")
+        highlightr?.setTheme(to: Theme.isLight ? "atom-one-light" : "atom-one-dark")
         context.coordinator.highlightr = highlightr
+        context.coordinator.appliedLightTheme = Theme.isLight
 
         let tv = UITextView()
         tv.delegate = context.coordinator
@@ -115,7 +116,16 @@ private struct HighlightingTextView: UIViewRepresentable {
 
     func updateUIView(_ uiView: UITextView, context: Context) {
         uiView.isEditable = isEditable
+        uiView.backgroundColor = UIColor(Theme.field)
+        uiView.tintColor = UIColor(Theme.accent)
         context.coordinator.parent = self
+
+        if context.coordinator.appliedLightTheme != Theme.isLight {
+            context.coordinator.appliedLightTheme = Theme.isLight
+            context.coordinator.highlightr?.setTheme(to: Theme.isLight ? "atom-one-light" : "atom-one-dark")
+            context.coordinator.applyHighlight(to: uiView, text: uiView.text ?? text, force: true)
+        }
+
         // Only push external text changes (load / reset) — not our own edits.
         if !context.coordinator.isEditing && uiView.text != text {
             context.coordinator.applyHighlight(to: uiView, text: text, force: true)
@@ -130,6 +140,7 @@ private struct HighlightingTextView: UIViewRepresentable {
         var highlightr: Highlightr?
         var language: String?
         var isEditing = false
+        var appliedLightTheme = false
         private var highlightWorkItem: DispatchWorkItem?
 
         init(_ parent: HighlightingTextView) {

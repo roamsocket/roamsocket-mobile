@@ -74,7 +74,6 @@ struct SkillMarketplaceView: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
     }
 }
 

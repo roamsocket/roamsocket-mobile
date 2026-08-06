@@ -13,6 +13,10 @@ final class ChatViewModel: ObservableObject {
     @Published var messages: [ChatMessage] = []
     @Published var inputText: String = ""
     @Published var isProcessing: Bool = false
+    /// True while a large/existing chat is being hydrated into the UI.
+    /// Chat chrome should appear immediately with a spinner rather than
+    /// freezing on the previous screen until conversion finishes.
+    @Published var isLoadingChat: Bool = false
     @Published var showAddToChatSheet: Bool = false
     @Published var showConnectorsView: Bool = false
     @Published var showModelPicker: Bool = false
@@ -37,9 +41,10 @@ final class ChatViewModel: ObservableObject {
     }
 
     // Per-chat feature toggles (live in the Add-to-Chat sheet).
-    @Published var webSearchEnabled: Bool = true
+    @Published var webSearchEnabled: Bool = false
     @Published var researchEnabled: Bool = false
     @Published var healthEnabled: Bool = false
+    @Published var locationEnabled: Bool = false
     @Published var connectorDiscoveryEnabled: Bool = true
     @Published var selectedConnectors: Set<String> = []
 
@@ -57,6 +62,14 @@ final class ChatViewModel: ObservableObject {
     /// True while the system Health authorization sheet is up.
     @Published var isRequestingHealthAccess: Bool = false
 
+    /// Device location for this chat (fresh fix → system prompt).
+    let locationService = LocationService()
+    /// True while the system location permission sheet or a fix is in flight.
+    @Published var isRequestingLocationAccess: Bool = false
+
+    /// Client-side web search / research (DuckDuckGo + Wikipedia).
+    private let webSearchService = WebSearchService()
+
     // MARK: - Dependencies
 
     let catalog: ModelCatalog
@@ -70,6 +83,8 @@ final class ChatViewModel: ObservableObject {
 
     private var cancellables = Set<AnyCancellable>()
     private var persistTask: Task<Void, Never>?
+    /// In-flight history hydrate (cancelled when switching chats quickly).
+    private var loadChatTask: Task<Void, Never>?
 
     // MARK: - Tool Access
 
@@ -87,9 +102,15 @@ final class ChatViewModel: ObservableObject {
         // authorised; the actual data fetching lives in the desktop server.
         self.selectedConnectors = ["gmail", "google-calendar", "google-drive"]
         healthService.refreshAuthorizationState()
-        // Bubble nested HealthKitService publishes so the Add-to-Chat sheet
+        locationService.refreshAuthorizationState()
+        // Bubble nested service publishes so the Add-to-Chat sheet
         // refreshes authorization subtitles without a second ObservedObject.
         healthService.objectWillChange
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
+        locationService.objectWillChange
             .sink { [weak self] _ in
                 self?.objectWillChange.send()
             }
@@ -121,6 +142,31 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Location
+
+    /// Turn location context on/off. Enabling triggers the system location
+    /// permission sheet the first time.
+    func setLocationEnabled(_ enabled: Bool) async {
+        if !enabled {
+            locationEnabled = false
+            return
+        }
+        guard locationService.isLocationServicesEnabled else {
+            locationEnabled = false
+            presentError(LocationServiceError.servicesDisabled.errorDescription ?? "Location is unavailable.")
+            return
+        }
+        isRequestingLocationAccess = true
+        defer { isRequestingLocationAccess = false }
+        do {
+            try await locationService.requestAuthorization()
+            locationEnabled = true
+        } catch {
+            locationEnabled = false
+            presentError((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+        }
+    }
+
     // MARK: - Message Handling
 
     /// Send a user message and stream the assistant reply from the
@@ -128,6 +174,9 @@ final class ChatViewModel: ObservableObject {
     func sendMessage() async {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+        // Don't send while a large transcript is still hydrating — the load
+        // would replace `messages` and drop the just-sent turn.
+        guard !isLoadingChat else { return }
         guard let state,
               let model = state.selectedModel
         else {
@@ -137,14 +186,21 @@ final class ChatViewModel: ObservableObject {
             )
             return
         }
-        // Local Metal is chat-only and needs no API key. Ensure MLX engine is bound.
+        // Local Metal is chat-only and needs no API key. Ensure MLX engine is bound
+        // and the selected weights are loaded before we call generate (avoids a
+        // second concurrent multi-GB load racing the selection preload).
         if model.provider == .localMetal {
             LocalMetalBootstrap.ensureRegistered()
             guard LocalMetalRuntime.isReady else {
                 presentError(
-                    "On-device Metal runtime is not ready. Rebuild the app with MLX packages, then download a model in Settings → On-device (Metal).",
+                    "On-device Metal runtime is not ready. Rebuild the app with MLX packages, then download a model in Settings → Manage models.",
                     action: .openProviderSettings
                 )
+                return
+            }
+            await state.ensureSelectedLocalMetalLoaded()
+            if let loadError = state.localMetalLoadError, !loadError.isEmpty {
+                presentError(loadError, action: .openProviderSettings)
                 return
             }
         }
@@ -159,8 +215,10 @@ final class ChatViewModel: ObservableObject {
 
         // Ensure this conversation has a sidebar row before we write.
         if activeChatID == nil {
-            activeChatID = history?.ensureActiveChat()
+            activeChatID = history?.ensureActiveChat(selectedModel: model)
         }
+        // Remember which model this chat is using so reopen restores it.
+        persistSelectedModel(model)
 
         messages.append(ChatMessage(role: .user, content: text))
         schedulePersist()
@@ -168,23 +226,99 @@ final class ChatViewModel: ObservableObject {
         isProcessing = true
         defer { isProcessing = false }
 
-        // Build the multi-turn payload from the in-memory conversation.
-        var turns: [ProviderChatMessage] = messages.map {
-            ProviderChatMessage(role: mapRole($0.role), content: $0.content)
+        // Placeholder assistant bubble so web-search / research steps stream
+        // in as grey status text before the model reply arrives.
+        let assistantID = UUID()
+        messages.append(ChatMessage(
+            id: assistantID,
+            role: .assistant,
+            content: "",
+            isStreaming: true,
+            toolCalls: []
+        ))
+
+        // Build the multi-turn payload from the in-memory conversation
+        // (skip the empty streaming assistant shell).
+        var turns: [ProviderChatMessage] = messages.compactMap { msg in
+            if msg.id == assistantID { return nil }
+            let body = msg.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !body.isEmpty else { return nil }
+            return ProviderChatMessage(role: mapRole(msg.role), content: msg.content)
         }
 
-        // Optional Apple Health context — injected as a system turn so
-        // Anthropic (system field) and OpenAI-compatible hosts both see it.
-        // Snapshot is fresh per send so "how many steps today" stays current.
+        // Optional context snapshots — injected as system turns so Anthropic
+        // (system field) and OpenAI-compatible hosts both see them. Fresh per
+        // send so health stats and location stay current.
+        var systemContext: [String] = []
         if healthEnabled {
             do {
-                let snapshot = try await healthService.snapshotForPrompt()
-                turns.insert(ProviderChatMessage(role: .system, content: snapshot), at: 0)
+                systemContext.append(try await healthService.snapshotForPrompt())
             } catch {
                 // Don't block the chat; surface a soft warning on the reply path.
                 let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 presentError("Health data unavailable: \(msg)")
             }
+        }
+        if locationEnabled {
+            do {
+                systemContext.append(try await locationService.snapshotForPrompt())
+            } catch {
+                let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                presentError("Location unavailable: \(msg)")
+            }
+        }
+
+        // Web search / Research — live SERP + optional Wikipedia, shown as
+        // grey tool lines on the assistant bubble.
+        var toolCalls: [ToolCall] = []
+        if researchEnabled || webSearchEnabled {
+            let mode: WebSearchService.Mode = researchEnabled ? .research : .webSearch
+            do {
+                let bundle = try await webSearchService.search(userMessage: text, mode: mode) {
+                    [weak self] step in
+                    await MainActor.run {
+                        guard let self,
+                              let idx = self.messages.firstIndex(where: { $0.id == assistantID })
+                        else { return }
+                        var calls = self.messages[idx].toolCalls ?? []
+                        if let existing = calls.firstIndex(where: { $0.id == step.id }) {
+                            calls[existing] = ToolCall(from: step)
+                        } else {
+                            calls.append(ToolCall(from: step))
+                        }
+                        self.messages[idx].toolCalls = calls
+                    }
+                }
+                toolCalls = bundle.steps.map { ToolCall(from: $0) }
+                if let idx = messages.firstIndex(where: { $0.id == assistantID }) {
+                    messages[idx].toolCalls = toolCalls
+                }
+                if !bundle.promptBlock.isEmpty {
+                    systemContext.append(bundle.promptBlock)
+                }
+            } catch {
+                let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                let failed = ToolCall(
+                    name: researchEnabled ? "research" : "web_search",
+                    summary: researchEnabled
+                        ? "Research unavailable"
+                        : "Web search unavailable",
+                    detail: msg,
+                    status: .failed(msg)
+                )
+                toolCalls = [failed]
+                if let idx = messages.firstIndex(where: { $0.id == assistantID }) {
+                    messages[idx].toolCalls = toolCalls
+                }
+                presentError(msg)
+            }
+        }
+
+        if !systemContext.isEmpty {
+            turns.insert(
+                ProviderChatMessage(role: .system, content: systemContext.joined(separator: "\n\n")),
+                at: 0
+            )
         }
 
         do {
@@ -192,6 +326,11 @@ final class ChatViewModel: ObservableObject {
             // model/effort switch in the picker is always honored (not a stale capture).
             guard let liveModel = state.selectedModel else {
                 presentError("Select a model in Settings first.", action: .openProviderSettings)
+                finishAssistant(
+                    assistantID,
+                    content: "Select a model in Settings first.",
+                    toolCalls: toolCalls
+                )
                 return
             }
             let liveKey = state.resolvedAPIKey(for: liveModel.provider)
@@ -199,6 +338,11 @@ final class ChatViewModel: ObservableObject {
                 presentError(
                     "Add an API key for \(liveModel.provider.displayName) in Settings.",
                     action: .openProviderSettings
+                )
+                finishAssistant(
+                    assistantID,
+                    content: "Add an API key for \(liveModel.provider.displayName) in Settings.",
+                    toolCalls: toolCalls
                 )
                 return
             }
@@ -210,6 +354,11 @@ final class ChatViewModel: ObservableObject {
                 presentError(
                     "Custom provider is missing a base URL. Edit it in Settings.",
                     action: .openProviderSettings
+                )
+                finishAssistant(
+                    assistantID,
+                    content: "Custom provider is missing a base URL. Edit it in Settings.",
+                    toolCalls: toolCalls
                 )
                 return
             }
@@ -224,12 +373,37 @@ final class ChatViewModel: ObservableObject {
                 effort: state.effort
             )
             let parsed = ThinkingExtractor.extract(from: reply)
-            messages.append(ChatMessage(
-                role: .assistant,
-                content: parsed.content,
-                thoughtProcess: parsed.thinking
-            ))
+            // Persist reasoning only when there is a body; empty open tags are a live UI concern.
+            let thought = parsed.thinking.flatMap { $0.isEmpty ? nil : $0 }
+            // Instant heuristic label; refine with on-device model in the background.
+            let heuristicSummary = thought.map { ThinkingSummaryGenerator.heuristicSummary(from: $0) }
+            if let idx = messages.firstIndex(where: { $0.id == assistantID }) {
+                messages[idx].content = parsed.content
+                messages[idx].thoughtProcess = thought
+                messages[idx].thoughtSummary = heuristicSummary
+                messages[idx].toolCalls = toolCalls.isEmpty ? nil : toolCalls
+                messages[idx].isStreaming = false
+            } else {
+                messages.append(ChatMessage(
+                    id: assistantID,
+                    role: .assistant,
+                    content: parsed.content,
+                    thoughtProcess: thought,
+                    thoughtSummary: heuristicSummary,
+                    toolCalls: toolCalls.isEmpty ? nil : toolCalls
+                ))
+            }
             schedulePersist()
+            if let thought {
+                Task { @MainActor [weak self] in
+                    let refined = await ThinkingSummaryGenerator.summarize(thought)
+                    guard let self,
+                          let idx = self.messages.firstIndex(where: { $0.id == assistantID })
+                    else { return }
+                    self.messages[idx].thoughtSummary = refined
+                    self.schedulePersist()
+                }
+            }
             // Capture long outputs / code blocks as an Artifact (≥ 10 lines OR contains ```).
             // Prefer visible answer content so artifacts aren't polluted with reasoning.
             state.artifactStore.maybeSave(chatId: activeChatID, content: parsed.content)
@@ -237,44 +411,199 @@ final class ChatViewModel: ObservableObject {
             let msg = (error as? ProviderError)?.errorDescription ?? error.localizedDescription
             presentError(msg)
             let name = state.selectedModel?.provider.displayName ?? model.provider.displayName
-            messages.append(ChatMessage(
-                role: .assistant,
-                content: "I couldn't reach \(name): \(msg)"
-            ))
+            if let idx = messages.firstIndex(where: { $0.id == assistantID }) {
+                messages[idx].content = "I couldn't reach \(name): \(msg)"
+                messages[idx].toolCalls = toolCalls.isEmpty ? nil : toolCalls
+                messages[idx].isStreaming = false
+            } else {
+                messages.append(ChatMessage(
+                    id: assistantID,
+                    role: .assistant,
+                    content: "I couldn't reach \(name): \(msg)",
+                    toolCalls: toolCalls.isEmpty ? nil : toolCalls
+                ))
+            }
             schedulePersist()
         }
     }
 
+    /// Finalize the streaming assistant bubble with content (and optional tools).
+    private func finishAssistant(_ id: UUID, content: String, toolCalls: [ToolCall]) {
+        if let idx = messages.firstIndex(where: { $0.id == id }) {
+            messages[idx].content = content
+            messages[idx].toolCalls = toolCalls.isEmpty ? nil : toolCalls
+            messages[idx].isStreaming = false
+        } else {
+            messages.append(ChatMessage(
+                id: id,
+                role: .assistant,
+                content: content,
+                toolCalls: toolCalls.isEmpty ? nil : toolCalls
+            ))
+        }
+        schedulePersist()
+    }
+
     // MARK: - History resume / persist
 
+    /// Switch to a global recent chat. Updates chrome immediately, then
+    /// hydrates messages after a frame so large transcripts don't block
+    /// navigation (sidebar close + chat title + spinner first).
     func loadChat(id: UUID, from store: ChatHistoryStore) {
+        loadChatTask?.cancel()
+        persistTask?.cancel()
+
         history = store
         activeChatID = id
         activeProjectID = nil
-        messages = store.messages(for: id)
-        store.openChat(store.recents.first(where: { $0.id == id }) ?? ChatHistoryItem(
+        currentProject = nil
+        inputText = ""
+        clearError()
+
+        // Prefer the store row (fresh messages) over a stale sidebar snapshot.
+        let item = store.recents.first(where: { $0.id == id }) ?? ChatHistoryItem(
             id: id,
             title: "Chat",
             lastMessageAt: Date(),
             messages: []
-        ))
+        )
+        // Mark active + reorder without waiting for message conversion.
+        store.openChat(item)
+        restoreSelectedModel(store.selectedModel(for: id) ?? item.selectedModel)
+
+        let persistedCount = item.messages.count
+        // Small chats can hydrate inline; larger ones show a spinner so
+        // the main thread can paint chat chrome first.
+        if persistedCount == 0 {
+            messages = []
+            isLoadingChat = false
+            return
+        }
+        if persistedCount <= 12 {
+            messages = store.messages(for: id)
+            isLoadingChat = false
+            return
+        }
+
+        messages = []
+        isLoadingChat = true
+        let chatID = id
+        loadChatTask = Task { @MainActor [weak self] in
+            // Yield so SwiftUI can close the sidebar and show the spinner.
+            await Task.yield()
+            // A second yield + tiny sleep lets the first layout commit on
+            // busy devices before we allocate/map a large transcript.
+            try? await Task.sleep(nanoseconds: 16_000_000)
+            guard let self, !Task.isCancelled else { return }
+            guard self.activeChatID == chatID else { return }
+
+            let loaded = store.messages(for: chatID)
+            guard !Task.isCancelled, self.activeChatID == chatID else { return }
+            self.messages = loaded
+            self.isLoadingChat = false
+        }
     }
 
+    /// Switch to a project-scoped chat with the same non-blocking hydrate path.
     func loadProjectChat(project: ProjectItem, chat: ProjectChatItem, from store: ChatHistoryStore) {
+        loadChatTask?.cancel()
+        persistTask?.cancel()
+
         history = store
         activeChatID = chat.id
         activeProjectID = project.id
         currentProject = project.name
-        messages = store.projectChatMessages(projectID: project.id, chatID: chat.id)
+        inputText = ""
+        clearError()
+
+        // Prefer the store snapshot over the navigation value (which can be stale).
+        let saved = store.projectChatSelectedModel(projectID: project.id, chatID: chat.id)
+            ?? chat.selectedModel
+        restoreSelectedModel(saved)
+
+        let persistedCount = store.projectChats[project.id]?
+            .first(where: { $0.id == chat.id })?
+            .messages.count
+            ?? chat.messages.count
+
+        if persistedCount == 0 {
+            messages = []
+            isLoadingChat = false
+            return
+        }
+        if persistedCount <= 12 {
+            messages = store.projectChatMessages(projectID: project.id, chatID: chat.id)
+            isLoadingChat = false
+            return
+        }
+
+        messages = []
+        isLoadingChat = true
+        let projectID = project.id
+        let chatID = chat.id
+        loadChatTask = Task { @MainActor [weak self] in
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 16_000_000)
+            guard let self, !Task.isCancelled else { return }
+            guard self.activeChatID == chatID, self.activeProjectID == projectID else { return }
+
+            let loaded = store.projectChatMessages(projectID: projectID, chatID: chatID)
+            guard !Task.isCancelled,
+                  self.activeChatID == chatID,
+                  self.activeProjectID == projectID
+            else { return }
+            self.messages = loaded
+            self.isLoadingChat = false
+        }
     }
 
     func beginNewChat(in store: ChatHistoryStore) {
+        loadChatTask?.cancel()
+        persistTask?.cancel()
         history = store
-        let item = store.startNewChat()
+        let currentModel = state?.selectedModel
+        let item = store.startNewChat(selectedModel: currentModel)
         activeChatID = item.id
         activeProjectID = nil
+        currentProject = nil
         messages = []
+        isLoadingChat = false
+        inputText = ""
         clearError()
+    }
+
+    /// Write the current composer model onto the active chat history row.
+    /// Only non-nil models are stored so a temporary catalog clear cannot
+    /// wipe a chat's remembered selection.
+    func persistSelectedModel(_ model: AIModel? = nil) {
+        guard let history else { return }
+        guard let model = model ?? state?.selectedModel else { return }
+        if let projectID = activeProjectID, let chatID = activeChatID {
+            history.saveProjectChatSelectedModel(model, projectID: projectID, chatID: chatID)
+        } else if let chatID = activeChatID {
+            history.saveSelectedModel(model, for: chatID)
+        }
+    }
+
+    /// Apply a chat's saved model to the global composer selection.
+    /// Prefers a live catalog entry (fresher display name / listing) when present.
+    private func restoreSelectedModel(_ saved: AIModel?) {
+        guard let saved, let state else { return }
+        if let live = state.allModels.first(where: { $0.id == saved.id }) {
+            if state.selectedModel?.id != live.id {
+                state.selectedModel = live
+            }
+            return
+        }
+        // Do not re-select a deleted / unavailable on-device model.
+        if saved.provider == .localMetal {
+            return
+        }
+        if state.selectedModel?.id != saved.id {
+            // Cloud model may have left the catalog temporarily; restore the snapshot
+            // so the pill and next send target the same provider/id.
+            state.selectedModel = saved
+        }
     }
 
     private func schedulePersist() {
@@ -288,12 +617,14 @@ final class ChatViewModel: ObservableObject {
 
     func persistNow() {
         guard let history else { return }
+        // Messages only — model is persisted explicitly on pick / send so a
+        // catalog refresh cannot overwrite a chat's saved selection.
         if let projectID = activeProjectID, let chatID = activeChatID {
             history.saveProjectChatMessages(messages, projectID: projectID, chatID: chatID)
         } else if let chatID = activeChatID {
             history.saveMessages(messages, for: chatID)
         } else if !messages.isEmpty {
-            let id = history.ensureActiveChat()
+            let id = history.ensureActiveChat(selectedModel: state?.selectedModel)
             activeChatID = id
             history.saveMessages(messages, for: id)
         }

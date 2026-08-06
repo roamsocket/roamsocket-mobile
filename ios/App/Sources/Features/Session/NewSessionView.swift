@@ -277,7 +277,8 @@ struct NewSessionView: View {
     }
 
     private var modelPillTitle: String {
-        guard let name = state.selectedModel?.displayName else { return "" }
+        guard let model = state.selectedModel else { return "" }
+        let name = state.displayName(for: model)
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         for effort in Effort.allCases.reversed() {
             let suffix = " " + effort.displayName

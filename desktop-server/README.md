@@ -24,6 +24,10 @@ On start it prints a **large pairing code** and an **ASCII QR** (JSON payload
 `{"host","code"}`). Scan it in the iOS app under *Pair server → Scan desktop QR*,
 or type the 6-digit code after picking a nearby server.
 
+When a public tunnel comes up (auto-tunnel after pair, or always-on remote
+access), the terminal prints the **tunnel URL** and re-prints the QR so
+`host` is the HTTPS tunnel address instead of the LAN URL.
+
 Headless TTY sessions also open a **CLI settings** prompt (`settings>`) for
 LAN discovery, auto-tunnel, and code display. Type `h` for help, `q` to leave
 the menu (server keeps running).

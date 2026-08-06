@@ -70,7 +70,6 @@ struct ConnectorManagerView: View {
                 AddConnectorView()
             }
         }
-        .preferredColorScheme(.dark)
     }
 }
 

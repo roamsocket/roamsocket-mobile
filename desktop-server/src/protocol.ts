@@ -313,6 +313,18 @@ export const TunnelListMsg = z.object({
 });
 export type TunnelListMsg = z.infer<typeof TunnelListMsg>;
 
+/**
+ * Ask the desktop to (re)publish the coding-server public tunnel URL.
+ * Used when the phone fell back to LAN after a dead tunnel and wants a
+ * fresh Cloudflare/ngrok/… URL without re-pairing.
+ */
+export const RemoteEndpointRequestMsg = z.object({
+  type: z.literal("remote_endpoint_request"),
+  /** When true, tear down any existing access tunnel and start a new one. */
+  force: z.boolean().optional().default(false),
+});
+export type RemoteEndpointRequestMsg = z.infer<typeof RemoteEndpointRequestMsg>;
+
 export const ClientMessage = z.discriminatedUnion("type", [
   CreateSessionMsg,
   UserMessageMsg,
@@ -337,6 +349,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
   TunnelStartMsg,
   TunnelStopMsg,
   TunnelListMsg,
+  RemoteEndpointRequestMsg,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 

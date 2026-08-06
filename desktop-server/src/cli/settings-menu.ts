@@ -37,6 +37,7 @@ export async function runSettingsMenu(ctx: CliSettingsContext): Promise<void> {
   Config file: ${desktopPrefsPath()}
   Server: ${info.name}  http://${info.host}:${info.port}
   Pairing code: ${ctx.getPairingCode()}
+  Pair URL: ${ctx.getPairHost()}
 
   [1]  LAN discovery (Bonjour) ........ ${yn(prefs.allowLanDiscovery)}
   [2]  Auto tunnel after pair ......... ${yn(prefs.autoTunnelOnPair)}

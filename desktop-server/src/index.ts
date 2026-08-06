@@ -45,7 +45,11 @@ import {
   resolveAdvertise,
   resolveAutoTunnel,
 } from "./desktop-config.js";
-import { pairPayload, printPairingBanner } from "./cli/banner.js";
+import {
+  printPairingBanner,
+  printTunnelReadyBanner,
+  resolvePairHost,
+} from "./cli/banner.js";
 import { runSettingsMenu } from "./cli/settings-menu.js";
 
 export interface StartServerOptions {
@@ -185,13 +189,13 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
     const autoTunnel = resolveAutoTunnel(livePrefs, opts.autoTunnel);
     // Kick a public tunnel so the phone can leave Wi‑Fi without re-pairing.
     if (autoTunnel && boundPort > 0) {
-      void ensureAccessTunnel({ port: boundPort, provider: livePrefs.tunnelProvider }).then((info) => {
-        if (info.url) {
-          console.log(`[apc] access tunnel ready after pair: ${info.url} (${info.provider})`);
-        } else if (info.status === "error") {
-          console.warn(`[apc] access tunnel failed after pair: ${info.error ?? info.status}`);
-        }
-      });
+      void ensureAccessTunnel({ port: boundPort, provider: livePrefs.tunnelProvider }).then((info) =>
+        announceAccessTunnel(info, {
+          silent,
+          pairingCode: () => pairing.pairingCode,
+          context: "after pair",
+        }),
+      );
     }
     if (livePrefs.rotateCodeAfterPair) {
       const next = pairing.rotateCode();
@@ -223,7 +227,10 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
     {
       const live = loadDesktopPrefs();
       if (resolveAutoTunnel(live, opts.autoTunnel) && boundPort > 0) {
-        void pushRemoteEndpoint(emit, boundPort, live.tunnelProvider);
+        void pushRemoteEndpoint(emit, boundPort, live.tunnelProvider, false, {
+          silent,
+          pairingCode: () => pairing.pairingCode,
+        });
       }
     }
 
@@ -444,6 +451,29 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
             });
             break;
           }
+          case "remote_endpoint_request": {
+            // Phone fell back to LAN after a dead tunnel — (re)publish a public URL.
+            if (boundPort <= 0) {
+              emit({
+                type: "remote_endpoint",
+                status: "error",
+                error: "Server is not listening yet.",
+              });
+              break;
+            }
+            const live = loadDesktopPrefs();
+            void pushRemoteEndpoint(
+              emit,
+              boundPort,
+              live.tunnelProvider,
+              Boolean(msg.force),
+              {
+                silent,
+                pairingCode: () => pairing.pairingCode,
+              },
+            );
+            break;
+          }
         }
       } catch (err) {
         emit({ type: "error", message: (err as Error).message });
@@ -482,6 +512,8 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
   });
 
   if (!silent) {
+    const existingTunnel =
+      currentAccessTunnel()?.url || desktopPrefs.remoteAccessUrl.trim() || null;
     if (desktopPrefs.showPairingCodePopup) {
       await printPairingBanner({
         serverName,
@@ -492,6 +524,7 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
         mock: useMock,
         advertise: shouldAdvertise,
         autoTunnel: shouldAutoTunnel,
+        publicUrl: existingTunnel,
       });
     } else {
       const lan = lanIPv4Addresses();
@@ -499,18 +532,36 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
       if (lan.length > 0) {
         console.log(`LAN: ${lan.map((ip) => `http://${ip}:${boundPort}`).join(", ")}`);
       }
+      if (existingTunnel) {
+        console.log(`Tunnel URL: ${existingTunnel}`);
+      }
       console.log(`Pairing code: ${pairingCode}${useMock ? "  (MOCK agent)" : ""}`);
     }
     if (openCliSettings) {
       console.log("CLI settings: type a command at the prompt (h = help, q = leave menu).\n");
-      const payload = pairPayload(host, boundPort, pairing.pairingCode);
       void runSettingsMenu({
         getPairingCode: () => pairing.pairingCode,
-        getPairHost: () => payload.host,
+        getPairHost: () =>
+          resolvePairHost(host, boundPort, currentAccessTunnel()?.url ?? null),
         rotateCode: () => pairing.rotateCode(),
         getServerInfo: () => ({ host, port: boundPort, name: serverName }),
       });
     }
+  }
+
+  // Always-on remote tunnel (Electron remote access / prefs) — start at boot
+  // and print the public URL + QR when the tunnel finishes loading.
+  if (desktopPrefs.remoteAccessEnabled && boundPort > 0) {
+    if (!silent) {
+      console.log("[apc] remote access enabled — starting public tunnel…");
+    }
+    void ensureAccessTunnel({ port: boundPort, provider: tunnelProvider }).then((info) =>
+      announceAccessTunnel(info, {
+        silent,
+        pairingCode: () => pairing.pairingCode,
+        context: "remote access",
+      }),
+    );
   }
 
   opts.onReady?.({ port: boundPort, host, pairingCode });
@@ -531,14 +582,50 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
   };
 }
 
+/**
+ * Terminal + log announcement when the coding-server access tunnel is up.
+ * Non-silent mode reprints the pairing QR with the public HTTPS host so
+ * phones scan the tunnel URL instead of a LAN address.
+ */
+async function announceAccessTunnel(
+  info: { url?: string; provider: string; status: string; error?: string },
+  opts: {
+    silent: boolean;
+    pairingCode: () => string;
+    context?: string;
+  },
+): Promise<void> {
+  const ctx = opts.context ? ` ${opts.context}` : "";
+  if (info.url && (info.status === "up" || info.status === "starting")) {
+    if (!opts.silent) {
+      await printTunnelReadyBanner({
+        url: info.url,
+        provider: info.provider,
+        pairingCode: opts.pairingCode(),
+      });
+    } else {
+      console.log(`[apc] access tunnel ready${ctx}: ${info.url} (${info.provider})`);
+    }
+    return;
+  }
+  if (info.status === "error") {
+    console.warn(`[apc] access tunnel failed${ctx}: ${info.error ?? info.status}`);
+  }
+}
+
 /** Start the coding-server tunnel and push status frames to one WebSocket. */
 async function pushRemoteEndpoint(
   emit: (msg: ServerMessage) => void,
   port: number,
   provider: "auto" | "ngrok" | "cloudflare" | "localtunnel" | "bore" = "auto",
+  force = false,
+  announce?: {
+    silent: boolean;
+    pairingCode: () => string;
+  },
 ): Promise<void> {
   const existing = currentAccessTunnel();
-  if (existing?.url && existing.status === "up") {
+  if (!force && existing?.url && existing.status === "up") {
     emit({
       type: "remote_endpoint",
       status: "up",
@@ -548,10 +635,14 @@ async function pushRemoteEndpoint(
     return;
   }
 
-  emit({ type: "remote_endpoint", status: "starting", provider: existing?.provider ?? provider });
+  emit({
+    type: "remote_endpoint",
+    status: "starting",
+    provider: existing?.provider ?? provider,
+  });
 
   try {
-    const info = await ensureAccessTunnel({ port, provider });
+    const info = await ensureAccessTunnel({ port, provider, force });
     if (info.url && (info.status === "up" || info.status === "starting")) {
       emit({
         type: "remote_endpoint",
@@ -559,7 +650,17 @@ async function pushRemoteEndpoint(
         url: info.url,
         provider: info.provider,
       });
-      console.log(`[apc] remote_endpoint → ${info.url} (${info.provider})`);
+      if (announce) {
+        await announceAccessTunnel(info, {
+          silent: announce.silent,
+          pairingCode: announce.pairingCode,
+          context: force ? "remote_endpoint [forced]" : "remote_endpoint",
+        });
+      } else {
+        console.log(
+          `[apc] remote_endpoint → ${info.url} (${info.provider})${force ? " [forced]" : ""}`,
+        );
+      }
     } else {
       emit({
         type: "remote_endpoint",

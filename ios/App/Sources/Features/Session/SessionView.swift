@@ -18,6 +18,10 @@ struct SessionView: View {
     @State private var showModelPicker = false
     @State private var showPermissionSheet = false
     @State private var showProviderSettings = false
+    /// Presented when the desktop token is invalid / missing so the user can enter a new code.
+    @State private var showServerPairing = false
+    /// Snapshot of `serverToken` when the pairing sheet opens — used to detect a successful re-pair.
+    @State private var tokenWhenPairingPresented: String?
     @State private var detailTool: SessionViewModel.Item?
     @State private var browserBusy = false
 
@@ -164,7 +168,6 @@ struct SessionView: View {
                     }
             }
             .environmentObject(state)
-            .preferredColorScheme(.dark)
             .presentationDetents([.large])
         }
         .sheet(isPresented: $showFiles) {
@@ -179,7 +182,6 @@ struct SessionView: View {
                     }
             }
             .environmentObject(state)
-            .preferredColorScheme(.dark)
             .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $showPorts) {
@@ -194,7 +196,6 @@ struct SessionView: View {
                     }
             }
             .environmentObject(state)
-            .preferredColorScheme(.dark)
             .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $showGitSheet) { gitSheet }
@@ -212,6 +213,20 @@ struct SessionView: View {
         .sheet(isPresented: $showPermissionSheet) {
             PermissionModeSheet(selection: permissionBinding)
         }
+        .sheet(isPresented: $showServerPairing, onDismiss: {
+            // Only reconnect when pairing produced a new token — dismissing
+            // without pairing must not re-open the sheet in a loop.
+            let newToken = state.serverToken
+            guard let newToken, !newToken.isEmpty, newToken != tokenWhenPairingPresented else {
+                return
+            }
+            DispatchQueue.main.async {
+                model.retryConnection()
+            }
+        }) {
+            NavigationStack { ServerPairingView() }
+                .environmentObject(state)
+        }
         .sheet(item: $detailTool) { item in
             if case let .tool(_, tool, summary, ok, output) = item {
                 ToolDetailSheet(tool: tool, summary: summary, ok: ok, output: output)
@@ -220,11 +235,20 @@ struct SessionView: View {
         .onChange(of: model.prURL) { _, url in
             if let url { openURL(url) }
         }
+        .onChange(of: model.needsRePair) { _, needs in
+            // Auto-prompt for a new pairing code when the token is bad/missing.
+            if needs { presentPairingSheet() }
+        }
         .onAppear {
             model.state = state
             model.start()
         }
         .onDisappear { model.stop() }
+    }
+
+    private func presentPairingSheet() {
+        tokenWhenPairingPresented = state.serverToken
+        showServerPairing = true
     }
 
     private var transcript: some View {
@@ -235,9 +259,34 @@ struct SessionView: View {
                         row(for: item).id(item.id)
                     }
                     if let error = model.connectionError {
-                        Text(error)
-                            .font(.system(size: 14))
-                            .foregroundStyle(.red)
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(error)
+                                .font(.system(size: 14))
+                                .foregroundStyle(.red)
+                            if model.needsRePair {
+                                Button {
+                                    presentPairingSheet()
+                                } label: {
+                                    Label("Enter pairing code", systemImage: "qrcode.viewfinder")
+                                        .font(.system(size: 14, weight: .semibold))
+                                        .foregroundStyle(Theme.background)
+                                        .padding(.horizontal, 14)
+                                        .padding(.vertical, 8)
+                                        .background(Theme.accent, in: Capsule())
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityHint("Open pairing to enter the code from the desktop")
+                            } else {
+                                Button {
+                                    model.retryConnection()
+                                } label: {
+                                    Label("Retry connection", systemImage: "arrow.clockwise")
+                                        .font(.system(size: 14, weight: .semibold))
+                                        .foregroundStyle(Theme.accent)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
                     }
                 }
                 .padding(16)
@@ -347,6 +396,7 @@ struct SessionView: View {
 
     private var composerPrompt: String {
         if !model.isSessionReady {
+            if model.needsRePair { return "Enter pairing code to continue…" }
             return model.connectionError != nil ? "Not connected…" : "Connecting to desktop…"
         }
         if model.isRunning {
@@ -357,7 +407,21 @@ struct SessionView: View {
 
     private var trailingSendButton: some View {
         Group {
-            if model.connectionError != nil {
+            if model.needsRePair {
+                // Same slot as Send — open pairing for a fresh desktop code.
+                Button {
+                    presentPairingSheet()
+                } label: {
+                    Image(systemName: "link.badge.plus")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 40, height: 40)
+                        .background(Theme.accent, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Enter pairing code")
+                .help(model.connectionError ?? "Re-pair required")
+            } else if model.connectionError != nil {
                 // Same slot as Send — red alert; tap retries the desktop link.
                 Button {
                     model.retryConnection()
@@ -575,7 +639,8 @@ struct SessionView: View {
     }
 
     private var modelPillTitle: String {
-        if let name = state.selectedModel?.displayName {
+        if let model = state.selectedModel {
+            let name = state.displayName(for: model)
             return Self.stripEffort(from: name)
         }
         return "Select a model"
@@ -657,7 +722,6 @@ struct SessionView: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
         .presentationDetents([.medium, .large])
     }
 
@@ -735,12 +799,6 @@ private struct SessionAssistantMessage: View {
     let text: String
     let alwaysExpandThinking: Bool
 
-    @State private var thinkingExpandedOverride: Bool?
-
-    private var thinkingExpanded: Bool {
-        thinkingExpandedOverride ?? alwaysExpandThinking
-    }
-
     private var resolved: (thinking: String?, content: String) {
         let parsed = ThinkingExtractor.extract(from: text)
         return (parsed.thinking, parsed.content)
@@ -749,15 +807,11 @@ private struct SessionAssistantMessage: View {
     var body: some View {
         let resolved = resolved
         return VStack(alignment: .leading, spacing: 12) {
-            if let thinking = resolved.thinking, !thinking.isEmpty {
+            // Non-nil (including empty body while streaming `<think>`) → clock + grey summary.
+            if let thinking = resolved.thinking {
                 ThinkingBlock(
                     text: thinking,
-                    expanded: thinkingExpanded,
-                    onToggle: {
-                        withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
-                            thinkingExpandedOverride = !thinkingExpanded
-                        }
-                    }
+                    expanded: alwaysExpandThinking
                 )
             }
 
@@ -939,7 +993,6 @@ private struct ToolDetailSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
-        .preferredColorScheme(.dark)
     }
 
     private var toolLabel: String {

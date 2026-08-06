@@ -62,7 +62,6 @@ struct PairQRScannerView: View {
                 Text(errorMessage ?? "")
             }
         }
-        .preferredColorScheme(.dark)
     }
 
     private func handleRaw(_ raw: String) {

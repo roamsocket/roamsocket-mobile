@@ -53,7 +53,6 @@ struct SessionToolsView: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
         .presentationDetents(tab == .terminal ? [.large] : [.medium, .large])
         .presentationDragIndicator(.visible)
     }
@@ -730,7 +729,6 @@ struct FileViewerSheet: View {
             }
             .interactiveDismissDisabled(isDirty && !saving)
         }
-        .preferredColorScheme(.dark)
         .presentationDetents([.large])
         .task { await load() }
         .sheet(isPresented: $showMarkdownPreview) {

@@ -2,8 +2,8 @@ import SwiftUI
 import AnyProvCore
 
 /// Main chat view:
-///  * On a fresh / empty chat, shows a centered greeting like
-///    "Clocking in for the evening shift." with a centered asterism glyph.
+///  * On a fresh / empty chat, shows a centered time-based greeting with a
+///    lightbulb icon.
 ///  * Otherwise renders a vertically scrolling message list.
 ///  * The bottom composer holds a `+` button, a model pill, a mic, and a
 ///    gradient send button.
@@ -41,24 +41,46 @@ struct ChatView: View {
         ZStack {
             Theme.background.ignoresSafeArea()
 
-            Group {
-                if isEffectivelyEmpty {
-                    emptyHome
-                } else {
-                    messageList
+            // Content + composer in a VStack. `safeAreaInset` alone was sometimes
+            // zero-height after returning from Code / other destinations, which
+            // hid the input; keeping the composer as a real sibling fixes that.
+            VStack(spacing: 0) {
+                Group {
+                    if viewModel.isLoadingChat {
+                        chatLoadingState
+                    } else if isEffectivelyEmpty {
+                        emptyHome
+                    } else {
+                        messageList
+                    }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .layoutPriority(0)
+
+                composer
+                    .layoutPriority(1)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        // Pin the composer to the bottom safe area so it stays above the home
-        // indicator *and* the keyboard. Putting it in the main VStack let
-        // emptyHome's expanding frame crush / cover it when the keyboard opens.
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            composer
+        .onAppear {
+            bindAndLoad()
         }
-        .onAppear { bindAndLoad() }
-        .onChange(of: resumeToken) { _ in bindAndLoad() }
-        .onDisappear { viewModel.persistNow() }
+        .onChange(of: resumeToken) { _ in
+            // Switching chats / new chat while this screen stays mounted.
+            persistAndAutoTitleOnLeave()
+            bindAndLoad()
+        }
+        .onChange(of: navigationPathDepth) { oldCount, newCount in
+            // Root ChatView stays alive under NavigationStack when Code /
+            // Projects / etc. are pushed — onDisappear does not fire. Title
+            // the chat as soon as we navigate away from the empty path.
+            guard project == nil, oldCount == 0, newCount > 0 else { return }
+            persistAndAutoTitleOnLeave()
+        }
+        .onDisappear {
+            // Project chat pop, or any full teardown of this chat screen.
+            persistAndAutoTitleOnLeave()
+            discardBlankDraftIfNeeded()
+        }
         // Keep the bar compact — large-title mode reserves a tall blank band
         // under the chrome and makes the empty home look top-padded.
         .navigationBarTitleDisplayMode(.inline)
@@ -86,7 +108,11 @@ struct ChatView: View {
         .sheet(isPresented: $viewModel.showConnectorsView) {
             ConnectorsView(viewModel: viewModel)
         }
-        .sheet(isPresented: $viewModel.showModelPicker) {
+        .sheet(isPresented: $viewModel.showModelPicker, onDismiss: {
+            // Capture the picker's selection onto this chat only after an
+            // intentional dismiss — not when catalog refresh mutates selection.
+            viewModel.persistSelectedModel()
+        }) {
             ModelPickerSheet()
         }
         .sheet(isPresented: $showProviderSettings) {
@@ -108,19 +134,44 @@ struct ChatView: View {
         return "New chat"
     }
 
+    /// Depth of the bound root navigation path (0 = chat is the visible root).
+    private var navigationPathDepth: Int {
+        path?.wrappedValue.count ?? 0
+    }
+
     private func bindAndLoad() {
         viewModel.state = state
         guard let history else { return }
         viewModel.history = history
         if let project, let chat {
             viewModel.loadProjectChat(project: project, chat: chat, from: history)
-        } else if let active = history.activeChatID {
+        } else if let active = history.activeChatID,
+                  history.recents.contains(where: { $0.id == active }) {
             viewModel.loadChat(id: active, from: history)
-        } else if !history.recents.isEmpty, let first = history.recents.first {
-            // Resume last chat on cold launch.
+        } else if let first = history.activeRecents.first {
+            // Resume last real chat on cold launch (skip blank drafts).
             viewModel.loadChat(id: first.id, from: history)
         } else {
             viewModel.beginNewChat(in: history)
+        }
+    }
+
+    /// Persist the open transcript, then auto-name it unless the user renamed it.
+    private func persistAndAutoTitleOnLeave() {
+        let leavingChatID = viewModel.activeChatID
+        let leavingProjectID = viewModel.activeProjectID
+        viewModel.persistNow()
+        guard let history, let leavingChatID else { return }
+        history.autoGenerateTitleIfNeeded(for: leavingChatID, projectID: leavingProjectID)
+    }
+
+    /// Remove unsent drafts from the sidebar / project list when leaving chat.
+    private func discardBlankDraftIfNeeded() {
+        guard let history else { return }
+        if let project {
+            history.discardActiveProjectChatIfBlank(projectID: project.id)
+        } else {
+            history.discardActiveIfBlank()
         }
     }
 
@@ -147,6 +198,10 @@ struct ChatView: View {
     }
 
     private func popToProject() {
+        // Title before the stack pop so Recents / project list show a name
+        // as soon as this chat is left (onDisappear also covers teardown).
+        persistAndAutoTitleOnLeave()
+        discardBlankDraftIfNeeded()
         // Prefer popping the navigation stack via the bound path; fall back
         // to the system dismiss action when no path is provided (e.g. the
         // root landing screen).
@@ -218,11 +273,31 @@ struct ChatView: View {
         viewModel.messages.count <= 1
     }
 
+    // MARK: - Loading (resume large chat)
+
+    /// Shown immediately when opening a big transcript so navigation isn't
+    /// blocked while messages are converted for the list.
+    private var chatLoadingState: some View {
+        VStack(spacing: 14) {
+            ProgressView()
+                .progressViewStyle(.circular)
+                .tint(Theme.accent)
+                .scaleEffect(1.15)
+            Text("Loading chat…")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Theme.textSecondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Loading chat")
+    }
+
     // MARK: - Empty home (greeting)
 
     /// Fills the space above the composer and centers the greeting in it.
     /// Avoids dual expanding Spacers (which left a large dead zone under the
-    /// nav / error banner, especially with the keyboard open).
+    /// nav / error banner, especially with the keyboard open). Does not own
+    /// the composer — that lives as a sibling so it cannot be crushed here.
     private var emptyHome: some View {
         VStack(spacing: 0) {
             if viewModel.error != nil {
@@ -231,22 +306,29 @@ struct ChatView: View {
             greeting
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var greeting: some View {
-        VStack(spacing: 18) {
-            AsterismGlyph()
-                .frame(width: 56, height: 56)
-            Text("Clocking in for the evening shift.")
-                .font(.system(size: 26, weight: .regular, design: .serif))
-                .foregroundStyle(Theme.textPrimary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            VStack(spacing: 18) {
+                Image(systemName: "lightbulb.fill")
+                    .font(.system(size: 36, weight: .medium))
+                    .foregroundStyle(Theme.accent)
+                    .frame(width: 56, height: 56)
+                    .accessibilityHidden(true)
+                Text(ChatGreeting.phrase(at: context.date))
+                    .font(.system(size: 26, weight: .regular, design: .serif))
+                    .foregroundStyle(Theme.textPrimary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+                    .contentTransition(.opacity)
+                    .id(ChatGreeting.phrase(at: context.date))
+            }
+            // Slight upward bias so the block sits closer to true visual center
+            // once the composer (and keyboard) claim the bottom of the screen.
+            .padding(.bottom, 28)
+            .animation(.easeInOut(duration: 0.35), value: ChatGreeting.phrase(at: context.date))
         }
-        // Slight upward bias so the block sits closer to true visual center
-        // once the composer (and keyboard) claim the bottom of the screen.
-        .padding(.bottom, 28)
     }
 
     // MARK: - Message list
@@ -287,19 +369,39 @@ struct ChatView: View {
 
     private var composer: some View {
         VStack(spacing: 8) {
+            if state.isLoadingLocalMetal {
+                LocalMetalLoadProgressBanner(
+                    progress: state.localMetalLoadProgress,
+                    modelName: state.selectedModel.map { state.displayName(for: $0) },
+                    style: .card
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if let err = state.localMetalLoadError, !err.isEmpty {
+                Text(err)
+                    .font(.footnote)
+                    .foregroundStyle(.red.opacity(0.9))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 4)
+            }
+
             composerSurface
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 12)
         .padding(.top, 8)
+        .animation(.easeInOut(duration: 0.2), value: state.isLoadingLocalMetal)
         // Extend fill under the home indicator so list content doesn't peek through.
         .background(Theme.background.ignoresSafeArea(edges: .bottom))
     }
 
     private var composerSurface: some View {
         VStack(spacing: 8) {
-            if viewModel.healthEnabled {
-                healthContextChip
+            if viewModel.healthEnabled
+                || viewModel.locationEnabled
+                || viewModel.webSearchEnabled
+                || viewModel.researchEnabled
+            {
+                contextChips
             }
 
             // Top: text field on its own row — full width, room to breathe.
@@ -354,7 +456,7 @@ struct ChatView: View {
                         .background(sendBackground, in: Circle())
                 }
                 .buttonStyle(.plain)
-                .disabled(!hasText)
+                .disabled(!hasText || viewModel.isLoadingChat || viewModel.isProcessing)
             }
         }
         .padding(.horizontal, 12)
@@ -367,31 +469,80 @@ struct ChatView: View {
         )
     }
 
-    /// Compact indicator that Apple Health context will be attached on send.
-    private var healthContextChip: some View {
+    /// Compact indicators for optional context attached on send.
+    private var contextChips: some View {
+        HStack(spacing: 8) {
+            if viewModel.researchEnabled {
+                contextChip(
+                    systemImage: "magnifyingglass",
+                    imageColor: Theme.accent,
+                    title: "Research",
+                    dismissLabel: "Turn off Research"
+                ) {
+                    viewModel.researchEnabled = false
+                    // Research implies web search; turning research off
+                    // leaves simple web search as the user last set it.
+                }
+            } else if viewModel.webSearchEnabled {
+                contextChip(
+                    systemImage: "globe",
+                    imageColor: Theme.accent,
+                    title: "Web",
+                    dismissLabel: "Turn off Web search"
+                ) {
+                    viewModel.webSearchEnabled = false
+                }
+            }
+            if viewModel.healthEnabled {
+                contextChip(
+                    systemImage: "heart.fill",
+                    imageColor: .pink,
+                    title: "Health",
+                    dismissLabel: "Turn off Health"
+                ) {
+                    Task { await viewModel.setHealthEnabled(false) }
+                }
+            }
+            if viewModel.locationEnabled {
+                contextChip(
+                    systemImage: "location.fill",
+                    imageColor: Theme.accent,
+                    title: "Location",
+                    dismissLabel: "Turn off Location"
+                ) {
+                    Task { await viewModel.setLocationEnabled(false) }
+                }
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func contextChip(
+        systemImage: String,
+        imageColor: Color,
+        title: String,
+        dismissLabel: String,
+        onDismiss: @escaping () -> Void
+    ) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: "heart.fill")
+            Image(systemName: systemImage)
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.pink)
-            Text("Health")
+                .foregroundStyle(imageColor)
+            Text(title)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(Theme.textSecondary)
-            Spacer(minLength: 0)
-            Button {
-                Task { await viewModel.setHealthEnabled(false) }
-            } label: {
+            Button(action: onDismiss) {
                 Image(systemName: "xmark")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(Theme.textTertiary)
                     .frame(width: 20, height: 20)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Turn off Health")
+            .accessibilityLabel(dismissLabel)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .background(Theme.surfaceElevated, in: Capsule())
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var modelPillTitle: String {
@@ -399,8 +550,9 @@ struct ChatView: View {
         // match the iOS chat composer. The pill itself decides what to
         // show when there's no model at all — empty string here lets it
         // switch into the "+ Add a model" CTA.
-        if let name = state.selectedModel?.displayName {
-            return stripEffort(from: name)
+        // Use displayName(for:) so aliases + Local Metal pretty names match the picker.
+        if let model = state.selectedModel {
+            return stripEffort(from: state.displayName(for: model))
         }
         return ""
     }
@@ -467,23 +619,114 @@ struct ProcessingIndicator: View {
     }
 }
 
-/// Centered accent glyph used on the empty chat home.
-struct AsterismGlyph: View {
-    var body: some View {
-        ZStack {
-            ForEach(0..<12, id: \.self) { i in
-                Capsule()
-                    .fill(Theme.accent)
-                    .frame(width: 4, height: 22)
-                    .offset(y: -16)
-                    .rotationEffect(.degrees(Double(i) * 30))
+/// Time-of-day empty-state greetings. Phrases rotate by hour (and day) so the
+/// home screen doesn’t always say the same thing.
+enum ChatGreeting {
+    enum Period: CaseIterable {
+        case lateNight   // 0–4
+        case earlyMorning // 5–8
+        case morning     // 9–11
+        case afternoon   // 12–16
+        case evening     // 17–20
+        case night       // 21–23
+
+        static func at(_ date: Date, calendar: Calendar = .current) -> Period {
+            let hour = calendar.component(.hour, from: date)
+            switch hour {
+            case 0..<5: return .lateNight
+            case 5..<9: return .earlyMorning
+            case 9..<12: return .morning
+            case 12..<17: return .afternoon
+            case 17..<21: return .evening
+            default: return .night
             }
-            Circle()
-                .fill(Theme.accent)
-                .frame(width: 6, height: 6)
         }
-        .frame(width: 56, height: 56)
-        .compositingGroup()
+
+        var phrases: [String] {
+            switch self {
+            case .lateNight:
+                return [
+                    "Still up? The bugs never sleep either.",
+                    "Midnight oil: officially lit.",
+                    "Quiet hours. Loud ideas.",
+                    "3 a.m. is a perfectly normal time to ship.",
+                    "The CI ghosts are friendlier at this hour.",
+                    "Coffee optional. Courage required.",
+                    "Night shift for code that dreams in stack traces.",
+                    "Only the terminal and the moon are online.",
+                ]
+            case .earlyMorning:
+                return [
+                    "Good morning. Let’s invent something small.",
+                    "Fresh day, clean branch, questionable coffee.",
+                    "Boot sequence complete. What’s first?",
+                    "Sunrise commits hit different.",
+                    "The early bird gets the green build.",
+                    "Stretch, hydrate, then refactor.",
+                    "Morning brain: surprisingly good at naming things.",
+                    "Warming up the compilers… and the optimism.",
+                ]
+            case .morning:
+                return [
+                    "Ready when you are.",
+                    "Inbox zero can wait. Ideas can’t.",
+                    "What are we building today?",
+                    "Mid-morning is prime time for clever hacks.",
+                    "Plotting greatness between meetings.",
+                    "Let’s turn that half-baked thought into a PR.",
+                    "Your cursor is blinking. So is destiny.",
+                    "Ship small, ship often, ship with flair.",
+                ]
+            case .afternoon:
+                return [
+                    "Afternoon check-in. How’s the stack feeling?",
+                    "Post-lunch productivity? We can make it happen.",
+                    "The day is half over. The fun is not.",
+                    "Time for a spicy little feature.",
+                    "If it compiles, we celebrate. If not, we learn.",
+                    "Standing by for your next brilliant digression.",
+                    "Let’s make the afternoon count for something mergeable.",
+                    "Snack break over. Idea break starts now.",
+                ]
+            case .evening:
+                return [
+                    "Clocking in for the evening shift.",
+                    "Golden hour for golden code.",
+                    "Evening mode: fewer meetings, more commits.",
+                    "The day wind-down… or the real work begins.",
+                    "Twilight and type errors—classic combo.",
+                    "Let’s close a loop before dinner.",
+                    "Side project energy detected.",
+                    "Soft light. Sharp diffs.",
+                ]
+            case .night:
+                return [
+                    "Night mode engaged. What shall we cook up?",
+                    "Stars out. Bugs in. Your move.",
+                    "The perfect hour for a reckless rewrite.",
+                    "Quiet keyboard. Loud ambition.",
+                    "One more feature before the night ends.",
+                    "Let’s leave tomorrow’s self a nicer codebase.",
+                    "Dark theme. Bright ideas.",
+                    "Last call for elegant solutions.",
+                ]
+            }
+        }
+    }
+
+    /// Stable-but-rotating pick: changes each hour, and shifts day-to-day.
+    static func phrase(at date: Date = Date(), calendar: Calendar = .current) -> String {
+        let period = Period.at(date, calendar: calendar)
+        let phrases = period.phrases
+        guard !phrases.isEmpty else { return "Ready when you are." }
+
+        let hour = calendar.component(.hour, from: date)
+        let dayOfYear = calendar.ordinality(of: .day, in: .year, for: date) ?? 1
+        let year = calendar.component(.year, from: date)
+        // Mix day + hour so the same hour tomorrow isn’t the same line.
+        let seed = year &* 1000 &+ dayOfYear &* 24 &+ hour
+        let index = abs(seed) % phrases.count
+        return phrases[index]
     }
 }
 

@@ -179,6 +179,46 @@ public actor ServerClient {
         throw ClientError.pairFailed("Timed out waiting for a public tunnel URL.")
     }
 
+    /**
+     Request a (re)published public tunnel URL over a short-lived LAN socket.
+     When `force` is true, ignores any pre-existing `remote_endpoint` "up" from
+     auto-push until the server acknowledges a restart (`starting` → `up`).
+     */
+    public func requestRemoteEndpoint(
+        endpoint: Endpoint,
+        token: String,
+        force: Bool = true,
+        timeoutSeconds: TimeInterval = 50
+    ) async throws -> (url: String, provider: String?) {
+        let stream = try await connect(endpoint: endpoint, token: token)
+        try await send(.remoteEndpointRequest(force: force))
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        var seenStarting = false
+        for await msg in stream {
+            if Date() > deadline { break }
+            if case let .remoteEndpoint(status, url, provider, error) = msg {
+                if status == "starting" {
+                    seenStarting = true
+                    continue
+                }
+                if status == "up", let url, !url.isEmpty {
+                    // After force, skip a stale auto-push that arrived before "starting".
+                    if force && !seenStarting { continue }
+                    disconnect()
+                    return (url, provider)
+                }
+                if status == "error" {
+                    // Ignore early errors unless we've begun a forced restart.
+                    if force && !seenStarting { continue }
+                    disconnect()
+                    throw ClientError.pairFailed(error ?? "Tunnel failed to start.")
+                }
+            }
+        }
+        disconnect()
+        throw ClientError.pairFailed("Timed out waiting for a public tunnel URL.")
+    }
+
     private func receiveLoop(
         task: URLSessionWebSocketTask,
         generation: UInt64,

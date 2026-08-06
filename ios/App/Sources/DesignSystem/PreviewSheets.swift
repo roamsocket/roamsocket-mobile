@@ -25,7 +25,6 @@ struct MarkdownPreviewSheet: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
         .presentationDetents([.medium, .large])
     }
 }
@@ -49,7 +48,6 @@ struct HTMLPreviewSheet: View {
                     }
                 }
         }
-        .preferredColorScheme(.dark)
         .presentationDetents([.medium, .large])
     }
 }
@@ -97,18 +95,18 @@ private struct HTMLWebView: UIViewRepresentable {
           <meta charset="utf-8" />
           <meta name="viewport" content="width=device-width, initial-scale=1" />
           <style>
-            :root { color-scheme: dark; }
+            :root { color-scheme: \(Theme.cssColorScheme); }
             body {
               margin: 16px;
               font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-              background: #0B0D10;
-              color: #E8ECF1;
+              background: \(Theme.cssBackground);
+              color: \(Theme.cssTextPrimary);
               line-height: 1.45;
             }
-            a { color: #6AA9FF; }
+            a { color: \(Theme.cssAccent); }
             pre, code {
               font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-              background: #14181D;
+              background: \(Theme.cssSurface);
               border-radius: 6px;
             }
             pre { padding: 12px; overflow-x: auto; }

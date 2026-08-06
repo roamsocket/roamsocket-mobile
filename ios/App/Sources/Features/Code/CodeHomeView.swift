@@ -59,6 +59,10 @@ struct CodeSession: Codable, Identifiable, Hashable {
     var transcript: [SessionTranscriptLine]
     /// If true, leave the desktop agent running after archive; phone disconnects on next idle.
     var disconnectWhenDone: Bool
+    /// True only while the desktop agent is mid-turn (streaming / tools).
+    /// Used so archive does not ask “keep running?” for idle sessions that
+    /// still show a Working filter status.
+    var agentActive: Bool
 
     enum Status: String, Codable, CaseIterable, Identifiable {
         case needsInput = "Needs input"
@@ -78,14 +82,6 @@ struct CodeSession: Codable, Identifiable, Hashable {
             case .archived: return "archivebox"
             }
         }
-
-        /// Desktop agent may still be mid-turn.
-        var mayBeRunning: Bool {
-            switch self {
-            case .working, .needsInput: return true
-            default: return false
-            }
-        }
     }
 
     init(
@@ -102,7 +98,8 @@ struct CodeSession: Codable, Identifiable, Hashable {
         status: Status = .working,
         toolCount: Int = 0,
         transcript: [SessionTranscriptLine] = [],
-        disconnectWhenDone: Bool = false
+        disconnectWhenDone: Bool = false,
+        agentActive: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -118,12 +115,13 @@ struct CodeSession: Codable, Identifiable, Hashable {
         self.toolCount = toolCount
         self.transcript = transcript
         self.disconnectWhenDone = disconnectWhenDone
+        self.agentActive = agentActive
     }
 
     enum CodingKeys: String, CodingKey {
         case id, title, repoFullName, baseBranch, workBranch
         case wireSessionId, environment, prURL, createdAt, updatedAt, status, toolCount
-        case transcript, disconnectWhenDone
+        case transcript, disconnectWhenDone, agentActive
     }
 
     init(from decoder: Decoder) throws {
@@ -143,6 +141,7 @@ struct CodeSession: Codable, Identifiable, Hashable {
         toolCount = try c.decodeIfPresent(Int.self, forKey: .toolCount) ?? 0
         transcript = try c.decodeIfPresent([SessionTranscriptLine].self, forKey: .transcript) ?? []
         disconnectWhenDone = try c.decodeIfPresent(Bool.self, forKey: .disconnectWhenDone) ?? false
+        agentActive = try c.decodeIfPresent(Bool.self, forKey: .agentActive) ?? false
     }
 }
 
@@ -173,6 +172,18 @@ final class CodeSessionStore: ObservableObject, @unchecked Sendable {
         mutate(&copy)
         copy.updatedAt = Date()
         sessions[idx] = copy
+        save()
+    }
+
+    /// Updates mid-turn agent activity without bumping `updatedAt` (list sort / relative time).
+    func setAgentActive(_ id: UUID, _ active: Bool) {
+        guard let idx = sessions.firstIndex(where: { $0.id == id }) else { return }
+        guard sessions[idx].agentActive != active else { return }
+        sessions[idx].agentActive = active
+        if active, sessions[idx].status != .archived {
+            sessions[idx].status = .working
+        }
+        objectWillChange.send()
         save()
     }
 
@@ -214,7 +225,12 @@ final class CodeSessionStore: ObservableObject, @unchecked Sendable {
         guard let data = UserDefaults.standard.data(forKey: key),
               let decoded = try? JSONDecoder().decode([CodeSession].self, from: data)
         else { return }
-        sessions = decoded
+        // Agent mid-turn state does not survive process restart.
+        sessions = decoded.map { session in
+            var copy = session
+            copy.agentActive = false
+            return copy
+        }
     }
 
     private func save() {
@@ -444,7 +460,10 @@ struct CodeHomeView: View {
                                 .listRowBackground(Color.clear)
                                 .listRowSeparator(.hidden)
                         } else {
-                            deviceRow(name: state.serverName ?? "", time: "Now")
+                            deviceRow(
+                                name: state.serverName ?? "Desktop",
+                                status: state.desktopReachability
+                            )
                                 .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
                                 .listRowBackground(Color.clear)
                                 .listRowSeparator(.hidden)
@@ -537,6 +556,11 @@ struct CodeHomeView: View {
                 .padding(.bottom, 22)
         }
         .navigationBarHidden(true)
+        .task {
+            // Refresh desktop reachability whenever Code home is shown.
+            guard state.serverToken != nil, !state.isReconnecting else { return }
+            await state.attemptServerReconnect()
+        }
         .navigationDestination(item: $pushSessionConfig) { config in
             SessionView(config: config)
         }
@@ -670,24 +694,71 @@ struct CodeHomeView: View {
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
     }
 
-    private func deviceRow(name: String, time: String) -> some View {
+    private func deviceRow(name: String, status: AppState.DesktopReachability) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: "laptopcomputer")
-                .font(.system(size: 22))
-                .foregroundStyle(Theme.selection)
-                .frame(width: 36, height: 36)
+            ZStack(alignment: .bottomTrailing) {
+                Image(systemName: "laptopcomputer")
+                    .font(.system(size: 22))
+                    .foregroundStyle(Theme.selection)
+                    .frame(width: 36, height: 36)
+                Circle()
+                    .fill(deviceStatusColor(status))
+                    .frame(width: 10, height: 10)
+                    .overlay(
+                        Circle()
+                            .stroke(Theme.surface, lineWidth: 2)
+                    )
+                    .offset(x: 2, y: 2)
+                    .accessibilityHidden(true)
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text(name)
                     .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(Theme.textPrimary)
-                Text(time)
+                Text(status.label)
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.textTertiary)
             }
             Spacer()
+            Button {
+                Task { await state.attemptServerReconnect() }
+            } label: {
+                Group {
+                    if state.isReconnecting {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(Theme.textSecondary)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(Theme.textSecondary)
+                    }
+                }
+                .frame(width: 36, height: 36)
+                .background(Theme.surfaceElevated, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(state.isReconnecting)
+            .accessibilityLabel("Refresh connection")
+            .accessibilityHint("Retry connecting to the desktop server")
         }
         .padding(14)
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(name), \(status.label)")
+    }
+
+    private func deviceStatusColor(_ status: AppState.DesktopReachability) -> Color {
+        switch status {
+        case .connected:
+            return Color.green
+        case .connecting:
+            return Color.orange
+        case .unreachable:
+            return Color.red
+        case .unpaired:
+            return Theme.textTertiary
+        }
     }
 
     // MARK: - Sessions
@@ -712,24 +783,31 @@ struct CodeHomeView: View {
                     .foregroundStyle(statusColor(session.status))
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(session.title)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(Theme.textPrimary)
-                    .lineLimit(1)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(session.title)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(Theme.textPrimary)
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                    Image(systemName: "arrow.triangle.branch")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.textTertiary)
+                    Text(session.workBranch)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textTertiary)
+                        .lineLimit(1)
+                }
                 HStack(spacing: 6) {
                     Image(systemName: "folder")
                         .font(.system(size: 11))
                     Text(session.repoFullName)
                         .font(.system(size: 12))
-                    Text("·")
-                        .font(.system(size: 12))
-                    Text(session.workBranch)
-                        .font(.system(size: 12))
+                        .lineLimit(1)
                 }
                 .foregroundStyle(Theme.textTertiary)
-                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Spacer(minLength: 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
             // Relative time sits where the old "ahead"/git badge was.
             Text(relativeTime(session.updatedAt))
                 .font(.system(size: 13, weight: .medium))
@@ -792,11 +870,14 @@ struct CodeHomeView: View {
     // MARK: - Archive / rename
 
     private func requestArchive(_ session: CodeSession) {
-        if session.status.mayBeRunning {
-            archiveCandidate = session
+        // Only prompt when the desktop agent is actually mid-turn — not merely
+        // because the row filter status is still "Working" from an earlier open.
+        let live = sessionStore.session(id: session.id) ?? session
+        if live.agentActive {
+            archiveCandidate = live
             showArchiveKillConfirm = true
         } else {
-            performArchive(session, killAgent: false)
+            performArchive(live, killAgent: false)
         }
     }
 
@@ -805,9 +886,14 @@ struct CodeHomeView: View {
         if killAgent {
             Task { await interruptRemoteAgent(wireSessionId: session.wireSessionId) }
             sessionStore.archive(session.id, disconnectWhenDone: false)
+            sessionStore.setAgentActive(session.id, false)
         } else {
-            // Leave desktop work running; phone should drop the WS when the turn ends.
-            sessionStore.archive(session.id, disconnectWhenDone: session.status.mayBeRunning)
+            // Leave desktop work running only when it is actually mid-turn.
+            let keepRunning = session.agentActive
+            sessionStore.archive(session.id, disconnectWhenDone: keepRunning)
+            if !keepRunning {
+                sessionStore.setAgentActive(session.id, false)
+            }
         }
         // If this session is open full-screen, close it so the connection policy applies.
         if pushSessionConfig?.localSessionId == session.id {
@@ -878,7 +964,11 @@ struct CodeHomeView: View {
             workBranch: session.workBranch,
             githubToken: state.githubToken
         )
-        sessionStore.update(session.id) { $0.status = .working }
+        // Re-open does not mean the agent is mid-turn yet.
+        sessionStore.update(session.id) {
+            $0.status = .working
+            $0.agentActive = false
+        }
         let config = SessionConfig(
             wireSessionId: session.wireSessionId,
             localSessionId: session.id,
@@ -1003,7 +1093,6 @@ struct ArchivedSessionsView: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
     }
 }
 
@@ -1059,7 +1148,6 @@ struct SessionFilterSheet: View {
             }
         }
         .presentationDetents([.medium])
-        .preferredColorScheme(.dark)
     }
 }
 

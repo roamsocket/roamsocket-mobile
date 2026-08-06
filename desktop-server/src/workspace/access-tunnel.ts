@@ -16,6 +16,8 @@ import {
 let tunnelId: string | null = null;
 let portBound: number | null = null;
 let inFlight: Promise<TunnelInfo> | null = null;
+/** Bumped on force-stop so a superseded in-flight start never reclaims ownership. */
+let generation = 0;
 
 export function accessTunnelId(): string | null {
   return tunnelId;
@@ -29,15 +31,24 @@ export function currentAccessTunnel(): TunnelInfo | null {
 /**
  * Ensure a public tunnel is running for `port`. Concurrent callers share one
  * promise so we never spawn two cloudflared processes for the same server.
+ *
+ * Pass `force: true` when the phone could not reach the current public URL —
+ * tears down the existing process and starts a fresh tunnel.
  */
 export async function ensureAccessTunnel(opts: {
   port: number;
   provider?: TunnelProvider;
   /** Max ms to wait for a public URL after spawn (default 45s). */
   waitMs?: number;
+  /** Stop any live access tunnel and open a new one (new public URL). */
+  force?: boolean;
 }): Promise<TunnelInfo> {
   const waitMs = opts.waitMs ?? 45_000;
   const provider = opts.provider ?? "auto";
+
+  if (opts.force) {
+    stopAccessTunnel();
+  }
 
   if (portBound !== null && portBound !== opts.port && tunnelId) {
     stopTunnel(tunnelId);
@@ -47,7 +58,7 @@ export async function ensureAccessTunnel(opts: {
   portBound = opts.port;
 
   const existing = currentAccessTunnel();
-  if (existing) {
+  if (existing && !opts.force) {
     if (existing.status === "up" && existing.url) return existing;
     if (existing.status === "starting" || (existing.status === "up" && !existing.url)) {
       return waitForUrl(existing.id, waitMs);
@@ -59,17 +70,29 @@ export async function ensureAccessTunnel(opts: {
     }
   }
 
-  if (inFlight) return inFlight;
+  if (inFlight && !opts.force) return inFlight;
 
+  const gen = generation;
   inFlight = (async () => {
     try {
       const started = await startTunnel({ port: opts.port, provider });
+      // A force-restart may have superseded this spawn.
+      if (gen !== generation) {
+        stopTunnel(started.id);
+        return (
+          currentAccessTunnel() ?? {
+            ...started,
+            status: "stopped" as const,
+            error: "Superseded by a newer tunnel restart.",
+          }
+        );
+      }
       tunnelId = started.id;
       if (started.url && started.status === "up") return started;
       if (started.status === "error") return started;
       return waitForUrl(started.id, waitMs);
     } finally {
-      inFlight = null;
+      if (gen === generation) inFlight = null;
     }
   })();
 
@@ -77,6 +100,7 @@ export async function ensureAccessTunnel(opts: {
 }
 
 export function stopAccessTunnel(): void {
+  generation += 1;
   if (tunnelId) {
     stopTunnel(tunnelId);
     tunnelId = null;

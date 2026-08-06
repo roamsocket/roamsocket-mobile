@@ -50,7 +50,6 @@ struct NewEnvironmentView: View {
                 createButton
             }
         }
-        .preferredColorScheme(.dark)
         .sheet(isPresented: $showNetworkSheet) {
             NetworkAccessSheet(selection: $networkAccess)
         }

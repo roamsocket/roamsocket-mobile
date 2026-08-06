@@ -4,10 +4,10 @@ import SwiftUI
 struct ProjectDetailView: View {
     let project: ProjectItem
     @ObservedObject var history: ChatHistoryStore
+    @EnvironmentObject var state: AppState
     @State private var showInstructions: Bool = false
     @State private var showAddFileSheet: Bool = false
     @State private var renameTarget: ProjectChatItem?
-    @State private var renameDraft = ""
 
     /// When the user taps "New chat", we create a chat in the project and
     /// navigate to it via the `path` binding on the root NavigationStack.
@@ -34,26 +34,24 @@ struct ProjectDetailView: View {
         .sheet(isPresented: $showAddFileSheet) {
             ProjectFilesSheet()
         }
-        .alert("Rename chat", isPresented: Binding(
-            get: { renameTarget != nil },
-            set: { if !$0 { renameTarget = nil } }
-        )) {
-            TextField("Title", text: $renameDraft)
-            Button("Cancel", role: .cancel) {
-                renameTarget = nil
-            }
-            Button("Save") {
-                if let target = renameTarget {
+        .sheet(item: $renameTarget) { chat in
+            RenameChatSheet(
+                initialTitle: chat.title,
+                onGenerate: {
+                    await history.suggestTitle(projectID: project.id, chatID: chat.id)
+                },
+                onSave: { title in
                     history.renameProjectChat(
                         projectID: project.id,
-                        chatID: target.id,
-                        title: renameDraft
+                        chatID: chat.id,
+                        title: title
                     )
+                    renameTarget = nil
+                },
+                onCancel: {
+                    renameTarget = nil
                 }
-                renameTarget = nil
-            }
-        } message: {
-            Text("Choose a short name for this chat.")
+            )
         }
     }
 
@@ -113,7 +111,6 @@ struct ProjectDetailView: View {
                                 .tint(Theme.accent)
                                 Button {
                                     renameTarget = chat
-                                    renameDraft = chat.title
                                 } label: {
                                     Label("Rename", systemImage: "pencil")
                                 }
@@ -122,7 +119,6 @@ struct ProjectDetailView: View {
                             .contextMenu {
                                 Button {
                                     renameTarget = chat
-                                    renameDraft = chat.title
                                 } label: {
                                     Label("Rename", systemImage: "pencil")
                                 }
@@ -200,7 +196,7 @@ struct ProjectDetailView: View {
     }
 
     private func startNewChat() {
-        let chat = history.startNewChat(in: project)
+        let chat = history.startNewChat(in: project, selectedModel: state.selectedModel)
         path.append(.projectChat(project, chat))
     }
 

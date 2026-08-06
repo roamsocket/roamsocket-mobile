@@ -182,6 +182,9 @@ public enum ClientMessage: Encodable, Sendable {
     case tunnelStart(sessionId: String, port: Int, provider: String)
     case tunnelStop(sessionId: String, tunnelId: String)
     case tunnelList(sessionId: String)
+    /// Ask desktop to (re)publish the coding-server public tunnel (`remote_endpoint`).
+    /// `force: true` tears down the existing access tunnel and starts a new one.
+    case remoteEndpointRequest(force: Bool = false)
 
     public enum PermissionDecision: String, Codable, Sendable { case allow, deny }
 
@@ -284,6 +287,9 @@ public enum ClientMessage: Encodable, Sendable {
         case let .tunnelList(sessionId):
             try c.encode("tunnel_list", forKey: .init("type"))
             try c.encode(sessionId, forKey: .init("sessionId"))
+        case let .remoteEndpointRequest(force):
+            try c.encode("remote_endpoint_request", forKey: .init("type"))
+            if force { try c.encode(true, forKey: .init("force")) }
         }
     }
 }

@@ -4,7 +4,7 @@ import AnyProvCore
 /// "Select model" bottom sheet:
 ///   - grouped by provider, each provider gets a section header
 ///   - tapping a model selects it
-///   - long-pressing (or the chevron) opens a rename sheet for an alias
+///   - swipe **Edit** (rename alias) or **Delete** (hide from list / erase Metal weights)
 ///   - local Metal models can be unloaded from RAM without deleting weights
 ///   - Effort lives at the bottom as before
 struct ModelPickerSheet: View {
@@ -16,7 +16,7 @@ struct ModelPickerSheet: View {
     @State private var statusMessage = ""
 
     private var nonEmptyResults: [ModelCatalog.ProviderResult] {
-        state.providerResults.filter { !$0.models.isEmpty }
+        state.providerResults.filter { !state.visibleModels(in: $0).isEmpty }
     }
 
     private var emptyResults: [ModelCatalog.ProviderResult] {
@@ -25,34 +25,86 @@ struct ModelPickerSheet: View {
 
     var body: some View {
         SheetScaffold(title: "Select model", trailing: nil, onClose: { dismiss() }) {
-            ScrollView {
-                VStack(spacing: 0) {
-                    if state.isLoadingModels {
-                        ProgressView().tint(Theme.textSecondary).padding(.vertical, 40)
-                    } else if state.allModels.isEmpty {
-                        emptyState
-                    } else {
-                        sections
+            List {
+                if state.isLoadingModels {
+                    ProgressView()
+                        .tint(Theme.textSecondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 40)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                } else if state.allModels.isEmpty {
+                    emptyState
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                } else {
+                    ForEach(nonEmptyResults) { result in
+                        providerSection(result: result)
                     }
-
-                    if !statusMessage.isEmpty {
-                        Text(statusMessage)
-                            .font(.footnote)
-                            .foregroundStyle(Theme.textSecondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.top, 10)
+                    ForEach(emptyResults) { result in
+                        errorRow(result: result)
+                            .listRowBackground(Theme.surface)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                     }
-
-                    if !loadedMetalIDs.isEmpty {
-                        unloadAllRow
-                            .padding(.top, 12)
-                    }
-
-                    effortRow
-                        .padding(.top, 16)
                 }
-                .padding(.horizontal, 20)
+
+                if state.isLoadingLocalMetal {
+                    LocalMetalLoadProgressBanner(
+                        progress: state.localMetalLoadProgress,
+                        modelName: state.selectedModel.map { state.displayName(for: $0) },
+                        style: .plain
+                    )
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                } else if let err = state.localMetalLoadError, !err.isEmpty {
+                    Text(err)
+                        .font(.footnote)
+                        .foregroundStyle(.red.opacity(0.9))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                }
+
+                if !statusMessage.isEmpty {
+                    Text(statusMessage)
+                        .font(.footnote)
+                        .foregroundStyle(Theme.textSecondary)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                }
+
+                if !loadedMetalIDs.isEmpty {
+                    unloadAllRow
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 4, trailing: 16))
+                }
+
+                if state.hasHiddenModels {
+                    Button {
+                        state.restoreHiddenModels()
+                        statusMessage = "Restored hidden models to the list."
+                    } label: {
+                        Label("Show hidden models", systemImage: "eye")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(Theme.accent)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                    .accessibilityHint("Bring back models you removed with swipe Delete")
+                }
+
+                effortRow
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 16, trailing: 16))
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
             .task {
                 LocalMetalBootstrap.ensureRegistered()
                 if state.allModels.isEmpty { await state.refreshModels() }
@@ -66,49 +118,70 @@ struct ModelPickerSheet: View {
         }
     }
 
-    private var sections: some View {
-        VStack(spacing: 18) {
-            ForEach(nonEmptyResults) { result in
-                providerSection(result: result)
-            }
-            ForEach(emptyResults) { result in
-                errorRow(result: result)
-            }
-        }
-    }
-
     @ViewBuilder
     private func providerSection(result: ModelCatalog.ProviderResult) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let models = state.visibleModels(in: result)
+        Section {
+            ForEach(models) { model in
+                ModelRow(
+                    model: model,
+                    isSelected: state.selectedModel?.id == model.id,
+                    providerDisplayName: providerDisplayName(for: result),
+                    isLoadedInMemory: model.provider == .localMetal
+                        && loadedMetalIDs.contains(model.modelID),
+                    onSelect: {
+                        // Selection triggers AppState local-Metal load/unload policy.
+                        state.selectedModel = model
+                        dismiss()
+                    },
+                    onUnload: model.provider == .localMetal
+                        ? { Task { await unload(model.modelID) } }
+                        : nil
+                )
+                .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                .listRowBackground(Theme.surface)
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    Button(role: .destructive) {
+                        Task { await deleteModel(model) }
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                    Button {
+                        renameTarget = model
+                    } label: {
+                        Label("Edit", systemImage: "pencil")
+                    }
+                    .tint(Theme.accent)
+                }
+                .contextMenu {
+                    Button {
+                        renameTarget = model
+                    } label: {
+                        Label("Edit", systemImage: "pencil")
+                    }
+                    if model.provider == .localMetal,
+                       loadedMetalIDs.contains(model.modelID) {
+                        Button {
+                            Task { await unload(model.modelID) }
+                        } label: {
+                            Label("Unload from memory", systemImage: "memorychip")
+                        }
+                    }
+                    Button(role: .destructive) {
+                        Task { await deleteModel(model) }
+                    } label: {
+                        Label(
+                            model.provider == .localMetal ? "Delete from disk" : "Remove from list",
+                            systemImage: "trash"
+                        )
+                    }
+                }
+            }
+        } header: {
             Text(providerTitle(for: result))
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Theme.textSecondary)
                 .textCase(.uppercase)
-                .padding(.horizontal, 4)
-
-            VStack(spacing: 0) {
-                ForEach(Array(result.models.enumerated()), id: \.element.id) { idx, model in
-                    ModelRow(
-                        model: model,
-                        isSelected: state.selectedModel?.id == model.id,
-                        providerDisplayName: providerDisplayName(for: result),
-                        isLoadedInMemory: model.provider == .localMetal
-                            && loadedMetalIDs.contains(model.modelID),
-                        onSelect: {
-                            state.selectedModel = model
-                            dismiss()
-                        },
-                        onRename: { renameTarget = model },
-                        onUnload: model.provider == .localMetal
-                            ? { Task { await unload(model.modelID) } }
-                            : nil
-                    )
-                    if idx < result.models.count - 1 {
-                        Divider().overlay(Theme.separator)
-                    }
-                }
-            }
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 18))
         }
     }
 
@@ -135,8 +208,7 @@ struct ModelPickerSheet: View {
     }
 
     private func providerDisplayName(for result: ModelCatalog.ProviderResult) -> String {
-        let base = state.customProvider(for: result.provider)?.label ?? result.provider.displayName
-        return base
+        state.customProvider(for: result.provider)?.label ?? result.provider.displayName
     }
 
     @ViewBuilder
@@ -170,6 +242,7 @@ struct ModelPickerSheet: View {
                 .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)
         }
+        .frame(maxWidth: .infinity)
         .padding(.vertical, 40)
     }
 
@@ -226,6 +299,18 @@ struct ModelPickerSheet: View {
         await refreshLoadedMetal()
         statusMessage = "All Metal models unloaded from memory."
     }
+
+    private func deleteModel(_ model: AIModel) async {
+        do {
+            let message = try await state.removeModelFromPicker(model)
+            statusMessage = message
+            if model.provider == .localMetal {
+                await refreshLoadedMetal()
+            }
+        } catch {
+            statusMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
 }
 
 // MARK: - Row
@@ -237,7 +322,6 @@ private struct ModelRow: View {
     let providerDisplayName: String
     var isLoadedInMemory: Bool = false
     var onSelect: () -> Void
-    var onRename: () -> Void
     var onUnload: (() -> Void)?
 
     private var contextSubtitle: String? {
@@ -252,62 +336,47 @@ private struct ModelRow: View {
     }
 
     var body: some View {
-        Button(action: onSelect) {
-            HStack(alignment: .center, spacing: 12) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(state.displayName(for: model))
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(Theme.textPrimary)
-                    if let contextSubtitle {
-                        Text(contextSubtitle)
-                            .font(.system(size: 13))
-                            .foregroundStyle(isLoadedInMemory ? Theme.accent : Theme.textTertiary)
-                    }
+        // Prefer tap gesture over an outer Button so trailing swipe actions
+        // (Edit / Delete) aren't stolen by the selection control.
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(state.displayName(for: model))
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(Theme.textPrimary)
+                if let contextSubtitle {
+                    Text(contextSubtitle)
+                        .font(.system(size: 13))
+                        .foregroundStyle(isLoadedInMemory ? Theme.accent : Theme.textTertiary)
                 }
-                Spacer()
-                if isSelected {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(Theme.selection)
-                }
-                if isLoadedInMemory, let onUnload {
-                    Button {
-                        onUnload()
-                    } label: {
-                        Text("Unload")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Theme.accent)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(Theme.accent.opacity(0.12), in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Unload \(state.displayName(for: model)) from memory")
-                }
-                Button(action: onRename) {
-                    Image(systemName: "pencil")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(Theme.textTertiary)
-                        .frame(width: 32, height: 32)
+            }
+            Spacer()
+            if isSelected {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Theme.selection)
+            }
+            if isLoadedInMemory, let onUnload {
+                Button {
+                    onUnload()
+                } label: {
+                    Text("Unload")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Theme.accent.opacity(0.12), in: Capsule())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Rename \(state.displayName(for: model))")
-            }
-            .padding(.vertical, 14)
-            .padding(.horizontal, 14)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .contextMenu {
-            if isLoadedInMemory, let onUnload {
-                Button("Unload from memory", systemImage: "memorychip") {
-                    onUnload()
-                }
-            }
-            Button("Rename", systemImage: "pencil") {
-                onRename()
+                .accessibilityLabel("Unload \(state.displayName(for: model)) from memory")
             }
         }
+        .padding(.vertical, 14)
+        .padding(.horizontal, 14)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onSelect)
+        .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
+        .accessibilityLabel(state.displayName(for: model))
+        .accessibilityHint("Select model")
     }
 }
 
@@ -344,7 +413,7 @@ private struct RenameModelSheet: View {
             }
             .scrollContentBackground(.hidden)
             .background(Theme.background)
-            .navigationTitle("Rename model")
+            .navigationTitle("Edit model")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -367,7 +436,6 @@ private struct RenameModelSheet: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
         .onAppear {
             alias = state.displayName(for: model)
         }

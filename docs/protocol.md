@@ -35,6 +35,12 @@ The iOS app updates its saved base URL to that HTTPS origin while **keeping
 the same bearer token**, so coding keeps working after leaving home Wi‑Fi.
 Disable with `APC_AUTO_TUNNEL=0`.
 
+If the phone later cannot reach that public URL, Smart mode falls back to the
+saved LAN address, **drops the dead tunnel URL**, and sends
+`remote_endpoint_request` with `force: true` so the desktop kills the old
+tunnel process and opens a fresh one. The new URL is applied only after a
+successful health check.
+
 ## HTTP
 
 ### `GET /health`
@@ -78,6 +84,7 @@ Every frame is a JSON object with a `type` discriminator.
 | `tunnel_start`        | `sessionId`, `port`, `provider` (`auto`\|`ngrok`\|`cloudflare`\|`localtunnel`\|`bore`) |
 | `tunnel_stop`         | `sessionId`, `tunnelId` |
 | `tunnel_list`         | `sessionId` |
+| `remote_endpoint_request` | `force?` (bool) — re-publish the coding-server public tunnel; `force: true` tears down the current access tunnel and starts a new one |
 
 `permissionMode` is one of `acceptEdits`, `plan`, `ask` (the composer's
 permission pill). `provider` is one of `anthropic`, `openai`, `google`, `groq`,

@@ -1,5 +1,45 @@
 import SwiftUI
 
+/// Three-way (or N-way) segmented control that always uses `Theme` colors.
+/// System `Picker(.segmented)` can render white-on-white in light mode when the
+/// app uses a custom palette; this control avoids that.
+struct ThemeSegmentedControl<Value: Hashable>: View {
+    let options: [(value: Value, title: String)]
+    @Binding var selection: Value
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(options.enumerated()), id: \.offset) { _, option in
+                let isSelected = selection == option.value
+                Button {
+                    selection = option.value
+                } label: {
+                    Text(option.title)
+                        .font(.system(size: 13, weight: isSelected ? .semibold : .medium))
+                        .foregroundStyle(isSelected ? Theme.inkOnAccent : Theme.textPrimary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background {
+                            if isSelected {
+                                Capsule()
+                                    .fill(Theme.accent)
+                            }
+                        }
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+            }
+        }
+        .padding(3)
+        .background(Theme.field, in: Capsule())
+        .overlay(
+            Capsule()
+                .strokeBorder(Theme.separator.opacity(0.7), lineWidth: 1)
+        )
+    }
+}
+
 /// A rounded pill control used in the composer's bottom row (model, permission).
 struct Pill: View {
     let title: String
@@ -140,6 +180,72 @@ struct SelectableRow<Leading: View>: View {
 extension SelectableRow where Leading == EmptyView {
     init(title: String, subtitle: String? = nil, isSelected: Bool, action: @escaping () -> Void) {
         self.init(title: title, subtitle: subtitle, isSelected: isSelected, leading: { EmptyView() }, action: action)
+    }
+}
+
+/// Determinate progress while an on-device Metal model is loading into RAM.
+/// Used on the model picker and the main chat composer.
+struct LocalMetalLoadProgressBanner: View {
+    /// 0…1 fraction complete.
+    let progress: Double
+    /// Optional display name of the model being loaded.
+    var modelName: String? = nil
+    /// Compact list-row styling vs. composer card padding.
+    var style: Style = .card
+
+    enum Style {
+        case card
+        case plain
+    }
+
+    private var clamped: Double {
+        min(1, max(0, progress))
+    }
+
+    private var percentText: String {
+        "\(Int((clamped * 100).rounded()))%"
+    }
+
+    private var title: String {
+        if let modelName, !modelName.isEmpty {
+            return "Loading \(modelName)…"
+        }
+        return "Loading on-device model…"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(Theme.accent)
+                Text(title)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Theme.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 4)
+                Text(percentText)
+                    .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(Theme.textTertiary)
+            }
+            ProgressView(value: clamped)
+                .tint(Theme.accent)
+                .accessibilityLabel("Model load progress")
+                .accessibilityValue(percentText)
+        }
+        .padding(style == .card ? EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14) : .init())
+        .background {
+            if style == .card {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Theme.surface)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(Theme.separator.opacity(0.8), lineWidth: 1)
+                    )
+            }
+        }
+        .accessibilityElement(children: .combine)
     }
 }
 

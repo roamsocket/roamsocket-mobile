@@ -54,6 +54,9 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1,2"
+        # Persist across xcodegen regenerate (otherwise Signing & Capabilities clears).
+        DEVELOPMENT_TEAM: 4JBMBNGPK7
+        CODE_SIGN_IDENTITY: "iPhone Developer"
         # MLX / Metal needs the increased default stack on device.
         OTHER_LDFLAGS: ["$(inherited)", "-lc++"]
     entitlements:
@@ -80,3 +83,4 @@ targets:
           - "_anyprov-code._tcp"
         NSHealthShareUsageDescription: "AnyProv Code reads your Apple Health data when you turn on Health in chat, so the assistant can answer questions about steps, sleep, workouts, and other stats you choose to share."
         NSHealthUpdateUsageDescription: "AnyProv Code does not write to Apple Health. This permission is required by the system HealthKit entitlement."
+        NSLocationWhenInUseUsageDescription: "AnyProv Code uses your location when you turn on Location in chat, so the assistant can answer with local context such as nearby places, weather, and time zone."

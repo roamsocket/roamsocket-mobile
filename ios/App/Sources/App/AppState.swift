@@ -25,17 +25,53 @@ final class AppState: ObservableObject {
     // Composer selections (mirror the home screen controls)
     @Published var selectedRepo: GitHubRepo?
     @Published var selectedEnvironment: EnvironmentConfig?
-    @Published var selectedModel: AIModel?
+    /// Currently selected chat model. Changing this loads/unloads on-device
+    /// Metal models so only the active local model sits in RAM.
+    @Published var selectedModel: AIModel? {
+        didSet {
+            guard oldValue?.id != selectedModel?.id else { return }
+            scheduleLocalMetalMemorySync(previous: oldValue, current: selectedModel)
+        }
+    }
     @Published var effort: Effort = .high
     @Published var permissionMode: PermissionMode = .acceptEdits
+
+    /// True while the selected on-device Metal model is being loaded into RAM.
+    @Published var isLoadingLocalMetal = false
+    /// 0…1 progress while `isLoadingLocalMetal` is true (disk → RAM / residual hub work).
+    @Published var localMetalLoadProgress: Double = 0
+    /// Last error from loading the selected local model into memory (if any).
+    @Published var localMetalLoadError: String?
+
+    private var localMetalSyncTask: Task<Void, Never>?
+    private var localMetalSyncGeneration = 0
 
     /// User-renamed models, keyed by `"provider:modelID"`. Empty entries are
     /// treated as "use the upstream name".
     @Published var modelAliases: [String: String] = [:]
 
+    /// Models the user removed from the picker (keyed like aliases).
+    /// Local Metal deletions also erase weights; remote/catalog models are only hidden.
+    @Published private(set) var hiddenModelKeys: Set<String> = []
+
     /// When true, every assistant message expands its Thinking section
     /// by default. When false, thinking collapses behind a one-line preview.
     @AppStorage("alwaysExpandThinking.v1") var alwaysExpandThinking: Bool = false
+
+    /// App chrome appearance: dark (blue-grey), OLED (true black), or light.
+    @AppStorage(AppAppearance.storageKey) var appearanceRaw: String = AppAppearance.default.rawValue
+
+    var appearance: AppAppearance {
+        get { AppAppearance.resolve(rawValue: appearanceRaw) }
+        set {
+            guard newValue.rawValue != appearanceRaw else { return }
+            appearanceRaw = newValue.rawValue
+            Theme.apply(newValue)
+            // @AppStorage does not always publish through ObservableObject;
+            // force dependents (and Theme.* readers) to refresh.
+            objectWillChange.send()
+        }
+    }
 
     /// Branch name prefix for new coding sessions, e.g. `apc/fix-login-a1b2c3d4`.
     @AppStorage("codeBranchPrefix.v1") var codeBranchPrefix: String = "apc"
@@ -52,6 +88,11 @@ final class AppState: ObservableObject {
     /// How the app chooses between LAN and tunnel.
     /// Raw value persisted in AppStorage.
     @AppStorage("serverConnectionPreference.v1") var connectionPreferenceRaw: String = ServerConnectionPreference.smart.rawValue
+
+    /// After a dead tunnel is cleared, request a forced desktop regen once LAN works.
+    private var pendingTunnelRegen = false
+    private var lastTunnelRegenAt: Date?
+    private static let tunnelRegenCooldownSeconds: TimeInterval = 60
 
     /// When non-nil, the iOS app will push its settings to this GitHub
     /// repo on every change (and pull on launch when a token is linked).
@@ -81,6 +122,25 @@ final class AppState: ObservableObject {
     @Published var serverName: String?
     @Published var isReconnecting = false
     @Published var reconnectMessage: String?
+    /// Live reachability of the paired desktop (used by Devices status dots).
+    @Published private(set) var desktopReachability: DesktopReachability = .unpaired
+
+    /// Whether the paired desktop is reachable right now.
+    enum DesktopReachability: Equatable {
+        case unpaired
+        case connecting
+        case connected
+        case unreachable
+
+        var label: String {
+            switch self {
+            case .unpaired: return "Not paired"
+            case .connecting: return "Connecting…"
+            case .connected: return "Connected"
+            case .unreachable: return "Unable to connect"
+            }
+        }
+    }
 
     /// How the phone reaches the desktop: offline, same network, or public tunnel.
     enum ServerConnectionPath: Equatable {
@@ -233,6 +293,35 @@ final class AppState: ObservableObject {
     /// keeps Settings / the status pill in sync with the live connection.
     func activateEndpointForSession(_ endpoint: ServerClient.Endpoint) {
         activateEndpoint(endpoint)
+        desktopReachability = .connected
+        // Keep “refreshing tunnel…” copy when we just fell back from a dead tunnel.
+        if !pendingTunnelRegen {
+            reconnectMessage = nil
+        }
+        // After tunnel → local fallback, ask the desktop for a fresh public URL.
+        if pendingTunnelRegen, Self.connectionPath(for: endpoint) == .local {
+            scheduleTunnelRegenerationIfNeeded()
+        }
+    }
+
+    /// Session/UI hooks for the Devices status dot while a socket is opening.
+    func markDesktopConnecting() {
+        guard serverToken != nil else {
+            desktopReachability = .unpaired
+            return
+        }
+        desktopReachability = .connecting
+    }
+
+    func markDesktopUnreachable(_ message: String? = nil) {
+        guard serverToken != nil else {
+            desktopReachability = .unpaired
+            return
+        }
+        desktopReachability = .unreachable
+        if let message, !message.isEmpty {
+            reconnectMessage = message
+        }
     }
 
     // Chat state (per-chat toggles live on `ChatViewModel`; nothing here yet.)
@@ -244,6 +333,7 @@ final class AppState: ObservableObject {
     private let mcpBranchKey = "mcpRepoBranch.v1"
     private let customProvidersKey = "customProviders.v1"
     private let modelAliasesKey = "modelAliases.v1"
+    private let hiddenModelsKey = "hiddenModels.v1"
     private let serverNameKey = "serverName.v1"
     private var bag = Set<AnyCancellable>()
 
@@ -259,6 +349,7 @@ final class AppState: ObservableObject {
         loadSyncedRepos()
         loadCustomProviders()
         loadModelAliases()
+        loadHiddenModels()
         seedDefaultEnvironmentIfNeeded()
         restorePairingFromDisk()
         Task { await attemptServerReconnect() }
@@ -285,21 +376,34 @@ final class AppState: ObservableObject {
         serverTunnelHost = ""
         recordEndpoint(endpoint)
         activateEndpoint(endpoint)
+        desktopReachability = .connected
+        reconnectMessage = nil
     }
 
     /// Remember the desktop's public tunnel URL while keeping the LAN address.
     /// Activates tunnel when preference is Smart or Always tunnel.
+    /// When `requireReachable` is true, runs a health check before switching
+    /// the active path (avoids re-applying a dead tunnel after LAN fallback).
     @discardableResult
-    func applyRemoteEndpoint(urlString: String) -> Bool {
+    func applyRemoteEndpoint(urlString: String, requireReachable: Bool = false) async -> Bool {
         let trimmed = normalizeHostString(urlString)
         guard !trimmed.isEmpty, let endpoint = ServerClient.Endpoint(host: trimmed) else {
             return false
         }
         guard serverToken != nil, !(serverToken ?? "").isEmpty else { return false }
 
+        if requireReachable {
+            let ok = await isEndpointReachable(endpoint)
+            if !ok {
+                reconnectMessage = "New tunnel not reachable yet — staying on local."
+                return false
+            }
+        }
+
         let previousTunnel = normalizeHostString(serverTunnelHost)
         serverTunnelHost = trimmed
         secrets.set(serverToken, for: SecretKey.serverToken(trimmed))
+        pendingTunnelRegen = false
 
         let shouldActivate: Bool = {
             switch connectionPreference {
@@ -315,6 +419,135 @@ final class AppState: ObservableObject {
             reconnectMessage = "Tunnel available (preference is Always local)."
         }
         return previousTunnel.caseInsensitiveCompare(trimmed) != .orderedSame || shouldActivate
+    }
+
+    /// Drop a public tunnel URL that failed health/connect so we stop preferring it.
+    /// Sets `pendingTunnelRegen` so the next successful LAN path can request a fresh tunnel.
+    func clearTunnelEndpoint(requestRegen: Bool = true) {
+        let previous = normalizeHostString(serverTunnelHost)
+        guard !previous.isEmpty else {
+            if requestRegen { pendingTunnelRegen = true }
+            return
+        }
+
+        // If the active path is the dead tunnel, switch to local first when possible.
+        let activeIsTunnel = serverEndpoint.map { Self.connectionPath(for: $0) == .tunnel } ?? false
+            || normalizeHostString(serverHost).caseInsensitiveCompare(previous) == .orderedSame
+        if activeIsTunnel, let local = localEndpoint {
+            activateEndpoint(local)
+        }
+
+        secrets.set(nil, for: SecretKey.serverToken(previous))
+        if let token = serverToken, !token.isEmpty {
+            if !serverLocalHost.isEmpty {
+                secrets.set(token, for: SecretKey.serverToken(serverLocalHost))
+            }
+            let activeHost = normalizeHostString(serverHost)
+            if !activeHost.isEmpty, activeHost.caseInsensitiveCompare(previous) != .orderedSame {
+                secrets.set(token, for: SecretKey.serverToken(activeHost))
+            }
+        }
+        serverTunnelHost = ""
+        if requestRegen { pendingTunnelRegen = true }
+        objectWillChange.send()
+    }
+
+    /// After a tunnel failure: clear the dead URL, stay/use local, ask desktop for a new tunnel.
+    func invalidateTunnelAndRegenerate(reason: String? = nil) {
+        clearTunnelEndpoint(requestRegen: true)
+        reconnectMessage = reason ?? "Tunnel unreachable — using local. Refreshing tunnel…"
+        scheduleTunnelRegenerationIfNeeded()
+    }
+
+    /// Cooldown-gated force-regen over the LAN endpoint (background recovery).
+    func scheduleTunnelRegenerationIfNeeded() {
+        guard pendingTunnelRegen || tunnelEndpoint == nil else { return }
+        if let last = lastTunnelRegenAt,
+           Date().timeIntervalSince(last) < Self.tunnelRegenCooldownSeconds {
+            return
+        }
+        lastTunnelRegenAt = Date()
+        Task { _ = await ensureTunnelFromLocal(force: true) }
+    }
+
+    /**
+     Ask the desktop (over LAN) for a public tunnel URL and apply it if healthy.
+     - `force: false` — reuse an existing desktop tunnel or start one if missing.
+     - `force: true` — tear down and mint a new public URL (dead-tunnel recovery).
+     Returns true when a reachable tunnel is now active (or stored for Always local).
+     */
+    @discardableResult
+    func ensureTunnelFromLocal(force: Bool) async -> Bool {
+        guard let token = serverToken, !token.isEmpty else {
+            pendingTunnelRegen = false
+            return false
+        }
+        let local = localEndpoint
+            ?? serverEndpoint.flatMap { Self.connectionPath(for: $0) == .local ? $0 : nil }
+        guard let local else {
+            reconnectMessage = "No local address to open a tunnel from — pair on the same Wi‑Fi first."
+            pendingTunnelRegen = false
+            return false
+        }
+
+        // Need a LAN path to talk to the desktop while the public URL is missing/dead.
+        if let active = serverEndpoint, Self.connectionPath(for: active) != .local {
+            activateEndpoint(local)
+        } else if serverEndpoint == nil {
+            activateEndpoint(local)
+        }
+
+        reconnectMessage = force
+            ? "Refreshing secure tunnel…"
+            : "Opening secure tunnel…"
+        desktopReachability = .connecting
+        lastTunnelRegenAt = Date()
+
+        do {
+            let client = ServerClient()
+            let result = try await client.requestRemoteEndpoint(
+                endpoint: local,
+                token: token,
+                force: force,
+                timeoutSeconds: 50
+            )
+            if await applyRemoteEndpoint(urlString: result.url, requireReachable: true) {
+                let provider = result.provider.map { " via \($0)" } ?? ""
+                reconnectMessage = "Secure tunnel ready\(provider)."
+                desktopReachability = .connected
+                return true
+            }
+            pendingTunnelRegen = false
+            // Preference may still want tunnel; keep LAN usable.
+            if connectionPreference == .alwaysTunnel {
+                reconnectMessage = "Tunnel URL not reachable yet — staying on local."
+            } else {
+                reconnectMessage = "Using local. New tunnel not reachable yet."
+            }
+            desktopReachability = .connected
+            return false
+        } catch {
+            pendingTunnelRegen = false
+            if connectionPreference == .alwaysTunnel {
+                reconnectMessage = "Could not open tunnel: \(error.localizedDescription)"
+                // Stay on local if we have it so the session still works.
+                if localEndpoint != nil || Self.connectionPath(for: local) == .local {
+                    activateEndpoint(local)
+                    desktopReachability = .connected
+                } else {
+                    desktopReachability = .unreachable
+                }
+            } else {
+                reconnectMessage = "Using local. Tunnel refresh failed: \(error.localizedDescription)"
+                desktopReachability = .connected
+            }
+            return false
+        }
+    }
+
+    /// Background recovery entry point (forced restart of a dead tunnel).
+    func regenerateTunnelFromServer() async {
+        _ = await ensureTunnelFromLocal(force: true)
     }
 
     /**
@@ -341,7 +574,7 @@ final class AppState: ObservableObject {
                 token: token,
                 timeoutSeconds: timeoutSeconds
             )
-            if applyRemoteEndpoint(urlString: result.url) {
+            if await applyRemoteEndpoint(urlString: result.url, requireReachable: true) {
                 let provider = result.provider.map { " via \($0)" } ?? ""
                 switch connectionPreference {
                 case .alwaysLocal:
@@ -350,30 +583,36 @@ final class AppState: ObservableObject {
                     return "Paired. Secure tunnel ready\(provider)."
                 }
             }
-            return "Paired (tunnel \(result.url))."
+            return "Paired on LAN. Tunnel URL received but not reachable yet."
         } catch {
             return "Paired on LAN. Tunnel unavailable: \(error.localizedDescription)"
         }
     }
 
     /// Change connection preference and re-resolve active endpoint.
-    func setConnectionPreference(_ preference: ServerConnectionPreference) {
+    /// When switching to Always tunnel with no (or a dead) URL, opens a tunnel
+    /// over the LAN automatically instead of only showing an error.
+    func setConnectionPreference(_ preference: ServerConnectionPreference) async {
         connectionPreference = preference
-        Task { await applyConnectionPreference(healthCheck: true) }
+        isReconnecting = true
+        desktopReachability = .connecting
+        defer { isReconnecting = false }
+        await applyConnectionPreference(healthCheck: true)
     }
 
     /**
      Pick the active endpoint from local/tunnel slots according to preference.
      Smart mode prefers tunnel when its health check passes, otherwise local.
+     Always tunnel will request a public URL from the desktop when missing.
      */
     func applyConnectionPreference(healthCheck: Bool = true) async {
-        guard serverToken != nil, !(serverToken ?? "").isEmpty else { return }
-
-        let local = localEndpoint
-        let tunnel = tunnelEndpoint
+        guard serverToken != nil, !(serverToken ?? "").isEmpty else {
+            desktopReachability = .unpaired
+            return
+        }
 
         // Seed slots from the current active host if they were never split.
-        if local == nil, tunnel == nil, let active = serverEndpoint {
+        if localEndpoint == nil, tunnelEndpoint == nil, let active = serverEndpoint {
             recordEndpoint(active)
         }
 
@@ -387,54 +626,88 @@ final class AppState: ObservableObject {
                 if ok {
                     activateEndpoint(localNow)
                     reconnectMessage = nil
+                    if healthCheck { desktopReachability = .connected }
                     return
                 }
                 reconnectMessage = "Local desktop not reachable."
+                if healthCheck { desktopReachability = .unreachable }
             } else {
                 reconnectMessage = "No local address saved — pair on the same Wi‑Fi first."
+                if healthCheck { desktopReachability = .unreachable }
             }
 
         case .alwaysTunnel:
+            var hadDeadTunnel = false
             if let tunnelNow {
                 let ok = healthCheck ? await isEndpointReachable(tunnelNow) : true
                 if ok {
                     activateEndpoint(tunnelNow)
                     reconnectMessage = nil
+                    if healthCheck { desktopReachability = .connected }
                     return
                 }
-                reconnectMessage = "Tunnel not reachable."
-            } else {
-                reconnectMessage = "No tunnel URL yet — enable remote access on the desktop."
+                // Dead tunnel: drop it so we mint a fresh public URL over LAN.
+                if healthCheck {
+                    clearTunnelEndpoint(requestRegen: false)
+                    hadDeadTunnel = true
+                }
             }
 
+            // No tunnel URL (or just cleared a dead one) — open one via LAN.
+            guard healthCheck else {
+                reconnectMessage = "No tunnel URL yet."
+                return
+            }
+            guard let localNow, await isEndpointReachable(localNow) else {
+                reconnectMessage = localNow == nil
+                    ? "No local address to open a tunnel from — pair on the same Wi‑Fi first."
+                    : "Desktop not reachable on local — can't open a tunnel."
+                desktopReachability = .unreachable
+                return
+            }
+            activateEndpoint(localNow)
+            // Force-restart only when replacing a dead URL; otherwise reuse/start on desktop.
+            _ = await ensureTunnelFromLocal(force: hadDeadTunnel)
+
         case .smart:
-            // Prefer tunnel, fall back to local.
+            // Prefer tunnel, fall back to local; drop dead tunnels and regen.
+            var tunnelFailed = false
             if let tunnelNow {
                 let ok = healthCheck ? await isEndpointReachable(tunnelNow) : true
                 if ok {
                     activateEndpoint(tunnelNow)
                     reconnectMessage = nil
+                    if healthCheck { desktopReachability = .connected }
                     return
+                }
+                tunnelFailed = healthCheck
+                if tunnelFailed {
+                    clearTunnelEndpoint(requestRegen: true)
                 }
             }
             if let localNow {
                 let ok = healthCheck ? await isEndpointReachable(localNow) : true
                 if ok {
                     activateEndpoint(localNow)
-                    reconnectMessage = tunnelNow == nil
-                        ? nil
-                        : "Tunnel unreachable — using local."
+                    if tunnelFailed {
+                        reconnectMessage = "Tunnel unreachable — using local. Refreshing tunnel…"
+                        scheduleTunnelRegenerationIfNeeded()
+                    } else {
+                        reconnectMessage = nil
+                    }
+                    if healthCheck { desktopReachability = .connected }
                     return
                 }
             }
             // Last resort: still point at preferred path so UI shows intent.
-            if let tunnelNow {
+            if let tunnelNow = tunnelEndpoint {
                 activateEndpoint(tunnelNow)
                 reconnectMessage = "Desktop not reachable on tunnel or local."
             } else if let localNow {
                 activateEndpoint(localNow)
                 reconnectMessage = "Desktop not reachable."
             }
+            if healthCheck { desktopReachability = .unreachable }
         }
     }
 
@@ -449,6 +722,9 @@ final class AppState: ObservableObject {
         serverLocalHost = ""
         serverTunnelHost = ""
         UserDefaults.standard.removeObject(forKey: serverNameKey)
+        desktopReachability = .unpaired
+        isReconnecting = false
+        reconnectMessage = nil
     }
 
     private func restorePairingFromDisk() {
@@ -478,21 +754,31 @@ final class AppState: ObservableObject {
             serverEndpoint = active
         }
         serverName = UserDefaults.standard.string(forKey: serverNameKey)
+        // Mark connecting until the launch health check finishes.
+        desktopReachability = .connecting
     }
 
     /// Health-check preferred endpoints and settle on the best path.
     func attemptServerReconnect() async {
         guard serverToken != nil, !(serverToken ?? "").isEmpty else {
             reconnectMessage = nil
+            desktopReachability = .unpaired
             return
         }
         isReconnecting = true
+        desktopReachability = .connecting
         defer { isReconnecting = false }
 
         await applyConnectionPreference(healthCheck: true)
 
         guard let endpoint = serverEndpoint, let token = serverToken else {
             reconnectMessage = "Not paired."
+            desktopReachability = .unpaired
+            return
+        }
+
+        // If HTTP health already failed, don't try a WebSocket probe.
+        if desktopReachability == .unreachable {
             return
         }
 
@@ -510,18 +796,24 @@ final class AppState: ObservableObject {
             if reconnectMessage == nil {
                 reconnectMessage = nil
             }
+            desktopReachability = .connected
         } catch {
             // If smart/local failed the WS step, try the other path once.
             if connectionPreference == .smart {
                 await tryAlternatePath(after: endpoint, error: error)
             } else {
-                reconnectMessage = "Could not reconnect: \(error.localizedDescription)"
+                reconnectMessage = Self.reconnectFailureMessage(error)
+                desktopReachability = .unreachable
             }
         }
     }
 
     private func tryAlternatePath(after failed: ServerClient.Endpoint, error: Error) async {
         let failedPath = Self.connectionPath(for: failed)
+        if failedPath == .tunnel {
+            // Forget the dead public URL before trying LAN so we don't loop on it.
+            clearTunnelEndpoint(requestRegen: true)
+        }
         let alternate: ServerClient.Endpoint? = {
             switch failedPath {
             case .tunnel: return localEndpoint
@@ -530,11 +822,13 @@ final class AppState: ObservableObject {
             }
         }()
         guard let alternate, let token = serverToken else {
-            reconnectMessage = "Could not reconnect: \(error.localizedDescription)"
+            reconnectMessage = Self.reconnectFailureMessage(error)
+            desktopReachability = .unreachable
             return
         }
         guard await isEndpointReachable(alternate) else {
-            reconnectMessage = "Could not reconnect: \(error.localizedDescription)"
+            reconnectMessage = Self.reconnectFailureMessage(error)
+            desktopReachability = .unreachable
             return
         }
         activateEndpoint(alternate)
@@ -544,12 +838,30 @@ final class AppState: ObservableObject {
             try? await Task.sleep(nanoseconds: 300_000_000)
             await client.disconnect()
             _ = stream
-            reconnectMessage = failedPath == .tunnel
-                ? "Tunnel failed — switched to local."
-                : "Local failed — switched to tunnel."
+            if failedPath == .tunnel {
+                reconnectMessage = "Tunnel failed — switched to local. Refreshing tunnel…"
+                desktopReachability = .connected
+                scheduleTunnelRegenerationIfNeeded()
+            } else {
+                reconnectMessage = "Local failed — switched to tunnel."
+                desktopReachability = .connected
+            }
         } catch {
-            reconnectMessage = "Could not reconnect: \(error.localizedDescription)"
+            reconnectMessage = Self.reconnectFailureMessage(error)
+            desktopReachability = .unreachable
         }
+    }
+
+    /// Prefer a pairing-focused message when the desktop rejected the saved token.
+    private static func reconnectFailureMessage(_ error: Error) -> String {
+        let detail = error.localizedDescription
+        if detail.localizedCaseInsensitiveContains("unauthorized")
+            || detail.localizedCaseInsensitiveContains("re-pair")
+            || detail.localizedCaseInsensitiveContains("token expired")
+        {
+            return "Pairing expired — open Desktop server and enter a new pairing code."
+        }
+        return "Could not reconnect: \(detail)"
     }
 
     private func isEndpointReachable(_ endpoint: ServerClient.Endpoint) async -> Bool {
@@ -749,7 +1061,78 @@ final class AppState: ObservableObject {
     }
 
     var allModels: [AIModel] {
-        providerResults.flatMap(\.models)
+        providerResults.flatMap(\.models).filter { !isModelHidden($0) }
+    }
+
+    /// Models for a provider result after applying the user's hide list.
+    func visibleModels(in result: ModelCatalog.ProviderResult) -> [AIModel] {
+        result.models.filter { !isModelHidden($0) }
+    }
+
+    func isModelHidden(_ model: AIModel) -> Bool {
+        hiddenModelKeys.contains(Self.aliasKey(provider: model.provider, modelID: model.modelID))
+    }
+
+    /// Hide a catalog model from the picker (or delete on-device Metal weights).
+    /// Returns a short status line for the UI, or throws for Metal failures.
+    @discardableResult
+    func removeModelFromPicker(_ model: AIModel) async throws -> String {
+        if model.provider == .localMetal {
+            LocalMetalBootstrap.ensureRegistered()
+            guard let engine = LocalMetalRuntime.engine else {
+                throw ProviderError.transport("Metal runtime is not linked.")
+            }
+            try await engine.deleteModel(modelID: model.modelID)
+            await LocalMetalModelStore.shared.markDeleted(modelID: model.modelID)
+            let removedID = model.id
+            if selectedModel?.id == removedID {
+                selectedModel = nil
+            }
+            await refreshModels()
+            if selectedModel == nil {
+                selectedModel = allModels.first
+            }
+            return "Deleted on-device model from disk."
+        }
+
+        hideModelKey(for: model)
+        modelAliases.removeValue(forKey: Self.aliasKey(provider: model.provider, modelID: model.modelID))
+        saveModelAliases()
+        if selectedModel?.id == model.id {
+            selectedModel = allModels.first
+        }
+        objectWillChange.send()
+        return "Removed from model list."
+    }
+
+    private func hideModelKey(for model: AIModel) {
+        hiddenModelKeys.insert(Self.aliasKey(provider: model.provider, modelID: model.modelID))
+        saveHiddenModels()
+    }
+
+    /// True when the user has swipe-hidden catalog models (not disk-deleted Metal).
+    var hasHiddenModels: Bool { !hiddenModelKeys.isEmpty }
+
+    /// Restore all swipe-hidden remote/catalog models to the picker.
+    func restoreHiddenModels() {
+        guard !hiddenModelKeys.isEmpty else { return }
+        hiddenModelKeys = []
+        saveHiddenModels()
+        objectWillChange.send()
+    }
+
+    private func loadHiddenModels() {
+        guard let data = UserDefaults.standard.data(forKey: hiddenModelsKey),
+              let decoded = try? JSONDecoder().decode([String].self, from: data)
+        else { return }
+        hiddenModelKeys = Set(decoded)
+    }
+
+    private func saveHiddenModels() {
+        let list = Array(hiddenModelKeys).sorted()
+        if let data = try? JSONEncoder().encode(list) {
+            UserDefaults.standard.set(data, forKey: hiddenModelsKey)
+        }
     }
 
     // MARK: Models
@@ -783,15 +1166,140 @@ final class AppState: ObservableObject {
             styles: styles
         )
         // Drop a selection that no longer has a key / vanished from catalog.
+        // When still listed, refresh metadata (friendly display names, etc.).
         if let selected = selectedModel {
-            let stillListed = allModels.contains(where: { $0.id == selected.id })
-            let canCall = !resolvedAPIKey(for: selected.provider).isEmpty
-            if !stillListed || !canCall {
+            if let updated = allModels.first(where: { $0.id == selected.id }) {
+                let canCall = !resolvedAPIKey(for: selected.provider).isEmpty
+                if canCall {
+                    if updated.displayName != selected.displayName
+                        || updated.contextWindow != selected.contextWindow {
+                        selectedModel = updated
+                    }
+                } else {
+                    selectedModel = allModels.first
+                }
+            } else {
                 selectedModel = allModels.first
             }
         } else {
             selectedModel = allModels.first
         }
+        // Ensure RAM matches selection after catalog refresh (e.g. new download).
+        await ensureSelectedLocalMetalLoaded()
+    }
+
+    // MARK: Local Metal RAM policy
+
+    /// Only the **selected** on-device model may stay in memory. Downloads leave
+    /// weights on disk; picking another model unloads the previous one.
+    func scheduleLocalMetalMemorySync(previous: AIModel?, current: AIModel?) {
+        localMetalSyncGeneration += 1
+        let generation = localMetalSyncGeneration
+        localMetalSyncTask?.cancel()
+        localMetalSyncTask = Task { @MainActor in
+            await syncLocalMetalMemory(
+                previous: previous,
+                current: current,
+                generation: generation
+            )
+        }
+    }
+
+    /// Awaitable re-sync for the current selection (call after a download finishes).
+    func ensureSelectedLocalMetalLoaded() async {
+        scheduleLocalMetalMemorySync(previous: nil, current: selectedModel)
+        await localMetalSyncTask?.value
+    }
+
+    private func syncLocalMetalMemory(
+        previous: AIModel?,
+        current: AIModel?,
+        generation: Int
+    ) async {
+        LocalMetalBootstrap.ensureRegistered()
+        guard let engine = LocalMetalRuntime.engine else {
+            clearLocalMetalLoadingState()
+            return
+        }
+        guard !Task.isCancelled, generation == localMetalSyncGeneration else { return }
+
+        let keepID: String? = (current?.provider == .localMetal) ? current?.modelID : nil
+
+        // Unload everything that shouldn't be resident.
+        let loaded = await engine.loadedModelIDs()
+        for id in loaded where id != keepID {
+            await engine.unloadFromMemory(modelID: id)
+        }
+        if keepID == nil {
+            if !loaded.isEmpty {
+                await engine.unloadAllFromMemory()
+            }
+            if generation == localMetalSyncGeneration {
+                clearLocalMetalLoadingState()
+                localMetalLoadError = nil
+            }
+            return
+        }
+
+        guard let modelID = keepID else { return }
+        if await engine.isLoadedInMemory(modelID: modelID) {
+            if generation == localMetalSyncGeneration {
+                clearLocalMetalLoadingState()
+                localMetalLoadError = nil
+            }
+            return
+        }
+
+        guard !Task.isCancelled, generation == localMetalSyncGeneration else { return }
+        isLoadingLocalMetal = true
+        localMetalLoadProgress = 0
+        localMetalLoadError = nil
+        defer {
+            if generation == localMetalSyncGeneration {
+                clearLocalMetalLoadingState()
+            }
+        }
+
+        do {
+            try await engine.loadIntoMemory(modelID: modelID) { [weak self] fraction in
+                Task { @MainActor in
+                    guard let self else { return }
+                    // Drop stale callbacks after cancel, model switch, or load finished.
+                    guard generation == self.localMetalSyncGeneration,
+                          self.isLoadingLocalMetal
+                    else { return }
+                    // Monotonic so a brief 0-report doesn't rewind the bar.
+                    let next = min(1, max(0, fraction))
+                    if next >= self.localMetalLoadProgress {
+                        self.localMetalLoadProgress = next
+                    }
+                }
+            }
+            // If the user picked another model mid-load, drop this one.
+            guard !Task.isCancelled, generation == localMetalSyncGeneration else {
+                await engine.unloadFromMemory(modelID: modelID)
+                return
+            }
+            localMetalLoadProgress = 1
+            // Belt-and-suspenders: never keep more than one local model in RAM.
+            for id in await engine.loadedModelIDs() where id != modelID {
+                await engine.unloadFromMemory(modelID: id)
+            }
+            _ = previous // reserved for future telemetry
+        } catch is CancellationError {
+            await engine.unloadFromMemory(modelID: modelID)
+        } catch {
+            await engine.unloadFromMemory(modelID: modelID)
+            if generation == localMetalSyncGeneration {
+                localMetalLoadError =
+                    (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
+        }
+    }
+
+    private func clearLocalMetalLoadingState() {
+        isLoadingLocalMetal = false
+        localMetalLoadProgress = 0
     }
 
     // MARK: Environments
@@ -877,9 +1385,21 @@ final class AppState: ObservableObject {
     }
 
     /// Display name shown in the UI: alias if present, otherwise the upstream name.
+    /// Local Metal models always resolve to a friendly name (not a hub code id).
     func displayName(for model: AIModel) -> String {
         let key = Self.aliasKey(provider: model.provider, modelID: model.modelID)
-        return modelAliases[key] ?? model.displayName
+        if let alias = modelAliases[key], !alias.isEmpty {
+            return alias
+        }
+        if model.provider == .localMetal {
+            let pretty = LocalMetalCatalog.displayName(for: model.modelID)
+            // Picker / composer show the Metal suffix for on-device models.
+            if model.displayName.hasSuffix(" · Metal") || model.displayName.hasSuffix("· Metal") {
+                return pretty + " · Metal"
+            }
+            return pretty
+        }
+        return model.displayName
     }
 
     private func loadModelAliases() {
