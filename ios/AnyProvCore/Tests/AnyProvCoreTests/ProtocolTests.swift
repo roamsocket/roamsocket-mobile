@@ -2,6 +2,24 @@ import XCTest
 @testable import AnyProvCore
 
 final class ProtocolTests: XCTestCase {
+    func testEndpointDefaultsCompanionPortForBareIP() throws {
+        let endpoint = try XCTUnwrap(ServerClient.Endpoint(host: "192.168.1.20"))
+        XCTAssertEqual(endpoint.baseURL.scheme, "http")
+        XCTAssertEqual(endpoint.baseURL.host, "192.168.1.20")
+        XCTAssertEqual(endpoint.baseURL.port, 4319)
+    }
+
+    func testEndpointPreservesExplicitPort() throws {
+        let endpoint = try XCTUnwrap(ServerClient.Endpoint(host: "http://10.0.0.5:9999"))
+        XCTAssertEqual(endpoint.baseURL.port, 9999)
+        XCTAssertEqual(endpoint.baseURL.host, "10.0.0.5")
+    }
+
+    func testEndpointRejectsEmptyHost() {
+        XCTAssertNil(ServerClient.Endpoint(host: "   "))
+        XCTAssertNil(ServerClient.Endpoint(host: "http://"))
+    }
+
     func testCreateSessionEncodesExpectedShape() throws {
         let msg = ClientMessage.createSession(
             sessionId: "s1",

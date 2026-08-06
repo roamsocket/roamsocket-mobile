@@ -94,6 +94,11 @@ final class AppState: ObservableObject {
     private var lastTunnelRegenAt: Date?
     private static let tunnelRegenCooldownSeconds: TimeInterval = 60
 
+    /// Coalesces concurrent reconnect attempts so `isReconnecting` can't flip
+    /// false while a later attempt is still in flight, and so Code home / launch
+    /// / Settings don't race `activateEndpoint`.
+    private var reconnectTask: Task<ServerReconnectOutcome, Never>?
+
     /// When non-nil, the iOS app will push its settings to this GitHub
     /// repo on every change (and pull on launch when a token is linked).
     @AppStorage("settingsSyncRepoFullName.v1") var settingsSyncRepoFullName: String?
@@ -122,8 +127,18 @@ final class AppState: ObservableObject {
     @Published var serverName: String?
     @Published var isReconnecting = false
     @Published var reconnectMessage: String?
+    /// True when the last reconnect failed because the desktop rejected the token.
+    @Published private(set) var needsServerRePair = false
     /// Live reachability of the paired desktop (used by Devices status dots).
     @Published private(set) var desktopReachability: DesktopReachability = .unpaired
+
+    /// Result of an interactive reconnect attempt (Devices tab, recovery sheet).
+    enum ServerReconnectOutcome: Equatable {
+        case connected
+        case needsRePair
+        case unreachable
+        case unpaired
+    }
 
     /// Whether the paired desktop is reachable right now.
     enum DesktopReachability: Equatable {
@@ -725,6 +740,7 @@ final class AppState: ObservableObject {
         desktopReachability = .unpaired
         isReconnecting = false
         reconnectMessage = nil
+        needsServerRePair = false
     }
 
     private func restorePairingFromDisk() {
@@ -759,14 +775,59 @@ final class AppState: ObservableObject {
     }
 
     /// Health-check preferred endpoints and settle on the best path.
-    func attemptServerReconnect() async {
+    /// Concurrent callers join the in-flight attempt instead of racing state.
+    @discardableResult
+    func attemptServerReconnect() async -> ServerReconnectOutcome {
+        if let existing = reconnectTask {
+            return await existing.value
+        }
+        let task = Task { @MainActor in
+            await self.performServerReconnect()
+        }
+        reconnectTask = task
+        let result = await task.value
+        if reconnectTask == task {
+            reconnectTask = nil
+        }
+        return result
+    }
+
+    /**
+     Point the phone at a specific LAN address (from Bonjour rescan or typed IP),
+     keep the saved token, and try to reconnect. Use when the desktop IP changed
+     or discovery found a host the user wants to try.
+
+     Only commits the new address after HTTP health + WebSocket succeed, so a
+     mistyped IP cannot clobber a working tunnel/local path.
+     */
+    @discardableResult
+    func reconnectToEndpoint(_ endpoint: ServerClient.Endpoint) async -> ServerReconnectOutcome {
+        // Drain any in-flight reconnect before starting a host-specific attempt.
+        // Loop so two concurrent callers don't both assign reconnectTask.
+        while let existing = reconnectTask {
+            _ = await existing.value
+        }
+        let task = Task { @MainActor in
+            await self.performReconnectToEndpoint(endpoint)
+        }
+        reconnectTask = task
+        let result = await task.value
+        if reconnectTask == task {
+            reconnectTask = nil
+        }
+        return result
+    }
+
+    private func performServerReconnect() async -> ServerReconnectOutcome {
         guard serverToken != nil, !(serverToken ?? "").isEmpty else {
             reconnectMessage = nil
+            needsServerRePair = false
             desktopReachability = .unpaired
-            return
+            return .unpaired
         }
         isReconnecting = true
         desktopReachability = .connecting
+        needsServerRePair = false
         defer { isReconnecting = false }
 
         await applyConnectionPreference(healthCheck: true)
@@ -774,15 +835,82 @@ final class AppState: ObservableObject {
         guard let endpoint = serverEndpoint, let token = serverToken else {
             reconnectMessage = "Not paired."
             desktopReachability = .unpaired
-            return
+            return .unpaired
         }
 
         // If HTTP health already failed, don't try a WebSocket probe.
         if desktopReachability == .unreachable {
-            return
+            return .unreachable
         }
 
         // Validate token with a short-lived WebSocket on the chosen path.
+        do {
+            if let name = await fetchServerName(endpoint: endpoint) {
+                // Pairing may have been cleared while the probe was in flight.
+                guard serverToken != nil else {
+                    desktopReachability = .unpaired
+                    return .unpaired
+                }
+                serverName = name
+                UserDefaults.standard.set(name, forKey: serverNameKey)
+            }
+            let client = ServerClient()
+            let stream = try await client.connect(endpoint: endpoint, token: token)
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            await client.disconnect()
+            _ = stream
+            guard serverToken != nil else {
+                desktopReachability = .unpaired
+                return .unpaired
+            }
+            // Keep “refreshing tunnel…” copy when we just fell back from a dead tunnel.
+            if !pendingTunnelRegen {
+                reconnectMessage = nil
+            }
+            needsServerRePair = false
+            desktopReachability = .connected
+            return .connected
+        } catch {
+            guard serverToken != nil else {
+                desktopReachability = .unpaired
+                return .unpaired
+            }
+            // If smart/local failed the WS step, try the other path once.
+            if connectionPreference == .smart {
+                return await tryAlternatePath(after: endpoint, error: error)
+            }
+            return markReconnectFailure(error)
+        }
+    }
+
+    private func performReconnectToEndpoint(_ endpoint: ServerClient.Endpoint) async -> ServerReconnectOutcome {
+        guard let token = serverToken, !token.isEmpty else {
+            reconnectMessage = "Not paired."
+            needsServerRePair = false
+            desktopReachability = .unpaired
+            return .unpaired
+        }
+
+        let hostLabel = endpoint.baseURL.host ?? endpoint.baseURL.absoluteString
+        let previousEndpoint = serverEndpoint
+
+        isReconnecting = true
+        desktopReachability = .connecting
+        needsServerRePair = false
+        defer { isReconnecting = false }
+
+        guard await isEndpointReachable(endpoint) else {
+            reconnectMessage = "Desktop not reachable at \(hostLabel)."
+            // Don't clobber a still-working active path with a bad typed IP.
+            if let previous = previousEndpoint, await isEndpointReachable(previous) {
+                desktopReachability = .connected
+                reconnectMessage = "Couldn't reach \(hostLabel). Previous connection still works."
+            } else {
+                desktopReachability = .unreachable
+            }
+            return .unreachable
+        }
+
         do {
             if let name = await fetchServerName(endpoint: endpoint) {
                 serverName = name
@@ -793,22 +921,38 @@ final class AppState: ObservableObject {
             try? await Task.sleep(nanoseconds: 300_000_000)
             await client.disconnect()
             _ = stream
-            if reconnectMessage == nil {
-                reconnectMessage = nil
+            guard serverToken != nil else {
+                desktopReachability = .unpaired
+                return .unpaired
             }
+            // Commit only after health + authenticated WS succeed.
+            recordEndpoint(endpoint)
+            activateEndpoint(endpoint)
+            reconnectMessage = nil
+            needsServerRePair = false
             desktopReachability = .connected
+            return .connected
         } catch {
-            // If smart/local failed the WS step, try the other path once.
-            if connectionPreference == .smart {
-                await tryAlternatePath(after: endpoint, error: error)
+            guard serverToken != nil else {
+                desktopReachability = .unpaired
+                return .unpaired
+            }
+            if Self.isUnauthorizedError(error) {
+                return markReconnectFailure(error)
+            }
+            // Network/WS failure on this address only — restore prior status when possible.
+            reconnectMessage = "Couldn't connect to \(hostLabel): \(error.localizedDescription)"
+            if let previous = previousEndpoint, await isEndpointReachable(previous) {
+                desktopReachability = .connected
             } else {
-                reconnectMessage = Self.reconnectFailureMessage(error)
                 desktopReachability = .unreachable
             }
+            return .unreachable
         }
     }
 
-    private func tryAlternatePath(after failed: ServerClient.Endpoint, error: Error) async {
+    @discardableResult
+    private func tryAlternatePath(after failed: ServerClient.Endpoint, error: Error) async -> ServerReconnectOutcome {
         let failedPath = Self.connectionPath(for: failed)
         if failedPath == .tunnel {
             // Forget the dead public URL before trying LAN so we don't loop on it.
@@ -822,14 +966,10 @@ final class AppState: ObservableObject {
             }
         }()
         guard let alternate, let token = serverToken else {
-            reconnectMessage = Self.reconnectFailureMessage(error)
-            desktopReachability = .unreachable
-            return
+            return markReconnectFailure(error)
         }
         guard await isEndpointReachable(alternate) else {
-            reconnectMessage = Self.reconnectFailureMessage(error)
-            desktopReachability = .unreachable
-            return
+            return markReconnectFailure(error)
         }
         activateEndpoint(alternate)
         do {
@@ -846,22 +986,41 @@ final class AppState: ObservableObject {
                 reconnectMessage = "Local failed — switched to tunnel."
                 desktopReachability = .connected
             }
+            needsServerRePair = false
+            return .connected
         } catch {
-            reconnectMessage = Self.reconnectFailureMessage(error)
-            desktopReachability = .unreachable
+            return markReconnectFailure(error)
         }
+    }
+
+    @discardableResult
+    private func markReconnectFailure(_ error: Error) -> ServerReconnectOutcome {
+        reconnectMessage = Self.reconnectFailureMessage(error)
+        desktopReachability = .unreachable
+        if Self.isUnauthorizedError(error) {
+            needsServerRePair = true
+            return .needsRePair
+        }
+        needsServerRePair = false
+        return .unreachable
     }
 
     /// Prefer a pairing-focused message when the desktop rejected the saved token.
     private static func reconnectFailureMessage(_ error: Error) -> String {
-        let detail = error.localizedDescription
-        if detail.localizedCaseInsensitiveContains("unauthorized")
-            || detail.localizedCaseInsensitiveContains("re-pair")
-            || detail.localizedCaseInsensitiveContains("token expired")
-        {
+        if isUnauthorizedError(error) {
             return "Pairing expired — open Desktop server and enter a new pairing code."
         }
-        return "Could not reconnect: \(detail)"
+        return "Could not reconnect: \(error.localizedDescription)"
+    }
+
+    static func isUnauthorizedError(_ error: Error) -> Bool {
+        isUnauthorizedError(error.localizedDescription)
+    }
+
+    static func isUnauthorizedError(_ detail: String) -> Bool {
+        detail.localizedCaseInsensitiveContains("unauthorized")
+            || detail.localizedCaseInsensitiveContains("re-pair")
+            || detail.localizedCaseInsensitiveContains("token expired")
     }
 
     private func isEndpointReachable(_ endpoint: ServerClient.Endpoint) async -> Bool {

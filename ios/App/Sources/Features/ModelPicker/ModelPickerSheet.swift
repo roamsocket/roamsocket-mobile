@@ -42,68 +42,79 @@ struct ModelPickerSheet: View {
                         providerSection(result: result)
                     }
                     ForEach(emptyResults) { result in
-                        errorRow(result: result)
-                            .listRowBackground(Theme.surface)
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                        Section {
+                            errorRow(result: result)
+                                .listRowBackground(Theme.surface)
+                                .listRowSeparator(.hidden)
+                        }
                     }
                 }
 
                 if state.isLoadingLocalMetal {
-                    LocalMetalLoadProgressBanner(
-                        progress: state.localMetalLoadProgress,
-                        modelName: state.selectedModel.map { state.displayName(for: $0) },
-                        style: .plain
-                    )
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                } else if let err = state.localMetalLoadError, !err.isEmpty {
-                    Text(err)
-                        .font(.footnote)
-                        .foregroundStyle(.red.opacity(0.9))
-                        .listRowBackground(Color.clear)
+                    Section {
+                        LocalMetalLoadProgressBanner(
+                            progress: state.localMetalLoadProgress,
+                            modelName: state.selectedModel.map { state.displayName(for: $0) },
+                            style: .plain
+                        )
+                        .listRowBackground(Theme.surface)
                         .listRowSeparator(.hidden)
+                    }
+                } else if let err = state.localMetalLoadError, !err.isEmpty {
+                    Section {
+                        Text(err)
+                            .font(.footnote)
+                            .foregroundStyle(.red.opacity(0.9))
+                            .listRowBackground(Theme.surface)
+                            .listRowSeparator(.hidden)
+                    }
                 }
 
                 if !statusMessage.isEmpty {
-                    Text(statusMessage)
-                        .font(.footnote)
-                        .foregroundStyle(Theme.textSecondary)
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
+                    Section {
+                        Text(statusMessage)
+                            .font(.footnote)
+                            .foregroundStyle(Theme.textSecondary)
+                            .listRowBackground(Theme.surface)
+                            .listRowSeparator(.hidden)
+                    }
                 }
 
                 if !loadedMetalIDs.isEmpty {
-                    unloadAllRow
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 4, trailing: 16))
+                    Section {
+                        unloadAllRow
+                            .listRowBackground(Theme.surface)
+                            .listRowSeparator(.hidden)
+                    }
                 }
 
                 if state.hasHiddenModels {
-                    Button {
-                        state.restoreHiddenModels()
-                        statusMessage = "Restored hidden models to the list."
-                    } label: {
-                        Label("Show hidden models", systemImage: "eye")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(Theme.accent)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                    Section {
+                        Button {
+                            state.restoreHiddenModels()
+                            statusMessage = "Restored hidden models to the list."
+                        } label: {
+                            Label("Show hidden models", systemImage: "eye")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(Theme.accent)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.plain)
+                        .listRowBackground(Theme.surface)
+                        .listRowSeparator(.hidden)
+                        .accessibilityHint("Bring back models you removed with swipe Delete")
                     }
-                    .buttonStyle(.plain)
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
-                    .accessibilityHint("Bring back models you removed with swipe Delete")
                 }
 
-                effortRow
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 16, trailing: 16))
+                Section {
+                    effortRow
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 8, trailing: 0))
+                }
             }
-            .listStyle(.plain)
+            // Inset grouped = rounded card sections (native iOS). Keeps swipeActions.
+            .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
             .task {
                 LocalMetalBootstrap.ensureRegistered()
@@ -138,7 +149,6 @@ struct ModelPickerSheet: View {
                         ? { Task { await unload(model.modelID) } }
                         : nil
                 )
-                .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
                 .listRowBackground(Theme.surface)
                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                     Button(role: .destructive) {
@@ -196,9 +206,9 @@ struct ModelPickerSheet: View {
                 Spacer()
             }
             .foregroundStyle(Theme.accent)
-            .padding(.vertical, 14)
-            .padding(.horizontal, 16)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14))
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -227,8 +237,7 @@ struct ModelPickerSheet: View {
                 }
                 Spacer()
             }
-            .padding(14)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14))
+            .padding(.vertical, 6)
         }
     }
 
@@ -370,8 +379,7 @@ private struct ModelRow: View {
                 .accessibilityLabel("Unload \(state.displayName(for: model)) from memory")
             }
         }
-        .padding(.vertical, 14)
-        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)

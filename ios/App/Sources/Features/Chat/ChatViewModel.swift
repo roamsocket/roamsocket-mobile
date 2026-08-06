@@ -643,8 +643,10 @@ final class ChatViewModel: ObservableObject {
 
     /// Copy message content to the system clipboard.
     func copyMessage(_ message: ChatMessage) {
+        let trimmed = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
         #if canImport(UIKit)
-        UIPasteboard.general.string = message.content
+        UIPasteboard.general.string = trimmed
         #endif
     }
 

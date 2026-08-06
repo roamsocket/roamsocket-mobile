@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Renders an individual chat message with actions.
 struct ChatMessageView: View {
@@ -8,6 +9,8 @@ struct ChatMessageView: View {
     var onShare: () -> Void
     var onDelete: () -> Void
     var onRegenerate: () -> Void
+
+    @State private var showCopiedToast = false
 
     var body: some View {
         VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 8) {
@@ -36,6 +39,43 @@ struct ChatMessageView: View {
             // Cap width to keep longer messages readable.
             .frame(maxWidth: 320, alignment: .trailing)
             .frame(maxWidth: .infinity, alignment: .trailing)
+            .overlay(alignment: .top) {
+                if showCopiedToast {
+                    Text("Copied")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Theme.surface, in: Capsule())
+                        .offset(y: -28)
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 20))
+            .onLongPressGesture(minimumDuration: 0.4, perform: copyOutgoingMessage)
+            .contextMenu {
+                Button {
+                    copyOutgoingMessage()
+                } label: {
+                    Label("Copy", systemImage: "doc.on.doc")
+                }
+            }
+            .accessibilityAction(named: "Copy") { copyOutgoingMessage() }
+    }
+
+    private func copyOutgoingMessage() {
+        let trimmed = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        onCopy()
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        withAnimation(.easeOut(duration: 0.15)) {
+            showCopiedToast = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
+            withAnimation(.easeOut(duration: 0.2)) {
+                showCopiedToast = false
+            }
+        }
     }
 
     // MARK: - Assistant Message

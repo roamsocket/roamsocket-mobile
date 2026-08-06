@@ -18,7 +18,18 @@ public actor ServerClient {
             while raw.count > 8, raw.hasSuffix("/") {
                 raw.removeLast()
             }
-            guard let url = URL(string: raw), url.host != nil else { return nil }
+            guard var components = URLComponents(string: raw),
+                  let hostName = components.host, !hostName.isEmpty else {
+                return nil
+            }
+            // Default companion port when the user types a bare IP / hostname.
+            if components.port == nil {
+                let scheme = (components.scheme ?? "http").lowercased()
+                if scheme == "http" || scheme == "ws" {
+                    components.port = 4319
+                }
+            }
+            guard let url = components.url else { return nil }
             self.baseURL = url
         }
     }

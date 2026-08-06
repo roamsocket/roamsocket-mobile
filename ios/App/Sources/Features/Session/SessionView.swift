@@ -779,8 +779,10 @@ struct SessionView: View {
 }
 
 /// Outgoing user message — same bubble treatment as chat.
+/// Long-press (or context menu) copies the message to the pasteboard.
 private struct SessionUserBubble: View {
     let text: String
+    @State private var showCopiedToast = false
 
     var body: some View {
         Text(text)
@@ -791,6 +793,45 @@ private struct SessionUserBubble: View {
             .background(Theme.surfaceElevated, in: RoundedRectangle(cornerRadius: 20))
             .frame(maxWidth: 320, alignment: .trailing)
             .frame(maxWidth: .infinity, alignment: .trailing)
+            .overlay(alignment: .top) {
+                if showCopiedToast {
+                    Text("Copied")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Theme.surface, in: Capsule())
+                        .offset(y: -28)
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 20))
+            .onLongPressGesture(minimumDuration: 0.4, perform: copyMessage)
+            .contextMenu {
+                Button {
+                    copyMessage()
+                } label: {
+                    Label("Copy", systemImage: "doc.on.doc")
+                }
+            }
+            .accessibilityAction(named: "Copy") { copyMessage() }
+    }
+
+    private func copyMessage() {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        #if canImport(UIKit)
+        UIPasteboard.general.string = trimmed
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        #endif
+        withAnimation(.easeOut(duration: 0.15)) {
+            showCopiedToast = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
+            withAnimation(.easeOut(duration: 0.2)) {
+                showCopiedToast = false
+            }
+        }
     }
 }
 

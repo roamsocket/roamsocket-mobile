@@ -437,6 +437,9 @@ struct CodeHomeView: View {
     @State private var showArchiveKillConfirm = false
     @State private var renameTarget: CodeSession?
     @State private var renameDraft = ""
+    @State private var showServerPairing = false
+    @State private var showDeviceConnectionHelp = false
+    @State private var tokenWhenPairingPresented: String?
 
     /// Opens the root sidebar drawer. Wired from `RootView` so Code can open
     /// the same destinations as Chat even though this screen hides the
@@ -454,19 +457,29 @@ struct CodeHomeView: View {
                 // Avoid wrapping rows in Button — that often steals the swipe gesture.
                 List {
                     Section {
-                        if state.serverName == nil {
+                        if state.serverName == nil && state.serverToken == nil {
                             devicesEmpty
+                                .contentShape(Rectangle())
+                                .onTapGesture { presentPairingSheet() }
                                 .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
                                 .listRowBackground(Color.clear)
                                 .listRowSeparator(.hidden)
+                                .accessibilityAddTraits(.isButton)
+                                .accessibilityHint("Opens pairing to connect a desktop server")
                         } else {
                             deviceRow(
                                 name: state.serverName ?? "Desktop",
                                 status: state.desktopReachability
                             )
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    Task { await handleDeviceTap() }
+                                }
                                 .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
                                 .listRowBackground(Color.clear)
                                 .listRowSeparator(.hidden)
+                                .accessibilityAddTraits(.isButton)
+                                .accessibilityHint("Reconnect to the desktop server")
                         }
                     } header: {
                         Text("Devices")
@@ -558,7 +571,8 @@ struct CodeHomeView: View {
         .navigationBarHidden(true)
         .task {
             // Refresh desktop reachability whenever Code home is shown.
-            guard state.serverToken != nil, !state.isReconnecting else { return }
+            // Coalesces with launch reconnect via AppState.reconnectTask.
+            guard state.serverToken != nil else { return }
             await state.attemptServerReconnect()
         }
         .navigationDestination(item: $pushSessionConfig) { config in
@@ -579,6 +593,29 @@ struct CodeHomeView: View {
                 reattach(session: session)
             }
             .environmentObject(state)
+        }
+        .sheet(isPresented: $showServerPairing, onDismiss: {
+            // After a successful re-pair, re-check reachability for the Devices row.
+            let newToken = state.serverToken
+            guard let newToken, !newToken.isEmpty, newToken != tokenWhenPairingPresented else {
+                return
+            }
+            Task { await state.attemptServerReconnect() }
+        }) {
+            NavigationStack { ServerPairingView() }
+                .environmentObject(state)
+        }
+        .sheet(isPresented: $showDeviceConnectionHelp) {
+            DeviceConnectionHelpSheet {
+                // Dismiss help first so the pairing sheet can present cleanly.
+                showDeviceConnectionHelp = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    presentPairingSheet()
+                }
+            }
+            .environmentObject(state)
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
         .fullScreenCover(isPresented: $showNewSession) {
             NewSessionView { config, task in
@@ -684,9 +721,9 @@ struct CodeHomeView: View {
             Text("No recently connected devices")
                 .font(.system(size: 14))
                 .foregroundStyle(Theme.textTertiary)
-            Text("Pair a desktop server from Settings → Coding.")
+            Text("Tap to pair a desktop server on this network.")
                 .font(.system(size: 13))
-                .foregroundStyle(Theme.textTertiary)
+                .foregroundStyle(Theme.accent)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
@@ -715,37 +752,104 @@ struct CodeHomeView: View {
                 Text(name)
                     .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(Theme.textPrimary)
-                Text(status.label)
+                Text(deviceStatusSubtitle(status))
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.textTertiary)
+                    .lineLimit(2)
             }
             Spacer()
-            Button {
-                Task { await state.attemptServerReconnect() }
-            } label: {
-                Group {
-                    if state.isReconnecting {
-                        ProgressView()
-                            .controlSize(.small)
-                            .tint(Theme.textSecondary)
-                    } else {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(Theme.textSecondary)
-                    }
+            Group {
+                if state.isReconnecting {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(Theme.textSecondary)
+                } else {
+                    Image(systemName: status == .connected ? "checkmark.circle" : "arrow.clockwise")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(status == .connected ? Theme.selection : Theme.textSecondary)
                 }
-                .frame(width: 36, height: 36)
-                .background(Theme.surfaceElevated, in: Circle())
             }
-            .buttonStyle(.plain)
-            .disabled(state.isReconnecting)
-            .accessibilityLabel("Refresh connection")
-            .accessibilityHint("Retry connecting to the desktop server")
+            .frame(width: 36, height: 36)
+            .background(Theme.surfaceElevated, in: Circle())
+            .accessibilityHidden(true)
         }
         .padding(14)
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(name), \(status.label)")
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(name), \(deviceStatusSubtitle(status))")
+    }
+
+    private func deviceStatusSubtitle(_ status: AppState.DesktopReachability) -> String {
+        if state.isReconnecting {
+            return "Connecting…"
+        }
+        if status == .connected {
+            return status.label
+        }
+        if let message = state.reconnectMessage, !message.isEmpty {
+            return message
+        }
+        return status.label
+    }
+
+    /// Tap Devices row: reconnect, re-pair if the token is dead, otherwise
+    /// open the Wi‑Fi / rescan recovery sheet.
+    private func handleDeviceTap() async {
+        // Unpaired (name present without token is unusual) → pair.
+        if state.serverToken == nil || (state.serverToken ?? "").isEmpty {
+            presentPairingSheet()
+            return
+        }
+
+        // Already know the saved token was rejected — skip another probe.
+        if state.needsServerRePair {
+            presentPairingSheet()
+            return
+        }
+
+        // Join any in-flight reconnect, or start a fresh one.
+        let outcome = await state.attemptServerReconnect()
+        switch outcome {
+        case .connected:
+            break
+        case .needsRePair, .unpaired:
+            presentPairingSheet()
+        case .unreachable:
+            showDeviceConnectionHelp = true
+        }
+    }
+
+    private func presentPairingSheet() {
+        tokenWhenPairingPresented = state.serverToken
+        showServerPairing = true
+    }
+
+    /// Ensure the desktop is reachable before opening a coding session.
+    /// Returns true when the caller may proceed with navigation.
+    @discardableResult
+    private func ensureDesktopConnected() async -> Bool {
+        if state.serverToken == nil || (state.serverToken ?? "").isEmpty {
+            presentPairingSheet()
+            return false
+        }
+        if state.needsServerRePair {
+            presentPairingSheet()
+            return false
+        }
+        if state.desktopReachability == .connected, !state.isReconnecting {
+            return true
+        }
+        let outcome = await state.attemptServerReconnect()
+        switch outcome {
+        case .connected:
+            return true
+        case .needsRePair, .unpaired:
+            presentPairingSheet()
+            return false
+        case .unreachable:
+            showDeviceConnectionHelp = true
+            return false
+        }
     }
 
     private func deviceStatusColor(_ status: AppState.DesktopReachability) -> Color {
@@ -847,7 +951,12 @@ struct CodeHomeView: View {
 
     private var newSessionFAB: some View {
         Button {
-            showNewSession = true
+            Task {
+                // Require a live desktop before the new-session flow; recovery
+                // sheet / re-pair covers the cases SessionLauncher can't fix.
+                guard await ensureDesktopConnected() else { return }
+                showNewSession = true
+            }
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "square.and.pencil")
@@ -955,37 +1064,44 @@ struct CodeHomeView: View {
         // selected repo (that blocked opening history until a new session).
         // Always open a fresh WS and send create_session with the same wire
         // id so the desktop rebinds (live) or re-clones (after restart).
-        guard let endpoint = state.serverEndpoint,
-              let token = state.serverToken,
-              let model = state.modelSelectionForSession() else { return }
-        let repoRef = RepoRef(
-            fullName: session.repoFullName,
-            baseBranch: session.baseBranch,
-            workBranch: session.workBranch,
-            githubToken: state.githubToken
-        )
-        // Re-open does not mean the agent is mid-turn yet.
-        sessionStore.update(session.id) {
-            $0.status = .working
-            $0.agentActive = false
+        Task {
+            guard await ensureDesktopConnected() else { return }
+            guard let endpoint = state.serverEndpoint,
+                  let token = state.serverToken,
+                  let model = state.modelSelectionForSession() else {
+                // Connected but missing model/key — SessionLauncher surfaces this
+                // for new sessions; for reattach show pairing/help isn't right.
+                return
+            }
+            let repoRef = RepoRef(
+                fullName: session.repoFullName,
+                baseBranch: session.baseBranch,
+                workBranch: session.workBranch,
+                githubToken: state.githubToken
+            )
+            // Re-open does not mean the agent is mid-turn yet.
+            sessionStore.update(session.id) {
+                $0.status = .working
+                $0.agentActive = false
+            }
+            let config = SessionConfig(
+                wireSessionId: session.wireSessionId,
+                localSessionId: session.id,
+                endpoint: endpoint,
+                token: token,
+                repo: repoRef,
+                // Environment is fixed for the life of the session.
+                environment: session.environment ?? state.selectedEnvironment,
+                model: model,
+                permissionMode: state.permissionMode,
+                firstMessage: session.title,
+                skills: state.skillManager.enabledSkills.map(\.content),
+                mcpServers: state.mcpManager.configuredMCPServers,
+                resuming: true,
+                prURL: session.prURL
+            )
+            pushSessionConfig = config
         }
-        let config = SessionConfig(
-            wireSessionId: session.wireSessionId,
-            localSessionId: session.id,
-            endpoint: endpoint,
-            token: token,
-            repo: repoRef,
-            // Environment is fixed for the life of the session.
-            environment: session.environment ?? state.selectedEnvironment,
-            model: model,
-            permissionMode: state.permissionMode,
-            firstMessage: session.title,
-            skills: state.skillManager.enabledSkills.map(\.content),
-            mcpServers: state.mcpManager.configuredMCPServers,
-            resuming: true,
-            prURL: session.prURL
-        )
-        pushSessionConfig = config
     }
 
     private func relativeTime(_ date: Date) -> String {
