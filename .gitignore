@@ -57,6 +57,7 @@ secrets.*
 
 # ---------- Xcode / iOS ----------
 build/
+ios/build/
 DerivedData/
 *.xcodeproj/xcuserdata/
 *.xcworkspace/xcuserdata/
