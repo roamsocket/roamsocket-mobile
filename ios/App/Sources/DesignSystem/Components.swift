@@ -25,6 +25,64 @@ struct Pill: View {
     }
 }
 
+/// The model-selector pill shown in the chat + coding-session composers.
+///
+/// When the user has a valid model + API key, it renders as a chevron
+/// pill that opens the model picker. When the user has no usable model
+/// yet, it switches to an accent-tinted "+ Add a model" CTA that opens
+/// the provider settings screen so they can paste a key. The component
+/// pulls reactive state from the environment so callers don't have to
+/// pass anything in besides the two actions.
+struct ModelSelectorPill: View {
+    @EnvironmentObject var state: AppState
+    var modelDisplayName: String
+    var onPick: () -> Void
+    var onAddModel: () -> Void
+
+    var body: some View {
+        Button {
+            if hasUsableModel { onPick() } else { onAddModel() }
+        } label: {
+            if hasUsableModel {
+                HStack(spacing: 4) {
+                    Text(modelDisplayName)
+                        .font(.system(size: 13, weight: .medium))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                .foregroundStyle(Theme.textPrimary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Theme.surfaceElevated, in: Capsule())
+            } else {
+                HStack(spacing: 4) {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("Add a model")
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(Theme.accent)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Theme.accent.opacity(0.15), in: Capsule())
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// A usable model needs an entry AND an API key for its provider.
+    /// The picker-only path stays open without a key so the user can
+    /// still browse, but anything that *uses* the model (sessions,
+    /// sends) bails out earlier — and the pill lets them know.
+    var hasUsableModel: Bool {
+        guard let model = state.selectedModel else { return false }
+        return !state.apiKey(for: model.provider).isEmpty
+    }
+}
+
 /// A tappable card used for the composer suggestions (IMG_0987).
 struct SuggestionCard: View {
     let attributed: AttributedString

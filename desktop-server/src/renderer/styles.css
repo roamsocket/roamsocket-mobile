@@ -32,11 +32,14 @@ button { font: inherit; color: inherit; }
 
 #app {
   display: grid;
-  grid-template-columns: 240px 1fr;
+  grid-template-columns: 240px minmax(0, 1fr);
   height: 100vh;
+  min-width: 0;
 }
 
 .sidebar {
+  position: relative;
+  z-index: 5;
   background: var(--bg-elev);
   border-right: 1px solid var(--line);
   padding: 14px 12px;
@@ -50,8 +53,8 @@ button { font: inherit; color: inherit; }
 .brand { display: flex; align-items: center; gap: 10px; padding: 6px 6px 12px; }
 .logo {
   width: 32px; height: 32px; border-radius: 8px;
-  background: linear-gradient(135deg, #6aa9ff, #b388ff);
-  color: #0b0d10; font-weight: 700;
+  background: linear-gradient(135deg, #9ea3ac, #d5d8dd);
+  color: #1d1f22; font-weight: 700;
   display: grid; place-items: center; font-size: 13px;
 }
 .brand-title { font-weight: 600; font-size: 13px; }
@@ -65,6 +68,16 @@ button { font: inherit; color: inherit; }
 }
 .nav a:hover { background: var(--bg-elev-2); color: var(--text); }
 .nav a.active { background: var(--accent-dim); color: var(--text); }
+
+.mobile-topbar { display: none; }
+.sidebar-toggle { display: none; }
+.content-scroll {
+  min-width: 0;
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
 
 .pairing-card {
   margin-top: auto;
@@ -98,15 +111,55 @@ button { font: inherit; color: inherit; }
   display: flex;
   flex-direction: column;
   height: 100vh;
+  min-width: 0;
   overflow: hidden;
 }
 .view {
   flex: 1;
+  min-width: 0;
   overflow: auto;
   padding: 20px 28px 0;
   user-select: text;
 }
 .view.hidden { display: none; }
+
+@media (max-width: 760px) {
+  #app { display: block; }
+  .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: min(280px, 86vw);
+    transform: translateX(-102%);
+    transition: transform 160ms ease;
+    box-shadow: var(--shadow);
+  }
+  #app.sidebar-open .sidebar { transform: translateX(0); }
+  .mobile-topbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 52px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg);
+    -webkit-app-region: drag;
+  }
+  .sidebar-toggle {
+    display: inline-grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    color: var(--text);
+    background: var(--bg-elev);
+    cursor: pointer;
+    -webkit-app-region: no-drag;
+  }
+  .mobile-topbar-title { font-weight: 600; }
+  .content-scroll { height: calc(100vh - 52px); }
+  .view { padding: 16px 14px 0; }
+}
 
 /* --- Home view: composer + streaming session --- */
 .home-grid {

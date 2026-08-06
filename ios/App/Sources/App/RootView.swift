@@ -27,7 +27,9 @@ struct RootView: View {
                         case .code:
                             CodeHomeView()
                         case .projectDetail(let project):
-                            ProjectDetailView(project: project, history: history)
+                            ProjectDetailView(project: project, history: history, path: $path)
+                        case .projectChat(let project, let chat):
+                            ChatView(project: project, chat: chat, path: $path)
                         }
                     }
             }
@@ -133,4 +135,5 @@ enum RootRoute: Hashable {
     case artifacts
     case code
     case projectDetail(ProjectItem)
+    case projectChat(ProjectItem, ProjectChatItem)
 }

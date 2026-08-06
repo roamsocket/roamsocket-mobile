@@ -56,6 +56,9 @@ const state = {
   history: [] as HistoryEntry[],
 };
 
+function $app() {
+  return document.getElementById("app") as HTMLElement | null;
+}
 function $(id: string) {
   const el = document.getElementById(id);
   if (!el) throw new Error(`#${id} missing`);
@@ -89,6 +92,9 @@ function showRoute(name: string) {
   for (const a of Array.from(document.querySelectorAll(".nav a"))) {
     a.classList.toggle("active", (a as HTMLAnchorElement).dataset.route === name);
   }
+  document.querySelector(".mobile-topbar-title")!.textContent =
+    name === "home" ? "Code" : name.charAt(0).toUpperCase() + name.slice(1);
+  $("app").classList.remove("sidebar-open");
   if (name === "home") renderHome();
   if (name === "history") renderHistory();
   if (name === "settings") renderSettings();
@@ -529,6 +535,10 @@ async function main() {
   // React to navigation requests from the tray
   window.cmai.on("navigate", (path) => {
     window.location.hash = `#/${path.replace(/^\//, "")}`;
+  });
+
+  $("sidebar-toggle").addEventListener("click", () => {
+    $app()?.classList.toggle("sidebar-open");
   });
 
   showRoute(currentRoute());

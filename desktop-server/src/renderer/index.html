@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div id="app">
+    <div id="app" class="app">
       <aside class="sidebar">
         <div class="brand">
           <div class="logo">CM</div>
@@ -30,9 +30,15 @@
       </aside>
 
       <main class="content">
-        <section id="view-home" class="view"></section>
-        <section id="view-history" class="view hidden"></section>
-        <section id="view-settings" class="view hidden"></section>
+        <header class="mobile-topbar">
+          <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle sidebar">☰</button>
+          <div class="mobile-topbar-title">Code</div>
+        </header>
+        <div class="content-scroll">
+          <section id="view-home" class="view"></section>
+          <section id="view-history" class="view hidden"></section>
+          <section id="view-settings" class="view hidden"></section>
+        </div>
       </main>
     </div>
     <script type="module" src="./main.ts"></script>

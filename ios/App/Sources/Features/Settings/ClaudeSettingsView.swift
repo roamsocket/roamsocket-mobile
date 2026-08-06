@@ -17,6 +17,22 @@ struct ClaudeSettingsView: View {
     @State private var showAbout = false
     @State private var showProviderKeys = false
 
+    /// Optional entry focus. `.providers` jumps straight into the API-key
+    /// providers screen as soon as the settings sheet finishes presenting,
+    /// which is what the model-selector pill uses when the user has no
+    /// usable model yet. Defaults to nil so the home-screen entry keeps
+    /// landing on the main settings page.
+    var initialFocus: SettingsFocus? = nil
+    @State private var autoOpenedFocus: Bool = false
+
+    init(initialFocus: SettingsFocus? = nil) {
+        self.initialFocus = initialFocus
+    }
+
+    enum SettingsFocus: String, Hashable {
+        case providers
+    }
+
     var body: some View {
         ZStack {
             Theme.background.ignoresSafeArea()
@@ -46,6 +62,13 @@ struct ClaudeSettingsView: View {
             // SkillsMCPClient and updates the local caches.
             if state.serverToken != nil {
                 await state.skillsMCPClient.refreshAll(over: state.serverClient)
+            }
+            // Honor the caller's entry focus on first presentation only,
+            // so re-opens don't keep shoving the user back into the
+            // providers screen.
+            if !autoOpenedFocus, initialFocus == .providers {
+                autoOpenedFocus = true
+                showProviderKeys = true
             }
         }
         .sheet(isPresented: $showGitHubLink) {
