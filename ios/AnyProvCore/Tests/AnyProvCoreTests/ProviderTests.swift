@@ -1,5 +1,5 @@
 import XCTest
-@testable import MobileAICore
+@testable import AnyProvCore
 
 final class ProviderTests: XCTestCase {
     func testAnthropicParsesModels() async throws {

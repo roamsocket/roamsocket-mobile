@@ -9,14 +9,14 @@ import { VitePlugin } from "@electron-forge/plugin-vite";
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
-    name: "Code Mobile AI",
-    executableName: "code-mobile-ai",
-    appBundleId: "ai.codemobile.desktop",
+    name: "AnyProv Code",
+    executableName: "anyprov-code",
+    appBundleId: "app.anyprovcode.desktop",
   },
   rebuildConfig: {},
   makers: [
     new MakerZIP({}, ["darwin", "linux", "win32"]),
-    new MakerSquirrel({ name: "code_mobile_ai" }, ["win32"]),
+    new MakerSquirrel({ name: "anyprov_code" }, ["win32"]),
     new MakerDMG({}, ["darwin"]),
     new MakerDeb({}),
     new MakerRpm({}),

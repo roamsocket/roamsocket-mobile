@@ -1,33 +1,38 @@
-name: CodeMobileAI
+name: AnyProvCode
 options:
-  bundleIdPrefix: com.codemobileai
+  bundleIdPrefix: com.anyprovcode
   deploymentTarget:
     iOS: "17.0"
   createIntermediateGroups: true
 
 packages:
-  MobileAICore:
-    path: MobileAICore
+  AnyProvCore:
+    path: AnyProvCore
 
 targets:
-  CodeMobileAI:
+  AnyProvCode:
     type: application
     platform: iOS
     sources:
       - path: App/Sources
     dependencies:
-      - package: MobileAICore
+      - package: AnyProvCore
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.codemobileai.app
+        PRODUCT_BUNDLE_IDENTIFIER: com.anyprovcode.app
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1,2"
+    entitlements:
+      path: App/AnyProvCode.entitlements
+      properties:
+        com.apple.developer.healthkit: true
+        com.apple.developer.healthkit.access: []
     info:
       path: App/Info.plist
       properties:
-        CFBundleDisplayName: "Code Mobile AI"
+        CFBundleDisplayName: "AnyProv Code"
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
@@ -37,3 +42,5 @@ targets:
           NSAllowsArbitraryLoads: true
           NSAllowsLocalNetworking: true
         NSLocalNetworkUsageDescription: "Connect to your desktop coding server on the local network."
+        NSHealthShareUsageDescription: "AnyProv Code reads your Apple Health data when you turn on Health in chat, so the assistant can answer questions about steps, sleep, workouts, and other stats you choose to share."
+        NSHealthUpdateUsageDescription: "AnyProv Code does not write to Apple Health. This permission is required by the system HealthKit entitlement."

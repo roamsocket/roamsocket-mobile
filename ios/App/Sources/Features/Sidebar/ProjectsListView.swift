@@ -41,7 +41,7 @@ struct ProjectsListView: View {
 
                 // Bottom-of-screen stack: Search bar sits below the FAB.
                 // The FAB (New project) is right-aligned and floats above
-                // the search bar, matching the iOS Claude layout.
+                // the search bar, matching the search layout.
                 ZStack(alignment: .top) {
                     // Background strip so the search bar has a solid
                     // background under the FAB shadow.

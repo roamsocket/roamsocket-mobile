@@ -1,5 +1,5 @@
 import SwiftUI
-import MobileAICore
+import AnyProvCore
 
 /// Form for adding a custom connector (formerly "MCP server"). The form
 /// supports two auth modes: `Environment variables` (for `stdio` connectors
@@ -129,8 +129,8 @@ struct AddConnectorView: View {
         // so the desktop can construct the actual fetch request.
         var finalEnv = env
         if transport != .stdio {
-            finalEnv["CMAI_CONNECTOR_URL"] = url
-            finalEnv["CMAI_CONNECTOR_TRANSPORT"] = transport.rawValue
+            finalEnv["APC_CONNECTOR_URL"] = url
+            finalEnv["APC_CONNECTOR_TRANSPORT"] = transport.rawValue
         }
 
         let server = MCPServer(

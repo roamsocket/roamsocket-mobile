@@ -1,10 +1,10 @@
-# CLAUDE.md — Claude Code project guide
+# CLAUDE.md — AI coding agent project guide
 
-This file is for Claude Code (and similar Anthropic tooling). For tool-agnostic agent instructions, see **[AGENTS.md](./AGENTS.md)** — start there for architecture, commands, and invariants. This file adds Claude-specific workflow, hooks, and repo defaults.
+Tooling-oriented notes for agents working in this repository. For the full architecture map, commands, and invariants, see **[AGENTS.md](./AGENTS.md)** first.
 
 ## Mission
 
-You are working on **code-mobile-ai**: a native iOS Claude Code–style client with a desktop companion that runs the real coding agent (clone → tools → diffs → PR). Users bring their own API keys and endpoints.
+You are working on **AnyProv Code** (`anyprov-code`): a native iOS coding client with a desktop companion that runs the real coding agent (clone → tools → diffs → PR). Users bring their own API keys and endpoints.
 
 Prefer **correctness over drive-by refactors**. Match existing patterns in the feature area you touch.
 
@@ -22,9 +22,9 @@ Prefer **correctness over drive-by refactors**. Match existing patterns in the f
 - Run the smallest relevant verification (smoke, `swift test`, typecheck) before claiming a fix is done.
 - Do not commit secrets, `ios/build/`, Electron `out/` / `.vite/`, or user-specific Xcode state.
 
-## Claude Code hooks
+## Editor hooks
 
-Configured in `.claude/settings.json`:
+Configured in `.claude/settings.json` (path used by some agent CLIs):
 
 | Hook | When | What |
 |------|------|------|
@@ -40,7 +40,7 @@ That hook regenerates the Xcode project when iOS sources / `project.yml` change 
 | Coding session UI | `ios/App/Sources/Features/Code`, `Session` |
 | Settings / pairing / keys | `ios/App/Sources/Features/Settings` |
 | Theme / shared controls | `ios/App/Sources/DesignSystem` |
-| Providers, GitHub, WS client | `ios/MobileAICore/Sources/MobileAICore` |
+| Providers, GitHub, WS client | `ios/AnyProvCore/Sources/AnyProvCore` |
 | Agent loop / tools / git | `desktop-server/src/agent`, `tools`, `git` |
 | Wire protocol (canonical) | `desktop-server/src/protocol.ts` → mirror Swift + docs |
 | Electron window / tray | `desktop-server/src/electron` |
@@ -64,7 +64,7 @@ Primary buttons on accent should use dark ink (`Theme.background` / `#0b0d10`), 
 Canonical order:
 
 1. `desktop-server/src/protocol.ts`  
-2. `ios/MobileAICore/.../Server/Protocol.swift`  
+2. `ios/AnyProvCore/.../Server/Protocol.swift`  
 3. Handlers on both ends  
 4. `docs/protocol.md`  
 5. Extend `desktop-server` smoke test if possible  
@@ -89,13 +89,13 @@ cd desktop-server && npm run smoke
 cd desktop-server && npm run typecheck:server
 
 # Core package (no Xcode)
-cd ios/MobileAICore && swift test
+cd ios/AnyProvCore && swift test
 
 # iOS project after structural changes
 cd ios && xcodegen generate
 ```
 
-Use `CMAI_MOCK=1` when exercising the server without provider keys.
+Use `APC_MOCK=1` when exercising the server without provider keys.
 
 ## PR / commit expectations
 
@@ -107,6 +107,6 @@ Use `CMAI_MOCK=1` when exercising the server without provider keys.
 
 - **Chat** works without the desktop server (direct provider APIs).  
 - **Code** requires pairing + server for real tools/git/PR.  
-- Skills, MCP, terminal, and workspace features may span MobileAICore + server — grep for existing managers before inventing parallel systems.
+- Skills, MCP, terminal, and workspace features may span AnyProvCore + server — grep for existing managers before inventing parallel systems.
 
 When unsure, prefer extending existing types and managers over new top-level abstractions.

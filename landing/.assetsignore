@@ -1,0 +1,13 @@
+# Root-level ignore (assets dir is ./public — this is a safety net if config changes).
+node_modules/
+.wrangler/
+package.json
+package-lock.json
+wrangler.jsonc
+wrangler.toml
+README.md
+*.md
+.dev.vars
+.env
+.env.*
+.DS_Store

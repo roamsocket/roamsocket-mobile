@@ -1,7 +1,7 @@
 import Foundation
 import Combine
 import UIKit
-import MobileAICore
+import AnyProvCore
 
 /// ViewModel for the Chat feature. Drives the messages, the model picker,
 /// and the toggles in the Add-to-Chat sheet. Backed by real provider API
@@ -34,11 +34,18 @@ final class ChatViewModel: ObservableObject {
     /// reports its catalog of available connectors.
     @Published var connectors: [Connector] = []
 
+    /// Apple Health integration for this chat (read-only snapshot → system prompt).
+    let healthService = HealthKitService()
+    /// True while the system Health authorization sheet is up.
+    @Published var isRequestingHealthAccess: Bool = false
+
     // MARK: - Dependencies
 
     let catalog: ModelCatalog
 
     weak var state: AppState?
+
+    private var cancellables = Set<AnyCancellable>()
 
     // MARK: - Tool Access
 
@@ -55,6 +62,39 @@ final class ChatViewModel: ObservableObject {
         // Default connectors — these are *ids* of connectors the user has
         // authorised; the actual data fetching lives in the desktop server.
         self.selectedConnectors = ["gmail", "google-calendar", "google-drive"]
+        healthService.refreshAuthorizationState()
+        // Bubble nested HealthKitService publishes so the Add-to-Chat sheet
+        // refreshes authorization subtitles without a second ObservedObject.
+        healthService.objectWillChange
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
+    }
+
+    // MARK: - Health
+
+    /// Turn Health context on/off. Enabling triggers the system HealthKit
+    /// permission sheet the first time.
+    func setHealthEnabled(_ enabled: Bool) async {
+        if !enabled {
+            healthEnabled = false
+            return
+        }
+        guard healthService.isHealthDataAvailable else {
+            healthEnabled = false
+            error = HealthKitServiceError.unavailable.errorDescription
+            return
+        }
+        isRequestingHealthAccess = true
+        defer { isRequestingHealthAccess = false }
+        do {
+            try await healthService.requestAuthorization()
+            healthEnabled = true
+        } catch {
+            healthEnabled = false
+            self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
     }
 
     // MARK: - Message Handling
@@ -82,8 +122,22 @@ final class ChatViewModel: ObservableObject {
         defer { isProcessing = false }
 
         // Build the multi-turn payload from the in-memory conversation.
-        let turns: [ProviderChatMessage] = messages.map {
+        var turns: [ProviderChatMessage] = messages.map {
             ProviderChatMessage(role: mapRole($0.role), content: $0.content)
+        }
+
+        // Optional Apple Health context — injected as a system turn so
+        // Anthropic (system field) and OpenAI-compatible hosts both see it.
+        // Snapshot is fresh per send so "how many steps today" stays current.
+        if healthEnabled {
+            do {
+                let snapshot = try await healthService.snapshotForPrompt()
+                turns.insert(ProviderChatMessage(role: .system, content: snapshot), at: 0)
+            } catch {
+                // Don't block the chat; surface a soft warning on the reply path.
+                let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                self.error = "Health data unavailable: \(msg)"
+            }
         }
 
         do {
@@ -105,9 +159,15 @@ final class ChatViewModel: ObservableObject {
                 messages: turns,
                 effort: state.effort
             )
-            messages.append(ChatMessage(role: .assistant, content: reply))
+            let parsed = ThinkingExtractor.extract(from: reply)
+            messages.append(ChatMessage(
+                role: .assistant,
+                content: parsed.content,
+                thoughtProcess: parsed.thinking
+            ))
             // Capture long outputs / code blocks as an Artifact (≥ 10 lines OR contains ```).
-            state.artifactStore.maybeSave(chatId: nil, content: reply)
+            // Prefer visible answer content so artifacts aren't polluted with reasoning.
+            state.artifactStore.maybeSave(chatId: nil, content: parsed.content)
         } catch {
             let msg = (error as? ProviderError)?.errorDescription ?? error.localizedDescription
             self.error = msg

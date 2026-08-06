@@ -1,5 +1,5 @@
 import SwiftUI
-import MobileAICore
+import AnyProvCore
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -33,8 +33,25 @@ struct ServerPairingView: View {
                     Text(status).font(.footnote).foregroundStyle(Theme.textSecondary)
                 }
             }
+            if state.serverToken != nil {
+                Section {
+                    Button("Reconnect now") {
+                        Task {
+                            busy = true
+                            await state.attemptServerReconnect()
+                            status = state.reconnectMessage ?? "Connected."
+                            busy = false
+                        }
+                    }
+                    .disabled(busy)
+                    Button("Forget this server", role: .destructive) {
+                        state.clearPairing()
+                        status = "Cleared."
+                    }
+                }
+            }
             Section {
-                Text("Run the server with `npm start` in the desktop-server folder, then enter the pairing code it prints.")
+                Text("Use the LAN address while at home, or the public tunnel URL from desktop Settings → Remote access when away. The app auto-reconnects on launch.")
                     .font(.footnote)
                     .foregroundStyle(Theme.textTertiary)
             }
@@ -43,6 +60,11 @@ struct ServerPairingView: View {
         .background(Theme.background)
         .navigationTitle("Pair server")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            if !state.serverHost.isEmpty {
+                host = state.serverHost
+            }
+        }
     }
 
     private func pair() {
@@ -58,9 +80,11 @@ struct ServerPairingView: View {
                     endpoint: endpoint,
                     code: code,
                     deviceName: deviceName())
-                state.serverEndpoint = endpoint
-                state.serverToken = response.token
-                state.serverName = response.serverName
+                state.savePairing(
+                    endpoint: endpoint,
+                    token: response.token,
+                    serverName: response.serverName
+                )
                 busy = false
                 dismiss()
             } catch {

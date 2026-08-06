@@ -57,7 +57,7 @@ export const writeFileTool: Tool = {
   },
 };
 
-/** Exact-string replacement, matching Claude Code's Edit semantics. */
+/** Exact-string replacement, exact-string edit semantics. */
 export const editTool: Tool = {
   name: "edit_file",
   description:

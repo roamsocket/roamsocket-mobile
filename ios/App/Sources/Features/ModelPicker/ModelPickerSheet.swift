@@ -1,5 +1,5 @@
 import SwiftUI
-import MobileAICore
+import AnyProvCore
 
 /// "Select model" bottom sheet:
 ///   - grouped by provider, each provider gets a section header

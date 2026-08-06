@@ -7,7 +7,7 @@
  * WebSocket:
  *   /session?token=...     -> the agent protocol (see src/protocol.ts)
  *
- * Set CMAI_MOCK=1 to run the deterministic offline agent (no API key needed).
+ * Set APC_MOCK=1 to run the deterministic offline agent (no API key needed).
  *
  * This module exports `startServer(opts)` so both the headless CLI
  * (`npm start`) and the Electron shell (`npm run electron:dev`) can reuse
@@ -23,8 +23,14 @@ import { mockAdapter } from "./providers/index.js";
 import { syncSkillsRepo, upsertSkill, removeSkill } from "./skills/sync.js";
 import { syncMCPRepo, upsertMCPServer, removeMCPServer } from "./mcp/sync.js";
 import { killTerminal, resizeTerminal, startTerminal, writeToTerminal } from "./terminal/index.js";
-import { diffAgainstBase, listDir, readFile } from "./workspace/files.js";
+import { diffAgainstBase, listChanges, listDir, readFile } from "./workspace/files.js";
 import { listListeningPorts } from "./workspace/ports.js";
+import {
+  detectTunnelProviders,
+  listTunnels,
+  startTunnel,
+  stopTunnel,
+} from "./workspace/tunnels.js";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -49,7 +55,7 @@ export interface RunningServer {
 }
 
 const DEFAULT_PORT = 4319;
-const DEFAULT_NAME = process.env.CMAI_NAME ?? "code-mobile-ai desktop";
+const DEFAULT_NAME = process.env.APC_NAME ?? "anyprov-code desktop";
 const DEFAULT_VERSION = "0.2.0";
 
 /** Configured skills/MCP repos. Read once at startup. The desktop is the
@@ -62,7 +68,7 @@ interface SyncConfig {
 
 async function loadSyncConfig(): Promise<SyncConfig> {
   const home = os.homedir();
-  const file = path.join(home, ".code-mobile-ai", "config.json");
+  const file = path.join(home, ".anyprov-code", "config.json");
   let json: Partial<SyncConfig> = {};
   try {
     const raw = await fs.readFile(file, "utf8");
@@ -72,18 +78,18 @@ async function loadSyncConfig(): Promise<SyncConfig> {
   }
   return {
     skillsRepo: {
-      url: process.env.CMAI_SKILLS_REPO ?? json.skillsRepo?.url ?? "",
-      branch: process.env.CMAI_SKILLS_BRANCH ?? json.skillsRepo?.branch ?? "main",
-      token: process.env.CMAI_SKILLS_TOKEN ?? json.skillsRepo?.token ?? "",
+      url: process.env.APC_SKILLS_REPO ?? json.skillsRepo?.url ?? "",
+      branch: process.env.APC_SKILLS_BRANCH ?? json.skillsRepo?.branch ?? "main",
+      token: process.env.APC_SKILLS_TOKEN ?? json.skillsRepo?.token ?? "",
     },
     mcpRepo: {
-      url: process.env.CMAI_MCP_REPO ?? json.mcpRepo?.url ?? "",
-      branch: process.env.CMAI_MCP_BRANCH ?? json.mcpRepo?.branch ?? "main",
-      token: process.env.CMAI_MCP_TOKEN ?? json.mcpRepo?.token ?? "",
+      url: process.env.APC_MCP_REPO ?? json.mcpRepo?.url ?? "",
+      branch: process.env.APC_MCP_BRANCH ?? json.mcpRepo?.branch ?? "main",
+      token: process.env.APC_MCP_TOKEN ?? json.mcpRepo?.token ?? "",
     },
     author: {
-      name: process.env.CMAI_AUTHOR_NAME ?? json.author?.name ?? "code-mobile-ai",
-      email: process.env.CMAI_AUTHOR_EMAIL ?? json.author?.email ?? "bot@code-mobile-ai.local",
+      name: process.env.APC_AUTHOR_NAME ?? json.author?.name ?? "anyprov-code",
+      email: process.env.APC_AUTHOR_EMAIL ?? json.author?.email ?? "bot@anyprov-code.local",
     },
   };
 }
@@ -94,10 +100,10 @@ async function loadSyncConfig(): Promise<SyncConfig> {
  */
 export async function startServer(opts: StartServerOptions = {}): Promise<RunningServer> {
   const port = opts.port ?? Number(process.env.PORT ?? DEFAULT_PORT);
-  const host = opts.host ?? process.env.CMAI_HOST ?? "127.0.0.1";
+  const host = opts.host ?? process.env.APC_HOST ?? "127.0.0.1";
   const serverName = opts.serverName ?? DEFAULT_NAME;
   const version = opts.version ?? DEFAULT_VERSION;
-  const useMock = opts.mock ?? process.env.CMAI_MOCK === "1";
+  const useMock = opts.mock ?? process.env.APC_MOCK === "1";
   const silent = opts.silent ?? false;
 
   const pairing = new PairingManager();
@@ -166,6 +172,9 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
             break;
           case "create_pr":
             await manager.createPr(msg);
+            break;
+          case "git_publish":
+            await manager.gitPublish(msg);
             break;
           case "skills_sync_request":
             if (!syncConfig.skillsRepo.url) {
@@ -245,8 +254,17 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
             }
             try {
               const entries = await listDir(workdir, msg.path);
-              const diff = msg.path === "" ? await diffAgainstBase(workdir) : undefined;
-              emit({ type: "file_list_result", sessionId: msg.sessionId, path: msg.path, entries, diff });
+              const atRoot = !msg.path || msg.path === "." || msg.path === "";
+              const diff = atRoot ? await diffAgainstBase(workdir) : undefined;
+              const changes = atRoot ? await listChanges(workdir) : undefined;
+              emit({
+                type: "file_list_result",
+                sessionId: msg.sessionId,
+                path: msg.path,
+                entries,
+                diff,
+                changes,
+              });
             } catch (err) {
               emit({ type: "error", sessionId: msg.sessionId, message: (err as Error).message });
             }
@@ -259,13 +277,14 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
               break;
             }
             try {
-              const { content, truncated } = await readFile(workdir, msg.path);
+              const { content, truncated, diff } = await readFile(workdir, msg.path);
               emit({
                 type: "file_read_result",
                 sessionId: msg.sessionId,
                 path: msg.path,
                 content,
                 truncated,
+                diff,
               });
             } catch (err) {
               emit({ type: "error", sessionId: msg.sessionId, message: (err as Error).message });
@@ -282,6 +301,44 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
             emit({ type: "port_list_result", sessionId: msg.sessionId, ports });
             break;
           }
+          case "tunnel_start": {
+            if (!manager.workdirFor(msg.sessionId)) {
+              emit({ type: "error", sessionId: msg.sessionId, message: "Unknown session." });
+              break;
+            }
+            try {
+              await startTunnel({ port: msg.port, provider: msg.provider });
+              const availableProviders = await detectTunnelProviders();
+              emit({
+                type: "tunnel_status",
+                sessionId: msg.sessionId,
+                tunnels: listTunnels(),
+                availableProviders,
+              });
+            } catch (err) {
+              emit({ type: "error", sessionId: msg.sessionId, message: (err as Error).message });
+            }
+            break;
+          }
+          case "tunnel_stop": {
+            stopTunnel(msg.tunnelId);
+            emit({
+              type: "tunnel_status",
+              sessionId: msg.sessionId,
+              tunnels: listTunnels(),
+              availableProviders: await detectTunnelProviders(),
+            });
+            break;
+          }
+          case "tunnel_list": {
+            emit({
+              type: "tunnel_status",
+              sessionId: msg.sessionId,
+              tunnels: listTunnels(),
+              availableProviders: await detectTunnelProviders(),
+            });
+            break;
+          }
         }
       } catch (err) {
         emit({ type: "error", message: (err as Error).message });
@@ -289,8 +346,24 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
     });
   });
 
-  await new Promise<void>((resolve) => {
-    server.listen(port, host, () => resolve());
+  await new Promise<void>((resolve, reject) => {
+    const onError = (err: NodeJS.ErrnoException) => {
+      server.off("error", onError);
+      if (err.code === "EADDRINUSE") {
+        reject(
+          new Error(
+            `Port ${port} is already in use. Quit the other AnyProv Code / desktop-server process, or set PORT to a free port.`,
+          ),
+        );
+        return;
+      }
+      reject(err);
+    };
+    server.once("error", onError);
+    server.listen(port, host, () => {
+      server.off("error", onError);
+      resolve();
+    });
   });
 
   const boundPort = (server.address() as { port: number } | null)?.port ?? port;

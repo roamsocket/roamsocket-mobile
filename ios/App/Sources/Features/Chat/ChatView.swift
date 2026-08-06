@@ -1,7 +1,7 @@
 import SwiftUI
-import MobileAICore
+import AnyProvCore
 
-/// Main chat view, mimicking the Claude iOS UI:
+/// Main chat view:
 ///  * On a fresh / empty chat, shows a centered greeting like
 ///    "Clocking in for the evening shift." with a centered asterism glyph.
 ///  * Otherwise renders a vertically scrolling message list.
@@ -82,7 +82,7 @@ struct ChatView: View {
             ModelPickerSheet()
         }
         .sheet(isPresented: $showProviderSettings) {
-            ClaudeSettingsView(initialFocus: .providers)
+            AppSettingsView(initialFocus: .providers)
         }
         .fullScreenCover(item: $sessionConfig) { config in
             NavigationStack {
@@ -217,8 +217,12 @@ struct ChatView: View {
 
     private var composerSurface: some View {
         VStack(spacing: 8) {
+            if viewModel.healthEnabled {
+                healthContextChip
+            }
+
             // Top: text field on its own row — full width, room to breathe.
-            TextField("Chat with Claude", text: $viewModel.inputText, axis: .vertical)
+            TextField("Message AnyProv Code", text: $viewModel.inputText, axis: .vertical)
                 .lineLimit(1...4)
                 .font(.system(size: 16))
                 .foregroundStyle(Theme.textPrimary)
@@ -280,6 +284,33 @@ struct ChatView: View {
             RoundedRectangle(cornerRadius: 28)
                 .stroke(Theme.separator, lineWidth: 1)
         )
+    }
+
+    /// Compact indicator that Apple Health context will be attached on send.
+    private var healthContextChip: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "heart.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.pink)
+            Text("Health")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Theme.textSecondary)
+            Spacer(minLength: 0)
+            Button {
+                Task { await viewModel.setHealthEnabled(false) }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(Theme.textTertiary)
+                    .frame(width: 20, height: 20)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Turn off Health")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Theme.surfaceElevated, in: Capsule())
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var modelPillTitle: String {

@@ -72,7 +72,25 @@ export async function cloneAndBranch(spec: RepoSpec, dir: string): Promise<{ bas
     await run(["checkout", baseBranch], { cwd: dir, token: spec.githubToken });
   }
 
-  // Create the work branch if it doesn't already exist.
+  // Prefer an existing remote work branch (cold resume after desktop restart
+  // when the session was previously pushed). Shallow clone only has HEAD, so
+  // fetch the named branch explicitly before creating a new one from base.
+  const fetchWork = await run(
+    [
+      "fetch",
+      "origin",
+      `refs/heads/${spec.workBranch}:refs/heads/${spec.workBranch}`,
+      "--depth",
+      "50",
+    ],
+    { cwd: dir, token: spec.githubToken },
+  );
+  if (fetchWork.code === 0) {
+    const co = await run(["checkout", spec.workBranch], { cwd: dir });
+    if (co.code === 0) return { baseBranch };
+  }
+
+  // New session: create the work branch from base (or check it out if local).
   const created = await run(["checkout", "-b", spec.workBranch], { cwd: dir });
   if (created.code !== 0) {
     await run(["checkout", spec.workBranch], { cwd: dir });
@@ -86,11 +104,17 @@ export async function commitAll(dir: string, message: string): Promise<boolean> 
   const status = await run(["status", "--porcelain"], { cwd: dir });
   if (!status.stdout.trim()) return false;
   // Identity is required for commit; set a bot identity locally.
-  await run(["config", "user.email", "agent@code-mobile-ai.local"], { cwd: dir });
-  await run(["config", "user.name", "code-mobile-ai"], { cwd: dir });
+  await run(["config", "user.email", "agent@anyprov-code.local"], { cwd: dir });
+  await run(["config", "user.name", "anyprov-code"], { cwd: dir });
   const commit = await run(["commit", "-m", message], { cwd: dir });
   if (commit.code !== 0) throw new Error(`git commit failed: ${commit.stderr.trim()}`);
   return true;
+}
+
+/** GitHub compare URL that opens the "Open a pull request" form. */
+export function compareURL(spec: RepoSpec): string {
+  const base = spec.baseBranch ?? "main";
+  return `https://github.com/${spec.fullName}/compare/${base}...${spec.workBranch}?expand=1`;
 }
 
 /** Push the work branch and return a GitHub compare URL for opening a PR. */
@@ -100,8 +124,7 @@ export async function pushBranch(spec: RepoSpec, dir: string): Promise<string> {
     token: spec.githubToken,
   });
   if (push.code !== 0) throw new Error(`git push failed: ${push.stderr.trim()}`);
-  const base = spec.baseBranch ?? "main";
-  return `https://github.com/${spec.fullName}/compare/${base}...${spec.workBranch}?expand=1`;
+  return compareURL(spec);
 }
 
 /**

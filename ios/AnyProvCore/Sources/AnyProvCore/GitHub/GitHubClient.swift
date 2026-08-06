@@ -170,7 +170,7 @@ public struct GitHubClient: Sendable {
         var req = URLRequest(url: components.url!)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        req.setValue("code-mobile-ai", forHTTPHeaderField: "User-Agent")
+        req.setValue("anyprov-code", forHTTPHeaderField: "User-Agent")
 
         let (data, response) = try await http.data(for: req)
         try expectOK(data, response)
@@ -205,7 +205,7 @@ public struct GitHubClient: Sendable {
     // MARK: User
 
     /// Authenticated user lookup. Used so the iOS app can name the settings
-    /// repo `code-mobile-ai-settings` under the right owner.
+    /// repo `anyprov-code-settings` under the right owner.
     public struct AuthenticatedUser: Codable, Sendable, Equatable {
         public let login: String
         public init(login: String) { self.login = login }
@@ -215,7 +215,7 @@ public struct GitHubClient: Sendable {
         var req = URLRequest(url: URL(string: "https://api.github.com/user")!)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        req.setValue("code-mobile-ai", forHTTPHeaderField: "User-Agent")
+        req.setValue("anyprov-code", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await http.data(for: req)
         try expectOK(data, response)
         struct Raw: Decodable { let login: String }
@@ -242,7 +242,7 @@ public struct GitHubClient: Sendable {
         req.httpMethod = "POST"
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        req.setValue("code-mobile-ai", forHTTPHeaderField: "User-Agent")
+        req.setValue("anyprov-code", forHTTPHeaderField: "User-Agent")
         let body: [String: Any] = [
             "name": name,
             "description": description ?? "",
@@ -279,12 +279,12 @@ public struct GitHubClient: Sendable {
     }
 
     /// True when a repo is reachable with this token. Used to auto-detect
-    /// whether `code-mobile-ai-settings` already exists.
+    /// whether `anyprov-code-settings` already exists.
     public func repoExists(token: String, fullName: String) async throws -> Bool {
         var req = URLRequest(url: URL(string: "https://api.github.com/repos/\(fullName)")!)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        req.setValue("code-mobile-ai", forHTTPHeaderField: "User-Agent")
+        req.setValue("anyprov-code", forHTTPHeaderField: "User-Agent")
         let (_, response) = try await http.data(for: req)
         switch response.statusCode {
         case 200..<300: return true
@@ -314,7 +314,7 @@ public struct GitHubClient: Sendable {
         var req = URLRequest(url: components.url!)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        req.setValue("code-mobile-ai", forHTTPHeaderField: "User-Agent")
+        req.setValue("anyprov-code", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await http.data(for: req)
         if response.statusCode == 404 { return nil }
         try expectOK(data, response)
@@ -344,7 +344,7 @@ public struct GitHubClient: Sendable {
         req.httpMethod = "PUT"
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        req.setValue("code-mobile-ai", forHTTPHeaderField: "User-Agent")
+        req.setValue("anyprov-code", forHTTPHeaderField: "User-Agent")
         var body: [String: Any] = [
             "message": message,
             "content": Data(content.utf8).base64EncodedString(),

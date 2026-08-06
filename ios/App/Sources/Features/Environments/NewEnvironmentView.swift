@@ -1,5 +1,5 @@
 import SwiftUI
-import MobileAICore
+import AnyProvCore
 
 /// "New cloud environment" form (screenshots 3 + 4):
 /// name, network-access picker with the four labelled cards, an allowed-domains

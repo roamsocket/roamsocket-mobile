@@ -1,5 +1,5 @@
 import Foundation
-@testable import MobileAICore
+@testable import AnyProvCore
 
 /// Returns canned responses keyed by URL substring, for provider tests.
 struct MockHTTPClient: HTTPClient {

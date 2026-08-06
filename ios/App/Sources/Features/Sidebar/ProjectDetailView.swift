@@ -226,7 +226,7 @@ private struct InstructionsSheet: View {
                     RoundedRectangle(cornerRadius: 22)
                         .fill(Theme.surface)
                     if text.isEmpty {
-                        Text("Instruct Claude how to behave and respond for all of the chats within this project.")
+                        Text("Instruct the assistant how to behave and respond for all of the chats within this project.")
                             .font(.system(size: 15))
                             .foregroundStyle(Theme.textTertiary)
                             .padding(16)
@@ -291,7 +291,7 @@ private struct ProjectFilesSheet: View {
                     Text("No files yet")
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(Theme.textPrimary)
-                    Text("Add files for Claude to use in this project.")
+                    Text("Add files for the assistant to use in this project.")
                         .font(.system(size: 14))
                         .foregroundStyle(Theme.textSecondary)
                         .multilineTextAlignment(.center)

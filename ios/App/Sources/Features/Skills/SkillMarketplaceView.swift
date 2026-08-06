@@ -1,5 +1,5 @@
 import SwiftUI
-import MobileAICore
+import AnyProvCore
 
 /// Lists skills synced from the user's configured skills repo. No bundled
 /// marketplace — every skill here was added either on the desktop side or

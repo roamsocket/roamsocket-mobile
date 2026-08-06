@@ -1,5 +1,5 @@
 import SwiftUI
-import MobileAICore
+import AnyProvCore
 
 /// Link a GitHub account via Device Flow (no secret) or a pasted PAT.
 struct GitHubLinkView: View {
@@ -36,14 +36,21 @@ struct GitHubLinkView: View {
                 }
             }
 
-            Section("Personal access token") {
+            Section {
                 SecureField("ghp_…", text: $pat)
                     .textInputAutocapitalization(.never)
+                Button("Generate token on GitHub") {
+                    openURL(Self.generateTokenURL)
+                }
                 Button("Save token") {
                     state.githubToken = pat
                     dismiss()
                 }
                 .disabled(pat.isEmpty)
+            } header: {
+                Text("Personal access token")
+            } footer: {
+                Text("Opens GitHub’s classic token page. Select all scopes, generate the token, then paste it above.")
             }
         }
         .scrollContentBackground(.hidden)
@@ -51,6 +58,40 @@ struct GitHubLinkView: View {
         .navigationTitle("Link GitHub")
         .navigationBarTitleDisplayMode(.inline)
     }
+
+    /// Classic PAT create page with all common scopes pre-checked.
+    /// User should still confirm every scope is selected before generating.
+    private static let generateTokenURL: URL = {
+        var components = URLComponents(string: "https://github.com/settings/tokens/new")!
+        components.queryItems = [
+            URLQueryItem(name: "description", value: "AnyProv Code"),
+            URLQueryItem(
+                name: "scopes",
+                value: [
+                    "repo",
+                    "workflow",
+                    "write:packages",
+                    "delete:packages",
+                    "admin:org",
+                    "admin:public_key",
+                    "admin:repo_hook",
+                    "admin:org_hook",
+                    "gist",
+                    "notifications",
+                    "user",
+                    "delete_repo",
+                    "write:discussion",
+                    "project",
+                    "admin:enterprise",
+                    "admin:gpg_key",
+                    "admin:ssh_signing_key",
+                    "codespace",
+                    "copilot",
+                ].joined(separator: ",")
+            ),
+        ]
+        return components.url!
+    }()
 
     private func startDeviceFlow() {
         let client = GitHubClient(clientID: state.githubClientID)

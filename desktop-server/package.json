@@ -1,13 +1,13 @@
 {
-  "name": "code-mobile-ai-server",
+  "name": "anyprov-code-server",
   "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Desktop companion server for the code-mobile-ai iOS app. Pairs with the app over WebSocket, clones GitHub repos, runs the agent loop, and executes code. Ships as an Electron app with a built-in client UI.",
+  "description": "Desktop companion server for the anyprov-code iOS app. Pairs with the app over WebSocket, clones GitHub repos, runs the agent loop, and executes code. Ships as an Electron app with a built-in client UI.",
   "license": "MIT",
   "main": ".vite/build/main.cjs",
   "bin": {
-    "code-mobile-ai-server": "dist/src/index.js"
+    "anyprov-code-server": "dist/src/index.js"
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",

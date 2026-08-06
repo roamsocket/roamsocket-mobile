@@ -1,12 +1,12 @@
 import Foundation
 import Security
-import MobileAICore
+import AnyProvCore
 
 /// Keychain-backed `SecretStore` for API keys and tokens on device.
 final class KeychainSecretStore: SecretStore, @unchecked Sendable {
     private let service: String
 
-    init(service: String = "com.codemobileai.secrets") {
+    init(service: String = "com.anyprovcode.secrets") {
         self.service = service
     }
 

@@ -1,5 +1,5 @@
 /**
- * Git operations on a local repo. Mirrors MobileAICore/.../GitRepoSync.swift
+ * Git operations on a local repo. Mirrors AnyProvCore/.../GitRepoSync.swift
  * on the desktop side so both apps behave the same way. The desktop is the
  * git operator; the iOS app sends edits over the WebSocket and this module
  * does the actual `git commit` / `git push`.
@@ -42,7 +42,7 @@ function run(cwd: string, args: string[], env: Record<string, string> = {}): Pro
 }
 
 export function defaultRoot(): string {
-  return path.join(os.homedir(), ".code-mobile-ai/sync");
+  return path.join(os.homedir(), ".anyprov-code/sync");
 }
 
 export async function ensureDir(p: string): Promise<string> {

@@ -1,7 +1,7 @@
 import Foundation
 import SwiftUI
 import Combine
-import MobileAICore
+import AnyProvCore
 
 /// Root observable app state: secrets, model catalog, environments, GitHub
 /// token, server pairing, and the current composer selections.
@@ -37,6 +37,12 @@ final class AppState: ObservableObject {
     /// by default. When false, thinking collapses behind a one-line preview.
     @AppStorage("alwaysExpandThinking.v1") var alwaysExpandThinking: Bool = false
 
+    /// Branch name prefix for new coding sessions, e.g. `apc/fix-login-a1b2c3d4`.
+    @AppStorage("codeBranchPrefix.v1") var codeBranchPrefix: String = "apc"
+
+    /// Last paired desktop base URL (e.g. `http://192.168.1.20:4319`).
+    @AppStorage("serverHost.v1") var serverHost: String = ""
+
     /// When non-nil, the iOS app will push its settings to this GitHub
     /// repo on every change (and pull on launch when a token is linked).
     @AppStorage("settingsSyncRepoFullName.v1") var settingsSyncRepoFullName: String?
@@ -63,6 +69,8 @@ final class AppState: ObservableObject {
     @Published var serverEndpoint: ServerClient.Endpoint?
     @Published var serverToken: String?
     @Published var serverName: String?
+    @Published var isReconnecting = false
+    @Published var reconnectMessage: String?
 
     // Chat state (per-chat toggles live on `ChatViewModel`; nothing here yet.)
 
@@ -73,6 +81,7 @@ final class AppState: ObservableObject {
     private let mcpBranchKey = "mcpRepoBranch.v1"
     private let customProvidersKey = "customProviders.v1"
     private let modelAliasesKey = "modelAliases.v1"
+    private let serverNameKey = "serverName.v1"
 
     init(secrets: SecretStore) {
         self.secrets = secrets
@@ -82,6 +91,76 @@ final class AppState: ObservableObject {
         loadCustomProviders()
         loadModelAliases()
         seedDefaultEnvironmentIfNeeded()
+        restorePairingFromDisk()
+        Task { await attemptServerReconnect() }
+    }
+
+    // MARK: - Desktop pairing persistence + auto-reconnect
+
+    /// Persist a successful pair so cold launch can reconnect.
+    func savePairing(endpoint: ServerClient.Endpoint, token: String, serverName: String) {
+        self.serverEndpoint = endpoint
+        self.serverToken = token
+        self.serverName = serverName
+        serverHost = endpoint.baseURL.absoluteString
+        secrets.set(token, for: SecretKey.serverToken(serverHost))
+        UserDefaults.standard.set(serverName, forKey: serverNameKey)
+    }
+
+    func clearPairing() {
+        if !serverHost.isEmpty {
+            secrets.set(nil, for: SecretKey.serverToken(serverHost))
+        }
+        serverEndpoint = nil
+        serverToken = nil
+        serverName = nil
+        serverHost = ""
+        UserDefaults.standard.removeObject(forKey: serverNameKey)
+    }
+
+    private func restorePairingFromDisk() {
+        let host = serverHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty, let endpoint = ServerClient.Endpoint(host: host) else { return }
+        let token = secrets.get(SecretKey.serverToken(host))
+        guard let token, !token.isEmpty else { return }
+        serverEndpoint = endpoint
+        serverToken = token
+        serverName = UserDefaults.standard.string(forKey: serverNameKey)
+    }
+
+    /// Health-check the last paired desktop and keep the token if reachable.
+    func attemptServerReconnect() async {
+        guard let endpoint = serverEndpoint, let token = serverToken, !token.isEmpty else {
+            reconnectMessage = nil
+            return
+        }
+        isReconnecting = true
+        defer { isReconnecting = false }
+        do {
+            var req = URLRequest(url: endpoint.baseURL.appendingPathComponent("health"))
+            req.timeoutInterval = 4
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                reconnectMessage = "Desktop not reachable — pair again when on the same network (or enable remote access on the desktop)."
+                return
+            }
+            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let name = obj["name"] as? String {
+                serverName = name
+                UserDefaults.standard.set(name, forKey: serverNameKey)
+            }
+            // Validate the token by opening a short-lived WebSocket.
+            let client = ServerClient()
+            let stream = try await client.connect(endpoint: endpoint, token: token)
+            // If connect didn't throw unauthorized close immediately, treat as OK.
+            // Give the server a moment; then disconnect.
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            await client.disconnect()
+            _ = stream
+            reconnectMessage = nil
+        } catch {
+            reconnectMessage = "Could not reconnect: \(error.localizedDescription)"
+        }
     }
 
     // MARK: - Custom providers

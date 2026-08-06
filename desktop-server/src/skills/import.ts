@@ -1,7 +1,11 @@
 /**
- * One-time importer: reads skills from `~/.claude/skills/<name>/SKILL.md`
- * and MCP servers from `~/.claude/plugins/marketplaces/*/.mcp.json`,
- * pushes them to the configured git repos as the initial commit.
+ * One-time importer: reads skills and MCP servers from common local agent
+ * directories on disk, then pushes them to the configured git repos as the
+ * initial commit.
+ *
+ * Scans (first existing wins per layout):
+ *   - `~/.anyprov/skills`, `~/.claude/skills`
+ *   - `~/.anyprov/plugins/marketplaces`, `~/.claude/plugins/marketplaces`
  *
  * NOT bundled into the app — this is a user-triggered import action that
  * the desktop performs when the user asks it to. After the initial push,
@@ -12,7 +16,6 @@ import path from "node:path";
 import os from "node:os";
 import {
   commitAndPush,
-  localDirFor,
   pullOrClone,
   writeFile,
   type RepoConfig,
@@ -20,36 +23,45 @@ import {
 import type { MCPServer, Skill } from "../protocol.js";
 
 const HOME = os.homedir();
-const CLAUDE_SKILLS_DIR = path.join(HOME, ".claude", "skills");
-const CLAUDE_MARKETPLACES_DIR = path.join(HOME, ".claude", "plugins", "marketplaces");
+const SKILL_DIRS = [
+  path.join(HOME, ".anyprov", "skills"),
+  path.join(HOME, ".claude", "skills"),
+];
+const MARKETPLACE_DIRS = [
+  path.join(HOME, ".anyprov", "plugins", "marketplaces"),
+  path.join(HOME, ".claude", "plugins", "marketplaces"),
+];
 
-export async function discoverClaudeSkills(): Promise<Skill[]> {
+export async function discoverLocalSkills(): Promise<Skill[]> {
   const out: Skill[] = [];
-  let entries: string[] = [];
-  try {
-    entries = await fs.readdir(CLAUDE_SKILLS_DIR);
-  } catch {
-    return out;
-  }
-  for (const id of entries) {
-    const skillFile = path.join(CLAUDE_SKILLS_DIR, id, "SKILL.md");
+  const seen = new Set<string>();
+  for (const skillsDir of SKILL_DIRS) {
+    let entries: string[] = [];
     try {
-      const text = await fs.readFile(skillFile, "utf8");
-      // Reuse the parser from skills/sync.ts by inlining a tiny version:
-      // we keep the original text intact so it's a faithful copy.
-      const { name, description, body } = crudeParse(text);
-      out.push({
-        id,
-        name: name ?? id,
-        description: description ?? "",
-        content: body,
-        category: "other" as Skill["category"],
-        source: "custom" as Skill["source"],
-        isEnabled: true,
-        frontmatter: { name: name ?? id, description: description ?? "" } as Record<string, string>,
-      });
+      entries = await fs.readdir(skillsDir);
     } catch {
-      // Skip silently; the user can edit the file before pushing.
+      continue;
+    }
+    for (const id of entries) {
+      if (seen.has(id)) continue;
+      const skillFile = path.join(skillsDir, id, "SKILL.md");
+      try {
+        const text = await fs.readFile(skillFile, "utf8");
+        const { name, description, body } = crudeParse(text);
+        seen.add(id);
+        out.push({
+          id,
+          name: name ?? id,
+          description: description ?? "",
+          content: body,
+          category: "other" as Skill["category"],
+          source: "custom" as Skill["source"],
+          isEnabled: true,
+          frontmatter: { name: name ?? id, description: description ?? "" } as Record<string, string>,
+        });
+      } catch {
+        // Skip silently; the user can edit the file before pushing.
+      }
     }
   }
   return out;
@@ -77,52 +89,57 @@ function crudeParse(text: string): { name?: string; description?: string; body: 
   return { name: fm.name, description: fm.description, body: lines.slice(end + 1).join("\n") };
 }
 
-export async function discoverClaudeMCPServers(): Promise<MCPServer[]> {
+export async function discoverLocalMCPServers(): Promise<MCPServer[]> {
   const out: MCPServer[] = [];
-  let marketplaceDirs: string[] = [];
-  try {
-    marketplaceDirs = await fs.readdir(CLAUDE_MARKETPLACES_DIR);
-  } catch {
-    return out;
-  }
-  for (const mp of marketplaceDirs) {
-    const file = path.join(CLAUDE_MARKETPLACES_DIR, mp, ".mcp.json");
-    let raw: string;
+  const seen = new Set<string>();
+  for (const marketplacesRoot of MARKETPLACE_DIRS) {
+    let marketplaceDirs: string[] = [];
     try {
-      raw = await fs.readFile(file, "utf8");
+      marketplaceDirs = await fs.readdir(marketplacesRoot);
     } catch {
       continue;
     }
-    let data: { mcpServers?: Record<string, unknown> };
-    try {
-      data = JSON.parse(raw);
-    } catch {
-      continue;
-    }
-    const servers = Object.entries(data.mcpServers ?? {});
-    for (const [name, spec] of servers) {
-      const s = spec as Record<string, unknown>;
-      const id = `${mp}-${name}`;
-      out.push({
-        id,
-        name,
-        description: typeof s.description === "string" ? s.description : "",
-        command: typeof s.command === "string" ? s.command : "",
-        args: Array.isArray(s.args) ? s.args as string[] : [],
-        env: (typeof s.env === "object" && s.env) ? s.env as Record<string, string> : {},
-        isEnabled: typeof s.isEnabled === "boolean" ? s.isEnabled : true,
-      });
+    for (const mp of marketplaceDirs) {
+      const file = path.join(marketplacesRoot, mp, ".mcp.json");
+      let raw: string;
+      try {
+        raw = await fs.readFile(file, "utf8");
+      } catch {
+        continue;
+      }
+      let data: { mcpServers?: Record<string, unknown> };
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        continue;
+      }
+      const servers = Object.entries(data.mcpServers ?? {});
+      for (const [name, spec] of servers) {
+        const id = `${mp}-${name}`;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        const s = spec as Record<string, unknown>;
+        out.push({
+          id,
+          name,
+          description: typeof s.description === "string" ? s.description : "",
+          command: typeof s.command === "string" ? s.command : "",
+          args: Array.isArray(s.args) ? s.args as string[] : [],
+          env: (typeof s.env === "object" && s.env) ? s.env as Record<string, string> : {},
+          isEnabled: typeof s.isEnabled === "boolean" ? s.isEnabled : true,
+        });
+      }
     }
   }
   return out;
 }
 
-export async function importClaudeSkillsToRepo(
+export async function importLocalSkillsToRepo(
   repo: RepoConfig,
   token: string | undefined,
   author: { name: string; email: string },
 ): Promise<{ imported: number; sha: string | null }> {
-  const skills = await discoverClaudeSkills();
+  const skills = await discoverLocalSkills();
   if (skills.length === 0) return { imported: 0, sha: null };
   await pullOrClone(repo, token);
   for (const skill of skills) {
@@ -139,18 +156,18 @@ export async function importClaudeSkillsToRepo(
   const sha = await commitAndPush({
     config: repo,
     token,
-    message: `Import ${skills.length} skills from ~/.claude/skills`,
+    message: `Import ${skills.length} skills from local skill directories`,
     author,
   });
   return { imported: skills.length, sha };
 }
 
-export async function importClaudeMCPToRepo(
+export async function importLocalMCPToRepo(
   repo: RepoConfig,
   token: string | undefined,
   author: { name: string; email: string },
 ): Promise<{ imported: number; sha: string | null }> {
-  const servers = await discoverClaudeMCPServers();
+  const servers = await discoverLocalMCPServers();
   if (servers.length === 0) return { imported: 0, sha: null };
   await pullOrClone(repo, token);
   for (const server of servers) {
@@ -171,7 +188,7 @@ export async function importClaudeMCPToRepo(
   const sha = await commitAndPush({
     config: repo,
     token,
-    message: `Import ${servers.length} MCP servers from ~/.claude/plugins/marketplaces`,
+    message: `Import ${servers.length} MCP servers from local marketplaces`,
     author,
   });
   return { imported: servers.length, sha };

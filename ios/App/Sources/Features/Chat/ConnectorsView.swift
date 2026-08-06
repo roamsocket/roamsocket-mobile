@@ -1,5 +1,5 @@
 import SwiftUI
-import MobileAICore
+import AnyProvCore
 
 /// Connectors list view. Reads the configured connectors from
 /// `AppState.mcpManager` (synced from the desktop server's git repo via
@@ -141,44 +141,44 @@ struct ConnectorsView: View {
 }
 
 /// Individual connector row, backed by a real `MCPServer` from the desktop-synced
-/// list. Tapping the row toggles its enabled state.
+/// list. The trailing switch toggles its enabled state.
 struct ConnectorServerRow: View {
     let server: MCPServer
     let isSelected: Bool
     var onTap: () -> Void
 
     var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: 14) {
-                Image(systemName: iconName(for: server))
-                    .font(.system(size: 20))
+        HStack(spacing: 14) {
+            Image(systemName: iconName(for: server))
+                .font(.system(size: 20))
+                .foregroundStyle(Theme.textPrimary)
+                .frame(width: 32, height: 32)
+                .background(Theme.surfaceElevated, in: RoundedRectangle(cornerRadius: 8))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(server.name)
+                    .font(.system(size: 17))
                     .foregroundStyle(Theme.textPrimary)
-                    .frame(width: 32, height: 32)
-                    .background(Theme.surfaceElevated, in: RoundedRectangle(cornerRadius: 8))
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(server.name)
-                        .font(.system(size: 17))
-                        .foregroundStyle(Theme.textPrimary)
-                    if !server.description.isEmpty {
-                        Text(server.description)
-                            .font(.system(size: 12))
-                            .foregroundStyle(Theme.textTertiary)
-                            .lineLimit(1)
-                    }
+                if !server.description.isEmpty {
+                    Text(server.description)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textTertiary)
+                        .lineLimit(1)
                 }
-
-                Spacer()
-
-                Image(systemName: isSelected ? "checkmark" : "chevron.right")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(Theme.textTertiary)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
-            .contentShape(Rectangle())
+
+            Spacer()
+
+            Toggle("", isOn: Binding(
+                get: { isSelected },
+                set: { _ in onTap() }
+            ))
+            .toggleStyle(SwitchToggleStyle(tint: Theme.accent))
+            .labelsHidden()
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .contentShape(Rectangle())
     }
 
     private func iconName(for server: MCPServer) -> String {

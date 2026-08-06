@@ -1,5 +1,5 @@
 import SwiftUI
-import MobileAICore
+import AnyProvCore
 
 /// Detail view for a skill with "Add to Chat" functionality.
 struct SkillDetailView: View {

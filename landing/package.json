@@ -1,0 +1,14 @@
+{
+  "name": "anyprov-code-landing",
+  "private": true,
+  "description": "AnyProv Code marketing site — static assets on Cloudflare Workers",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "deploy:dry": "wrangler deploy --dry-run",
+    "cf-typegen": "wrangler types"
+  },
+  "devDependencies": {
+    "wrangler": "^4.119.0"
+  }
+}

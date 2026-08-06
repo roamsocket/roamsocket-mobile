@@ -1,12 +1,9 @@
 import SwiftUI
-import MobileAICore
+import AnyProvCore
 
-/// Settings sheet mirroring the iOS Claude app layout. Every row is wired to
-/// a real configuration destination — the bogus "Profile / Billing / Usage /
-/// Notifications / Privacy / Shared links / Capabilities / Connectors /
-/// Permissions / Voice" placeholders are gone. The full legacy form lives
-/// behind "Advanced settings".
-struct ClaudeSettingsView: View {
+/// App settings sheet. Every row is wired to a real configuration destination.
+/// The full legacy form lives behind "Advanced settings".
+struct AppSettingsView: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
 
@@ -163,10 +160,15 @@ struct ClaudeSettingsView: View {
         state.githubToken?.isEmpty == false ? "Linked" : "Not linked"
     }
 
+    /// Built-in providers with a stored key, plus every custom provider
+    /// (custom hosts count even when the key is blank — Ollama-style).
     private var providerKeysStatus: String {
-        let count = ProviderID.allCases.filter { !state.apiKey(for: $0).isEmpty }.count
-        let total = ProviderID.allCases.count
-        return count == 0 ? "Not set" : "\(count)/\(total)"
+        let builtIn = ProviderID.allBuiltInCases
+            .filter { !state.apiKey(for: $0).isEmpty }
+            .count
+        let count = builtIn + state.customProviders.count
+        if count == 0 { return "Add +" }
+        return count == 1 ? "1 provider" : "\(count) providers"
     }
 
     // MARK: - Coding
@@ -185,11 +187,42 @@ struct ClaudeSettingsView: View {
                 )
             }
             .buttonStyle(.plain)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Branch prefix")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(Theme.textPrimary)
+                Text("Each coding session gets its own branch: \(previewBranchExample)")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.textTertiary)
+                TextField("apc", text: $state.codeBranchPrefix)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .padding(10)
+                    .background(Theme.field, in: RoundedRectangle(cornerRadius: 10))
+                    .foregroundStyle(Theme.textPrimary)
+            }
+            .padding(.top, 8)
+
+            if let msg = state.reconnectMessage, !msg.isEmpty {
+                Text(msg)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.textSecondary)
+                    .padding(.top, 4)
+            }
         }
     }
 
+    private var previewBranchExample: String {
+        let p = state.codeBranchPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prefix = p.isEmpty ? "apc" : p
+        return "\(prefix)/your-task-a1b2c3d4"
+    }
+
     private var serverStatus: String {
+        if state.isReconnecting { return "Reconnecting…" }
         if let name = state.serverName, !name.isEmpty { return "Paired · \(name)" }
+        if state.serverToken != nil { return "Paired" }
         return "Not paired"
     }
 
@@ -210,7 +243,7 @@ struct ClaudeSettingsView: View {
     // MARK: - Settings backup
 
     /// GitHub-backed settings sync. The app auto-creates
-    /// `code-mobile-ai-settings` under the user's account on the first push.
+    /// `anyprov-code-settings` under the user's account on the first push.
     private var settingsBackupSection: some View {
         settingsCard(header: "Settings backup") {
             VStack(alignment: .leading, spacing: 12) {
@@ -368,13 +401,13 @@ struct ClaudeSettingsView: View {
                     .font(.footnote)
                     .foregroundStyle(Theme.textTertiary)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("CMAI_SKILLS_REPO / CMAI_MCP_REPO")
+                    Text("APC_SKILLS_REPO / APC_MCP_REPO")
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(Theme.textSecondary)
-                    Text("CMAI_SKILLS_BRANCH / CMAI_MCP_BRANCH (default main)")
+                    Text("APC_SKILLS_BRANCH / APC_MCP_BRANCH (default main)")
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(Theme.textSecondary)
-                    Text("CMAI_SKILLS_TOKEN / CMAI_MCP_TOKEN (optional GitHub PAT)")
+                    Text("APC_SKILLS_TOKEN / APC_MCP_TOKEN (optional GitHub PAT)")
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(Theme.textSecondary)
                 }
@@ -496,7 +529,7 @@ struct ClaudeSettingsView: View {
 // MARK: - Provider Keys sheet
 
 /// Quick view of provider API keys (one sheet to look at and edit them from
-/// the Claude-style settings).
+/// app settings).
 /// this is the abbreviated entry.
 private struct ProviderKeysView: View {
     @EnvironmentObject var state: AppState
@@ -861,7 +894,7 @@ private struct AboutSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Code Mobile AI")
+                        Text("AnyProv Code")
                             .font(.system(size: 22, weight: .semibold))
                             .foregroundStyle(Theme.textPrimary)
                         Text("Version \(appVersion)")
@@ -878,7 +911,7 @@ private struct AboutSheet: View {
                             .foregroundStyle(Theme.textSecondary)
                             .padding(.horizontal, 4)
                         VStack(alignment: .leading, spacing: 12) {
-                            Text("An open-source iOS client for Claude Code and other providers, paired with a desktop coding server.")
+                            Text("An open-source iOS client for any AI provider, paired with a desktop coding server.")
                                 .font(.system(size: 15))
                                 .foregroundStyle(Theme.textPrimary)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -919,6 +952,6 @@ private struct AboutSheet: View {
 }
 
 #Preview {
-    ClaudeSettingsView()
+    AppSettingsView()
         .environmentObject(AppState(secrets: KeychainSecretStore()))
 }

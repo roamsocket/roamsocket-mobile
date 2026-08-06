@@ -40,10 +40,13 @@ export interface AgentDeps {
 
 export class AgentSession {
   private readonly messages: NormalizedMessage[] = [];
-  private readonly adapter: ProviderAdapter;
+  private adapter: ProviderAdapter;
   private readonly systemPrompt: string;
+  /** Mutable so a reattached WebSocket can rebind emit / signal / model. */
+  private deps: AgentDeps;
 
-  constructor(private readonly deps: AgentDeps) {
+  constructor(deps: AgentDeps) {
+    this.deps = deps;
     this.adapter =
       deps.adapter ??
       getAgentAdapter(deps.model.provider, {
@@ -51,6 +54,37 @@ export class AgentSession {
         apiStyle: deps.model.apiStyle,
       });
     this.systemPrompt = this.buildSystemPrompt();
+  }
+
+  /**
+   * Rebind this agent to a new WebSocket connection (and fresh abort signal)
+   * when the app re-opens an existing session. Keeps workdir + conversation.
+   */
+  rebind(next: {
+    emit: AgentDeps["emit"];
+    signal: AbortSignal;
+    requestPermission: AgentDeps["requestPermission"];
+    model?: ModelSelection;
+    permissionMode?: PermissionMode;
+    environment?: EnvironmentConfig;
+  }): void {
+    this.deps = {
+      ...this.deps,
+      emit: next.emit,
+      signal: next.signal,
+      requestPermission: next.requestPermission,
+      model: next.model ?? this.deps.model,
+      permissionMode: next.permissionMode ?? this.deps.permissionMode,
+      environment: next.environment ?? this.deps.environment,
+    };
+    if (next.model) {
+      this.adapter =
+        this.deps.adapter ??
+        getAgentAdapter(next.model.provider, {
+          baseUrl: next.model.baseUrl,
+          apiStyle: next.model.apiStyle,
+        });
+    }
   }
 
   private buildSystemPrompt(): string {
@@ -71,7 +105,8 @@ export class AgentSession {
 
   async handleUserMessage(text: string): Promise<void> {
     this.messages.push({ role: "user", text });
-    const { emit, sessionId } = this.deps;
+    // Always read emit/sessionId from deps so a rebind mid-session is honored.
+    const sessionId = this.deps.sessionId;
 
     for (let round = 0; round < MAX_ROUNDS; round++) {
       if (this.deps.signal.aborted) return;
@@ -95,7 +130,7 @@ export class AgentSession {
       for await (const ev of stream) {
         if (ev.kind === "text") {
           assistantText += ev.text;
-          emit({ type: "assistant_delta", sessionId, text: ev.text });
+          this.deps.emit({ type: "assistant_delta", sessionId, text: ev.text });
         } else if (ev.kind === "tool_call") {
           toolCalls.push(ev.call);
         } else if (ev.kind === "done") {
@@ -107,7 +142,7 @@ export class AgentSession {
       this.messages.push({ role: "assistant", text: assistantText, toolCalls });
 
       if (toolCalls.length === 0) {
-        emit({ type: "session_done", sessionId, stopReason });
+        this.deps.emit({ type: "session_done", sessionId, stopReason });
         return;
       }
 
@@ -115,14 +150,22 @@ export class AgentSession {
       for (const call of toolCalls) {
         const tool = TOOLS[call.name];
         const summary = tool ? tool.summarize(call.input) : `${call.name}`;
-        emit({ type: "tool_call", sessionId, callId: call.id, tool: call.name, summary, input: call.input });
+        this.deps.emit({
+          type: "tool_call",
+          sessionId,
+          callId: call.id,
+          tool: call.name,
+          summary,
+          input: call.input,
+        });
 
         let result = { ok: false, output: `Unknown tool: ${call.name}` };
         if (tool) {
           const gated = MUTATING_TOOLS.has(call.name);
           const baseCtx = {
             workdir: this.deps.workdir,
-            onOutput: (chunk: string) => emit({ type: "assistant_delta", sessionId, text: chunk }),
+            onOutput: (chunk: string) =>
+              this.deps.emit({ type: "assistant_delta", sessionId, text: chunk }),
             network: this.deps.environment
               ? {
                   access: this.deps.environment.networkAccess,
@@ -145,15 +188,34 @@ export class AgentSession {
           }
         }
 
-        emit({ type: "tool_result", sessionId, callId: call.id, ok: result.ok, output: result.output });
-        this.messages.push({ role: "tool", toolCallId: call.id, name: call.name, output: result.output, ok: result.ok });
+        this.deps.emit({
+          type: "tool_result",
+          sessionId,
+          callId: call.id,
+          ok: result.ok,
+          output: result.output,
+        });
+        this.messages.push({
+          role: "tool",
+          toolCallId: call.id,
+          name: call.name,
+          output: result.output,
+          ok: result.ok,
+        });
       }
 
       // Emit per-file diffs after this round's mutations.
       if (this.deps.permissionMode !== "plan") {
         try {
           for (const d of await diffFiles(this.deps.workdir)) {
-            emit({ type: "diff", sessionId, path: d.path, patch: d.patch, added: d.added, removed: d.removed });
+            this.deps.emit({
+              type: "diff",
+              sessionId,
+              path: d.path,
+              patch: d.patch,
+              added: d.added,
+              removed: d.removed,
+            });
           }
         } catch {
           // Non-fatal: diffs are best-effort (e.g. workdir not a git repo).
@@ -161,6 +223,10 @@ export class AgentSession {
       }
     }
 
-    emit({ type: "error", sessionId, message: `Stopped after ${MAX_ROUNDS} rounds.` });
+    this.deps.emit({
+      type: "error",
+      sessionId,
+      message: `Stopped after ${MAX_ROUNDS} rounds.`,
+    });
   }
 }

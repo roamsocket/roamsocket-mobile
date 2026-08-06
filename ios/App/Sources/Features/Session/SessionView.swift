@@ -1,5 +1,5 @@
 import SwiftUI
-import MobileAICore
+import AnyProvCore
 
 /// The coding-session transcript: streamed assistant text, tool cards, diffs,
 /// permission prompts, and a Create-PR action.
@@ -8,14 +8,61 @@ struct SessionView: View {
     @Environment(\.openURL) private var openURL
     @StateObject private var model: SessionViewModel
     @State private var followUp = ""
-    @State private var showPRSheet = false
-    @State private var prTitle = ""
-    @State private var showTools = false
+    @State private var showGitSheet = false
+    /// Which git steps the sheet will run after the user confirms.
+    @State private var pendingGitAction: GitSheetAction = .all
+    @State private var showTerminal = false
+    @State private var showFiles = false
+    @State private var showPorts = false
     @State private var showModelPicker = false
-    @State private var showEnvironmentPicker = false
     @State private var showPermissionSheet = false
     @State private var showProviderSettings = false
     @State private var detailTool: SessionViewModel.Item?
+    @State private var browserBusy = false
+
+    private enum GitSheetAction: String, Identifiable {
+        case commit, push, pr, all
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .commit: return "Commit"
+            case .push: return "Push"
+            case .pr: return "Create PR"
+            case .all: return "Done · Commit · Push · PR"
+            }
+        }
+
+        var needsMessage: Bool {
+            switch self {
+            case .commit, .all, .pr: return true
+            case .push: return false
+            }
+        }
+
+        var commit: Bool {
+            switch self {
+            case .commit, .all: return true
+            case .push: return false
+            // PR flow commits if there are local changes (server skips when clean).
+            case .pr: return true
+            }
+        }
+
+        var push: Bool {
+            switch self {
+            case .push, .pr, .all: return true
+            case .commit: return false
+            }
+        }
+
+        var openPr: Bool {
+            switch self {
+            case .pr, .all: return true
+            case .commit, .push: return false
+            }
+        }
+    }
 
     private let config: SessionConfig
 
@@ -39,29 +86,101 @@ struct SessionView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button { showTools = true } label: {
-                    Image(systemName: "wrench.and.screwdriver")
+                Menu {
+                    Button {
+                        showTerminal = true
+                    } label: {
+                        Label("Shell", systemImage: "terminal")
+                    }
+                    Button {
+                        showFiles = true
+                    } label: {
+                        Label("Files", systemImage: "folder")
+                    }
+                    if model.hasWebPreview {
+                        Button {
+                            Task { await openBrowserPreview() }
+                        } label: {
+                            Label(
+                                browserBusy ? "Opening preview…" : "Browser",
+                                systemImage: "safari"
+                            )
+                        }
+                        .disabled(browserBusy)
+                    }
+                    Button {
+                        showPorts = true
+                    } label: {
+                        Label("Open ports", systemImage: "network")
+                    }
+                } label: {
+                    Image(systemName: "line.3.horizontal")
                         .foregroundStyle(Theme.textPrimary)
                 }
+                .accessibilityLabel("Workspace menu")
             }
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
                 if model.hasDiffs {
-                    Button {
-                        prTitle = config.firstMessage
-                        showPRSheet = true
-                    } label: {
-                        let stats = model.totalDiffStats
-                        Text("+\(stats.added) −\(stats.removed)")
-                            .font(.system(size: 14, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(Theme.selection)
-                    }
+                    let stats = model.totalDiffStats
+                    Text("+\(stats.added) −\(stats.removed)")
+                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(Theme.selection)
                 }
+                Button {
+                    openGitAction()
+                } label: {
+                    Image(systemName: "arrow.triangle.branch")
+                        .foregroundStyle(Theme.textPrimary)
+                }
+                .accessibilityLabel(model.prURL != nil ? "Open pull request" : "Git · \(model.workBranch)")
             }
         }
-        .sheet(isPresented: $showTools) {
-            SessionToolsView()
+        .sheet(isPresented: $showTerminal) {
+            NavigationStack {
+                TerminalPaneView(sessionId: model.sessionID)
+                    .navigationTitle("Shell")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { showTerminal = false }
+                        }
+                    }
+            }
+            .environmentObject(state)
+            .preferredColorScheme(.dark)
+            .presentationDetents([.large])
         }
-        .sheet(isPresented: $showPRSheet) { prSheet }
+        .sheet(isPresented: $showFiles) {
+            NavigationStack {
+                FileExplorerView(sessionId: model.sessionID)
+                    .navigationTitle("Files")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { showFiles = false }
+                        }
+                    }
+            }
+            .environmentObject(state)
+            .preferredColorScheme(.dark)
+            .presentationDetents([.medium, .large])
+        }
+        .sheet(isPresented: $showPorts) {
+            NavigationStack {
+                PortManagerView(sessionId: model.sessionID)
+                    .navigationTitle("Open ports")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { showPorts = false }
+                        }
+                    }
+            }
+            .environmentObject(state)
+            .preferredColorScheme(.dark)
+            .presentationDetents([.medium, .large])
+        }
+        .sheet(isPresented: $showGitSheet) { gitSheet }
         .sheet(isPresented: $showModelPicker) {
             ModelPickerSheet()
         }
@@ -71,10 +190,7 @@ struct SessionView: View {
             // Land directly on the providers section when the user came
             // from the "+ Add a model" pill so they don't have to tap
             // through again.
-            ClaudeSettingsView(initialFocus: .providers)
-        }
-        .sheet(isPresented: $showEnvironmentPicker) {
-            EnvironmentPickerSheet()
+            AppSettingsView(initialFocus: .providers)
         }
         .sheet(isPresented: $showPermissionSheet) {
             PermissionModeSheet(selection: permissionBinding)
@@ -168,7 +284,7 @@ struct SessionView: View {
 
     /// Input area split into two rows: the chat text box on top, then a
     /// second row with the action pills and send button. Matches the
-    /// Claude Code iOS reference where the prompt lives above the
+    /// prompt lives above the
     /// controls.
     private var inputArea: some View {
         VStack(spacing: 8) {
@@ -242,33 +358,124 @@ struct SessionView: View {
     }
 
     private var actionRow: some View {
-        HStack(spacing: 8) {
-            Button { /* TODO: attach file / @-mention */ } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Theme.textPrimary)
-                    .frame(width: 32, height: 32)
-                    .background(Theme.surface, in: Circle())
-            }
-            .buttonStyle(.plain)
+        VStack(alignment: .leading, spacing: 8) {
+            gitActionRow
 
-            ModelSelectorPill(
-                modelDisplayName: modelPillTitle,
-                onPick: { showModelPicker = true },
-                onAddModel: { showProviderSettings = true }
+            HStack(spacing: 8) {
+                Button { /* TODO: attach file / @-mention */ } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                        .frame(width: 32, height: 32)
+                        .background(Theme.surface, in: Circle())
+                }
+                .buttonStyle(.plain)
+
+                ModelSelectorPill(
+                    modelDisplayName: modelPillTitle,
+                    onPick: { showModelPicker = true },
+                    onAddModel: { showProviderSettings = true }
+                )
+                permissionPill
+                Spacer(minLength: 0)
+
+                Menu {
+                    Button { showTerminal = true } label: {
+                        Label("Shell", systemImage: "terminal")
+                    }
+                    Button { showFiles = true } label: {
+                        Label("Files", systemImage: "folder")
+                    }
+                    if model.hasWebPreview {
+                        Button {
+                            Task { await openBrowserPreview() }
+                        } label: {
+                            Label("Browser", systemImage: "safari")
+                        }
+                    }
+                    Button { openGitSheet(.all) } label: {
+                        Label("Finish · PR", systemImage: "checkmark.seal")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                        .frame(width: 32, height: 32)
+                        .background(Theme.surface, in: Circle())
+                }
+            }
+        }
+    }
+
+    private func openGitAction() {
+        if let url = model.prURL {
+            openURL(url)
+            return
+        }
+        // No PR yet — open the git sheet for commit / push / PR (branch is already per-session).
+        openGitSheet(.all)
+    }
+
+    private func openBrowserPreview() async {
+        browserBusy = true
+        defer { browserBusy = false }
+        await model.refreshPorts()
+        guard let port = model.primaryWebPort else { return }
+        // Prefer a tunnel so the phone can reach the desktop off-LAN.
+        if let tunneled = await model.exposePortForPreview(port) {
+            openURL(tunneled)
+            return
+        }
+        if let url = model.webPreviewURL {
+            openURL(url)
+        }
+    }
+
+    /// Instant commit / push / PR controls (publish strip).
+    private var gitActionRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                gitChip("Commit", systemImage: "checkmark.circle", action: .commit)
+                gitChip("Push", systemImage: "arrow.up.to.line", action: .push)
+                gitChip("PR", systemImage: "arrow.triangle.branch", action: .pr)
+                gitChip("Done", systemImage: "checkmark.seal", action: .all, emphasized: true)
+            }
+        }
+    }
+
+    private func gitChip(
+        _ title: String,
+        systemImage: String,
+        action: GitSheetAction,
+        emphasized: Bool = false
+    ) -> some View {
+        Button {
+            openGitSheet(action)
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 11, weight: .semibold))
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+            }
+            .foregroundStyle(emphasized ? Theme.background : Theme.textPrimary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(
+                emphasized ? Theme.accent : Theme.surfaceElevated,
+                in: Capsule()
             )
-            permissionPill
-            environmentPill
-            Spacer(minLength: 0)
+        }
+        .buttonStyle(.plain)
+        .disabled(model.isPublishing)
+        .opacity(model.isPublishing ? 0.55 : 1)
+    }
 
-            Button { showTools = true } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Theme.textPrimary)
-                    .frame(width: 32, height: 32)
-                    .background(Theme.surface, in: Circle())
-            }
-            .buttonStyle(.plain)
+    private func openGitSheet(_ action: GitSheetAction) {
+        pendingGitAction = action
+        showGitSheet = true
+        if action.needsMessage {
+            model.prepareCommitMessage(generateWithAI: true)
         }
     }
 
@@ -302,23 +509,6 @@ struct SessionView: View {
         )
     }
 
-    private var environmentPill: some View {
-        Button { showEnvironmentPicker = true } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "cloud")
-                    .font(.system(size: 11, weight: .semibold))
-                Text(state.selectedEnvironment?.name ?? "Default")
-                    .font(.system(size: 13, weight: .medium))
-                    .lineLimit(1)
-            }
-            .foregroundStyle(Theme.textSecondary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(Theme.surfaceElevated, in: Capsule())
-        }
-        .buttonStyle(.plain)
-    }
-
     private var modelPillTitle: String {
         if let name = state.selectedModel?.displayName {
             return Self.stripEffort(from: name)
@@ -337,28 +527,107 @@ struct SessionView: View {
         return trimmed
     }
 
-    private var prSheet: some View {
+    private var gitSheet: some View {
         NavigationStack {
             Form {
-                Section("Pull request title") {
-                    TextField("Title", text: $prTitle)
+                if pendingGitAction.needsMessage {
+                    Section {
+                        ZStack(alignment: .topLeading) {
+                            if model.commitMessage.isEmpty && model.isGeneratingCommitMessage {
+                                Text("Generating commit message…")
+                                    .foregroundStyle(Theme.textTertiary)
+                            }
+                            TextField("Commit message", text: $model.commitMessage, axis: .vertical)
+                                .lineLimit(2...6)
+                        }
+                        Button {
+                            Task { await model.generateCommitMessageWithAI() }
+                        } label: {
+                            HStack {
+                                if model.isGeneratingCommitMessage {
+                                    ProgressView()
+                                } else {
+                                    Image(systemName: "sparkles")
+                                }
+                                Text(model.isGeneratingCommitMessage ? "Generating…" : "Regenerate with AI")
+                            }
+                        }
+                        .disabled(model.isGeneratingCommitMessage)
+                    } header: {
+                        Text("Commit message")
+                    } footer: {
+                        Text(gitSheetFooter)
+                    }
+                } else {
+                    Section {
+                        Text("Pushes the current work branch to origin.")
+                            .font(.footnote)
+                            .foregroundStyle(Theme.textSecondary)
+                    }
+                }
+
+                if model.hasDiffs {
+                    Section("Local changes") {
+                        let stats = model.totalDiffStats
+                        Text("+\(stats.added) −\(stats.removed) across session diffs")
+                            .font(.system(size: 14, design: .monospaced))
+                            .foregroundStyle(Theme.selection)
+                    }
                 }
             }
-            .navigationTitle("Create PR")
+            .scrollContentBackground(.hidden)
+            .background(Theme.background)
+            .navigationTitle(pendingGitAction.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { showPRSheet = false }
+                    Button("Cancel") { showGitSheet = false }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Create") {
-                        model.createPR(title: prTitle)
-                        showPRSheet = false
+                    Button(pendingGitAction.title) {
+                        confirmGitAction()
                     }
+                    .disabled(gitConfirmDisabled)
+                    .fontWeight(.semibold)
                 }
             }
         }
         .preferredColorScheme(.dark)
+        .presentationDetents([.medium, .large])
+    }
+
+    private var gitSheetFooter: String {
+        switch pendingGitAction {
+        case .commit:
+            return "Stages all changes and creates a commit on the work branch."
+        case .push:
+            return "Pushes the work branch to GitHub."
+        case .pr:
+            return "Commits if needed, pushes, then opens GitHub’s create-PR page."
+        case .all:
+            return "Finishes this session: commits, pushes the session branch, and opens a pull request. Does not merge."
+        }
+    }
+
+    private var gitConfirmDisabled: Bool {
+        if model.isPublishing { return true }
+        if pendingGitAction.needsMessage {
+            return model.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || model.isGeneratingCommitMessage
+        }
+        return false
+    }
+
+    private func confirmGitAction() {
+        let message = model.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        let action = pendingGitAction
+        showGitSheet = false
+        model.gitPublish(
+            message: message,
+            commit: action.commit,
+            push: action.push,
+            openPr: action.openPr
+        )
     }
 
     private var canSend: Bool {

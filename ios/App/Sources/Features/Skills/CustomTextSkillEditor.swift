@@ -1,5 +1,5 @@
 import SwiftUI
-import MobileAICore
+import AnyProvCore
 
 /// Sheet for creating a custom text skill. The user enters a name (becomes
 /// the skill's `id` slug and frontmatter `name`), a one-line description,

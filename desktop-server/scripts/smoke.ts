@@ -24,7 +24,7 @@ function git(cwd: string, ...args: string[]): void {
 }
 
 async function makeOriginRepo(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), "cmai-origin-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "apc-origin-"));
   git(dir, "init", "-b", "main");
   git(dir, "config", "user.email", "test@example.com");
   git(dir, "config", "user.name", "Test");
@@ -70,7 +70,7 @@ async function main(): Promise<void> {
 
   const server = spawn("npx", ["tsx", "src/index.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, PORT: String(PORT), CMAI_MOCK: "1" },
+    env: { ...process.env, PORT: String(PORT), APC_MOCK: "1" },
   });
 
   try {
@@ -91,7 +91,7 @@ async function main(): Promise<void> {
           JSON.stringify({
             type: "create_session",
             sessionId: "smoke",
-            repo: { fullName: origin, workBranch: "cmai/smoke-test" },
+            repo: { fullName: origin, workBranch: "apc/smoke-test" },
             model: { provider: "anthropic", model: "mock", apiKey: "none", effort: "high" },
             permissionMode: "acceptEdits",
           }),
@@ -106,7 +106,15 @@ async function main(): Promise<void> {
         } else if (msg.type === "diff" && msg.path === "NOTES.md") {
           diffForNotes = true;
         } else if (msg.type === "session_done") {
-          ws.send(JSON.stringify({ type: "create_pr", sessionId: "smoke", title: "Add NOTES.md", body: "" }));
+          // Prefer the new git_publish path; create_pr remains a thin wrapper.
+          ws.send(JSON.stringify({
+            type: "git_publish",
+            sessionId: "smoke",
+            message: "Add NOTES.md",
+            commit: true,
+            push: true,
+            openPr: true,
+          }));
         } else if (msg.type === "pr_created") {
           prUrl = msg.url;
           clearTimeout(timeout);

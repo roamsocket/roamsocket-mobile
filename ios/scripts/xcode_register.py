@@ -14,7 +14,7 @@ into:
   - PBXSourcesBuildPhase files (or PBXResourcesBuildPhase for bundle assets)
 
 The script is idempotent: already-registered files are skipped. It refuses to
-touch MobileAICore/ (a SwiftPM package, not part of the Xcode app target) and
+touch AnyProvCore/ (a SwiftPM package, not part of the Xcode app target) and
 refuses to register the project.pbxproj itself.
 
 Run with `--dry-run` to see what would change without writing.
@@ -89,10 +89,10 @@ class Project:
 
 
 def find_pbxproj(start: Path) -> Path | None:
-    """Walk up from start looking for <root>/ios/CodeMobileAI.xcodeproj/project.pbxproj."""
+    """Walk up from start looking for <root>/ios/AnyProvCode.xcodeproj/project.pbxproj."""
     cur = start.resolve()
     for _ in range(8):
-        candidate = cur / "ios" / "CodeMobileAI.xcodeproj" / PBXPROJ_FILENAME
+        candidate = cur / "ios" / "AnyProvCode.xcodeproj" / PBXPROJ_FILENAME
         if candidate.exists():
             return candidate
         if cur.parent == cur:
@@ -128,7 +128,7 @@ def relative_group_segments(ios_root: Path, file_path: Path) -> list[str] | None
 
     # Skip anything that's part of the SwiftPM package — those don't go in
     # the Xcode app target.
-    if parts and parts[0] == "MobileAICore":
+    if parts and parts[0] == "AnyProvCore":
         return None
 
     if not parts or parts[0] != "App":
@@ -680,7 +680,7 @@ def main() -> int:
 
     changed_any = False
     for pbx, pbx_files in by_pbx.items():
-        ios_root = pbx.parent.parent  # ios/CodeMobileAI.xcodeproj -> ios
+        ios_root = pbx.parent.parent  # ios/AnyProvCode.xcodeproj -> ios
         project = read_project(pbx)
         parent_gid = find_root_app_group(project)
 
@@ -696,7 +696,7 @@ def main() -> int:
                     continue
                 # Skip files inside the SwiftPM package.
                 rel = f.relative_to(ios_root)
-                if rel.parts and rel.parts[0] == "MobileAICore":
+                if rel.parts and rel.parts[0] == "AnyProvCore":
                     continue
                 # Skip pbxproj itself.
                 if f.name == PBXPROJ_FILENAME:

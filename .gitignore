@@ -104,3 +104,8 @@ temp/
 .nuxt/
 .svelte-kit/
 .vite/
+
+# ---------- Cloudflare / Wrangler ----------
+.wrangler/
+.dev.vars
+**/.wrangler/

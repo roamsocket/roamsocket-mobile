@@ -154,29 +154,45 @@ struct AddToChatSheet: View {
             
             Divider().background(Theme.separator).padding(.leading, 50)
             
-            // Health toggle
+            // Health (Apple HealthKit) — injects a read-only stats snapshot
+            // into the chat system prompt when enabled.
             HStack(spacing: 14) {
                 Image(systemName: "heart.fill")
                     .font(.system(size: 20))
                     .foregroundStyle(.pink)
                     .frame(width: 32, height: 32)
-                
-                Text("Health")
-                    .font(.system(size: 17))
-                    .foregroundStyle(Theme.textPrimary)
-                
-                Text("Beta")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(Theme.textPrimary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(Theme.surfaceElevated, in: Capsule())
-                
+
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 8) {
+                        Text("Health")
+                            .font(.system(size: 17))
+                            .foregroundStyle(Theme.textPrimary)
+
+                        Text("Beta")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(Theme.textPrimary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Theme.surfaceElevated, in: Capsule())
+                    }
+
+                    Text(healthSubtitle)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textTertiary)
+                        .lineLimit(2)
+                }
+
                 Spacer()
-                
-                Toggle("", isOn: $viewModel.healthEnabled)
+
+                if viewModel.isRequestingHealthAccess {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+
+                Toggle("", isOn: healthToggleBinding)
                     .labelsHidden()
                     .tint(Theme.selection)
+                    .disabled(viewModel.isRequestingHealthAccess || !viewModel.healthService.isHealthDataAvailable)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
@@ -265,6 +281,34 @@ struct AddToChatSheet: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
+    }
+
+    /// Routes the Health switch through async authorization so the first
+    /// enable presents the system HealthKit permission sheet.
+    private var healthToggleBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.healthEnabled },
+            set: { newValue in
+                Task { await viewModel.setHealthEnabled(newValue) }
+            }
+        )
+    }
+
+    private var healthSubtitle: String {
+        if !viewModel.healthService.isHealthDataAvailable {
+            return "Apple Health is not available on this device."
+        }
+        if viewModel.healthEnabled {
+            return "Apple Health is on. Stats are shared with the model for this chat."
+        }
+        switch viewModel.healthService.authorizationState {
+        case .denied:
+            return "Access denied — enable in Settings → Privacy → Health."
+        case .unavailable:
+            return "Apple Health is not available on this device."
+        default:
+            return "Ask about steps, sleep, workouts, and more."
+        }
     }
 }
 

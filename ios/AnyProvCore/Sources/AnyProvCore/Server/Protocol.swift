@@ -153,6 +153,8 @@ public enum ClientMessage: Encodable, Sendable {
     case permissionResponse(sessionId: String, requestId: String, decision: PermissionDecision)
     case interrupt(sessionId: String)
     case createPR(sessionId: String, title: String, body: String)
+    /// Instant commit / push / open-PR from the session UI.
+    case gitPublish(sessionId: String, message: String, commit: Bool, push: Bool, openPr: Bool)
     case skillsSyncRequest
     case mcpSyncRequest
     case skillUpsert(skill: Skill)
@@ -166,6 +168,9 @@ public enum ClientMessage: Encodable, Sendable {
     case fileList(sessionId: String, path: String)
     case fileRead(sessionId: String, path: String)
     case portList(sessionId: String)
+    case tunnelStart(sessionId: String, port: Int, provider: String)
+    case tunnelStop(sessionId: String, tunnelId: String)
+    case tunnelList(sessionId: String)
 
     public enum PermissionDecision: String, Codable, Sendable { case allow, deny }
 
@@ -198,6 +203,13 @@ public enum ClientMessage: Encodable, Sendable {
             try c.encode(sessionId, forKey: .init("sessionId"))
             try c.encode(title, forKey: .init("title"))
             try c.encode(body, forKey: .init("body"))
+        case let .gitPublish(sessionId, message, commit, push, openPr):
+            try c.encode("git_publish", forKey: .init("type"))
+            try c.encode(sessionId, forKey: .init("sessionId"))
+            try c.encode(message, forKey: .init("message"))
+            try c.encode(commit, forKey: .init("commit"))
+            try c.encode(push, forKey: .init("push"))
+            try c.encode(openPr, forKey: .init("openPr"))
         case .skillsSyncRequest:
             try c.encode("skills_sync_request", forKey: .init("type"))
         case .mcpSyncRequest:
@@ -243,22 +255,59 @@ public enum ClientMessage: Encodable, Sendable {
         case let .portList(sessionId):
             try c.encode("port_list", forKey: .init("type"))
             try c.encode(sessionId, forKey: .init("sessionId"))
+        case let .tunnelStart(sessionId, port, provider):
+            try c.encode("tunnel_start", forKey: .init("type"))
+            try c.encode(sessionId, forKey: .init("sessionId"))
+            try c.encode(port, forKey: .init("port"))
+            try c.encode(provider, forKey: .init("provider"))
+        case let .tunnelStop(sessionId, tunnelId):
+            try c.encode("tunnel_stop", forKey: .init("type"))
+            try c.encode(sessionId, forKey: .init("sessionId"))
+            try c.encode(tunnelId, forKey: .init("tunnelId"))
+        case let .tunnelList(sessionId):
+            try c.encode("tunnel_list", forKey: .init("type"))
+            try c.encode(sessionId, forKey: .init("sessionId"))
         }
     }
 }
 
-/// MCP server configuration sent to the desktop server.
+/// MCP server configuration sent on `create_session`.
+/// Wire shape must match desktop `MCPServer` in `protocol.ts`.
 public struct MCPServerConfig: Codable, Sendable {
+    public let id: String
     public let name: String
+    public let description: String
     public let command: String
     public let args: [String]
     public let env: [String: String]
-    
-    public init(name: String, command: String, args: [String] = [], env: [String: String] = [:]) {
+    public let isEnabled: Bool
+
+    public init(
+        id: String,
+        name: String,
+        description: String,
+        command: String,
+        args: [String] = [],
+        env: [String: String] = [:],
+        isEnabled: Bool = true
+    ) {
+        self.id = id
         self.name = name
+        self.description = description
         self.command = command
         self.args = args
         self.env = env
+        self.isEnabled = isEnabled
+    }
+
+    public init(_ server: MCPServer) {
+        self.id = server.id
+        self.name = server.name
+        self.description = server.description
+        self.command = server.command
+        self.args = server.args
+        self.env = server.env
+        self.isEnabled = server.isEnabled
     }
 }
 
@@ -273,14 +322,16 @@ public enum ServerMessage: Decodable, Sendable {
     case permissionRequest(sessionId: String, requestId: String, tool: String, summary: String)
     case sessionDone(sessionId: String, stopReason: String?)
     case prCreated(sessionId: String, url: String)
+    case gitResult(sessionId: String, action: String, ok: Bool, detail: String, url: String?)
     case error(sessionId: String?, message: String)
     case skillsSync(skills: [Skill])
     case mcpSync(servers: [MCPServer])
     case terminalData(terminalId: String, stream: String, data: String)
     case terminalControl(terminalId: String, event: String, code: Int)
-    case fileListResult(sessionId: String, path: String, entries: [FileEntryPayload], diff: String?)
-    case fileReadResult(sessionId: String, path: String, content: String, truncated: Bool)
+    case fileListResult(sessionId: String, path: String, entries: [FileEntryPayload], diff: String?, changes: [FileChangePayload]?)
+    case fileReadResult(sessionId: String, path: String, content: String, truncated: Bool, diff: String?)
     case portListResult(sessionId: String, ports: [PortEntryPayload])
+    case tunnelStatus(sessionId: String, tunnels: [TunnelPayload], availableProviders: [String])
 
     public struct FileEntryPayload: Codable, Hashable, Sendable {
         public let name: String
@@ -288,20 +339,35 @@ public enum ServerMessage: Decodable, Sendable {
         public let isDirectory: Bool
         public let size: Int
         public let modifiedAt: String
+        public let changeStatus: String?
+    }
+    public struct FileChangePayload: Codable, Hashable, Sendable {
+        public let path: String
+        public let status: String
     }
     public struct PortEntryPayload: Codable, Hashable, Sendable {
         public let port: Int
         public let pid: Int
         public let command: String
     }
+    public struct TunnelPayload: Codable, Hashable, Sendable, Identifiable {
+        public let id: String
+        public let port: Int
+        public let provider: String
+        public let status: String
+        public let url: String?
+        public let error: String?
+    }
 
     private enum K: String, CodingKey {
         case type, sessionId, workdir, baseBranch, workBranch, text, callId, tool
         case summary, ok, output, path, patch, added, removed, requestId, stopReason, url, message
+        case action, detail
         case skills, servers
         case terminalId, stream, data, event, code
         case entries, diff, content, truncated, ports, port, pid, command
-        case name, isDirectory, size, modifiedAt
+        case name, isDirectory, size, modifiedAt, changeStatus, changes
+        case tunnels, availableProviders, provider, status, error, tunnelId
     }
 
     public init(from decoder: Decoder) throws {
@@ -351,6 +417,13 @@ public enum ServerMessage: Decodable, Sendable {
             self = .prCreated(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
                 url: try c.decode(String.self, forKey: .url))
+        case "git_result":
+            self = .gitResult(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                action: try c.decode(String.self, forKey: .action),
+                ok: try c.decode(Bool.self, forKey: .ok),
+                detail: try c.decode(String.self, forKey: .detail),
+                url: try c.decodeIfPresent(String.self, forKey: .url))
         case "error":
             self = .error(
                 sessionId: try c.decodeIfPresent(String.self, forKey: .sessionId),
@@ -374,17 +447,24 @@ public enum ServerMessage: Decodable, Sendable {
                 sessionId: try c.decode(String.self, forKey: .sessionId),
                 path: try c.decode(String.self, forKey: .path),
                 entries: try c.decode([FileEntryPayload].self, forKey: .entries),
-                diff: try c.decodeIfPresent(String.self, forKey: .diff))
+                diff: try c.decodeIfPresent(String.self, forKey: .diff),
+                changes: try c.decodeIfPresent([FileChangePayload].self, forKey: .changes))
         case "file_read_result":
             self = .fileReadResult(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
                 path: try c.decode(String.self, forKey: .path),
                 content: try c.decode(String.self, forKey: .content),
-                truncated: try c.decode(Bool.self, forKey: .truncated))
+                truncated: try c.decode(Bool.self, forKey: .truncated),
+                diff: try c.decodeIfPresent(String.self, forKey: .diff))
         case "port_list_result":
             self = .portListResult(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
                 ports: try c.decode([PortEntryPayload].self, forKey: .ports))
+        case "tunnel_status":
+            self = .tunnelStatus(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                tunnels: try c.decode([TunnelPayload].self, forKey: .tunnels),
+                availableProviders: try c.decode([String].self, forKey: .availableProviders))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .type, in: c, debugDescription: "Unknown server message type: \(type)")

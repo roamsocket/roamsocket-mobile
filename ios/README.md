@@ -8,19 +8,19 @@ Requires Xcode 15+ and [XcodeGen](https://github.com/yonsm/XcodeGen)
 (`brew install xcodegen`).
 
 ```bash
-xcodegen generate      # reads project.yml → CodeMobileAI.xcodeproj
-open CodeMobileAI.xcodeproj
+xcodegen generate      # reads project.yml → AnyProvCode.xcodeproj
+open AnyProvCode.xcodeproj
 ```
 
-The app target depends on the local `MobileAICore` Swift package.
+The app target depends on the local `AnyProvCore` Swift package.
 
-## MobileAICore (buildable/testable without Xcode)
+## AnyProvCore (buildable/testable without Xcode)
 
-`MobileAICore` is Foundation-only (no SwiftUI), so it builds and tests with the
+`AnyProvCore` is Foundation-only (no SwiftUI), so it builds and tests with the
 Swift toolchain alone:
 
 ```bash
-cd MobileAICore
+cd AnyProvCore
 swift build
 swift test             # provider parsing + protocol Codable round-trips
 ```

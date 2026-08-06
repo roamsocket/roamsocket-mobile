@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Code Mobile AI</string>
+	<string>AnyProv Code</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -27,6 +27,10 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSHealthShareUsageDescription</key>
+	<string>AnyProv Code reads your Apple Health data when you turn on Health in chat, so the assistant can answer questions about steps, sleep, workouts, and other stats you choose to share.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>AnyProv Code does not write to Apple Health. This permission is required by the system HealthKit entitlement.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Connect to your desktop coding server on the local network.</string>
 	<key>UIApplicationSceneManifest</key>

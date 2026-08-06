@@ -1,17 +1,19 @@
 /**
- * Per-project `.claude/` config. When a session is created, after cloning
- * the user's repo, the desktop reads these files (if present) and merges
- * them into the session:
- *   - `.claude/settings.local.json` (env vars, allowed tools, model prefs)
- *   - `.claude/mcp.json` (project-scoped MCP servers)
- *   - `.claude/CLAUDE.md` (project instructions injected as skill content)
+ * Per-project agent config. When a session is created, after cloning the
+ * user's repo, the desktop reads project instruction files (if present) and
+ * merges them into the session.
  *
- * Mirrors the same lookup the Claude CLI performs at session start.
+ * Looks for a project config directory (`.anyprov/` preferred, `.claude/`
+ * still accepted for existing repos) containing:
+ *   - `settings.local.json` (env vars, allowed tools, model prefs)
+ *   - `mcp.json` (project-scoped MCP servers)
+ *   - `AGENTS.md` or `CLAUDE.md` (project instructions injected as skill content)
+ *   - `skills/` directory
  */
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-export interface ProjectClaude {
+export interface ProjectConfig {
   env: Record<string, string>;
   mcpServers: Array<{
     name: string;
@@ -21,30 +23,38 @@ export interface ProjectClaude {
     env?: Record<string, string>;
     url?: string;
   }>;
-  claudeMd: string | null;
+  instructionsMd: string | null;
   skills: Array<{ name: string; content: string }>;
 }
 
-const EMPTY: ProjectClaude = { env: {}, mcpServers: [], claudeMd: null, skills: [] };
+const EMPTY: ProjectConfig = { env: {}, mcpServers: [], instructionsMd: null, skills: [] };
 
-/** Read every `.claude/` config from the cloned repo and return a merged view. */
-export async function readProjectClaude(workdir: string): Promise<ProjectClaude> {
-  const root = path.join(workdir, ".claude");
-  let exists = false;
-  try {
-    const stat = await fs.stat(root);
-    exists = stat.isDirectory();
-  } catch {
-    return EMPTY;
-  }
-  if (!exists) return EMPTY;
+/** Read project config from the cloned repo and return a merged view. */
+export async function readProjectConfig(workdir: string): Promise<ProjectConfig> {
+  const root = await resolveProjectConfigRoot(workdir);
+  if (!root) return EMPTY;
 
   const env = await readSettingsJson(path.join(root, "settings.local.json"));
   const mcp = await readMcpJson(path.join(root, "mcp.json"));
-  const claudeMd = await readMaybeFile(path.join(root, "CLAUDE.md"));
+  const instructionsMd =
+    (await readMaybeFile(path.join(root, "AGENTS.md"))) ??
+    (await readMaybeFile(path.join(root, "CLAUDE.md")));
   const skills = await readSkillsDir(path.join(root, "skills"));
 
-  return { env, mcpServers: mcp, claudeMd, skills };
+  return { env, mcpServers: mcp, instructionsMd, skills };
+}
+
+async function resolveProjectConfigRoot(workdir: string): Promise<string | null> {
+  for (const dir of [".anyprov", ".claude"]) {
+    const root = path.join(workdir, dir);
+    try {
+      const stat = await fs.stat(root);
+      if (stat.isDirectory()) return root;
+    } catch {
+      /* try next */
+    }
+  }
+  return null;
 }
 
 async function readMaybeFile(p: string): Promise<string | null> {
@@ -83,7 +93,7 @@ interface McpSpec {
   url?: string;
 }
 
-async function readMcpJson(p: string): Promise<ProjectClaude["mcpServers"]> {
+async function readMcpJson(p: string): Promise<ProjectConfig["mcpServers"]> {
   try {
     const text = await fs.readFile(p, "utf8");
     const data = JSON.parse(text) as McpFile;
@@ -101,14 +111,14 @@ async function readMcpJson(p: string): Promise<ProjectClaude["mcpServers"]> {
   }
 }
 
-async function readSkillsDir(p: string): Promise<ProjectClaude["skills"]> {
+async function readSkillsDir(p: string): Promise<ProjectConfig["skills"]> {
   let entries: string[] = [];
   try {
     entries = await fs.readdir(p);
   } catch {
     return [];
   }
-  const out: ProjectClaude["skills"] = [];
+  const out: ProjectConfig["skills"] = [];
   for (const id of entries) {
     const skillFile = path.join(p, id, "SKILL.md");
     try {

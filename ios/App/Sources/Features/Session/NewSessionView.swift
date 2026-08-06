@@ -1,5 +1,5 @@
 import SwiftUI
-import MobileAICore
+import AnyProvCore
 
 /// Full-screen composer shown after tapping "New session".
 /// Repository selection, suggestions, permission mode, and the first task all
@@ -12,6 +12,8 @@ struct NewSessionView: View {
 
     @State private var task = ""
     @State private var showRepositoryPicker = false
+    @State private var showGitHubLink = false
+    @State private var showServerPairing = false
     @State private var showModelPicker = false
     @State private var showPermissionPicker = false
     @State private var showProviderSettings = false
@@ -31,28 +33,55 @@ struct NewSessionView: View {
 
             VStack(spacing: 0) {
                 header
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        Spacer(minLength: 70)
-                        suggestionsSection
-                        repoControls
-                        composer
-                        if let errorMessage {
-                            Text(errorMessage)
-                                .font(.system(size: 13))
-                                .foregroundStyle(.red)
-                                .padding(.horizontal, 4)
+                // Dock suggestions + repo + composer to the bottom so the page
+                // doesn't float mid-screen with a large empty gap.
+                GeometryReader { geo in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 18) {
+                            suggestionsSection
+                            repoControls
+                            composer
+                            if let errorMessage {
+                                Text(errorMessage)
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(.red)
+                                    .padding(.horizontal, 4)
+                            }
                         }
+                        .padding(.horizontal, 16)
+                        .padding(.top, 12)
+                        .padding(.bottom, 24)
+                        .frame(maxWidth: .infinity, minHeight: geo.size.height, alignment: .bottom)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 24)
+                    .scrollDismissesKeyboard(.interactively)
                 }
-                .scrollDismissesKeyboard(.interactively)
             }
         }
         .navigationBarHidden(true)
         .sheet(isPresented: $showRepositoryPicker) {
             RepositoryPickerSheet()
+        }
+        .sheet(isPresented: $showGitHubLink, onDismiss: {
+            // After a successful link, continue into the repo picker.
+            // Defer so SwiftUI finishes dismissing this sheet before presenting
+            // the next one.
+            guard isGitHubLinked else { return }
+            DispatchQueue.main.async {
+                showRepositoryPicker = true
+            }
+        }) {
+            NavigationStack { GitHubLinkView() }
+        }
+        .sheet(isPresented: $showServerPairing, onDismiss: {
+            // After a successful pair, retry starting the session so the user
+            // doesn't have to hit Send again. Defer so the pairing sheet fully
+            // dismisses first.
+            guard isServerPaired else { return }
+            DispatchQueue.main.async {
+                start()
+            }
+        }) {
+            NavigationStack { ServerPairingView() }
         }
         .sheet(isPresented: $showModelPicker) {
             ModelPickerSheet()
@@ -61,7 +90,7 @@ struct NewSessionView: View {
             PermissionModeSheet(selection: $state.permissionMode)
         }
         .sheet(isPresented: $showProviderSettings) {
-            ClaudeSettingsView(initialFocus: .providers)
+            AppSettingsView(initialFocus: .providers)
         }
         .sheet(isPresented: $showEnvironmentPicker) {
             EnvironmentPickerSheet()
@@ -135,7 +164,7 @@ struct NewSessionView: View {
 
     private var repoControls: some View {
         HStack(spacing: 10) {
-            Button(action: { showRepositoryPicker = true }) {
+            Button(action: chooseRepository) {
                 Image(systemName: "plus")
                     .font(.system(size: 20, weight: .medium))
                     .foregroundStyle(Theme.textPrimary)
@@ -146,7 +175,7 @@ struct NewSessionView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Choose repository")
 
-            Button(action: { showRepositoryPicker = true }) {
+            Button(action: chooseRepository) {
                 HStack(spacing: 8) {
                     GitHubGlyph()
                     Text(state.selectedRepo?.fullName ?? "Choose repository")
@@ -164,27 +193,36 @@ struct NewSessionView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private var isGitHubLinked: Bool {
+        state.githubToken?.isEmpty == false
+    }
+
+    private var isServerPaired: Bool {
+        state.serverEndpoint != nil && state.serverToken != nil
+    }
+
+    /// Opens the repo picker when GitHub is linked; otherwise the link modal.
+    private func chooseRepository() {
+        if isGitHubLinked {
+            showRepositoryPicker = true
+        } else {
+            showGitHubLink = true
+        }
+    }
+
     private var composer: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ZStack(alignment: .topLeading) {
-                if task.isEmpty {
-                    Text("Code anything…")
-                        .font(.system(size: 18))
-                        .foregroundStyle(Theme.textTertiary)
-                        .padding(.horizontal, 14)
-                        .padding(.top, 13)
-                        .allowsHitTesting(false)
-                }
-
-                TextEditor(text: $task)
-                    .font(.system(size: 18))
-                    .foregroundStyle(Theme.textPrimary)
-                    .scrollContentBackground(.hidden)
-                    .focused($composerFocused)
-                    .frame(minHeight: 92, maxHeight: 150)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-            }
+            // Start compact (~one to two lines) and grow with content up to the
+            // previous max height so the empty state isn't a large empty box.
+            TextField("Code anything…", text: $task, axis: .vertical)
+                .lineLimit(1...6)
+                .font(.system(size: 18))
+                .foregroundStyle(Theme.textPrimary)
+                .focused($composerFocused)
+                .frame(minHeight: 44, maxHeight: 150, alignment: .topLeading)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
 
             HStack(spacing: 8) {
                 Button(action: {}) {
@@ -253,6 +291,14 @@ struct NewSessionView: View {
     private func start() {
         let trimmedTask = task.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTask.isEmpty else { return }
+
+        // No desktop server attached — open pairing instead of a dead-end error.
+        guard isServerPaired else {
+            errorMessage = nil
+            showServerPairing = true
+            return
+        }
+
         guard let config = SessionLauncher.makeConfig(in: state, task: trimmedTask) else {
             errorMessage = SessionLauncher.missingRequirements(in: state).joined(separator: " ")
             return
@@ -275,7 +321,7 @@ struct PermissionModeSheet: View {
                     icon: "bolt",
                     tint: Theme.accent,
                     title: "Auto",
-                    subtitle: "Claude handles permission decisions"
+                    subtitle: "The agent handles permission decisions"
                 )
                 Divider().overlay(Theme.separator).padding(.leading, 64)
                 modeRow(

@@ -105,7 +105,7 @@ public enum ProviderID: Hashable, Sendable, Identifiable, Codable {
 /// A single model exposed by a provider.
 public struct AIModel: Codable, Hashable, Sendable, Identifiable {
     public let provider: ProviderID
-    /// Provider-native model id, e.g. "claude-sonnet-4" or "gpt-4o".
+    /// Provider-native model id, e.g. "gpt-4o" or "gemini-2.0-flash".
     public let modelID: String
     public let displayName: String
     public let contextWindow: Int?
@@ -117,7 +117,7 @@ public struct AIModel: Codable, Hashable, Sendable, Identifiable {
         self.contextWindow = contextWindow
     }
 
-    /// Stable identity across providers ("anthropic/claude-...").
+    /// Stable identity across providers ("anthropic/…", "openai/…").
     public var id: String { "\(provider.rawValue)/\(modelID)" }
 }
 

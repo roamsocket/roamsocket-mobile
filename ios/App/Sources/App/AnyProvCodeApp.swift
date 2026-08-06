@@ -1,8 +1,8 @@
 import SwiftUI
-import MobileAICore
+import AnyProvCore
 
 @main
-struct CodeMobileAIApp: App {
+struct AnyProvCodeApp: App {
     @StateObject private var state = AppState(secrets: KeychainSecretStore())
 
     var body: some Scene {

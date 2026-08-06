@@ -74,7 +74,9 @@ public struct AnthropicProvider: ModelProvider {
 
     public func chat(model: String, apiKey: String, messages: [ProviderChatMessage], effort: Effort?) async throws -> String {
         guard !apiKey.isEmpty else { throw ProviderError.missingKey }
-        let system = messages.first(where: { $0.role == .system })?.content
+        // Merge all system turns (e.g. Health snapshot + future skills).
+        let systemParts = messages.filter { $0.role == .system }.map(\.content)
+        let system = systemParts.isEmpty ? nil : systemParts.joined(separator: "\n\n")
         let turns = messages.filter { $0.role != .system }.map { Msg(role: $0.role.rawValue, content: $0.content) }
         let body = MessagesRequest(model: model, max_tokens: 1024, messages: turns, system: system)
         let req = ProviderHTTP.post(

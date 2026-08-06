@@ -1,5 +1,5 @@
 import SwiftUI
-import MobileAICore
+import AnyProvCore
 
 /// Captured assistant outputs that meet the artifact threshold (≥ 10 lines
 /// or contains a code block). Tap an item to see it full-screen with copy.

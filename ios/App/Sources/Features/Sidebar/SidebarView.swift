@@ -10,7 +10,7 @@ enum SidebarDestination: Hashable {
     case project(ProjectItem)
 }
 
-/// The left-edge drawer mirroring the Claude iOS sidebar.
+/// The left-edge navigation drawer.
 struct SidebarView: View {
     @ObservedObject var history: ChatHistoryStore
     var onSelect: (SidebarDestination) -> Void
@@ -39,7 +39,7 @@ struct SidebarView: View {
 
     private var header: some View {
         HStack(alignment: .center) {
-            Text("Claude")
+            Text("AnyProv Code")
                 .font(.system(size: 30, weight: .semibold))
                 .foregroundStyle(Theme.textPrimary)
             Spacer()

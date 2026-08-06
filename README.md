@@ -1,6 +1,6 @@
-# code-mobile-ai
+# AnyProv Code
 
-An open-source, native **iOS** clone of the Claude Code mobile experience, plus
+An open-source, native **iOS** coding client, plus
 a **desktop companion server** that actually runs code.
 
 - **Chat** talks to each provider's `/v1` REST API directly from the app with
@@ -10,8 +10,7 @@ a **desktop companion server** that actually runs code.
   (bash / file edits / git), streams tool calls and diffs back to the phone,
   and opens a pull request.
 
-> Status: first milestone — the Claude Code clone (composer, pickers, coding
-> session) and the desktop server. The general chat UI is next.
+> Status: first milestone — composer, pickers, coding session, chat, and the desktop companion server.
 
 ## Architecture
 
@@ -27,13 +26,13 @@ CODE   iOS app ──WebSocket──▶ desktop server ──▶ git clone / bas
 | Path | What |
 |------|------|
 | `ios/App` | SwiftUI app (composer, model/env/repo pickers, coding session, settings) |
-| `ios/MobileAICore` | Foundation-only Swift package: provider clients, GitHub, WebSocket protocol |
+| `ios/AnyProvCore` | Foundation-only Swift package: provider clients, GitHub, WebSocket protocol |
 | `ios/project.yml` | XcodeGen spec that generates the Xcode project |
 | `desktop-server` | Node + TypeScript server: pairing, tools, git, agent loop |
 | `docs/protocol.md` | The app ↔ server wire protocol |
-| `landing/` | Static marketing landing page |
+| `landing/` | Static marketing page (Cloudflare Workers assets) |
 | `AGENTS.md` | Instructions for AI coding agents (architecture, commands, invariants) |
-| `CLAUDE.md` | Claude Code–oriented workflow (hooks, verification defaults) |
+| `CLAUDE.md` | Agent workflow notes (hooks, verification defaults) |
 
 ## Quick start
 
@@ -43,7 +42,7 @@ CODE   iOS app ──WebSocket──▶ desktop server ──▶ git clone / bas
 cd desktop-server
 npm install
 npm start           # prints a pairing code + QR
-# or: CMAI_MOCK=1 npm start   # offline agent, no API key needed
+# or: APC_MOCK=1 npm start   # offline agent, no API key needed
 ```
 
 Verify it end-to-end without any API key or GitHub:
@@ -65,8 +64,8 @@ Requires a Mac with Xcode 15+ and [XcodeGen](https://github.com/yonsm/XcodeGen).
 
 ```bash
 cd ios
-xcodegen generate          # creates CodeMobileAI.xcodeproj
-open CodeMobileAI.xcodeproj
+xcodegen generate          # creates AnyProvCode.xcodeproj
+open AnyProvCode.xcodeproj
 ```
 
 Run on a simulator or device, then in **Settings**:
@@ -79,6 +78,20 @@ Run on a simulator or device, then in **Settings**:
    code it printed.
 
 Then pick a repository and model on the home screen, describe a task, and send.
+
+### 3. Landing page (Cloudflare)
+
+Static site under `landing/` — no build step. Deployed as [Workers static assets](https://developers.cloudflare.com/workers/static-assets/).
+
+```bash
+cd landing
+npm install
+npm run dev          # local preview (Wrangler)
+npx wrangler login   # once
+npm run deploy       # https://anyprov-code.<account>.workers.dev
+```
+
+See [`landing/README.md`](./landing/README.md) for custom domains and Git-connected builds.
 
 ## Providers
 

@@ -2,24 +2,24 @@
 import PackageDescription
 
 let package = Package(
-    name: "MobileAICore",
+    name: "AnyProvCore",
     platforms: [
         .iOS(.v16),
         .macOS(.v13),
     ],
     products: [
-        .library(name: "MobileAICore", targets: ["MobileAICore"]),
+        .library(name: "AnyProvCore", targets: ["AnyProvCore"]),
     ],
     targets: [
         .target(
-            name: "MobileAICore",
+            name: "AnyProvCore",
             dependencies: [],
-            path: "Sources/MobileAICore"
+            path: "Sources/AnyProvCore"
         ),
         .testTarget(
-            name: "MobileAICoreTests",
-            dependencies: ["MobileAICore"],
-            path: "Tests/MobileAICoreTests"
+            name: "AnyProvCoreTests",
+            dependencies: ["AnyProvCore"],
+            path: "Tests/AnyProvCoreTests"
         ),
     ]
 )

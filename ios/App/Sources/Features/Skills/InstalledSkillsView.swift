@@ -1,5 +1,5 @@
 import SwiftUI
-import MobileAICore
+import AnyProvCore
 
 /// View for managing installed skills.
 struct InstalledSkillsView: View {

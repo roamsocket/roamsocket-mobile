@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Root navigation:
-///  * `ChatView` is the default landing screen (mimicking the Claude iOS app).
+///  * `ChatView` is the default landing screen.
 ///  * A left-edge sidebar lists top-level destinations (Chats, Projects,
 ///    Artifacts, Code) plus a Recents list and a profile chip.
 ///  * Settings is reachable from the sidebar profile.
@@ -72,7 +72,7 @@ struct RootView: View {
             }
         }
         .sheet(isPresented: $showSettings) {
-            ClaudeSettingsView()
+            AppSettingsView()
         }
     }
 

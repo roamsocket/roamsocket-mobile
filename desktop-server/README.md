@@ -1,6 +1,6 @@
 # desktop-server
 
-Node + TypeScript companion server for the code-mobile-ai iOS app. It pairs with
+Node + TypeScript companion server for the anyprov-code iOS app. It pairs with
 the app over a WebSocket, clones a GitHub repo, drives the agent loop against a
 provider, executes tools, and opens a pull request.
 
@@ -36,15 +36,15 @@ a single window. Closing the window hides the app to the macOS menu bar /
 Windows task tray by default. The first close asks whether you want the app
 to fully quit on future closes; the answer is remembered.
 
-To really quit: tray menu → *Quit Code Mobile AI*, or `Cmd-Q` on macOS.
+To really quit: tray menu → *Quit AnyProv Code*, or `Cmd-Q` on macOS.
 
 ### Environment
 
 | Var | Default | Purpose |
 |-----|---------|---------|
 | `PORT` | `4319` | HTTP + WebSocket port |
-| `CMAI_NAME` | `code-mobile-ai desktop` | shown when pairing |
-| `CMAI_MOCK` | unset | `1` runs a deterministic offline agent (no API key) |
+| `APC_NAME` | `anyprov-code desktop` | shown when pairing |
+| `APC_MOCK` | unset | `1` runs a deterministic offline agent (no API key) |
 
 ## Verify
 

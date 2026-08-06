@@ -1,10 +1,10 @@
-# AGENTS.md — working in code-mobile-ai
+# AGENTS.md — working in anyprov-code
 
-Instructions for AI coding agents (Claude Code, Codex, Cursor, Grok, etc.) working in this repository.
+Instructions for AI coding agents (Codex, Cursor, Grok, etc.) working in this repository.
 
 ## What this project is
 
-**Code Mobile AI** is an open-source, native **iOS** client inspired by Claude Code mobile, plus a **desktop companion** that runs the coding agent.
+**AnyProv Code** is an open-source, native **iOS** client plus a **desktop companion** that runs the coding agent.
 
 | Mode | Path | Needs server? |
 |------|------|----------------|
@@ -16,27 +16,27 @@ BYOK: Anthropic, OpenAI, Ollama/OpenAI-compatible, Groq, OpenRouter, xAI, Mistra
 ## Repo map
 
 ```
-code-mobile-ai/
-├── ios/                      # SwiftUI app + MobileAICore package
+anyprov-code/
+├── ios/                      # SwiftUI app + AnyProvCore package
 │   ├── App/Sources/          # UI (edit these, not the generated xcodeproj)
-│   ├── MobileAICore/         # Foundation-only: providers, GitHub, protocol, skills
+│   ├── AnyProvCore/         # Foundation-only: providers, GitHub, protocol, skills
 │   ├── project.yml           # XcodeGen source of truth
-│   ├── CodeMobileAI.xcodeproj/  # GENERATED — do not hand-edit
+│   ├── AnyProvCode.xcodeproj/  # GENERATED — do not hand-edit
 │   └── scripts/              # watch-xcode.sh, xcode helpers
 ├── desktop-server/           # Node/TS companion + Electron UI
 │   ├── src/                  # server, agent, tools, electron, renderer
 │   └── scripts/smoke.ts      # offline e2e protocol test
 ├── docs/protocol.md          # Human-readable wire protocol
-├── landing/                  # Static marketing page (HTML/CSS/JS)
+├── landing/                  # Marketing site → Cloudflare Workers assets
 ├── AGENTS.md                 # This file
-└── CLAUDE.md                 # Claude Code–oriented notes
+└── CLAUDE.md                 # Agent-oriented notes
 ```
 
 ### iOS app structure (`ios/App/Sources`)
 
 | Path | Role |
 |------|------|
-| `App/` | `CodeMobileAIApp`, `AppState`, `RootView`, Keychain |
+| `App/` | `AnyProvCodeApp`, `AppState`, `RootView`, Keychain |
 | `DesignSystem/` | `Theme`, shared components |
 | `Features/Chat/` | Main chat UI (default landing) |
 | `Features/Code/` | `CodeHomeView` — coding entry |
@@ -46,7 +46,7 @@ code-mobile-ai/
 | `Features/Skills/` | Skills + MCP management |
 | `Features/Environments/`, `ModelPicker/`, `Repositories/` | Pickers |
 
-### MobileAICore (`ios/MobileAICore`)
+### AnyProvCore (`ios/AnyProvCore`)
 
 Pure Foundation (no SwiftUI). Safe to build/test without Xcode:
 
@@ -75,7 +75,7 @@ Default port: **4319**.
 
 1. **Protocol triple must stay in sync** when changing wire messages:
    - `desktop-server/src/protocol.ts` (canonical)
-   - `ios/MobileAICore/.../Server/Protocol.swift`
+   - `ios/AnyProvCore/.../Server/Protocol.swift`
    - `docs/protocol.md`
 2. **Xcode project is generated.** After adding/removing Swift files under `ios/App/Sources` or editing `ios/project.yml`, run:
    ```bash
@@ -100,8 +100,8 @@ npm run dev              # watch (tsx)
 npm start                # needs prior build
 npm run typecheck        # server + electron
 npm run typecheck:server
-npm run smoke            # offline e2e: pair → session → tools → PR (CMAI_MOCK)
-CMAI_MOCK=1 npm start    # mock agent, no API key
+npm run smoke            # offline e2e: pair → session → tools → PR (APC_MOCK)
+APC_MOCK=1 npm start    # mock agent, no API key
 ```
 
 Electron:
@@ -112,16 +112,16 @@ npm run electron:dev
 npm run electron:package
 ```
 
-Env: `PORT` (default 4319), `CMAI_MOCK=1`, `CMAI_NAME`.
+Env: `PORT` (default 4319), `APC_MOCK=1`, `APC_NAME`.
 
 ### iOS
 
 ```bash
 cd ios
 xcodegen generate                 # project.yml → .xcodeproj
-open CodeMobileAI.xcodeproj
+open AnyProvCode.xcodeproj
 
-cd MobileAICore
+cd AnyProvCore
 swift build
 swift test                        # protocol + provider tests
 ```
@@ -131,16 +131,27 @@ swift test                        # protocol + provider tests
 ./ios/scripts/watch-xcode.sh
 ```
 
-### Landing
+### Landing (Cloudflare Workers)
 
-Static files only: open `landing/index.html` in a browser. No build step.
+Static files under `landing/public/` (no app build). Deployed as Workers static assets via Wrangler.
+
+```bash
+cd landing
+npm install
+npm run dev          # wrangler dev — http://localhost:8787
+npm run deploy       # requires wrangler login
+npm run deploy:dry   # validate without publishing
+```
+
+Config: `landing/wrangler.jsonc` (`assets.directory` = `./public`), headers in `landing/public/_headers`.
+Open `landing/public/index.html` for a local file preview without Wrangler.
 
 ## How to change common things
 
 ### Wire protocol / new WS message type
 
 1. Add Zod schema + union member in `desktop-server/src/protocol.ts`
-2. Mirror Codable types in `ios/MobileAICore/.../Server/Protocol.swift`
+2. Mirror Codable types in `ios/AnyProvCore/.../Server/Protocol.swift`
 3. Handle on server (`sessions.ts` / agent / tools) and client (`ServerClient` + UI)
 4. Update `docs/protocol.md`
 5. Prefer extending `npm run smoke` if the flow is testable offline
@@ -151,7 +162,7 @@ Static files only: open `landing/index.html` in a browser. No build step.
 2. Wire navigation from `RootView` / sidebar / existing feature
 3. Use `Theme` and existing components — don't invent a second palette
 4. Run `xcodegen generate` (or watch script)
-5. Keep logic that is reusable/testable in `MobileAICore` when possible
+5. Keep logic that is reusable/testable in `AnyProvCore` when possible
 
 ### New agent tool
 
@@ -162,7 +173,7 @@ Static files only: open `landing/index.html` in a browser. No build step.
 
 ### Provider / model support
 
-- iOS listing: `MobileAICore/Providers/`
+- iOS listing: `AnyProvCore/Providers/`
 - Server agent: `desktop-server/src/providers/`
 - OpenAI-compatible base URL is the path for Ollama and custom endpoints
 
@@ -176,10 +187,10 @@ Static files only: open `landing/index.html` in a browser. No build step.
 
 ## What not to do
 
-- Don't hand-edit `ios/CodeMobileAI.xcodeproj` as the primary workflow — edit `project.yml` / sources and regenerate.
+- Don't hand-edit `ios/AnyProvCode.xcodeproj` as the primary workflow — edit `project.yml` / sources and regenerate.
 - Don't commit build products or `.xcuserstate`.
 - Don't break chat-without-server: chat must keep working with only a provider key.
-- Don't add a second theme or Claude terracotta accents without an explicit product decision.
+- Don't add a second theme or terracotta accents without an explicit product decision.
 - Don't invent protocol fields on one side only.
 
 ## Verification checklist before claiming done
@@ -189,14 +200,14 @@ Static files only: open `landing/index.html` in a browser. No build step.
 | Desktop server | `cd desktop-server && npm run typecheck:server` |
 | Agent / protocol flow | `cd desktop-server && npm run smoke` |
 | Electron types | `cd desktop-server && npm run typecheck:electron` |
-| MobileAICore | `cd ios/MobileAICore && swift test` |
+| AnyProvCore | `cd ios/AnyProvCore && swift test` |
 | iOS UI | Build in Xcode simulator after `xcodegen generate` |
 | Protocol | TS + Swift + `docs/protocol.md` still agree |
 
 ## Further reading
 
 - Root `README.md` — product overview  
-- `ios/README.md` — app + MobileAICore  
+- `ios/README.md` — app + AnyProvCore  
 - `desktop-server/README.md` — server + Electron  
 - `docs/protocol.md` — wire protocol  
-- `CLAUDE.md` — Claude Code hooks and session defaults  
+- `CLAUDE.md` — optional agent tooling notes (hooks, session defaults)  

@@ -1,3 +1,4 @@
-// Thought process modal removed. The mock thought-process text was bogus
-// and the underlying streaming reasoning isn't wired yet. Re-add this view
-// once provider responses stream a real thought process.
+// Thought process UI lives in `ChatMessageView.ThinkingBlock`.
+// Reasoning is extracted from `<think>` / `<thinking>` tags via
+// `ThinkingExtractor` when the assistant reply is stored (and again
+// at render time as a fallback).

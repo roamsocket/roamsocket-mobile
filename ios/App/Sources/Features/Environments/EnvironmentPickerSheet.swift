@@ -1,5 +1,5 @@
 import SwiftUI
-import MobileAICore
+import AnyProvCore
 
 /// The "Choose environment" bottom sheet (IMG_0989).
 struct EnvironmentPickerSheet: View {

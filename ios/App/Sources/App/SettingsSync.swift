@@ -1,8 +1,8 @@
 import Foundation
-import MobileAICore
+import AnyProvCore
 
 /// Snapshot of the iOS app's user settings, written to a GitHub repo the
-/// user owns (default: `code-mobile-ai-settings`) so they can sync between
+/// user owns (default: `anyprov-code-settings`) so they can sync between
 /// devices or back up before reinstalls. Schema version is part of the
 /// payload so future clients can ignore older shapes.
 struct AppSettingsSnapshot: Codable, Sendable {
@@ -45,7 +45,7 @@ struct AppSettingsSnapshot: Codable, Sendable {
 /// Pushes and pulls `AppSettingsSnapshot` to a GitHub repo. Uses the
 /// existing GitHub PAT stored in the keychain; no desktop involvement.
 actor SettingsSync {
-    static let repoName = "code-mobile-ai-settings"
+    static let repoName = "anyprov-code-settings"
     static let filePath = "settings.json"
 
     enum SyncError: Error, LocalizedError {
@@ -88,7 +88,7 @@ actor SettingsSync {
         return try await client.createRepo(
             token: token,
             name: Self.repoName,
-            description: "Synced settings for code-mobile-ai (environments, model aliases, custom providers).",
+            description: "Synced settings for anyprov-code (environments, model aliases, custom providers).",
             isPrivate: true,
             autoInit: true
         )
@@ -111,7 +111,7 @@ actor SettingsSync {
                 token: token,
                 fullName: repoFullName,
                 path: Self.filePath,
-                message: "chore: sync code-mobile-ai settings",
+                message: "chore: sync anyprov-code settings",
                 content: content,
                 sha: existing?.sha
             )

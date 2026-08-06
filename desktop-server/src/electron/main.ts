@@ -18,12 +18,36 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { startServer, type RunningServer } from "../index.js";
+import {
+  hostTriple,
+  installStrategySummary,
+  installTunnelCli,
+  listTunnelCliStatus,
+  managedBinDir,
+  type TunnelCliId,
+} from "../workspace/tunnel-clis.js";
+import {
+  detectTunnelProviders,
+  listTunnels,
+  startTunnel,
+  stopTunnel,
+  type TunnelInfo,
+} from "../workspace/tunnels.js";
+import {
+  findConflictingProcesses,
+  formatConflictDetail,
+  isPortHeld,
+  killProcesses,
+} from "./instance-cleanup.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // --- Single-instance lock so two launches don't fight for port 4319. -----
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
+  // Another Electron instance of this app already owns the lock. That
+  // instance will raise its window via the `second-instance` handler; we
+  // exit quietly so only one GUI runs.
   app.quit();
   process.exit(0);
 }
@@ -36,12 +60,27 @@ interface Prefs {
   alwaysQuitOnClose: boolean;
   /** Whether the window starts hidden in the tray (auto-launched at login, etc). */
   startMinimized: boolean;
+  /**
+   * When true, expose the local coding server port via a public tunnel
+   * so phones can pair / reconnect away from home.
+   */
+  remoteAccessEnabled: boolean;
+  /** Last known public URL for the coding server tunnel. */
+  remoteAccessUrl: string;
+  /** Tunnel provider preference for remote access. */
+  remoteAccessProvider: "auto" | "ngrok" | "cloudflare" | "localtunnel" | "bore";
 }
 const DEFAULT_PREFS: Prefs = {
   closeBehaviorDecided: false,
   alwaysQuitOnClose: false,
   startMinimized: false,
+  remoteAccessEnabled: false,
+  remoteAccessUrl: "",
+  remoteAccessProvider: "auto",
 };
+
+/** Live remote-access tunnel id (process-local). */
+let remoteAccessTunnelId: string | null = null;
 
 let prefs: Prefs = { ...DEFAULT_PREFS };
 let prefsPath = "";
@@ -165,7 +204,7 @@ function buildTrayIcon(): Electron.NativeImage {
 function createTray(): void {
   if (tray) return;
   tray = new Tray(buildTrayIcon());
-  tray.setToolTip("Code Mobile AI");
+  tray.setToolTip("AnyProv Code");
   refreshTrayMenu();
   tray.on("click", () => {
     if (process.platform === "darwin") {
@@ -203,7 +242,7 @@ function refreshTrayMenu(): void {
       },
     },
     {
-      label: "Quit Code Mobile AI",
+      label: "Quit AnyProv Code",
       click: () => {
         isQuitting = true;
         app.quit();
@@ -245,7 +284,7 @@ async function handleWindowClose(event: Electron.Event): Promise<void> {
       buttons: ["Hide to tray", "Quit app"],
       defaultId: 0,
       cancelId: 0,
-      title: "Close Code Mobile AI?",
+      title: "Close AnyProv Code?",
       message: "Closing the window keeps the server running in the background.",
       detail:
         "Hide to tray: the app stays in the menu bar / task tray and the WebSocket server keeps running so paired devices stay connected.\n\n" +
@@ -271,7 +310,7 @@ function createWindow(): void {
     minWidth: 880,
     minHeight: 560,
     show: !prefs.startMinimized,
-    title: "Code Mobile AI",
+    title: "AnyProv Code",
     backgroundColor: "#0b0d10",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     webPreferences: {
@@ -294,17 +333,17 @@ function createWindow(): void {
   const wc = mainWindow.webContents;
   wc.on("did-fail-load", (_e, errorCode, errorDescription, validatedURL, isMainFrame) => {
     if (!isMainFrame) return;
-    console.error(`[cmai] renderer failed to load: ${validatedURL} — ${errorCode} ${errorDescription}`);
+    console.error(`[apc] renderer failed to load: ${validatedURL} — ${errorCode} ${errorDescription}`);
   });
   wc.on("render-process-gone", (_e, details) => {
-    console.error(`[cmai] renderer process gone: reason=${details.reason} exitCode=${details.exitCode}`);
+    console.error(`[apc] renderer process gone: reason=${details.reason} exitCode=${details.exitCode}`);
   });
   wc.on("preload-error", (_e, preloadPath, error) => {
-    console.error(`[cmai] preload error in ${preloadPath}: ${(error as Error).message}`);
+    console.error(`[apc] preload error in ${preloadPath}: ${(error as Error).message}`);
   });
   wc.on("console-message", (_e, level, message, line, source) => {
     const lvl = level >= 2 ? "error" : level === 1 ? "warn" : "log";
-    console[level >= 2 ? "error" : "log"](`[cmai:renderer:${lvl}] ${message} (${source}:${line})`);
+    console[level >= 2 ? "error" : "log"](`[apc:renderer:${lvl}] ${message} (${source}:${line})`);
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -319,13 +358,13 @@ function createWindow(): void {
   // Prod: the bundled HTML lives at `.vite/renderer/main_window/index.html`.
   const devUrl = process.env["MAIN_WINDOW_VITE_DEV_SERVER_URL" as keyof NodeJS.ProcessEnv] as string | undefined;
   if (devUrl) {
-    console.log(`[cmai] loading renderer from dev URL: ${devUrl}`);
+    console.log(`[apc] loading renderer from dev URL: ${devUrl}`);
     void loadWithRetry(mainWindow, devUrl, 5, 500);
   } else {
     const indexHtml = path.join(__dirname, "..", "renderer", "main_window", "index.html");
-    console.log(`[cmai] loading renderer from bundled HTML: ${indexHtml}`);
+    console.log(`[apc] loading renderer from bundled HTML: ${indexHtml}`);
     void mainWindow.loadFile(indexHtml).catch((err) => {
-      console.error(`[cmai] loadFile failed: ${(err as Error).message}`);
+      console.error(`[apc] loadFile failed: ${(err as Error).message}`);
     });
   }
 }
@@ -339,12 +378,12 @@ async function loadWithRetry(
   for (let i = 0; i < attempts; i++) {
     try {
       await win.loadURL(url);
-      console.log(`[cmai] renderer loaded from ${url}`);
+      console.log(`[apc] renderer loaded from ${url}`);
       return;
     } catch (err) {
       const last = i === attempts - 1;
       console.warn(
-        `[cmai] renderer load attempt ${i + 1}/${attempts} failed: ${(err as Error).message}` +
+        `[apc] renderer load attempt ${i + 1}/${attempts} failed: ${(err as Error).message}` +
         (last ? " (giving up)" : `, retrying in ${delayMs}ms`),
       );
       if (last) {
@@ -405,6 +444,78 @@ function registerIpc(): void {
     return server?.pairingCode ?? null;
   });
 
+  // --- Tunnel CLIs (cloudflared / ngrok) ---------------------------------
+  ipcMain.handle("tools:tunnelCliStatus", async () => {
+    return {
+      binDir: managedBinDir(),
+      platform: hostTriple(),
+      strategy: installStrategySummary(),
+      tools: await listTunnelCliStatus(),
+      availableProviders: await detectTunnelProviders(),
+      remoteAccess: {
+        enabled: prefs.remoteAccessEnabled,
+        url: prefs.remoteAccessUrl,
+        provider: prefs.remoteAccessProvider,
+        tunnelId: remoteAccessTunnelId,
+        serverPort: server?.port ?? null,
+        live: listTunnels().find((t) => t.id === remoteAccessTunnelId) ?? null,
+      },
+    };
+  });
+  ipcMain.handle(
+    "tools:installTunnelCli",
+    async (event, id: TunnelCliId, opts?: { force?: boolean }) => {
+      if (id !== "cloudflared" && id !== "ngrok") {
+        throw new Error(`Unsupported tunnel CLI: ${id}`);
+      }
+      const sendLog = (line: string) => {
+        event.sender.send("tools:installLog", { id, line });
+      };
+      try {
+        sendLog(`Installing ${id}…`);
+        const status = await installTunnelCli(id, sendLog, { force: !!opts?.force });
+        event.sender.send("tools:installDone", { id, ok: true, status });
+        return { ok: true as const, status };
+      } catch (err) {
+        const message = (err as Error).message ?? String(err);
+        sendLog(`Error: ${message}`);
+        event.sender.send("tools:installDone", { id, ok: false, error: message });
+        return { ok: false as const, error: message };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "tools:setRemoteAccess",
+    async (
+      _e,
+      opts: { enabled: boolean; provider?: Prefs["remoteAccessProvider"] },
+    ) => {
+      if (opts.provider) prefs.remoteAccessProvider = opts.provider;
+      prefs.remoteAccessEnabled = opts.enabled;
+      savePrefs();
+      if (opts.enabled) {
+        const info = await ensureRemoteAccessTunnel();
+        return { ok: true as const, remote: info };
+      }
+      if (remoteAccessTunnelId) {
+        stopTunnel(remoteAccessTunnelId);
+        remoteAccessTunnelId = null;
+      }
+      prefs.remoteAccessUrl = "";
+      savePrefs();
+      return { ok: true as const, remote: null };
+    },
+  );
+
+  ipcMain.handle("tools:refreshRemoteAccess", async () => {
+    if (!prefs.remoteAccessEnabled) {
+      return { enabled: false, url: "", live: null as TunnelInfo | null };
+    }
+    const info = await ensureRemoteAccessTunnel();
+    return info;
+  });
+
   ipcMain.handle("window:hide", () => hideWindow());
   ipcMain.handle("app:quit", () => {
     isQuitting = true;
@@ -415,32 +526,172 @@ function registerIpc(): void {
 // --- Lifecycle. ----------------------------------------------------------
 app.on("second-instance", () => showWindow());
 
+/**
+ * If port / leftover APC processes would block startup, ask the user to
+ * quit them. Returns false when the user declines (caller should exit).
+ */
+async function promptKillConflictingInstances(port: number): Promise<boolean> {
+  let conflicts = await findConflictingProcesses(port);
+  if (conflicts.length === 0) return true;
+
+  const result = await dialog.showMessageBox({
+    type: "warning",
+    buttons: ["Quit other instances", "Cancel"],
+    defaultId: 0,
+    cancelId: 1,
+    title: "Another AnyProv Code is running",
+    message: "Quit other AnyProv Code processes?",
+    detail: formatConflictDetail(conflicts, port),
+    noLink: true,
+  });
+
+  if (result.response !== 0) return false;
+
+  console.log(
+    `[apc] killing conflicting processes: ${conflicts.map((c) => c.pid).join(", ")}`,
+  );
+  await killProcesses(conflicts.map((c) => c.pid));
+
+  // Second pass: port still held by something we didn't map (rare).
+  if (await isPortHeld(port)) {
+    conflicts = await findConflictingProcesses(port);
+    if (conflicts.length > 0) {
+      await killProcesses(conflicts.map((c) => c.pid));
+    }
+  }
+
+  if (await isPortHeld(port)) {
+    dialog.showErrorBox(
+      "Could not free port",
+      `Port ${port} is still in use after quitting other instances.\n\n` +
+        `Quit the process manually (Activity Monitor / Task Manager) or set PORT to a free port and relaunch.`,
+    );
+    return false;
+  }
+
+  return true;
+}
+
 app.whenReady().then(async () => {
   loadPrefs();
   loadSecrets();
+  // App-managed tunnel binaries (cloudflared / ngrok) live under userData/bin
+  // so installs work without admin and are found by the tunnel spawner.
+  process.env.APC_BIN_DIR = path.join(app.getPath("userData"), "bin");
   registerIpc();
 
-  try {
-    server = await startServer({
-      port: Number(process.env.PORT ?? 4319),
-      host: process.env.CMAI_HOST ?? "127.0.0.1",
-      silent: true,
-      onReady: () => refreshTrayMenu(),
-    });
-    console.log(`[cmai] server listening on http://${server.host}:${server.port}, code=${server.pairingCode}`);
-  } catch (err) {
-    console.error("[cmai] server failed to start:", err);
-    dialog.showErrorBox("Server failed to start", String((err as Error).message ?? err));
+  const port = Number(process.env.PORT ?? 4319);
+  const host = process.env.APC_HOST ?? "127.0.0.1";
+
+  const canStart = await promptKillConflictingInstances(port);
+  if (!canStart) {
+    isQuitting = true;
     app.quit();
     return;
   }
 
+  try {
+    server = await startServer({
+      port,
+      host,
+      silent: true,
+      onReady: () => refreshTrayMenu(),
+    });
+    console.log(`[apc] server listening on http://${server.host}:${server.port}, code=${server.pairingCode}`);
+  } catch (err) {
+    const message = String((err as Error).message ?? err);
+    console.error("[apc] server failed to start:", err);
+
+    // Race: something bound the port between our scan and listen. Offer one more kill.
+    if (message.includes("already in use") || message.includes("EADDRINUSE")) {
+      const retry = await promptKillConflictingInstances(port);
+      if (retry) {
+        try {
+          server = await startServer({
+            port,
+            host,
+            silent: true,
+            onReady: () => refreshTrayMenu(),
+          });
+          console.log(
+            `[apc] server listening on http://${server.host}:${server.port}, code=${server.pairingCode}`,
+          );
+        } catch (err2) {
+          dialog.showErrorBox("Server failed to start", String((err2 as Error).message ?? err2));
+          isQuitting = true;
+          app.quit();
+          return;
+        }
+      } else {
+        isQuitting = true;
+        app.quit();
+        return;
+      }
+    } else {
+      dialog.showErrorBox("Server failed to start", message);
+      isQuitting = true;
+      app.quit();
+      return;
+    }
+  }
+
   createTray();
   createWindow();
-  console.log("[cmai] tray + window created");
+  console.log("[apc] tray + window created");
+
+  // Auto-start remote-access tunnel when the user left it enabled.
+  if (prefs.remoteAccessEnabled) {
+    void ensureRemoteAccessTunnel().then((info) => {
+      console.log(`[apc] remote access: ${info?.url ?? "(starting)"}`);
+    });
+  }
 }).catch((err) => {
-  console.error("[cmai] whenReady chain failed:", err);
+  console.error("[apc] whenReady chain failed:", err);
 });
+
+/** Expose the coding server port through the preferred tunnel provider. */
+async function ensureRemoteAccessTunnel(): Promise<{
+  enabled: boolean;
+  url: string;
+  provider: string;
+  live: TunnelInfo | null;
+}> {
+  const port = server?.port;
+  if (!port) {
+    return { enabled: prefs.remoteAccessEnabled, url: prefs.remoteAccessUrl, provider: prefs.remoteAccessProvider, live: null };
+  }
+  // Reuse existing live tunnel if still up.
+  if (remoteAccessTunnelId) {
+    const live = listTunnels().find((t) => t.id === remoteAccessTunnelId) ?? null;
+    if (live && (live.status === "up" || live.status === "starting")) {
+      if (live.url) {
+        prefs.remoteAccessUrl = live.url;
+        savePrefs();
+      }
+      return {
+        enabled: true,
+        url: live.url ?? prefs.remoteAccessUrl,
+        provider: live.provider,
+        live,
+      };
+    }
+  }
+  const started = await startTunnel({
+    port,
+    provider: prefs.remoteAccessProvider,
+  });
+  remoteAccessTunnelId = started.id;
+  if (started.url) {
+    prefs.remoteAccessUrl = started.url;
+    savePrefs();
+  }
+  return {
+    enabled: true,
+    url: started.url ?? prefs.remoteAccessUrl,
+    provider: started.provider,
+    live: started,
+  };
+}
 
 app.on("window-all-closed", () => {
   // Keep running in tray on every platform; explicit Quit ends the process.

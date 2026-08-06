@@ -1,5 +1,5 @@
 import SwiftUI
-import MobileAICore
+import AnyProvCore
 
 /// A locally-tracked coding session. Persisted to UserDefaults so the user
 /// can re-open recent sessions from the Code home screen.
@@ -9,6 +9,12 @@ struct CodeSession: Codable, Identifiable, Hashable {
     var repoFullName: String
     var baseBranch: String
     var workBranch: String
+    /// Wire protocol session id used by the desktop SessionManager + tools.
+    var wireSessionId: String
+    /// Environment locked in when the session was created (not changeable later).
+    var environment: EnvironmentConfig?
+    /// Compare / pull-request URL after publish, if any.
+    var prURL: String?
     var createdAt: Date
     var updatedAt: Date
     /// `active` while a session is running, `ready` when finished.
@@ -42,6 +48,9 @@ struct CodeSession: Codable, Identifiable, Hashable {
         repoFullName: String,
         baseBranch: String,
         workBranch: String,
+        wireSessionId: String = "s_\(UUID().uuidString.prefix(8).lowercased())",
+        environment: EnvironmentConfig? = nil,
+        prURL: String? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         status: Status = .working,
@@ -52,10 +61,35 @@ struct CodeSession: Codable, Identifiable, Hashable {
         self.repoFullName = repoFullName
         self.baseBranch = baseBranch
         self.workBranch = workBranch
+        self.wireSessionId = wireSessionId
+        self.environment = environment
+        self.prURL = prURL
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.status = status
         self.toolCount = toolCount
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, repoFullName, baseBranch, workBranch
+        case wireSessionId, environment, prURL, createdAt, updatedAt, status, toolCount
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        repoFullName = try c.decode(String.self, forKey: .repoFullName)
+        baseBranch = try c.decode(String.self, forKey: .baseBranch)
+        workBranch = try c.decode(String.self, forKey: .workBranch)
+        wireSessionId = try c.decodeIfPresent(String.self, forKey: .wireSessionId)
+            ?? "s_\(id.uuidString.prefix(8).lowercased())"
+        environment = try c.decodeIfPresent(EnvironmentConfig.self, forKey: .environment)
+        prURL = try c.decodeIfPresent(String.self, forKey: .prURL)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        updatedAt = try c.decode(Date.self, forKey: .updatedAt)
+        status = try c.decode(Status.self, forKey: .status)
+        toolCount = try c.decodeIfPresent(Int.self, forKey: .toolCount) ?? 0
     }
 }
 
@@ -124,7 +158,10 @@ enum SessionLauncher {
         }
         let activeSkills = skills ?? state.skillManager.enabledSkills
         let activeMCP = mcpServers ?? state.mcpManager.configuredMCPServers
-        let workBranch = "claude/\(slug(from: task))-\(shortId())"
+        let prefix = state.codeBranchPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
+        let branchPrefix = prefix.isEmpty ? "apc" : prefix
+        let workBranch = "\(branchPrefix)/\(slug(from: task))-\(shortId())"
+        let wireId = "s_\(shortId())"
         let repoRef = RepoRef(
             fullName: repo.fullName,
             baseBranch: repo.defaultBranch,
@@ -132,6 +169,7 @@ enum SessionLauncher {
             githubToken: state.githubToken
         )
         return SessionConfig(
+            wireSessionId: wireId,
             endpoint: endpoint,
             token: token,
             repo: repoRef,
@@ -520,20 +558,39 @@ struct CodeHomeView: View {
             title: title,
             repoFullName: config.repo.fullName,
             baseBranch: config.repo.baseBranch ?? "main",
-            workBranch: config.repo.workBranch
+            workBranch: config.repo.workBranch,
+            wireSessionId: config.wireSessionId,
+            environment: config.environment
         )
         sessionStore.add(session)
-        // Stash the session id on the config so SessionView can update
-        // its status as events come back over the WebSocket.
-        pushSessionConfig = config.with(sessionId: session.id)
+        // Keep selected repo in sync so other pickers stay coherent.
+        if state.selectedRepo?.fullName != session.repoFullName {
+            // Best-effort: leave selectedRepo alone if we only have a name.
+        }
+        pushSessionConfig = SessionConfig(
+            id: config.id,
+            wireSessionId: config.wireSessionId,
+            localSessionId: session.id,
+            endpoint: config.endpoint,
+            token: config.token,
+            repo: config.repo,
+            environment: config.environment,
+            model: config.model,
+            permissionMode: config.permissionMode,
+            firstMessage: config.firstMessage,
+            skills: config.skills,
+            mcpServers: config.mcpServers,
+            resuming: false
+        )
     }
 
     private func reattach(session: CodeSession) {
-        // Build a session config from the persisted session record. This
-        // reconnects to the server and re-runs the same first message.
+        // Rebuild from the persisted session — do not require the currently
+        // selected repo (that blocked opening history until a new session).
+        // Always open a fresh WS and send create_session with the same wire
+        // id so the desktop rebinds (live) or re-clones (after restart).
         guard let endpoint = state.serverEndpoint,
               let token = state.serverToken,
-              let repo = state.selectedRepo,
               let model = state.modelSelectionForSession() else { return }
         let repoRef = RepoRef(
             fullName: session.repoFullName,
@@ -541,16 +598,22 @@ struct CodeHomeView: View {
             workBranch: session.workBranch,
             githubToken: state.githubToken
         )
+        sessionStore.update(session.id) { $0.status = .working }
         let config = SessionConfig(
+            wireSessionId: session.wireSessionId,
+            localSessionId: session.id,
             endpoint: endpoint,
             token: token,
             repo: repoRef,
-            environment: state.selectedEnvironment,
+            // Environment is fixed for the life of the session.
+            environment: session.environment ?? state.selectedEnvironment,
             model: model,
             permissionMode: state.permissionMode,
             firstMessage: session.title,
             skills: state.skillManager.enabledSkills.map(\.content),
-            mcpServers: state.mcpManager.configuredMCPServers
+            mcpServers: state.mcpManager.configuredMCPServers,
+            resuming: true,
+            prURL: session.prURL
         )
         pushSessionConfig = config
     }
@@ -620,33 +683,12 @@ struct SessionFilterSheet: View {
     }
 }
 
-extension SessionConfig {
-    /// Returns a copy of this config with the session id replaced.
-    func with(sessionId: UUID) -> SessionConfig {
-        // The wire id is a String. We round-trip through a fresh SessionConfig
-        // so the rest of the call sites (which only take SessionConfig)
-        // stay typed.
-        return SessionConfig(
-            endpoint: endpoint,
-            token: token,
-            repo: repo,
-            environment: environment,
-            model: model,
-            permissionMode: permissionMode,
-            firstMessage: firstMessage,
-            skills: skills,
-            mcpServers: mcpServers
-        )
-    }
-}
-
 extension MCPManager {
     /// Wire-format subset of the user's MCP servers. Sent to the desktop
     /// server on session create. The desktop side decides which ones to
     /// start based on transport + its own enabled flag.
     var configuredMCPServers: [MCPServerConfig] {
-        configuredServers.map {
-            MCPServerConfig(name: $0.name, command: $0.command, args: $0.args, env: $0.env)
-        }
+        // Full MCPServer wire shape (id / description / isEnabled required by desktop Zod).
+        configuredServers.map { MCPServerConfig($0) }
     }
 }

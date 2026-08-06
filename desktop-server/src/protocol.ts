@@ -5,7 +5,7 @@
  * then opens a WebSocket to `/session?token=...`. Every WebSocket frame is a
  * JSON object validated by the schemas below.
  *
- * The Swift `MobileAICore/Server` Codable models mirror these types exactly;
+ * The Swift `AnyProvCore/Server` Codable models mirror these types exactly;
  * `docs/protocol.md` is the human-readable reference. Keep all three in sync.
  */
 import { z } from "zod";
@@ -167,6 +167,22 @@ export const CreatePrMsg = z.object({
 });
 export type CreatePrMsg = z.infer<typeof CreatePrMsg>;
 
+/**
+ * Instant git actions from the session composer (commit / push / open PR).
+ * Flags may be combined; the server runs them in order: commit → push → PR URL.
+ */
+export const GitPublishMsg = z.object({
+  type: z.literal("git_publish"),
+  sessionId: z.string(),
+  /** Commit message (required when `commit` is true). */
+  message: z.string().default(""),
+  commit: z.boolean().default(false),
+  push: z.boolean().default(false),
+  /** When true, push (if needed) and return a compare/PR URL. */
+  openPr: z.boolean().default(false),
+});
+export type GitPublishMsg = z.infer<typeof GitPublishMsg>;
+
 // Skills/MCP sync — the iOS app is the editor, the desktop is the git operator.
 
 export const SkillsSyncRequestMsg = z.object({
@@ -255,12 +271,36 @@ export const PortListMsg = z.object({
 });
 export type PortListMsg = z.infer<typeof PortListMsg>;
 
+/** Start a public tunnel to a local listening port (ngrok / cloudflare / …). */
+export const TunnelStartMsg = z.object({
+  type: z.literal("tunnel_start"),
+  sessionId: z.string(),
+  port: z.number().int().min(1).max(65535),
+  /** auto | ngrok | cloudflare | localtunnel | bore */
+  provider: z.enum(["auto", "ngrok", "cloudflare", "localtunnel", "bore"]).default("auto"),
+});
+export type TunnelStartMsg = z.infer<typeof TunnelStartMsg>;
+
+export const TunnelStopMsg = z.object({
+  type: z.literal("tunnel_stop"),
+  sessionId: z.string(),
+  tunnelId: z.string(),
+});
+export type TunnelStopMsg = z.infer<typeof TunnelStopMsg>;
+
+export const TunnelListMsg = z.object({
+  type: z.literal("tunnel_list"),
+  sessionId: z.string(),
+});
+export type TunnelListMsg = z.infer<typeof TunnelListMsg>;
+
 export const ClientMessage = z.discriminatedUnion("type", [
   CreateSessionMsg,
   UserMessageMsg,
   PermissionResponseMsg,
   InterruptMsg,
   CreatePrMsg,
+  GitPublishMsg,
   SkillsSyncRequestMsg,
   SkillUpsertMsg,
   SkillDeleteMsg,
@@ -274,6 +314,9 @@ export const ClientMessage = z.discriminatedUnion("type", [
   FileListMsg,
   FileReadMsg,
   PortListMsg,
+  TunnelStartMsg,
+  TunnelStopMsg,
+  TunnelListMsg,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
@@ -353,6 +396,19 @@ export const PrCreatedMsg = z.object({
 });
 export type PrCreatedMsg = z.infer<typeof PrCreatedMsg>;
 
+/** Outcome of an instant git action (`git_publish`). */
+export const GitResultMsg = z.object({
+  type: z.literal("git_result"),
+  sessionId: z.string(),
+  /** Which steps ran, e.g. "commit", "push", "commit+push+pr". */
+  action: z.string(),
+  ok: z.boolean(),
+  detail: z.string(),
+  /** Compare / open-PR URL when push or openPr succeeded. */
+  url: z.string().optional(),
+});
+export type GitResultMsg = z.infer<typeof GitResultMsg>;
+
 export const ErrorMsg = z.object({
   type: z.literal("error"),
   sessionId: z.string().optional(),
@@ -405,8 +461,16 @@ export const FileListResultMsg = z.object({
     isDirectory: z.boolean(),
     size: z.number(),
     modifiedAt: z.string(),
+    /** Git short status when dirty: M, A, D, ?, … */
+    changeStatus: z.string().optional(),
   })),
+  /** Working-tree unified diff / stat (repo root listings). */
   diff: z.string().optional(),
+  /** Flat list of changed paths for the Diffs tab. */
+  changes: z.array(z.object({
+    path: z.string(),
+    status: z.string(),
+  })).optional(),
 });
 export type FileListResultMsg = z.infer<typeof FileListResultMsg>;
 
@@ -416,6 +480,8 @@ export const FileReadResultMsg = z.object({
   path: z.string(),
   content: z.string(),
   truncated: z.boolean(),
+  /** Unified diff for this file vs HEAD when dirty. */
+  diff: z.string().optional(),
 });
 export type FileReadResultMsg = z.infer<typeof FileReadResultMsg>;
 
@@ -430,6 +496,21 @@ export const PortListResultMsg = z.object({
 });
 export type PortListResultMsg = z.infer<typeof PortListResultMsg>;
 
+export const TunnelStatusMsg = z.object({
+  type: z.literal("tunnel_status"),
+  sessionId: z.string(),
+  tunnels: z.array(z.object({
+    id: z.string(),
+    port: z.number(),
+    provider: z.string(),
+    status: z.enum(["starting", "up", "error", "stopped"]),
+    url: z.string().optional(),
+    error: z.string().optional(),
+  })),
+  availableProviders: z.array(z.string()),
+});
+export type TunnelStatusMsg = z.infer<typeof TunnelStatusMsg>;
+
 export const ServerMessage = z.discriminatedUnion("type", [
   SessionCreatedMsg,
   AssistantDeltaMsg,
@@ -439,6 +520,7 @@ export const ServerMessage = z.discriminatedUnion("type", [
   PermissionRequestMsg,
   SessionDoneMsg,
   PrCreatedMsg,
+  GitResultMsg,
   ErrorMsg,
   SkillsSyncMsg,
   MCPSyncMsg,
@@ -447,6 +529,7 @@ export const ServerMessage = z.discriminatedUnion("type", [
   FileListResultMsg,
   FileReadResultMsg,
   PortListResultMsg,
+  TunnelStatusMsg,
 ]);
 export type ServerMessage = z.infer<typeof ServerMessage>;
 

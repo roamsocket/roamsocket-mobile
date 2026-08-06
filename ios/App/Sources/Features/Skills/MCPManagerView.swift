@@ -1,5 +1,5 @@
 import SwiftUI
-import MobileAICore
+import AnyProvCore
 
 /// View for managing connectors (formerly "MCP servers"). The underlying
 /// manager is still `MCPManager`; only the user-facing name changed.
