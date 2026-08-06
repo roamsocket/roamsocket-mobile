@@ -41,14 +41,20 @@ struct ChatView: View {
         ZStack {
             Theme.background.ignoresSafeArea()
 
-            VStack(spacing: 0) {
+            Group {
                 if isEffectivelyEmpty {
                     emptyHome
                 } else {
                     messageList
                 }
-                composer
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        // Pin the composer to the bottom safe area so it stays above the home
+        // indicator *and* the keyboard. Putting it in the main VStack let
+        // emptyHome's expanding frame crush / cover it when the keyboard opens.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            composer
         }
         .onAppear { bindAndLoad() }
         .onChange(of: resumeToken) { _ in bindAndLoad() }
@@ -229,14 +235,18 @@ struct ChatView: View {
     }
 
     private var greeting: some View {
-        Text("Clocking in for the evening shift.")
-            .font(.system(size: 26, weight: .regular, design: .serif))
-            .foregroundStyle(Theme.textPrimary)
-            .multilineTextAlignment(.center)
-            .padding(.horizontal, 32)
-            // Slight upward bias so the block sits closer to true visual center
-            // once the composer (and keyboard) claim the bottom of the screen.
-            .padding(.bottom, 28)
+        VStack(spacing: 18) {
+            AsterismGlyph()
+                .frame(width: 56, height: 56)
+            Text("Clocking in for the evening shift.")
+                .font(.system(size: 26, weight: .regular, design: .serif))
+                .foregroundStyle(Theme.textPrimary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+        }
+        // Slight upward bias so the block sits closer to true visual center
+        // once the composer (and keyboard) claim the bottom of the screen.
+        .padding(.bottom, 28)
     }
 
     // MARK: - Message list
@@ -282,7 +292,8 @@ struct ChatView: View {
         .padding(.horizontal, 16)
         .padding(.bottom, 12)
         .padding(.top, 8)
-        .background(Theme.background)
+        // Extend fill under the home indicator so list content doesn't peek through.
+        .background(Theme.background.ignoresSafeArea(edges: .bottom))
     }
 
     private var composerSurface: some View {
@@ -453,6 +464,26 @@ struct ProcessingIndicator: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Centered accent glyph used on the empty chat home.
+struct AsterismGlyph: View {
+    var body: some View {
+        ZStack {
+            ForEach(0..<12, id: \.self) { i in
+                Capsule()
+                    .fill(Theme.accent)
+                    .frame(width: 4, height: 22)
+                    .offset(y: -16)
+                    .rotationEffect(.degrees(Double(i) * 30))
+            }
+            Circle()
+                .fill(Theme.accent)
+                .frame(width: 6, height: 6)
+        }
+        .frame(width: 56, height: 56)
+        .compositingGroup()
     }
 }
 

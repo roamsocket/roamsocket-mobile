@@ -488,12 +488,24 @@ struct SessionView: View {
     private var gitActionRow: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
+                liveGitStatusBadge
                 gitChip("Commit", systemImage: "checkmark.circle", action: .commit)
                 gitChip("Push", systemImage: "arrow.up.to.line", action: .push)
                 gitChip("PR", systemImage: "arrow.triangle.branch", action: .pr)
                 gitChip("Done", systemImage: "checkmark.seal", action: .all, emphasized: true)
             }
         }
+    }
+
+    /// Same style of ahead / blocked / clean pill that used to sit on the
+    /// Code home session list — now lives next to publish actions.
+    private var liveGitStatusBadge: some View {
+        SessionGitStatusBadge.live(
+            isRunning: model.isRunning,
+            hasDiffs: model.hasDiffs,
+            hasPR: model.prURL != nil,
+            needsInput: model.pendingPermission != nil
+        )
     }
 
     private func gitChip(

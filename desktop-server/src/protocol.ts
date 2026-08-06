@@ -147,6 +147,11 @@ export const UserMessageMsg = z.object({
   type: z.literal("user_message"),
   sessionId: z.string(),
   text: z.string(),
+  /**
+   * Optional model override for this turn. When set, the agent rebinds to the
+   * new provider/model before running so mid-session model switches take effect.
+   */
+  model: ModelSelection.optional(),
 });
 export type UserMessageMsg = z.infer<typeof UserMessageMsg>;
 

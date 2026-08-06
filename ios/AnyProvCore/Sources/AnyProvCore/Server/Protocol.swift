@@ -158,7 +158,8 @@ public struct RepoRef: Codable, Sendable {
 /// Discriminated messages the app sends. Encoded with a `type` field.
 public enum ClientMessage: Encodable, Sendable {
     case createSession(sessionId: String?, repo: RepoRef, environment: EnvironmentConfig?, model: ModelSelection, permissionMode: PermissionMode, skills: [String] = [], mcpServers: [MCPServerConfig] = [])
-    case userMessage(sessionId: String, text: String)
+    /// Optional `model` rebinds the agent for this turn (mid-session model switch).
+    case userMessage(sessionId: String, text: String, model: ModelSelection? = nil)
     case permissionResponse(sessionId: String, requestId: String, decision: PermissionDecision)
     case interrupt(sessionId: String)
     case createPR(sessionId: String, title: String, body: String)
@@ -196,10 +197,11 @@ public enum ClientMessage: Encodable, Sendable {
             try c.encode(permissionMode, forKey: .init("permissionMode"))
             if !skills.isEmpty { try c.encode(skills, forKey: .init("skills")) }
             if !mcpServers.isEmpty { try c.encode(mcpServers, forKey: .init("mcpServers")) }
-        case let .userMessage(sessionId, text):
+        case let .userMessage(sessionId, text, model):
             try c.encode("user_message", forKey: .init("type"))
             try c.encode(sessionId, forKey: .init("sessionId"))
             try c.encode(text, forKey: .init("text"))
+            if let model { try c.encode(model, forKey: .init("model")) }
         case let .permissionResponse(sessionId, requestId, decision):
             try c.encode("permission_response", forKey: .init("type"))
             try c.encode(sessionId, forKey: .init("sessionId"))

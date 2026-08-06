@@ -11,6 +11,8 @@ struct ChatHistoryItem: Identifiable, Hashable, Codable {
     var messages: [PersistedChatMessage]
     /// Hidden from Recents when true (swipe-to-archive).
     var isArchived: Bool
+    /// Pinned / starred chats float to the top of Recents.
+    var isStarred: Bool
 
     init(
         id: UUID = UUID(),
@@ -18,7 +20,8 @@ struct ChatHistoryItem: Identifiable, Hashable, Codable {
         lastMessageAt: Date,
         isToolCall: Bool = false,
         messages: [PersistedChatMessage] = [],
-        isArchived: Bool = false
+        isArchived: Bool = false,
+        isStarred: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -26,6 +29,7 @@ struct ChatHistoryItem: Identifiable, Hashable, Codable {
         self.isToolCall = isToolCall
         self.messages = messages
         self.isArchived = isArchived
+        self.isStarred = isStarred
     }
 
     init(from decoder: Decoder) throws {
@@ -36,6 +40,7 @@ struct ChatHistoryItem: Identifiable, Hashable, Codable {
         isToolCall = try c.decodeIfPresent(Bool.self, forKey: .isToolCall) ?? false
         messages = try c.decodeIfPresent([PersistedChatMessage].self, forKey: .messages) ?? []
         isArchived = try c.decodeIfPresent(Bool.self, forKey: .isArchived) ?? false
+        isStarred = try c.decodeIfPresent(Bool.self, forKey: .isStarred) ?? false
     }
 }
 
@@ -131,8 +136,14 @@ final class ChatHistoryStore: ObservableObject {
     }
 
     /// Active (non-archived) global recents for the sidebar.
+    /// Starred chats stay pinned above the rest; both groups stay
+    /// newest-first.
     var activeRecents: [ChatHistoryItem] {
-        recents.filter { !$0.isArchived }
+        let active = recents.filter { !$0.isArchived }
+        return active.sorted { a, b in
+            if a.isStarred != b.isStarred { return a.isStarred && !b.isStarred }
+            return a.lastMessageAt > b.lastMessageAt
+        }
     }
 
     /// Start a blank global chat and make it active.
@@ -263,12 +274,68 @@ final class ChatHistoryStore: ObservableObject {
         save()
     }
 
+    func renameChat(_ id: UUID, title: String) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let idx = recents.firstIndex(where: { $0.id == id })
+        else { return }
+        recents[idx].title = trimmed
+        save()
+    }
+
+    func setStarred(_ id: UUID, starred: Bool) {
+        guard let idx = recents.firstIndex(where: { $0.id == id }) else { return }
+        recents[idx].isStarred = starred
+        save()
+    }
+
+    /// Copy a global recent into a project (keeps the original in Recents).
+    @discardableResult
+    func addChatToProject(chatID: UUID, projectID: UUID) -> ProjectChatItem? {
+        guard let chat = recents.first(where: { $0.id == chatID }),
+              projects.contains(where: { $0.id == projectID })
+        else { return nil }
+        let projectChat = ProjectChatItem(
+            title: chat.title,
+            lastMessageAt: chat.lastMessageAt,
+            messages: chat.messages,
+            isArchived: false
+        )
+        var list = projectChats[projectID] ?? []
+        list.insert(projectChat, at: 0)
+        projectChats[projectID] = list
+        if let pIdx = projects.firstIndex(where: { $0.id == projectID }) {
+            projects[pIdx].updatedAt = Date()
+        }
+        save()
+        return projectChat
+    }
+
     /// Swipe-to-archive for a project chat.
     func archiveProjectChat(projectID: UUID, chatID: UUID) {
         guard var list = projectChats[projectID],
               let idx = list.firstIndex(where: { $0.id == chatID })
         else { return }
         list[idx].isArchived = true
+        projectChats[projectID] = list
+        if activeChatID == chatID { activeChatID = nil }
+        save()
+    }
+
+    func renameProjectChat(projectID: UUID, chatID: UUID, title: String) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              var list = projectChats[projectID],
+              let idx = list.firstIndex(where: { $0.id == chatID })
+        else { return }
+        list[idx].title = trimmed
+        projectChats[projectID] = list
+        save()
+    }
+
+    func deleteProjectChat(projectID: UUID, chatID: UUID) {
+        guard var list = projectChats[projectID] else { return }
+        list.removeAll { $0.id == chatID }
         projectChats[projectID] = list
         if activeChatID == chatID { activeChatID = nil }
         save()

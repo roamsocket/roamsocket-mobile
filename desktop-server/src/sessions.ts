@@ -170,11 +170,31 @@ export class SessionManager {
     });
   }
 
-  async handleUserMessage(sessionId: string, text: string): Promise<void> {
+  async handleUserMessage(
+    sessionId: string,
+    text: string,
+    model?: import("./protocol.js").ModelSelection,
+  ): Promise<void> {
     const session = globalSessions.get(sessionId);
     if (!session) {
       this.emit({ type: "error", sessionId, message: "Unknown session." });
       return;
+    }
+    // Mid-session model switch from the phone's model picker.
+    if (model) {
+      const pendingPermissions = session.pendingPermissions;
+      const emit = this.emit;
+      const sid = session.id;
+      session.agent.rebind({
+        emit,
+        signal: session.abort.signal,
+        requestPermission: (requestId, tool, summary) =>
+          new Promise<"allow" | "deny">((resolve) => {
+            pendingPermissions.set(requestId, resolve);
+            emit({ type: "permission_request", sessionId: sid, requestId, tool, summary });
+          }),
+        model,
+      });
     }
     try {
       await session.agent.handleUserMessage(text);

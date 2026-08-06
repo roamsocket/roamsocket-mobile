@@ -452,9 +452,11 @@ final class SessionViewModel: ObservableObject {
         isRunning = true
         connectionStatusLine = nil
         connectionError = nil
+        // Always send the live model selection so mid-session picker changes apply.
+        let model = state?.modelSelectionForSession()
         Task {
             do {
-                try await client.send(.userMessage(sessionId: sessionID, text: trimmed))
+                try await client.send(.userMessage(sessionId: sessionID, text: trimmed, model: model))
             } catch {
                 isRunning = false
                 connectionError = error.localizedDescription
@@ -493,9 +495,10 @@ final class SessionViewModel: ObservableObject {
         // Bubble already shown when queued — only transmit.
         isRunning = true
         connectionStatusLine = nil
+        let model = state?.modelSelectionForSession()
         Task {
             do {
-                try await client.send(.userMessage(sessionId: sessionID, text: next))
+                try await client.send(.userMessage(sessionId: sessionID, text: next, model: model))
             } catch {
                 isRunning = false
                 connectionError = error.localizedDescription

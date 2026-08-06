@@ -241,7 +241,7 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
             await manager.create(msg);
             break;
           case "user_message":
-            await manager.handleUserMessage(msg.sessionId, msg.text);
+            await manager.handleUserMessage(msg.sessionId, msg.text, msg.model);
             break;
           case "permission_response":
             manager.resolvePermission(msg.sessionId, msg.requestId, msg.decision);

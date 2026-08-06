@@ -6,6 +6,8 @@ struct ProjectDetailView: View {
     @ObservedObject var history: ChatHistoryStore
     @State private var showInstructions: Bool = false
     @State private var showAddFileSheet: Bool = false
+    @State private var renameTarget: ProjectChatItem?
+    @State private var renameDraft = ""
 
     /// When the user taps "New chat", we create a chat in the project and
     /// navigate to it via the `path` binding on the root NavigationStack.
@@ -31,6 +33,27 @@ struct ProjectDetailView: View {
         }
         .sheet(isPresented: $showAddFileSheet) {
             ProjectFilesSheet()
+        }
+        .alert("Rename chat", isPresented: Binding(
+            get: { renameTarget != nil },
+            set: { if !$0 { renameTarget = nil } }
+        )) {
+            TextField("Title", text: $renameDraft)
+            Button("Cancel", role: .cancel) {
+                renameTarget = nil
+            }
+            Button("Save") {
+                if let target = renameTarget {
+                    history.renameProjectChat(
+                        projectID: project.id,
+                        chatID: target.id,
+                        title: renameDraft
+                    )
+                }
+                renameTarget = nil
+            }
+        } message: {
+            Text("Choose a short name for this chat.")
         }
     }
 
@@ -72,24 +95,48 @@ struct ProjectDetailView: View {
             } else {
                 List {
                     ForEach(chats) { chat in
-                        Button {
-                            history.activeProject = project
-                            path.append(.projectChat(project, chat))
-                        } label: {
-                            chatRow(chat)
-                        }
-                        .buttonStyle(.plain)
-                        .listRowInsets(EdgeInsets())
-                        .listRowBackground(Theme.background)
-                        .listRowSeparatorTint(Theme.separator)
-                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                            Button {
-                                history.archiveProjectChat(projectID: project.id, chatID: chat.id)
-                            } label: {
-                                Label("Archive", systemImage: "archivebox")
+                        chatRow(chat)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                history.activeProject = project
+                                path.append(.projectChat(project, chat))
                             }
-                            .tint(Theme.accent)
-                        }
+                            .listRowInsets(EdgeInsets())
+                            .listRowBackground(Theme.background)
+                            .listRowSeparatorTint(Theme.separator)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                Button {
+                                    history.archiveProjectChat(projectID: project.id, chatID: chat.id)
+                                } label: {
+                                    Label("Archive", systemImage: "archivebox")
+                                }
+                                .tint(Theme.accent)
+                                Button {
+                                    renameTarget = chat
+                                    renameDraft = chat.title
+                                } label: {
+                                    Label("Rename", systemImage: "pencil")
+                                }
+                                .tint(Theme.textSecondary)
+                            }
+                            .contextMenu {
+                                Button {
+                                    renameTarget = chat
+                                    renameDraft = chat.title
+                                } label: {
+                                    Label("Rename", systemImage: "pencil")
+                                }
+                                Button {
+                                    history.archiveProjectChat(projectID: project.id, chatID: chat.id)
+                                } label: {
+                                    Label("Archive", systemImage: "archivebox")
+                                }
+                                Button(role: .destructive) {
+                                    history.deleteProjectChat(projectID: project.id, chatID: chat.id)
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
                     }
                 }
                 .listStyle(.plain)

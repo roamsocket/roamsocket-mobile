@@ -200,6 +200,12 @@ final class CodeSessionStore: ObservableObject, @unchecked Sendable {
         }
     }
 
+    func rename(_ id: UUID, title: String) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        update(id) { $0.title = trimmed }
+    }
+
     func saveTranscript(_ id: UUID, lines: [SessionTranscriptLine]) {
         update(id) { $0.transcript = lines }
     }
@@ -310,6 +316,98 @@ extension PermissionMode {
     }
 }
 
+/// Compact git / session status pill shared by Code home and the in-session
+/// commit / push / PR strip.
+struct SessionGitStatusBadge: View {
+    let icon: String
+    let label: String
+    let tint: Color
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .semibold))
+            Text(label)
+                .font(.system(size: 11, weight: .semibold))
+        }
+        .foregroundStyle(tint)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(tint.opacity(0.15), in: Capsule())
+        .accessibilityLabel(label)
+    }
+
+    /// Map a persisted session status to a lightweight badge.
+    static func forSessionStatus(_ status: CodeSession.Status) -> SessionGitStatusBadge {
+        switch status {
+        case .working:
+            return SessionGitStatusBadge(
+                icon: "arrow.up.circle.fill",
+                label: "ahead",
+                tint: Theme.accent
+            )
+        case .needsInput:
+            return SessionGitStatusBadge(
+                icon: "exclamationmark.circle.fill",
+                label: "blocked",
+                tint: .orange
+            )
+        case .readyForReview:
+            return SessionGitStatusBadge(
+                icon: "checkmark.circle.fill",
+                label: "ready",
+                tint: Theme.selection
+            )
+        case .completed:
+            return SessionGitStatusBadge(
+                icon: "checkmark.seal.fill",
+                label: "merged",
+                tint: Theme.textSecondary
+            )
+        case .archived:
+            return SessionGitStatusBadge(
+                icon: "archivebox.fill",
+                label: "archived",
+                tint: Theme.textTertiary
+            )
+        }
+    }
+
+    /// Live badge for an open coding session (diff / PR / agent state).
+    static func live(
+        isRunning: Bool,
+        hasDiffs: Bool,
+        hasPR: Bool,
+        needsInput: Bool
+    ) -> SessionGitStatusBadge {
+        if needsInput {
+            return forSessionStatus(.needsInput)
+        }
+        if hasPR {
+            return SessionGitStatusBadge(
+                icon: "arrow.triangle.branch",
+                label: "pr open",
+                tint: Theme.selection
+            )
+        }
+        if isRunning {
+            return forSessionStatus(.working)
+        }
+        if hasDiffs {
+            return SessionGitStatusBadge(
+                icon: "arrow.up.circle.fill",
+                label: "ahead",
+                tint: Theme.accent
+            )
+        }
+        return SessionGitStatusBadge(
+            icon: "checkmark.circle",
+            label: "clean",
+            tint: Theme.textSecondary
+        )
+    }
+}
+
 struct CodeHomeView: View {
     @EnvironmentObject var state: AppState
     @State private var statusFilter: CodeSession.Status? = nil
@@ -321,6 +419,8 @@ struct CodeHomeView: View {
     @State private var pushSessionConfig: SessionConfig?
     @State private var archiveCandidate: CodeSession?
     @State private var showArchiveKillConfirm = false
+    @State private var renameTarget: CodeSession?
+    @State private var renameDraft = ""
 
     /// Opens the root sidebar drawer. Wired from `RootView` so Code can open
     /// the same destinations as Chat even though this screen hides the
@@ -335,6 +435,7 @@ struct CodeHomeView: View {
             VStack(spacing: 0) {
                 header
                 // Single List so swipe-to-archive works (swipeActions need List rows).
+                // Avoid wrapping rows in Button — that often steals the swipe gesture.
                 List {
                     Section {
                         if state.serverName == nil {
@@ -363,23 +464,45 @@ struct CodeHomeView: View {
                                 .listRowSeparator(.hidden)
                         } else {
                             ForEach(filteredSessions) { session in
-                                Button {
-                                    reattach(session: session)
-                                } label: {
-                                    sessionCard(session)
-                                }
-                                .buttonStyle(.plain)
-                                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
-                                .listRowBackground(Color.clear)
-                                .listRowSeparator(.hidden)
-                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                    Button {
-                                        requestArchive(session)
-                                    } label: {
-                                        Label("Archive", systemImage: "archivebox")
+                                sessionCard(session)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        reattach(session: session)
                                     }
-                                    .tint(Theme.accent)
-                                }
+                                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                                    .listRowBackground(Color.clear)
+                                    .listRowSeparator(.hidden)
+                                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                        Button {
+                                            requestArchive(session)
+                                        } label: {
+                                            Label("Archive", systemImage: "archivebox")
+                                        }
+                                        .tint(Theme.accent)
+                                        Button {
+                                            beginRename(session)
+                                        } label: {
+                                            Label("Rename", systemImage: "pencil")
+                                        }
+                                        .tint(Theme.textSecondary)
+                                    }
+                                    .contextMenu {
+                                        Button {
+                                            beginRename(session)
+                                        } label: {
+                                            Label("Rename", systemImage: "pencil")
+                                        }
+                                        Button {
+                                            requestArchive(session)
+                                        } label: {
+                                            Label("Archive", systemImage: "archivebox")
+                                        }
+                                        Button(role: .destructive) {
+                                            sessionStore.remove(session.id)
+                                        } label: {
+                                            Label("Delete", systemImage: "trash")
+                                        }
+                                    }
                             }
                         }
                     } header: {
@@ -455,6 +578,23 @@ struct CodeHomeView: View {
             }
         } message: { session in
             Text("“\(session.title)” may still be running on the desktop. Stop it, or leave it running and just archive this chat?")
+        }
+        .alert("Rename session", isPresented: Binding(
+            get: { renameTarget != nil },
+            set: { if !$0 { renameTarget = nil } }
+        )) {
+            TextField("Title", text: $renameDraft)
+            Button("Cancel", role: .cancel) {
+                renameTarget = nil
+            }
+            Button("Save") {
+                if let target = renameTarget {
+                    sessionStore.rename(target.id, title: renameDraft)
+                }
+                renameTarget = nil
+            }
+        } message: {
+            Text("Choose a short name for this coding session.")
         }
     }
 
@@ -585,79 +725,24 @@ struct CodeHomeView: View {
                         .font(.system(size: 12))
                     Text(session.workBranch)
                         .font(.system(size: 12))
-                    Text("·")
-                        .font(.system(size: 12))
-                    Text(relativeTime(session.updatedAt))
-                        .font(.system(size: 12))
                 }
                 .foregroundStyle(Theme.textTertiary)
                 .lineLimit(1)
             }
-            Spacer()
-            gitStatusBadge(for: session)
+            Spacer(minLength: 8)
+            // Relative time sits where the old "ahead"/git badge was.
+            Text(relativeTime(session.updatedAt))
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Theme.textTertiary)
+                .fixedSize()
         }
         .padding(14)
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
     }
 
-    /// Compact git-status pill for the trailing edge of each session row.
-    /// Falls back to a baseline "clean" indicator when the session hasn't
-    /// reported any activity yet. The mapping is intentionally lightweight —
-    /// it doesn't read real ahead/behind counts, it just reflects what
-    /// state we know about locally.
-    private func gitStatusBadge(for session: CodeSession) -> some View {
-        let badge = gitStatus(for: session)
-        return HStack(spacing: 4) {
-            Image(systemName: badge.icon)
-                .font(.system(size: 11, weight: .semibold))
-            Text(badge.label)
-                .font(.system(size: 11, weight: .semibold))
-        }
-        .foregroundStyle(badge.tint)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(badge.tint.opacity(0.15), in: Capsule())
-    }
-
-    private struct GitStatusBadge {
-        let icon: String
-        let label: String
-        let tint: Color
-    }
-
-    private func gitStatus(for session: CodeSession) -> GitStatusBadge {
-        switch session.status {
-        case .working:
-            return GitStatusBadge(
-                icon: "arrow.up.circle.fill",
-                label: "ahead",
-                tint: Theme.accent
-            )
-        case .needsInput:
-            return GitStatusBadge(
-                icon: "exclamationmark.circle.fill",
-                label: "blocked",
-                tint: .orange
-            )
-        case .readyForReview:
-            return GitStatusBadge(
-                icon: "checkmark.circle.fill",
-                label: "ready",
-                tint: Theme.selection
-            )
-        case .completed:
-            return GitStatusBadge(
-                icon: "checkmark.seal.fill",
-                label: "merged",
-                tint: Theme.textSecondary
-            )
-        case .archived:
-            return GitStatusBadge(
-                icon: "archivebox.fill",
-                label: "archived",
-                tint: Theme.textTertiary
-            )
-        }
+    private func beginRename(_ session: CodeSession) {
+        renameTarget = session
+        renameDraft = session.title
     }
 
     private var sessionsEmpty: some View {
@@ -704,7 +789,7 @@ struct CodeHomeView: View {
 
     // MARK: - Session lifecycle
 
-    // MARK: - Archive
+    // MARK: - Archive / rename
 
     private func requestArchive(_ session: CodeSession) {
         if session.status.mayBeRunning {
@@ -828,6 +913,8 @@ struct ArchivedSessionsView: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
     var onOpen: (CodeSession) -> Void
+    @State private var renameTarget: CodeSession?
+    @State private var renameDraft = ""
 
     private var sessions: [CodeSession] { state.codeSessionStore.archivedSessions }
 
@@ -838,25 +925,24 @@ struct ArchivedSessionsView: View {
                     ContentUnavailableView(
                         "No archived sessions",
                         systemImage: "archivebox",
-                        description: Text("Swipe right on a session to archive it.")
+                        description: Text("Swipe left on a session to archive it.")
                     )
                 } else {
                     List {
                         ForEach(sessions) { session in
-                            Button {
-                                onOpen(session)
-                            } label: {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(session.title)
-                                        .font(.system(size: 16, weight: .medium))
-                                        .foregroundStyle(Theme.textPrimary)
-                                        .lineLimit(2)
-                                    Text("\(session.repoFullName) · \(session.transcript.count) messages")
-                                        .font(.system(size: 12))
-                                        .foregroundStyle(Theme.textTertiary)
-                                }
-                                .padding(.vertical, 4)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(session.title)
+                                    .font(.system(size: 16, weight: .medium))
+                                    .foregroundStyle(Theme.textPrimary)
+                                    .lineLimit(2)
+                                Text("\(session.repoFullName) · \(session.transcript.count) messages")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(Theme.textTertiary)
                             }
+                            .padding(.vertical, 4)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                            .onTapGesture { onOpen(session) }
                             .swipeActions(edge: .trailing) {
                                 Button(role: .destructive) {
                                     state.codeSessionStore.remove(session.id)
@@ -870,6 +956,24 @@ struct ArchivedSessionsView: View {
                                 }
                                 .tint(Theme.accent)
                             }
+                            .contextMenu {
+                                Button {
+                                    renameTarget = session
+                                    renameDraft = session.title
+                                } label: {
+                                    Label("Rename", systemImage: "pencil")
+                                }
+                                Button {
+                                    state.codeSessionStore.unarchive(session.id)
+                                } label: {
+                                    Label("Restore", systemImage: "arrow.uturn.backward")
+                                }
+                                Button(role: .destructive) {
+                                    state.codeSessionStore.remove(session.id)
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
                         }
                     }
                     .scrollContentBackground(.hidden)
@@ -881,6 +985,21 @@ struct ArchivedSessionsView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
+                }
+            }
+            .alert("Rename session", isPresented: Binding(
+                get: { renameTarget != nil },
+                set: { if !$0 { renameTarget = nil } }
+            )) {
+                TextField("Title", text: $renameDraft)
+                Button("Cancel", role: .cancel) {
+                    renameTarget = nil
+                }
+                Button("Save") {
+                    if let target = renameTarget {
+                        state.codeSessionStore.rename(target.id, title: renameDraft)
+                    }
+                    renameTarget = nil
                 }
             }
         }

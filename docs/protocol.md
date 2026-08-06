@@ -63,7 +63,7 @@ Every frame is a JSON object with a `type` discriminator.
 | type                  | fields |
 |-----------------------|--------|
 | `create_session`      | `sessionId?`, `repo{fullName, baseBranch?, workBranch, githubToken?}`, `environment?`, `model{provider, model, effort, apiKey, baseUrl?, apiStyle?}`, `permissionMode`, `skills?` (string[]), `mcpServers?` (`MCPServer[]`: `id`, `name`, `description`, `command`, `args`, `env`, `isEnabled`) |
-| `user_message`        | `sessionId`, `text` |
+| `user_message`        | `sessionId`, `text`, `model?` (optional full `ModelSelection` — rebinds the agent for this turn) |
 | `permission_response` | `sessionId`, `requestId`, `decision` (`allow`\|`deny`) |
 | `interrupt`           | `sessionId` |
 | `create_pr`           | `sessionId`, `title`, `body` |

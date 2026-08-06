@@ -17,6 +17,10 @@ struct SidebarView: View {
     var onNewChat: () -> Void
     var onShowSettings: () -> Void
 
+    @State private var renameTarget: ChatHistoryItem?
+    @State private var renameDraft = ""
+    @State private var addToProjectTarget: ChatHistoryItem?
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -31,6 +35,28 @@ struct SidebarView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         // Background can extend edge-to-edge; content respects the safe area.
         .background(Theme.background.ignoresSafeArea(edges: .vertical))
+        .alert("Rename chat", isPresented: Binding(
+            get: { renameTarget != nil },
+            set: { if !$0 { renameTarget = nil } }
+        )) {
+            TextField("Title", text: $renameDraft)
+            Button("Cancel", role: .cancel) {
+                renameTarget = nil
+            }
+            Button("Save") {
+                if let target = renameTarget {
+                    history.renameChat(target.id, title: renameDraft)
+                }
+                renameTarget = nil
+            }
+        } message: {
+            Text("Choose a short name for this chat.")
+        }
+        .sheet(item: $addToProjectTarget) { chat in
+            AddChatToProjectSheet(history: history, chat: chat)
+                .presentationDetents([.medium])
+                .preferredColorScheme(.dark)
+        }
     }
 
     // MARK: - Header
@@ -74,7 +100,8 @@ struct SidebarView: View {
                 .padding(.top, 20)
                 .padding(.bottom, 8)
 
-            // List is required for swipeActions to work.
+            // List is required for swipeActions + contextMenu on rows.
+            // Prefer onTapGesture over Button so long-press / swipe aren't stolen.
             List {
                 ForEach(history.activeRecents) { item in
                     RecentRow(item: item) {
@@ -90,6 +117,37 @@ struct SidebarView: View {
                             Label("Archive", systemImage: "archivebox")
                         }
                         .tint(Theme.accent)
+                        Button {
+                            beginRename(item)
+                        } label: {
+                            Label("Rename", systemImage: "pencil")
+                        }
+                        .tint(Theme.textSecondary)
+                    }
+                    .contextMenu {
+                        Button {
+                            addToProjectTarget = item
+                        } label: {
+                            Label("Add to project", systemImage: "tray.full")
+                        }
+                        Button {
+                            history.setStarred(item.id, starred: !item.isStarred)
+                        } label: {
+                            Label(
+                                item.isStarred ? "Unstar" : "Star",
+                                systemImage: item.isStarred ? "star.slash" : "star"
+                            )
+                        }
+                        Button {
+                            beginRename(item)
+                        } label: {
+                            Label("Rename", systemImage: "pencil")
+                        }
+                        Button(role: .destructive) {
+                            history.deleteChat(item.id)
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
                     }
                 }
             }
@@ -135,6 +193,11 @@ struct SidebarView: View {
         .padding(.top, 12)
         .padding(.bottom, 4)
     }
+
+    private func beginRename(_ item: ChatHistoryItem) {
+        renameTarget = item
+        renameDraft = item.title
+    }
 }
 
 // MARK: - Subviews
@@ -168,22 +231,97 @@ private struct RecentRow: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                if item.isToolCall {
-                    Image(systemName: "bubble.left.fill")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.textSecondary)
-                }
-                Text(item.title)
-                    .font(.system(size: 16, weight: .regular))
-                    .foregroundStyle(Theme.textPrimary)
-                    .lineLimit(1)
+        // Use onTapGesture (not Button) so contextMenu / swipeActions work reliably.
+        HStack(spacing: 8) {
+            if item.isStarred {
+                Image(systemName: "star.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.accent)
+            } else if item.isToolCall {
+                Image(systemName: "bubble.left.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.textSecondary)
             }
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
-            .frame(maxWidth: .infinity, alignment: .leading)
+            Text(item.title)
+                .font(.system(size: 16, weight: .regular))
+                .foregroundStyle(Theme.textPrimary)
+                .lineLimit(1)
+            Spacer(minLength: 0)
         }
-        .buttonStyle(.plain)
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onTapGesture(perform: action)
+    }
+}
+
+// MARK: - Add to project sheet
+
+private struct AddChatToProjectSheet: View {
+    @ObservedObject var history: ChatHistoryStore
+    let chat: ChatHistoryItem
+    @Environment(\.dismiss) private var dismiss
+    @State private var createdName = ""
+    @State private var showCreate = false
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if history.projects.isEmpty {
+                    ContentUnavailableView(
+                        "No projects yet",
+                        systemImage: "tray",
+                        description: Text("Create a project to organize this chat.")
+                    )
+                } else {
+                    List {
+                        ForEach(history.projects) { project in
+                            Button {
+                                history.addChatToProject(chatID: chat.id, projectID: project.id)
+                                dismiss()
+                            } label: {
+                                HStack {
+                                    Image(systemName: "tray.full")
+                                        .foregroundStyle(Theme.textSecondary)
+                                    Text(project.name)
+                                        .foregroundStyle(Theme.textPrimary)
+                                    Spacer()
+                                }
+                            }
+                        }
+                    }
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
+                }
+            }
+            .background(Theme.background)
+            .navigationTitle("Add to project")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        showCreate = true
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                }
+            }
+            .alert("New project", isPresented: $showCreate) {
+                TextField("Name", text: $createdName)
+                Button("Cancel", role: .cancel) {
+                    createdName = ""
+                }
+                Button("Create") {
+                    let name = createdName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let project = history.createProject(name: name.isEmpty ? "New project" : name)
+                    history.addChatToProject(chatID: chat.id, projectID: project.id)
+                    createdName = ""
+                    dismiss()
+                }
+            }
+        }
     }
 }

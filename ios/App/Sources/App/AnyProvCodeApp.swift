@@ -7,7 +7,8 @@ struct AnyProvCodeApp: App {
 
     init() {
         // On-device Metal is registered for **chat only** (not coding sessions).
-        LocalMetalBootstrap.register()
+        // Models are never bundled — users download them in Settings.
+        LocalMetalBootstrap.ensureRegistered()
     }
 
     var body: some Scene {

@@ -5,12 +5,15 @@ import AnyProvCore
 ///   - grouped by provider, each provider gets a section header
 ///   - tapping a model selects it
 ///   - long-pressing (or the chevron) opens a rename sheet for an alias
+///   - local Metal models can be unloaded from RAM without deleting weights
 ///   - Effort lives at the bottom as before
 struct ModelPickerSheet: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
 
     @State private var renameTarget: AIModel?
+    @State private var loadedMetalIDs: Set<String> = []
+    @State private var statusMessage = ""
 
     private var nonEmptyResults: [ModelCatalog.ProviderResult] {
         state.providerResults.filter { !$0.models.isEmpty }
@@ -32,13 +35,28 @@ struct ModelPickerSheet: View {
                         sections
                     }
 
+                    if !statusMessage.isEmpty {
+                        Text(statusMessage)
+                            .font(.footnote)
+                            .foregroundStyle(Theme.textSecondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, 10)
+                    }
+
+                    if !loadedMetalIDs.isEmpty {
+                        unloadAllRow
+                            .padding(.top, 12)
+                    }
+
                     effortRow
                         .padding(.top, 16)
                 }
                 .padding(.horizontal, 20)
             }
             .task {
+                LocalMetalBootstrap.ensureRegistered()
                 if state.allModels.isEmpty { await state.refreshModels() }
+                await refreshLoadedMetal()
             }
         }
         .presentationDetents([.large])
@@ -74,11 +92,16 @@ struct ModelPickerSheet: View {
                         model: model,
                         isSelected: state.selectedModel?.id == model.id,
                         providerDisplayName: providerDisplayName(for: result),
+                        isLoadedInMemory: model.provider == .localMetal
+                            && loadedMetalIDs.contains(model.modelID),
                         onSelect: {
                             state.selectedModel = model
                             dismiss()
                         },
-                        onRename: { renameTarget = model }
+                        onRename: { renameTarget = model },
+                        onUnload: model.provider == .localMetal
+                            ? { Task { await unload(model.modelID) } }
+                            : nil
                     )
                     if idx < result.models.count - 1 {
                         Divider().overlay(Theme.separator)
@@ -89,12 +112,29 @@ struct ModelPickerSheet: View {
         }
     }
 
+    private var unloadAllRow: some View {
+        Button {
+            Task { await unloadAll() }
+        } label: {
+            HStack {
+                Image(systemName: "memorychip")
+                Text("Unload all Metal models from memory")
+                    .font(.system(size: 15, weight: .medium))
+                Spacer()
+            }
+            .foregroundStyle(Theme.accent)
+            .padding(.vertical, 14)
+            .padding(.horizontal, 16)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
+    }
+
     private func providerTitle(for result: ModelCatalog.ProviderResult) -> String {
         state.customProvider(for: result.provider)?.label ?? result.provider.displayName
     }
 
     private func providerDisplayName(for result: ModelCatalog.ProviderResult) -> String {
-        // Subtitle beneath the model name; falls back to provider name.
         let base = state.customProvider(for: result.provider)?.label ?? result.provider.displayName
         return base
     }
@@ -125,7 +165,7 @@ struct ModelPickerSheet: View {
             Text("No models yet")
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(Theme.textPrimary)
-            Text("Add an API key in Settings to load models from your providers.")
+            Text("Add an API key in Settings, or download an on-device Metal model (Settings → On-device).")
                 .font(.system(size: 15))
                 .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)
@@ -160,6 +200,32 @@ struct ModelPickerSheet: View {
             .background(Theme.surface, in: Capsule())
         }
     }
+
+    private func refreshLoadedMetal() async {
+        LocalMetalBootstrap.ensureRegistered()
+        guard let engine = LocalMetalRuntime.engine else {
+            loadedMetalIDs = []
+            return
+        }
+        let ids = await engine.loadedModelIDs()
+        loadedMetalIDs = Set(ids)
+    }
+
+    private func unload(_ modelID: String) async {
+        LocalMetalBootstrap.ensureRegistered()
+        guard let engine = LocalMetalRuntime.engine else { return }
+        await engine.unloadFromMemory(modelID: modelID)
+        await refreshLoadedMetal()
+        statusMessage = "Unloaded from memory (weights stay on disk)."
+    }
+
+    private func unloadAll() async {
+        LocalMetalBootstrap.ensureRegistered()
+        guard let engine = LocalMetalRuntime.engine else { return }
+        await engine.unloadAllFromMemory()
+        await refreshLoadedMetal()
+        statusMessage = "All Metal models unloaded from memory."
+    }
 }
 
 // MARK: - Row
@@ -169,14 +235,20 @@ private struct ModelRow: View {
     let model: AIModel
     let isSelected: Bool
     let providerDisplayName: String
+    var isLoadedInMemory: Bool = false
     var onSelect: () -> Void
     var onRename: () -> Void
+    var onUnload: (() -> Void)?
 
     private var contextSubtitle: String? {
+        var parts: [String] = [providerDisplayName]
         if let ctx = model.contextWindow {
-            return "\(providerDisplayName) · \(ctx / 1000)K context"
+            parts.append("\(ctx / 1000)K context")
         }
-        return providerDisplayName
+        if isLoadedInMemory {
+            parts.append("In memory")
+        }
+        return parts.joined(separator: " · ")
     }
 
     var body: some View {
@@ -189,7 +261,7 @@ private struct ModelRow: View {
                     if let contextSubtitle {
                         Text(contextSubtitle)
                             .font(.system(size: 13))
-                            .foregroundStyle(Theme.textTertiary)
+                            .foregroundStyle(isLoadedInMemory ? Theme.accent : Theme.textTertiary)
                     }
                 }
                 Spacer()
@@ -197,6 +269,20 @@ private struct ModelRow: View {
                     Image(systemName: "checkmark")
                         .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(Theme.selection)
+                }
+                if isLoadedInMemory, let onUnload {
+                    Button {
+                        onUnload()
+                    } label: {
+                        Text("Unload")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Theme.accent)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Theme.accent.opacity(0.12), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Unload \(state.displayName(for: model)) from memory")
                 }
                 Button(action: onRename) {
                     Image(systemName: "pencil")
@@ -212,6 +298,16 @@ private struct ModelRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .contextMenu {
+            if isLoadedInMemory, let onUnload {
+                Button("Unload from memory", systemImage: "memorychip") {
+                    onUnload()
+                }
+            }
+            Button("Rename", systemImage: "pencil") {
+                onRename()
+            }
+        }
     }
 }
 

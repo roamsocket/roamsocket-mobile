@@ -26,6 +26,27 @@ final class ProtocolTests: XCTestCase {
         let obj = try JSONSerialization.jsonObject(with: data) as! [String: Any]
         XCTAssertEqual(obj["type"] as? String, "user_message")
         XCTAssertEqual(obj["text"] as? String, "hello")
+        XCTAssertNil(obj["model"])
+    }
+
+    func testUserMessageEncodingWithModel() throws {
+        let model = ModelSelection(
+            provider: .anthropic,
+            model: "claude-sonnet-4",
+            effort: .high,
+            apiKey: "sk-test"
+        )
+        let data = try JSONEncoder().encode(ClientMessage.userMessage(
+            sessionId: "s1",
+            text: "switch me",
+            model: model
+        ))
+        let obj = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        XCTAssertEqual(obj["type"] as? String, "user_message")
+        let m = obj["model"] as! [String: Any]
+        XCTAssertEqual(m["provider"] as? String, "anthropic")
+        XCTAssertEqual(m["model"] as? String, "claude-sonnet-4")
+        XCTAssertEqual(m["apiKey"] as? String, "sk-test")
     }
 
     func testFileWriteEncoding() throws {

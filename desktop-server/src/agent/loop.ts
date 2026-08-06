@@ -68,6 +68,7 @@ export class AgentSession {
     permissionMode?: PermissionMode;
     environment?: EnvironmentConfig;
   }): void {
+    const previousModel = this.deps.model;
     this.deps = {
       ...this.deps,
       emit: next.emit,
@@ -78,12 +79,21 @@ export class AgentSession {
       environment: next.environment ?? this.deps.environment,
     };
     if (next.model) {
-      this.adapter =
-        this.deps.adapter ??
-        getAgentAdapter(next.model.provider, {
+      // Always rebuild the provider client when the model changes so mid-session
+      // switches (e.g. Anthropic → OpenAI) don't keep the old adapter.
+      // Preserve an explicit test override only when the provider is unchanged.
+      const override = this.deps.adapter;
+      const providerChanged = next.model.provider !== previousModel.provider
+        || next.model.baseUrl !== previousModel.baseUrl
+        || next.model.apiStyle !== previousModel.apiStyle;
+      if (override && !providerChanged) {
+        this.adapter = override;
+      } else {
+        this.adapter = getAgentAdapter(next.model.provider, {
           baseUrl: next.model.baseUrl,
           apiStyle: next.model.apiStyle,
         });
+      }
     }
   }
 

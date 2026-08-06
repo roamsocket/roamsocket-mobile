@@ -137,7 +137,17 @@ final class ChatViewModel: ObservableObject {
             )
             return
         }
-        // Local Metal is chat-only and needs no API key.
+        // Local Metal is chat-only and needs no API key. Ensure MLX engine is bound.
+        if model.provider == .localMetal {
+            LocalMetalBootstrap.ensureRegistered()
+            guard LocalMetalRuntime.isReady else {
+                presentError(
+                    "On-device Metal runtime is not ready. Rebuild the app with MLX packages, then download a model in Settings → On-device (Metal).",
+                    action: .openProviderSettings
+                )
+                return
+            }
+        }
         let key = state.resolvedAPIKey(for: model.provider)
         if model.provider.requiresAPIKey, key.isEmpty {
             presentError(
@@ -178,11 +188,25 @@ final class ChatViewModel: ObservableObject {
         }
 
         do {
+            // Re-read selection immediately before the API call so a mid-conversation
+            // model/effort switch in the picker is always honored (not a stale capture).
+            guard let liveModel = state.selectedModel else {
+                presentError("Select a model in Settings first.", action: .openProviderSettings)
+                return
+            }
+            let liveKey = state.resolvedAPIKey(for: liveModel.provider)
+            if liveModel.provider.requiresAPIKey, liveKey.isEmpty {
+                presentError(
+                    "Add an API key for \(liveModel.provider.displayName) in Settings.",
+                    action: .openProviderSettings
+                )
+                return
+            }
             // Custom providers must hit their configured base URL + API style —
             // never the built-in OpenAI host just because a model was listed.
-            let baseURL = state.baseURL(for: model.provider)
-            let style = state.apiStyle(for: model.provider)
-            if case .custom = model.provider, baseURL == nil {
+            let baseURL = state.baseURL(for: liveModel.provider)
+            let style = state.apiStyle(for: liveModel.provider)
+            if case .custom = liveModel.provider, baseURL == nil {
                 presentError(
                     "Custom provider is missing a base URL. Edit it in Settings.",
                     action: .openProviderSettings
@@ -190,12 +214,12 @@ final class ChatViewModel: ObservableObject {
                 return
             }
             let reply = try await catalog.provider(
-                model.provider,
+                liveModel.provider,
                 customBaseURL: baseURL,
                 style: style
             ).chat(
-                model: model.modelID,
-                apiKey: key,
+                model: liveModel.modelID,
+                apiKey: liveKey,
                 messages: turns,
                 effort: state.effort
             )
@@ -212,9 +236,10 @@ final class ChatViewModel: ObservableObject {
         } catch {
             let msg = (error as? ProviderError)?.errorDescription ?? error.localizedDescription
             presentError(msg)
+            let name = state.selectedModel?.provider.displayName ?? model.provider.displayName
             messages.append(ChatMessage(
                 role: .assistant,
-                content: "I couldn't reach \(model.provider.displayName): \(msg)"
+                content: "I couldn't reach \(name): \(msg)"
             ))
             schedulePersist()
         }
