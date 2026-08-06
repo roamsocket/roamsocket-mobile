@@ -136,6 +136,91 @@ final class ProviderTests: XCTestCase {
         XCTAssertNil(customResult.error)
     }
 
+    func testOpenAICompatibleEncodesVisionImageParts() async throws {
+        final class CapturingHTTP: HTTPClient, @unchecked Sendable {
+            var lastBody: Data?
+            func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+                lastBody = request.httpBody
+                let payload = #"{"choices":[{"message":{"role":"assistant","content":"A red cup."}}]}"#
+                let resp = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: nil
+                )!
+                return (Data(payload.utf8), resp)
+            }
+        }
+        let http = CapturingHTTP()
+        let provider = OpenAICompatibleProvider(id: .openai, http: http)
+        let image = ProviderChatMessage.ImageAttachment(
+            mimeType: "image/jpeg",
+            base64Data: "abc123"
+        )
+        let reply = try await provider.chat(
+            model: "gpt-4o",
+            apiKey: "sk-test",
+            messages: [
+                ProviderChatMessage(role: .user, content: "What is this?", images: [image]),
+            ],
+            effort: nil
+        )
+        XCTAssertEqual(reply, "A red cup.")
+        let body = try XCTUnwrap(http.lastBody)
+        let json = try JSONSerialization.jsonObject(with: body) as! [String: Any]
+        let messages = json["messages"] as! [[String: Any]]
+        let content = messages[0]["content"] as! [[String: Any]]
+        XCTAssertEqual(content.count, 2)
+        XCTAssertEqual(content[0]["type"] as? String, "text")
+        XCTAssertEqual(content[0]["text"] as? String, "What is this?")
+        XCTAssertEqual(content[1]["type"] as? String, "image_url")
+        let imageURL = content[1]["image_url"] as! [String: Any]
+        XCTAssertEqual(imageURL["url"] as? String, "data:image/jpeg;base64,abc123")
+    }
+
+    func testAnthropicEncodesVisionImageBlocks() async throws {
+        final class CapturingHTTP: HTTPClient, @unchecked Sendable {
+            var lastBody: Data?
+            func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+                lastBody = request.httpBody
+                let payload = #"{"content":[{"type":"text","text":"A blue book."}]}"#
+                let resp = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: nil
+                )!
+                return (Data(payload.utf8), resp)
+            }
+        }
+        let http = CapturingHTTP()
+        let provider = AnthropicProvider(http: http)
+        let image = ProviderChatMessage.ImageAttachment(
+            mimeType: "image/png",
+            base64Data: "pngdata"
+        )
+        let reply = try await provider.chat(
+            model: "claude-sonnet-4",
+            apiKey: "sk-ant",
+            messages: [
+                ProviderChatMessage(role: .user, content: "Describe", images: [image]),
+            ],
+            effort: nil
+        )
+        XCTAssertEqual(reply, "A blue book.")
+        let body = try XCTUnwrap(http.lastBody)
+        let json = try JSONSerialization.jsonObject(with: body) as! [String: Any]
+        let messages = json["messages"] as! [[String: Any]]
+        let content = messages[0]["content"] as! [[String: Any]]
+        XCTAssertEqual(content[0]["type"] as? String, "image")
+        let source = content[0]["source"] as! [String: Any]
+        XCTAssertEqual(source["type"] as? String, "base64")
+        XCTAssertEqual(source["media_type"] as? String, "image/png")
+        XCTAssertEqual(source["data"] as? String, "pngdata")
+        XCTAssertEqual(content[1]["type"] as? String, "text")
+        XCTAssertEqual(content[1]["text"] as? String, "Describe")
+    }
+
     func testModelSelectionEncodesBaseUrlAndApiStyle() throws {
         let sel = ModelSelection(
             provider: .custom("ollama"),

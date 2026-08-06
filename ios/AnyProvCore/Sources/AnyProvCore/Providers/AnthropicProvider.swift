@@ -61,7 +61,73 @@ public struct AnthropicProvider: ModelProvider {
         let max_tokens: Int
         let messages: [Message]
         let system: String?
-        struct Message: Encodable { let role: String; let content: String }
+    }
+
+    /// Anthropic message: `content` is either a plain string or multimodal blocks.
+    private struct Message: Encodable {
+        let role: String
+        let content: Content
+
+        enum Content: Encodable {
+            case text(String)
+            case blocks([Block])
+
+            func encode(to encoder: Encoder) throws {
+                switch self {
+                case .text(let value):
+                    var container = encoder.singleValueContainer()
+                    try container.encode(value)
+                case .blocks(let blocks):
+                    var container = encoder.unkeyedContainer()
+                    for block in blocks {
+                        try container.encode(block)
+                    }
+                }
+            }
+        }
+
+        enum Block: Encodable {
+            case text(String)
+            case image(mimeType: String, base64: String)
+
+            private enum CodingKeys: String, CodingKey {
+                case type, text, source
+            }
+
+            private enum SourceKeys: String, CodingKey {
+                case type, media_type, data
+            }
+
+            func encode(to encoder: Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                switch self {
+                case .text(let value):
+                    try container.encode("text", forKey: .type)
+                    try container.encode(value, forKey: .text)
+                case .image(let mimeType, let base64):
+                    try container.encode("image", forKey: .type)
+                    var source = container.nestedContainer(keyedBy: SourceKeys.self, forKey: .source)
+                    try source.encode("base64", forKey: .type)
+                    try source.encode(mimeType, forKey: .media_type)
+                    try source.encode(base64, forKey: .data)
+                }
+            }
+        }
+
+        init(from message: ProviderChatMessage) {
+            role = message.role.rawValue
+            if message.images.isEmpty {
+                content = .text(message.content)
+            } else {
+                var blocks: [Block] = []
+                for image in message.images {
+                    blocks.append(.image(mimeType: image.mimeType, base64: image.base64Data))
+                }
+                let text = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                blocks.append(.text(text.isEmpty ? "Analyze this image." : text))
+                content = .blocks(blocks)
+            }
+        }
     }
 
     private struct MessagesResponse: Decodable {
@@ -77,8 +143,14 @@ public struct AnthropicProvider: ModelProvider {
         // Merge all system turns (e.g. Health snapshot + future skills).
         let systemParts = messages.filter { $0.role == .system }.map(\.content)
         let system = systemParts.isEmpty ? nil : systemParts.joined(separator: "\n\n")
-        let turns = messages.filter { $0.role != .system }.map { Msg(role: $0.role.rawValue, content: $0.content) }
-        let body = MessagesRequest(model: model, max_tokens: 1024, messages: turns, system: system)
+        let turns = messages.filter { $0.role != .system }.map { Message(from: $0) }
+        let hasImages = messages.contains(where: \.hasImages)
+        let body = MessagesRequest(
+            model: model,
+            max_tokens: hasImages ? 2048 : 1024,
+            messages: turns,
+            system: system
+        )
         let req = ProviderHTTP.post(
             baseURL.appendingPathComponent("messages"),
             headers: [
@@ -97,6 +169,4 @@ public struct AnthropicProvider: ModelProvider {
             throw ProviderError.decoding(String(describing: error))
         }
     }
-
-    private typealias Msg = MessagesRequest.Message
 }

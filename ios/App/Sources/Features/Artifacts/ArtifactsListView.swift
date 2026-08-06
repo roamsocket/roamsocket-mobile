@@ -14,19 +14,25 @@ struct ArtifactsListView: View {
             } else {
                 List {
                     ForEach(state.artifactStore.artifacts) { artifact in
-                        NavigationLink {
-                            ArtifactDetailView(artifact: artifact)
-                        } label: {
-                            row(for: artifact)
-                        }
-                        .listRowBackground(Theme.surface)
-                        .swipeActions {
-                            Button(role: .destructive) {
-                                state.artifactStore.delete(artifact.id)
-                            } label: {
-                                Label("Delete", systemImage: "trash")
+                        artifactCard(artifact)
+                            .background {
+                                NavigationLink {
+                                    ArtifactDetailView(artifact: artifact)
+                                } label: {
+                                    EmptyView()
+                                }
+                                .opacity(0)
                             }
-                        }
+                            .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                Button(role: .destructive) {
+                                    state.artifactStore.delete(artifact.id)
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
                     }
                 }
                 .listStyle(.plain)
@@ -70,24 +76,44 @@ struct ArtifactsListView: View {
         .frame(maxHeight: .infinity)
     }
 
-    private func row(for artifact: Artifact) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(artifact.title)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(Theme.textPrimary)
-                .lineLimit(2)
-            HStack(spacing: 8) {
-                Text("\(artifact.lineCount) lines")
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(Theme.textTertiary)
-                Text("·")
-                    .foregroundStyle(Theme.textTertiary)
-                Text(artifact.createdAt, style: .date)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.textTertiary)
+    /// Compact single-line card — title + meta, not a multi-line preview block.
+    private func artifactCard(_ artifact: Artifact) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(artifact.title)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text("\(artifact.lineCount) lines")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(Theme.textTertiary)
+                    Text("·")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textTertiary)
+                    Text(artifact.createdAt, style: .date)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textTertiary)
+                }
+                .lineLimit(1)
             }
+            Spacer(minLength: 8)
+            Image(systemName: "chevron.right")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.textTertiary)
         }
-        .padding(.vertical, 4)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                .fill(Theme.surface)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                .stroke(Theme.separator.opacity(0.55), lineWidth: 1)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
     }
 }
 

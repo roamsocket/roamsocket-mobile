@@ -344,14 +344,29 @@ private struct ModelRow: View {
         return parts.joined(separator: " · ")
     }
 
+    private var supportsVision: Bool {
+        VisionCapability.supportsVision(model)
+    }
+
     var body: some View {
         // Prefer tap gesture over an outer Button so trailing swipe actions
         // (Edit / Delete) aren't stolen by the selection control.
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(state.displayName(for: model))
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(Theme.textPrimary)
+                HStack(spacing: 8) {
+                    Text(state.displayName(for: model))
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(Theme.textPrimary)
+                        .lineLimit(1)
+                    if supportsVision {
+                        Text("Vision")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Color.yellow)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Color.yellow.opacity(0.18), in: Capsule())
+                    }
+                }
                 if let contextSubtitle {
                     Text(contextSubtitle)
                         .font(.system(size: 13))
@@ -383,7 +398,11 @@ private struct ModelRow: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
-        .accessibilityLabel(state.displayName(for: model))
+        .accessibilityLabel(
+            supportsVision
+                ? "\(state.displayName(for: model)), supports vision"
+                : state.displayName(for: model)
+        )
         .accessibilityHint("Select model")
     }
 }

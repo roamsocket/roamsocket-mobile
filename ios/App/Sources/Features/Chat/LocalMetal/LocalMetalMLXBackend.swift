@@ -1,7 +1,9 @@
 import Foundation
+import CoreImage
 import AnyProvCore
 import MLX
 import MLXLLM
+import MLXVLM
 import MLXLMCommon
 import MLXHuggingFace
 import HuggingFace
@@ -51,8 +53,21 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
             )
         }
 
+        let hasImages = messages.contains(where: \.hasImages)
+        let useVLM = hasImages || Self.isLikelyVLM(modelID)
+        if hasImages && !Self.isLikelyVLM(modelID) {
+            throw ProviderError.transport(
+                "This on-device model does not support vision. Download a Vision model (Gemma 4, Qwen2-VL, SmolVLM, …) from Settings → On-device (Metal)."
+            )
+        }
+
         // Lazy fallback if selection preload hasn't finished yet.
-        let container = try await loadContainer(id: modelID, keepInMemory: true, progress: { _ in })
+        let container = try await loadContainer(
+            id: modelID,
+            keepInMemory: true,
+            preferVLM: useVLM,
+            progress: { _ in }
+        )
         let params = generateParameters(effort: effort)
 
         let systemText = messages
@@ -86,6 +101,17 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
         do {
             switch last.role {
             case .user:
+                if last.hasImages {
+                    let images = try Self.userInputImages(from: last.images)
+                    let prompt = last.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let output = try await session.respond(
+                        to: prompt.isEmpty ? "Describe this image." : prompt,
+                        images: images,
+                        videos: [],
+                        audios: []
+                    )
+                    return try nonEmpty(output)
+                }
                 let output = try await session.respond(to: last.content)
                 return try nonEmpty(output)
             case .assistant, .system:
@@ -186,7 +212,12 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
                 "Model “\(modelID)” is not downloaded. Open Settings → Manage models and tap Download."
             )
         }
-        _ = try await loadContainer(id: modelID, keepInMemory: true, progress: progress)
+        _ = try await loadContainer(
+            id: modelID,
+            keepInMemory: true,
+            preferVLM: Self.isLikelyVLM(modelID),
+            progress: progress
+        )
         progress(1)
     }
 
@@ -257,6 +288,7 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
     private func loadContainer(
         id: String,
         keepInMemory: Bool,
+        preferVLM: Bool,
         progress: @escaping @Sendable (Double) -> Void
     ) async throws -> ModelContainer {
         if let cached = await cache.get(id) {
@@ -286,8 +318,18 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
                 }
 
                 // Explicit hub client so weights land in Application Support (deletable).
-                // When weights are already on disk this mainly reports residual hub work;
-                // `downloadModel` owns smooth download progress separately.
+                // VLMs (Gemma 4, Qwen-VL, …) must load via VLMModelFactory.
+                let useVLM = preferVLM || Self.isLikelyVLM(id)
+                if useVLM {
+                    return try await VLMModelFactory.shared.loadContainer(
+                        from: #hubDownloader(hubClient),
+                        using: #huggingFaceTokenizerLoader(),
+                        configuration: configuration,
+                        progressHandler: { p in
+                            report(DownloadProgressBroker.fraction(from: p))
+                        }
+                    )
+                }
                 return try await LLMModelFactory.shared.loadContainer(
                     from: #hubDownloader(hubClient),
                     using: #huggingFaceTokenizerLoader(),
@@ -391,6 +433,47 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
         case .user: return .user(turn.content)
         case .assistant: return .assistant(turn.content)
         case .system: return .system(turn.content)
+        }
+    }
+
+    /// Hub-id heuristic matching VisionCapability / MLXVLM registry families.
+    private static func isLikelyVLM(_ modelID: String) -> Bool {
+        let id = modelID.lowercased()
+        if id.contains("whisper") || id.contains("embed") || id.contains("tts") { return false }
+        if id.contains("gemma-3n") && id.contains("-lm-") { return false }
+        if id.contains("gemma-4") || id.contains("gemma4") { return true }
+        if id.contains("gemma-3-4b") || id.contains("gemma-3-12b") || id.contains("gemma-3-27b") {
+            return true
+        }
+        if id.contains("gemma-3n") { return true }
+        if id.contains("paligemma") || id.contains("smolvlm") || id.contains("fastvlm")
+            || id.contains("paddleocr") || id.contains("moondream") || id.contains("pixtral")
+            || id.contains("kimi-vl") || id.contains("mage-vl")
+        {
+            return true
+        }
+        if id.contains("qwen2-vl") || id.contains("qwen2.5-vl") || id.contains("qwen3-vl")
+            || id.contains("qwen2_vl") || id.contains("qwen2_5_vl") || id.contains("qwen3_vl")
+        {
+            return true
+        }
+        if id.contains("lfm2-vl") || id.contains("lfm2.5-vl") { return true }
+        if id.contains("ministral-3") { return true }
+        if id.contains("vision") || id.contains("vlm") { return true }
+        if id.contains("-vl-") || id.contains("_vl_") || id.hasSuffix("-vl") { return true }
+        return false
+    }
+
+    private static func userInputImages(
+        from attachments: [ProviderChatMessage.ImageAttachment]
+    ) throws -> [UserInput.Image] {
+        try attachments.map { attachment in
+            guard let data = Data(base64Encoded: attachment.base64Data),
+                  let ciImage = CIImage(data: data)
+            else {
+                throw ProviderError.transport("Could not decode the captured photo for on-device vision.")
+            }
+            return .ciImage(ciImage)
         }
     }
 

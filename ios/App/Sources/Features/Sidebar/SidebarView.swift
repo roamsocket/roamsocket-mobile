@@ -3,6 +3,7 @@ import SwiftUI
 /// Identifies which top-level destination the sidebar wants to navigate to.
 enum SidebarDestination: Hashable {
     case chats
+    case vision
     case projects
     case artifacts
     case code
@@ -77,6 +78,9 @@ struct SidebarView: View {
         VStack(spacing: 2) {
             SidebarRow(systemImage: "bubble.left.and.bubble.right", title: "Chats") {
                 onSelect(.chats)
+            }
+            SidebarRow(systemImage: "eye", title: "Vision") {
+                onSelect(.vision)
             }
             SidebarRow(systemImage: "tray.full", title: "Projects") {
                 onSelect(.projects)

@@ -246,9 +246,9 @@ public actor LocalMetalCatalog {
         case "Qwen":
             return "Qwen models from the Qwen team. Strong multilingual chat and instruction following."
         case "Gemma":
-            return "Google Gemma instruct models. Efficient multi-turn chat tuned for mobile-class devices."
+            return "Google Gemma models — including Gemma 4 multimodal (vision + chat) and compact Gemma 3 chat variants for Metal."
         case "LFM":
-            return "Liquid AI LFM models. Built for general-purpose chat and efficient on-device inference."
+            return "Liquid AI LFM models. Text chat and LFM2/LFM2.5 vision-language variants for on-device inference."
         case "Phi":
             return "Microsoft Phi instruct models. Compact reasoning and chat for smaller memory budgets."
         case "Mistral":
@@ -652,6 +652,138 @@ public actor LocalMetalCatalog {
             source: .recommended,
             tags: [.recommended, .new]
         ),
+
+        // MARK: Vision (Apple Silicon / MLX VLMs — phone-friendly first)
+        // Hub ids verified on Hugging Face (mlx-community / lmstudio-community), Aug 2026.
+        // Gemma 4 family: E2B/E4B (edge) + 12B Unified QAT (June 2026 encoder-free multimodal).
+        .init(
+            hubID: "mlx-community/gemma-4-e2b-it-4bit",
+            displayName: "Gemma 4 E2B",
+            approxSize: "~2 GB",
+            blurb: "Google Gemma 4 E2B — natively multimodal (image + text). Best on-device Vision starter.",
+            source: .recommended,
+            tags: [.recommended, .vision, .best, .new]
+        ),
+        .init(
+            hubID: "mlx-community/gemma-4-e4b-it-4bit",
+            displayName: "Gemma 4 E4B",
+            approxSize: "~3 GB",
+            blurb: "Gemma 4 E4B multimodal. Stronger vision + chat; needs more free RAM (15 Pro class+).",
+            source: .recommended,
+            tags: [.recommended, .vision, .new]
+        ),
+        .init(
+            hubID: "mlx-community/gemma-4-12B-it-qat-4bit",
+            displayName: "Gemma 4 12B Unified",
+            approxSize: "~7 GB",
+            blurb: "Gemma 4 12B Unified QAT (June 2026) — encoder-free multimodal. High-end / iPad class RAM only.",
+            source: .recommended,
+            tags: [.vision, .new, .experimental]
+        ),
+        .init(
+            hubID: "mlx-community/Qwen3-VL-2B-Instruct-4bit",
+            displayName: "Qwen3-VL 2B",
+            approxSize: "~1.5 GB",
+            blurb: "Latest Qwen3 vision-language 2B. Fast photo analysis and OCR on phone-class devices.",
+            source: .recommended,
+            tags: [.recommended, .vision, .new]
+        ),
+        .init(
+            hubID: "mlx-community/Qwen3-VL-4B-Instruct-4bit",
+            displayName: "Qwen3-VL 4B",
+            approxSize: "~2.5 GB",
+            blurb: "Qwen3-VL 4B — top phone-class VLM quality when you can spare the RAM.",
+            source: .recommended,
+            tags: [.recommended, .vision, .new]
+        ),
+        .init(
+            hubID: "mlx-community/Qwen2.5-VL-3B-Instruct-4bit",
+            displayName: "Qwen2.5-VL 3B",
+            approxSize: "~2 GB",
+            blurb: "Qwen2.5 vision instruct — strong OCR, documents, and scene understanding.",
+            source: .recommended,
+            tags: [.recommended, .vision]
+        ),
+        .init(
+            hubID: "mlx-community/Qwen2-VL-2B-Instruct-4bit",
+            displayName: "Qwen2-VL 2B",
+            approxSize: "~1.5 GB",
+            blurb: "Compact Qwen2 vision-language model. Lightweight photo analysis.",
+            source: .recommended,
+            tags: [.recommended, .vision]
+        ),
+        .init(
+            hubID: "mlx-community/gemma-3-4b-it-qat-4bit",
+            displayName: "Gemma 3 4B Vision",
+            approxSize: "~2.5 GB",
+            blurb: "Gemma 3 4B multimodal (image + text). Proven all-rounder for Vision mode.",
+            source: .recommended,
+            tags: [.recommended, .vision]
+        ),
+        .init(
+            hubID: "mlx-community/LFM2.5-VL-1.6B-4bit",
+            displayName: "LFM2.5-VL 1.6B",
+            approxSize: "~1.2 GB",
+            blurb: "Liquid AI LFM2.5 vision-language — newer edge VLM for Apple Silicon.",
+            source: .recommended,
+            tags: [.recommended, .vision, .new]
+        ),
+        .init(
+            hubID: "mlx-community/LFM2.5-VL-450M-6bit",
+            displayName: "LFM2.5-VL 450M",
+            approxSize: "~0.5 GB",
+            blurb: "Tiny Liquid AI vision model. Lowest storage among current LFM VLMs.",
+            source: .recommended,
+            tags: [.recommended, .vision, .new]
+        ),
+        .init(
+            hubID: "mlx-community/LFM2-VL-1.6B-4bit",
+            displayName: "LFM2-VL 1.6B",
+            approxSize: "~1.2 GB",
+            blurb: "Liquid AI LFM2 edge vision model (prior gen). Compact multimodal chat.",
+            source: .recommended,
+            tags: [.recommended, .vision]
+        ),
+        .init(
+            hubID: "mlx-community/SmolVLM2-500M-Video-Instruct-mlx",
+            displayName: "SmolVLM2 500M",
+            approxSize: "~0.6 GB",
+            blurb: "Hugging Face SmolVLM2 — tiny image/video instruct VLM for quick on-device analysis.",
+            source: .recommended,
+            tags: [.recommended, .vision, .new]
+        ),
+        .init(
+            hubID: "mlx-community/SmolVLM-256M-Instruct-4bit",
+            displayName: "SmolVLM 256M",
+            approxSize: "~0.3 GB",
+            blurb: "Ultra-small SmolVLM for smoke tests and tight storage.",
+            source: .recommended,
+            tags: [.recommended, .vision, .new]
+        ),
+        .init(
+            hubID: "mlx-community/SmolVLM-Instruct-4bit",
+            displayName: "SmolVLM",
+            approxSize: "~1 GB",
+            blurb: "Original SmolVLM instruct — light footprint for quick photo captions.",
+            source: .recommended,
+            tags: [.recommended, .vision]
+        ),
+        .init(
+            hubID: "mlx-community/FastVLM-0.5B-bf16",
+            displayName: "FastVLM 0.5B",
+            approxSize: "~1 GB",
+            blurb: "Very small fast vision model for smoke tests and low storage.",
+            source: .recommended,
+            tags: [.recommended, .vision]
+        ),
+        .init(
+            hubID: "mlx-community/PaddleOCR-VL-1.5-bf16",
+            displayName: "PaddleOCR-VL 1.5",
+            approxSize: "~1 GB",
+            blurb: "Document-focused VLM (OCR, tables, layout). Great for screenshots and PDFs.",
+            source: .recommended,
+            tags: [.recommended, .vision, .new]
+        ),
     ]
 
     /// Models registered in mlx-swift-lm `LLMRegistry` (architectures supported by this stack).
@@ -674,6 +806,23 @@ public actor LocalMetalCatalog {
         "mlx-community/gemma-3n-E2B-it-lm-4bit",
         "mlx-community/gemma-4-e4b-it-4bit",
         "mlx-community/gemma-4-e2b-it-4bit",
+        "mlx-community/gemma-4-12B-it-qat-4bit",
+        // Vision-language (MLXVLM)
+        "mlx-community/Qwen2-VL-2B-Instruct-4bit",
+        "mlx-community/Qwen2.5-VL-3B-Instruct-4bit",
+        "mlx-community/Qwen3-VL-2B-Instruct-4bit",
+        "mlx-community/Qwen3-VL-4B-Instruct-4bit",
+        "lmstudio-community/Qwen3-VL-4B-Instruct-MLX-4bit",
+        "mlx-community/gemma-3-4b-it-qat-4bit",
+        "mlx-community/SmolVLM-Instruct-4bit",
+        "mlx-community/SmolVLM-256M-Instruct-4bit",
+        "mlx-community/SmolVLM2-500M-Video-Instruct-mlx",
+        "mlx-community/LFM2-VL-1.6B-4bit",
+        "mlx-community/LFM2.5-VL-1.6B-4bit",
+        "mlx-community/LFM2.5-VL-450M-6bit",
+        "mlx-community/LFM2-VL-450M-4bit",
+        "mlx-community/FastVLM-0.5B-bf16",
+        "mlx-community/PaddleOCR-VL-1.5-bf16",
         "mlx-community/Qwen1.5-0.5B-Chat-4bit",
         "mlx-community/Qwen2.5-7B-Instruct-4bit",
         "mlx-community/Qwen2.5-1.5B-Instruct-4bit",
@@ -709,10 +858,20 @@ public actor LocalMetalCatalog {
         "mlx-community/gpt-oss-20b-MXFP4-Q8",
         "mlx-community/AI21-Jamba-Reasoning-3B-4bit",
         "mlx-community/Nemotron-Labs-Diffusion-3B-4bit",
-    ].map { hub in
+    ].map { hub -> LocalMetalCatalogEntry in
         var tags: [LocalMetalCatalogEntry.Tag] = []
         let lower = hub.lowercased()
         if lower.contains("r1") || lower.contains("reason") { tags.append(.thinking) }
+        let isVision =
+            lower.contains("gemma-4") || lower.contains("gemma4")
+            || lower.contains("gemma-3-4b") || lower.contains("gemma-3-12b") || lower.contains("gemma-3-27b")
+            || lower.contains("paligemma") || lower.contains("smolvlm") || lower.contains("fastvlm")
+            || lower.contains("qwen2-vl") || lower.contains("qwen2.5-vl") || lower.contains("qwen3-vl")
+            || lower.contains("lfm2-vl") || lower.contains("lfm2.5-vl")
+            || lower.contains("paddleocr") || lower.contains("moondream") || lower.contains("pixtral")
+            || lower.contains("kimi-vl") || lower.contains("mage-vl")
+            || lower.contains("-vl-") || lower.contains("vision") || lower.contains("vlm")
+        if isVision { tags.append(.vision) }
         if LocalMetalCatalogEntry.matchesLegacyParameterSize(hub) {
             tags.append(.legacy)
         }
@@ -720,7 +879,9 @@ public actor LocalMetalCatalog {
             hubID: hub,
             displayName: prettyName(from: hub),
             approxSize: "",
-            blurb: "Registered for mlx-swift-lm. Larger sizes may be slow or fail on phone RAM.",
+            blurb: isVision
+                ? "Vision-language model (MLXVLM). Download for on-device photo analysis."
+                : "Registered for mlx-swift-lm. Larger sizes may be slow or fail on phone RAM.",
             source: .mlxSwiftRegistry,
             tags: tags
         )

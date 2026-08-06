@@ -5,8 +5,8 @@ import UIKit
 
 /// Root navigation:
 ///  * `ChatView` is the default landing screen.
-///  * A left-edge sidebar lists top-level destinations (Chats, Projects,
-///    Artifacts, Code) plus a Recents list and a settings entry.
+///  * A left-edge sidebar lists top-level destinations (Chats, Vision,
+///    Projects, Artifacts, Code) plus a Recents list and a settings entry.
 ///  * Settings is reachable from the toolbar gear and the sidebar.
 struct RootView: View {
     @EnvironmentObject var state: AppState
@@ -14,6 +14,7 @@ struct RootView: View {
 
     @State private var sidebarOpen: Bool = false
     @State private var showSettings: Bool = false
+    @State private var showVision: Bool = false
     @State private var path: [RootRoute] = []
     /// Bumps when the user picks a recent chat so ChatView reloads messages.
     @State private var chatResumeToken = UUID()
@@ -103,6 +104,10 @@ struct RootView: View {
         .sheet(isPresented: $showSettings) {
             AppSettingsView()
         }
+        .fullScreenCover(isPresented: $showVision) {
+            VisionView()
+                .environmentObject(state)
+        }
         .onChange(of: path) { oldPath, newPath in
             // Returning to the chat root (e.g. system back from Code) — refresh
             // so a discarded blank draft doesn't leave a stale empty shell, and
@@ -173,6 +178,10 @@ struct RootView: View {
             chatResumeToken = UUID()
             path = []
             setSidebarOpen(false)
+        case .vision:
+            history.discardActiveIfBlank()
+            setSidebarOpen(false)
+            showVision = true
         case .projects:
             // Leaving the composer — drop unsent "New chat" rows from Recents.
             history.discardActiveIfBlank()

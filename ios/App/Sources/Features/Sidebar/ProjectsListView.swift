@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Projects list screen, mirroring the second screenshot.
+/// Projects list — compact card rows (iOS 26–style inset surfaces).
 struct ProjectsListView: View {
     @ObservedObject var history: ChatHistoryStore
     @State private var search: String = ""
@@ -11,40 +11,31 @@ struct ProjectsListView: View {
             Theme.background.ignoresSafeArea()
 
             VStack(spacing: 0) {
-                List {
-                    ForEach(filtered) { project in
-                        NavigationLink(value: RootRoute.projectDetail(project)) {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(project.name)
-                                        .font(.system(size: 17, weight: .regular))
-                                        .foregroundStyle(Theme.textPrimary)
-                                    Text(relativeTime(project.updatedAt))
-                                        .font(.system(size: 14))
-                                        .foregroundStyle(Theme.textSecondary)
+                if filtered.isEmpty {
+                    emptyState
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    List {
+                        ForEach(filtered) { project in
+                            projectCard(project)
+                                .background {
+                                    // Invisible link keeps the system disclosure chevron off the card.
+                                    NavigationLink(value: RootRoute.projectDetail(project)) {
+                                        EmptyView()
+                                    }
+                                    .opacity(0)
                                 }
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 14, weight: .regular))
-                                    .foregroundStyle(Theme.textSecondary)
-                            }
-                            .padding(.vertical, 8)
-                            .contentShape(Rectangle())
+                                .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+                                .listRowSeparator(.hidden)
+                                .listRowBackground(Color.clear)
                         }
-                        .listRowBackground(Theme.background)
-                        .listRowSeparatorTint(Theme.separator)
                     }
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
                 }
-                .listStyle(.plain)
-                .scrollContentBackground(.hidden)
-                .padding(.horizontal, 4)
 
                 // Bottom-of-screen stack: Search bar sits below the FAB.
-                // The FAB (New project) is right-aligned and floats above
-                // the search bar, matching the search layout.
                 ZStack(alignment: .top) {
-                    // Background strip so the search bar has a solid
-                    // background under the FAB shadow.
                     Theme.background
                         .ignoresSafeArea(edges: .bottom)
 
@@ -71,6 +62,46 @@ struct ProjectsListView: View {
         return history.projects.filter { $0.name.localizedCaseInsensitiveContains(search) }
     }
 
+    private var emptyState: some View {
+        ContentUnavailableView(
+            "No projects yet",
+            systemImage: "tray",
+            description: Text("Create a project to organize chats.")
+        )
+        .foregroundStyle(Theme.textSecondary)
+    }
+
+    private func projectCard(_ project: ProjectItem) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(project.name)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                    .lineLimit(1)
+                Text(relativeTime(project.updatedAt))
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.textSecondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            Image(systemName: "chevron.right")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.textTertiary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                .fill(Theme.surface)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                .stroke(Theme.separator.opacity(0.55), lineWidth: 1)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
+    }
+
     private var searchBar: some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
@@ -80,7 +111,7 @@ struct ProjectsListView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 22))
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .padding(.horizontal, 16)
     }
 

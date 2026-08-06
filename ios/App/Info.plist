@@ -32,7 +32,7 @@
 		<string>_anyprov-code._tcp</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>Scan the pairing QR code shown on your desktop or terminal.</string>
+	<string>Scan pairing QR codes and capture photos for Vision analysis.</string>
 	<key>NSHealthShareUsageDescription</key>
 	<string>AnyProv Code reads your Apple Health data when you turn on Health in chat, so the assistant can answer questions about steps, sleep, workouts, and other stats you choose to share.</string>
 	<key>NSHealthUpdateUsageDescription</key>

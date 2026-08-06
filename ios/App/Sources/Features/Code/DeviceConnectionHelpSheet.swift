@@ -344,24 +344,32 @@ struct DeviceConnectionHelpSheet: View {
 
     private func labelRow(title: String, systemImage: String, primary: Bool) -> some View {
         HStack(spacing: 10) {
+            if !primary {
+                Image(systemName: systemImage)
+                    .font(.system(size: 15, weight: .semibold))
+            }
             if (busy || state.isReconnecting), primary {
                 ProgressView()
                     .controlSize(.small)
-                    .tint(primary ? Theme.background : Theme.accent)
-            } else {
+                    .tint(Theme.background)
+            } else if primary {
                 Image(systemName: systemImage)
                     .font(.system(size: 15, weight: .semibold))
             }
             Text(title)
                 .font(.system(size: 15, weight: .semibold))
-            Spacer(minLength: 0)
+                .multilineTextAlignment(primary ? .center : .leading)
+            if !primary {
+                Spacer(minLength: 0)
+            }
         }
+        .frame(maxWidth: .infinity, alignment: primary ? .center : .leading)
         .foregroundStyle(primary ? Theme.background : Theme.textPrimary)
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
         .background(
             primary ? Theme.accent : Theme.surfaceElevated,
-            in: RoundedRectangle(cornerRadius: 12)
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
         )
     }
 

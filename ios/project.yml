@@ -40,6 +40,8 @@ targets:
       - package: mlx-swift-lm
         product: MLXLLM
       - package: mlx-swift-lm
+        product: MLXVLM
+      - package: mlx-swift-lm
         product: MLXLMCommon
       - package: mlx-swift-lm
         product: MLXHuggingFace
@@ -77,7 +79,7 @@ targets:
           NSAllowsArbitraryLoads: true
           NSAllowsLocalNetworking: true
         NSLocalNetworkUsageDescription: "Connect to your desktop coding server on the local network."
-        NSCameraUsageDescription: "Scan the pairing QR code shown on your desktop or terminal."
+        NSCameraUsageDescription: "Scan pairing QR codes and capture photos for Vision analysis."
         # Required for NWBrowser to discover `_anyprov-code._tcp` (desktop Bonjour).
         NSBonjourServices:
           - "_anyprov-code._tcp"

@@ -74,12 +74,81 @@ public struct OpenAICompatibleProvider: ModelProvider {
     private struct ChatRequest: Encodable {
         let model: String
         let messages: [Msg]
-        struct Msg: Encodable { let role: String; let content: String }
+    }
+
+    /// OpenAI chat message: `content` is either a plain string or a multimodal
+    /// array of text / image_url parts.
+    private struct Msg: Encodable {
+        let role: String
+        let content: Content
+
+        enum Content: Encodable {
+            case text(String)
+            case parts([Part])
+
+            func encode(to encoder: Encoder) throws {
+                switch self {
+                case .text(let value):
+                    var container = encoder.singleValueContainer()
+                    try container.encode(value)
+                case .parts(let parts):
+                    var container = encoder.unkeyedContainer()
+                    for part in parts {
+                        try container.encode(part)
+                    }
+                }
+            }
+        }
+
+        enum Part: Encodable {
+            case text(String)
+            case imageURL(String)
+
+            private enum CodingKeys: String, CodingKey {
+                case type, text, image_url
+            }
+
+            func encode(to encoder: Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                switch self {
+                case .text(let value):
+                    try container.encode("text", forKey: .type)
+                    try container.encode(value, forKey: .text)
+                case .imageURL(let url):
+                    try container.encode("image_url", forKey: .type)
+                    try container.encode(["url": url], forKey: .image_url)
+                }
+            }
+        }
+
+        init(from message: ProviderChatMessage) {
+            role = message.role.rawValue
+            if message.images.isEmpty {
+                content = .text(message.content)
+            } else {
+                var parts: [Part] = []
+                let text = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !text.isEmpty {
+                    parts.append(.text(text))
+                }
+                for image in message.images {
+                    parts.append(.imageURL(image.dataURL))
+                }
+                // Some hosts require at least one text part when images are present.
+                if parts.allSatisfy({
+                    if case .imageURL = $0 { return true }
+                    return false
+                }) {
+                    parts.insert(.text("Analyze this image."), at: 0)
+                }
+                content = .parts(parts)
+            }
+        }
     }
 
     private struct ChatResponse: Decodable {
         struct Choice: Decodable {
-            struct Msg: Decodable { let role: String; let content: String }
+            struct Msg: Decodable { let role: String; let content: String? }
             let message: Msg
         }
         let choices: [Choice]
@@ -87,7 +156,7 @@ public struct OpenAICompatibleProvider: ModelProvider {
 
     public func chat(model: String, apiKey: String, messages: [ProviderChatMessage], effort: Effort?) async throws -> String {
         guard !apiKey.isEmpty else { throw ProviderError.missingKey }
-        let turns = messages.map { Msg(role: $0.role.rawValue, content: $0.content) }
+        let turns = messages.map { Msg(from: $0) }
         let body = ChatRequest(model: model, messages: turns)
         let req = ProviderHTTP.post(
             baseURL.appendingPathComponent("chat/completions"),
@@ -106,6 +175,4 @@ public struct OpenAICompatibleProvider: ModelProvider {
             throw ProviderError.decoding(String(describing: error))
         }
     }
-
-    private typealias Msg = ChatRequest.Msg
 }
