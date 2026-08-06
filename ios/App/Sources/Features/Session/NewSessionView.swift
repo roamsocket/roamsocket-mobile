@@ -221,7 +221,7 @@ struct NewSessionView: View {
                 Button(action: start) {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(canSubmit ? Theme.background : Theme.textSecondary)
                         .frame(width: 40, height: 40)
                         .background(canSubmit ? Theme.accent : Theme.background, in: Circle())
                 }

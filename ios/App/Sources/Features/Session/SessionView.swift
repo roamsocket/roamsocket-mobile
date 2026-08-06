@@ -231,7 +231,7 @@ struct SessionView: View {
                 Button(action: send) {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(canSend ? Theme.background : Theme.textSecondary)
                         .frame(width: 40, height: 40)
                         .background(canSend ? Theme.accent : Theme.surfaceElevated, in: Circle())
                 }

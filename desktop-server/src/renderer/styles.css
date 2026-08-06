@@ -53,8 +53,8 @@ button { font: inherit; color: inherit; }
 .brand { display: flex; align-items: center; gap: 10px; padding: 6px 6px 12px; }
 .logo {
   width: 32px; height: 32px; border-radius: 8px;
-  background: linear-gradient(135deg, #9ea3ac, #d5d8dd);
-  color: #1d1f22; font-weight: 700;
+  background: linear-gradient(135deg, #6aa9ff, #8bb8ff);
+  color: #0b0d10; font-weight: 700;
   display: grid; place-items: center; font-size: 13px;
 }
 .brand-title { font-weight: 600; font-size: 13px; }

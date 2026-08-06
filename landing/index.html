@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Code Mobile AI — Claude-style mobile coding with your own Anthropic, OpenAI, or Ollama-compatible keys." />
+  <title>Code Mobile AI — Your keys. Your models. Your phone.</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="noise" aria-hidden="true"></div>
+  <div class="glow-orb glow-orb--a" aria-hidden="true"></div>
+  <div class="glow-orb glow-orb--b" aria-hidden="true"></div>
+
+  <header class="site-header">
+    <a class="brand" href="#">
+      <span class="brand-mark" aria-hidden="true">CM</span>
+      <span class="brand-name">Code Mobile AI</span>
+    </a>
+    <nav class="site-nav" aria-label="Primary">
+      <a href="#providers">Providers</a>
+      <a href="#flow">How it works</a>
+      <a href="#features">Features</a>
+    </nav>
+    <a class="btn btn--ghost btn--sm" href="#get">Get the app</a>
+  </header>
+
+  <main>
+    <!-- Hero thesis: BYOK coding agent in your pocket, shown as a CSS 3D depth scene -->
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">
+          <span class="eyebrow-dot" aria-hidden="true"></span>
+          Open source · BYOK · Local desktop agent
+        </p>
+        <h1>
+          Claude-class coding
+          <span class="hero-line">on your phone.</span>
+          <span class="hero-line hero-line--accent">Your API keys.</span>
+        </h1>
+        <p class="lede">
+          A native iOS client for Anthropic, OpenAI, Ollama, and any compatible endpoint.
+          Pair with the desktop companion to clone repos, run tools, stream diffs, and open pull requests.
+        </p>
+        <div class="hero-actions">
+          <a class="btn btn--primary" href="#get">Download for iOS</a>
+          <a class="btn btn--ghost" href="#flow">See the setup</a>
+        </div>
+        <ul class="trust-row" aria-label="Compatible providers">
+          <li>Anthropic</li>
+          <li>OpenAI</li>
+          <li>Ollama</li>
+          <li>Groq</li>
+          <li>OpenRouter</li>
+          <li>xAI</li>
+        </ul>
+      </div>
+
+      <div class="hero-stage" id="hero-stage" aria-hidden="true">
+        <div class="stage-scene" id="stage-scene">
+          <!-- Floating 3D tool cards -->
+          <div class="float-card float-card--tool" data-depth="1.4">
+            <div class="float-card-label">tool · bash</div>
+            <code>git status --short</code>
+            <div class="float-card-meta">streaming…</div>
+          </div>
+          <div class="float-card float-card--diff" data-depth="1.1">
+            <div class="float-card-label">diff</div>
+            <pre><span class="add">+ export async function</span>
+<span class="add">+   pairWithServer()</span>
+<span class="del">- // TODO wire keys</span></pre>
+          </div>
+          <div class="float-card float-card--key" data-depth="0.9">
+            <div class="float-card-label">endpoint</div>
+            <code>http://localhost:11434/v1</code>
+            <div class="float-card-meta">Ollama · keychain</div>
+          </div>
+
+          <!-- Phone device -->
+          <div class="phone" data-depth="1">
+            <div class="phone-bezel">
+              <div class="phone-notch"></div>
+              <div class="phone-screen">
+                <div class="phone-status">
+                  <span>9:41</span>
+                  <span class="phone-status-right">5G</span>
+                </div>
+                <div class="phone-suggestions">
+                  <div class="phone-eyebrow">Suggestions</div>
+                  <div class="sugg">Create or update my <em>CLAUDE.md</em></div>
+                  <div class="sugg">Search for a <em>TODO</em> and fix it</div>
+                  <div class="sugg">Recommend areas to improve tests</div>
+                </div>
+                <div class="phone-composer">
+                  <div class="repo-chip">
+                    <span class="repo-dot"></span>
+                    kind365/code-mobile-ai
+                  </div>
+                  <div class="composer-field">Describe a task…</div>
+                  <div class="composer-row">
+                    <span class="pill">claude-sonnet</span>
+                    <span class="pill">accept edits</span>
+                    <span class="send" aria-hidden="true">↑</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section providers" id="providers">
+      <div class="section-head">
+        <h2>Bring your own keys &amp; endpoints</h2>
+        <p>Chat hits each provider’s <code>/v1</code> API from the device. No proxy. No hosted model bill from us.</p>
+      </div>
+      <div class="provider-grid">
+        <article class="provider-card">
+          <h3>Anthropic</h3>
+          <code>api.anthropic.com/v1</code>
+          <p>Messages + streaming tool-use for the coding agent.</p>
+        </article>
+        <article class="provider-card">
+          <h3>OpenAI</h3>
+          <code>api.openai.com/v1</code>
+          <p>Chat completions and models list with your org key.</p>
+        </article>
+        <article class="provider-card">
+          <h3>Ollama &amp; compat</h3>
+          <code>localhost:11434/v1</code>
+          <p>Point at any OpenAI-compatible base URL — local or remote.</p>
+        </article>
+        <article class="provider-card">
+          <h3>Also supported</h3>
+          <code>Groq · OpenRouter · xAI · Mistral</code>
+          <p>Refresh models from Settings. Keys stay in the Keychain.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section flow" id="flow">
+      <div class="section-head">
+        <h2>From pair to pull request</h2>
+        <p>Order matters here — this is the real path from a cold install to a merged branch.</p>
+      </div>
+      <ol class="flow-steps">
+        <li class="flow-step">
+          <span class="flow-num" aria-hidden="true">1</span>
+          <div>
+            <h3>Add a provider key</h3>
+            <p>Paste an Anthropic, OpenAI, or custom base URL + key. Tap refresh to load models.</p>
+          </div>
+        </li>
+        <li class="flow-step">
+          <span class="flow-num" aria-hidden="true">2</span>
+          <div>
+            <h3>Pair the desktop server</h3>
+            <p>Run the companion on your Mac. Enter the address and six-digit code — or scan the QR.</p>
+          </div>
+        </li>
+        <li class="flow-step">
+          <span class="flow-num" aria-hidden="true">3</span>
+          <div>
+            <h3>Pick a repo and describe the task</h3>
+            <p>The agent clones, runs bash and file tools, and streams tool cards and diffs to the phone.</p>
+          </div>
+        </li>
+        <li class="flow-step">
+          <span class="flow-num" aria-hidden="true">4</span>
+          <div>
+            <h3>Open the pull request</h3>
+            <p>Review the session, then create the PR from the same thread when you’re ready.</p>
+          </div>
+        </li>
+      </ol>
+    </section>
+
+    <section class="section features" id="features">
+      <div class="section-head">
+        <h2>Built like the desktop you already trust</h2>
+        <p>Same cool blue-grey shell as the Electron companion — dark, quiet, focused on the work.</p>
+      </div>
+      <div class="feature-grid">
+        <article class="feature-card feature-card--wide">
+          <h3>Native SwiftUI client</h3>
+          <p>Composer, model picker, environment &amp; repo chips, coding session with tool cards and diffs — not a WebView wrapper.</p>
+        </article>
+        <article class="feature-card">
+          <h3>Desktop agent</h3>
+          <p>WebSocket pairing, git clone, bash, file edits, PR open. Your machine does the heavy lifting.</p>
+        </article>
+        <article class="feature-card">
+          <h3>Keychain storage</h3>
+          <p>Provider keys and tokens never write to disk on the server. Session-scoped handoff only.</p>
+        </article>
+        <article class="feature-card">
+          <h3>Open protocol</h3>
+          <p>App ↔ server messages are documented. Fork it, extend tools, or point at your own stack.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section cta" id="get">
+      <div class="cta-panel">
+        <div class="cta-copy">
+          <h2>Ship from the couch.</h2>
+          <p>Clone the repo, run the desktop server, drop in a key, and pair your phone.</p>
+          <div class="hero-actions">
+            <a class="btn btn--primary" href="https://github.com/kind365/code-mobile-ai">View on GitHub</a>
+            <a class="btn btn--ghost" href="../desktop-server/README.md">Server quick start</a>
+          </div>
+        </div>
+        <pre class="cta-terminal" aria-label="Quick start commands"><span class="t-mute"># desktop companion</span>
+<span class="t-cmd">cd</span> desktop-server
+<span class="t-cmd">npm</span> install && <span class="t-cmd">npm</span> start
+<span class="t-mute"># prints pairing code + QR</span>
+
+<span class="t-mute"># iOS</span>
+<span class="t-cmd">cd</span> ios && xcodegen generate
+<span class="t-cmd">open</span> CodeMobileAI.xcodeproj</pre>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="brand brand--footer">
+      <span class="brand-mark" aria-hidden="true">CM</span>
+      <span class="brand-name">Code Mobile AI</span>
+    </div>
+    <p>MIT licensed. Compatible with Anthropic, OpenAI, Ollama, and OpenAI-compatible APIs.</p>
+  </footer>
+
+  <script src="main.js"></script>
+</body>
+</html>
