@@ -89,6 +89,7 @@ export class SessionManager {
       signal: abort.signal,
       adapter: this.adapterOverride,
       skills: mergedSkills,
+      environment: msg.environment,
       requestPermission: (requestId, tool, summary) =>
         new Promise<"allow" | "deny">((resolve) => {
           pendingPermissions.set(requestId, resolve);

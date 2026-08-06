@@ -9,7 +9,7 @@
  *   - plan:       mutating tools are described but not executed
  */
 import { randomUUID } from "node:crypto";
-import type { ModelSelection, PermissionMode, ServerMessage } from "../protocol.js";
+import type { ModelSelection, PermissionMode, ServerMessage, EnvironmentConfig } from "../protocol.js";
 import { TOOLS, MUTATING_TOOLS } from "../tools/index.js";
 import { diffFiles } from "../git/github.js";
 import { getAgentAdapter, type NormalizedMessage, type ProviderAdapter } from "../providers/index.js";
@@ -34,6 +34,8 @@ export interface AgentDeps {
   adapter?: ProviderAdapter;
   /** Skill content strings to inject into the system prompt. */
   skills?: string[];
+  /** Optional environment config — drives the bash network policy. */
+  environment?: EnvironmentConfig;
 }
 
 export class AgentSession {
@@ -113,6 +115,16 @@ export class AgentSession {
         let result = { ok: false, output: `Unknown tool: ${call.name}` };
         if (tool) {
           const gated = MUTATING_TOOLS.has(call.name);
+          const baseCtx = {
+            workdir: this.deps.workdir,
+            onOutput: (chunk: string) => emit({ type: "assistant_delta", sessionId, text: chunk }),
+            network: this.deps.environment
+              ? {
+                  access: this.deps.environment.networkAccess,
+                  allowedDomains: this.deps.environment.allowedDomains ?? [],
+                }
+              : undefined,
+          };
           if (gated && this.deps.permissionMode === "plan") {
             result = { ok: true, output: "[plan mode] change described but not executed." };
           } else if (gated && this.deps.permissionMode === "ask") {
@@ -121,16 +133,10 @@ export class AgentSession {
             if (decision === "deny") {
               result = { ok: false, output: "Denied by user." };
             } else {
-              result = await tool.execute(call.input, {
-                workdir: this.deps.workdir,
-                onOutput: (chunk) => emit({ type: "assistant_delta", sessionId, text: chunk }),
-              });
+              result = await tool.execute(call.input, baseCtx);
             }
           } else {
-            result = await tool.execute(call.input, {
-              workdir: this.deps.workdir,
-              onOutput: (chunk) => emit({ type: "assistant_delta", sessionId, text: chunk }),
-            });
+            result = await tool.execute(call.input, baseCtx);
           }
         }
 
