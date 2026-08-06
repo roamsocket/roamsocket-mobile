@@ -1,23 +1,24 @@
 import SwiftUI
 
-/// Dark theme tokens matching the Claude Code mobile screenshots.
+/// Dark theme tokens shared with the Electron desktop client.
+/// Cool blueish-grey surfaces with a soft blue accent (`#6aa9ff`).
 enum Theme {
-    // Backgrounds
-    static let background = Color(hex: 0x0D0D0D)
-    static let surface = Color(hex: 0x1A1A1A)
-    static let surfaceElevated = Color(hex: 0x242424)
-    static let field = Color(hex: 0x1E1E1E)
+    // Backgrounds — match desktop --bg / --bg-elev / --bg-elev-2
+    static let background = Color(hex: 0x0B0D10)
+    static let surface = Color(hex: 0x14181D)
+    static let surfaceElevated = Color(hex: 0x1B2026)
+    static let field = Color(hex: 0x0E1216)
 
-    // Text
-    static let textPrimary = Color(hex: 0xF5F5F4)
-    static let textSecondary = Color(hex: 0x9A9A97)
-    static let textTertiary = Color(hex: 0x6B6B68)
+    // Text — match desktop --text / --text-dim / --text-mute
+    static let textPrimary = Color(hex: 0xE8ECF1)
+    static let textSecondary = Color(hex: 0x9AA3AD)
+    static let textTertiary = Color(hex: 0x6B727B)
 
     // Accents
-    static let accent = Color(hex: 0xC96442)        // orange send button / highlights
-    static let selection = Color(hex: 0x3B82F6)     // blue checkmark
-    static let separator = Color(hex: 0x2A2A2A)
-    static let codeToken = Color(hex: 0xD98E5B)
+    static let accent = Color(hex: 0x6AA9FF)        // primary actions / send
+    static let selection = Color(hex: 0x6AA9FF)     // selected checkmark
+    static let separator = Color(hex: 0x262C34)
+    static let codeToken = Color(hex: 0x8BB8FF)
 
     // Radii
     static let pillRadius: CGFloat = 22
