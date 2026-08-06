@@ -85,4 +85,68 @@ final class ProviderTests: XCTestCase {
         XCTAssertTrue(openai.models.isEmpty)
         XCTAssertNotNil(openai.error)
     }
+
+    func testCustomProviderIDDoesNotCollapseToOpenAI() throws {
+        let id = ProviderID.custom("ollama")
+        XCTAssertEqual(id.rawValue, "custom:ollama")
+        XCTAssertNotEqual(id, .openai)
+        XCTAssertEqual(id.customSlug, "ollama")
+
+        let data = try JSONEncoder().encode(id)
+        let decoded = try JSONDecoder().decode(ProviderID.self, from: data)
+        XCTAssertEqual(decoded, .custom("ollama"))
+        XCTAssertNotEqual(decoded, .openai)
+    }
+
+    func testCustomOpenAICompatibleListsAgainstBaseURL() async throws {
+        let http = MockHTTPClient(routes: [(
+            match: "127.0.0.1:11434/v1/models",
+            status: 200,
+            body: json(#"{"data":[{"id":"llama3.2"}]}"#)
+        )])
+        let custom = ProviderID.custom("ollama")
+        let base = URL(string: "http://127.0.0.1:11434/v1")!
+        let models = try await OpenAICompatibleProvider(
+            id: custom,
+            http: http,
+            baseURL: base
+        ).listModels(apiKey: "local")
+        XCTAssertEqual(models.count, 1)
+        XCTAssertEqual(models[0].provider, custom)
+        XCTAssertEqual(models[0].modelID, "llama3.2")
+    }
+
+    func testCatalogRoutesCustomToBaseURLNotOpenAI() async {
+        let http = MockHTTPClient(routes: [
+            (match: "127.0.0.1:9999/v1/models", status: 200, body: json(#"{"data":[{"id":"proxy-model"}]}"#)),
+            (match: "api.openai.com", status: 500, body: json("should-not-hit")),
+        ])
+        let custom = ProviderID.custom("my-proxy")
+        let results = await ModelCatalog(http: http).fetchAll(
+            keys: [custom: "sk-proxy"],
+            customBaseURLs: [custom: URL(string: "http://127.0.0.1:9999/v1")!],
+            styles: [custom: .openAI]
+        )
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(results[0].provider, custom)
+        XCTAssertEqual(results[0].models.map(\.modelID), ["proxy-model"])
+        XCTAssertNil(results[0].error)
+    }
+
+    func testModelSelectionEncodesBaseUrlAndApiStyle() throws {
+        let sel = ModelSelection(
+            provider: .custom("ollama"),
+            model: "llama3.2",
+            effort: .medium,
+            apiKey: "local",
+            baseURL: "http://127.0.0.1:11434/v1",
+            apiStyle: .openAI
+        )
+        let data = try JSONEncoder().encode(sel)
+        let obj = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        XCTAssertEqual(obj["provider"] as? String, "custom:ollama")
+        XCTAssertEqual(obj["baseUrl"] as? String, "http://127.0.0.1:11434/v1")
+        XCTAssertEqual(obj["apiStyle"] as? String, "openai")
+        XCTAssertEqual(obj["model"] as? String, "llama3.2")
+    }
 }

@@ -10,8 +10,11 @@
  */
 import { z } from "zod";
 
-/** Provider identifiers understood by both the app and the server. */
-export const ProviderId = z.enum([
+/**
+ * Provider identifiers understood by both the app and the server.
+ * Built-ins are fixed strings; user-defined endpoints use `custom:<slug>`.
+ */
+export const BuiltInProviderId = z.enum([
   "anthropic",
   "openai",
   "google",
@@ -20,7 +23,15 @@ export const ProviderId = z.enum([
   "xai",
   "mistral",
 ]);
+export type BuiltInProviderId = z.infer<typeof BuiltInProviderId>;
+
+/** Any provider id, including `custom:…` for user-defined endpoints. */
+export const ProviderId = z.string().min(1);
 export type ProviderId = z.infer<typeof ProviderId>;
+
+/** HTTP shape for chat/completions vs Anthropic messages. */
+export const ApiStyle = z.enum(["openai", "anthropic"]);
+export type ApiStyle = z.infer<typeof ApiStyle>;
 
 /** Permission mode, mirroring the composer's permission pill. */
 export const PermissionMode = z.enum(["acceptEdits", "plan", "ask"]);
@@ -70,6 +81,13 @@ export const ModelSelection = z.object({
   effort: z.enum(["low", "medium", "high"]).default("high"),
   /** Provider API key the server uses for this session's agent calls. */
   apiKey: z.string(),
+  /**
+   * Optional base URL for custom / proxy endpoints (e.g. `http://localhost:11434/v1`).
+   * When set, the agent hits this host instead of the built-in provider default.
+   */
+  baseUrl: z.string().optional(),
+  /** API shape when using `baseUrl` (or a `custom:` provider). Defaults to openai. */
+  apiStyle: ApiStyle.optional(),
 });
 export type ModelSelection = z.infer<typeof ModelSelection>;
 

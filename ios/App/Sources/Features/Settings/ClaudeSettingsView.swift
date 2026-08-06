@@ -16,6 +16,10 @@ struct ClaudeSettingsView: View {
     @State private var showMCP = false
     @State private var showAbout = false
     @State private var showProviderKeys = false
+    @State private var syncInFlight = false
+    @State private var syncMessage: String?
+    @State private var syncError: String?
+    @State private var pendingPullSnapshot: AppSettingsSnapshot?
 
     /// Optional entry focus. `.providers` jumps straight into the API-key
     /// providers screen as soon as the settings sheet finishes presenting,
@@ -42,8 +46,9 @@ struct ClaudeSettingsView: View {
                 ScrollView {
                     VStack(spacing: 16) {
                         accountSection
+                        chatSection
                         codingSection
-                        syncSection
+                        settingsBackupSection
                         skillsSection
                         mcpSection
                     }
@@ -186,6 +191,168 @@ struct ClaudeSettingsView: View {
     private var serverStatus: String {
         if let name = state.serverName, !name.isEmpty { return "Paired · \(name)" }
         return "Not paired"
+    }
+
+    // MARK: - Chat (thinking display)
+
+    private var chatSection: some View {
+        settingsCard(header: "Chat") {
+            ToggleRow(
+                systemImage: "brain.head.profile",
+                title: "Always expand thinking",
+                subtitle: "Show reasoning blocks expanded instead of collapsed.",
+                iconColor: Theme.accent,
+                isOn: $state.alwaysExpandThinking
+            )
+        }
+    }
+
+    // MARK: - Settings backup
+
+    /// GitHub-backed settings sync. The app auto-creates
+    /// `code-mobile-ai-settings` under the user's account on the first push.
+    private var settingsBackupSection: some View {
+        settingsCard(header: "Settings backup") {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(settingsBackupBlurb)
+                    .font(.footnote)
+                    .foregroundStyle(Theme.textSecondary)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 4)
+
+                Button(action: pushSettings) {
+                    HStack(spacing: 10) {
+                        if syncInFlight {
+                            ProgressView().tint(.white)
+                        } else {
+                            Image(systemName: "arrow.up.doc.on.clipboard")
+                        }
+                        Text(syncButtonTitle)
+                            .font(.system(size: 15, weight: .semibold))
+                    }
+                    .foregroundStyle(.black)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Theme.textPrimary, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(syncInFlight)
+                .padding(.horizontal, 16)
+
+                if let syncMessage {
+                    Text(syncMessage)
+                        .font(.footnote)
+                        .foregroundStyle(Theme.textSecondary)
+                        .padding(.horizontal, 16)
+                }
+                if let syncError {
+                    Text(syncError)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                        .padding(.horizontal, 16)
+                }
+
+                Divider().background(Theme.separator)
+                Button {
+                    pullSettings()
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "arrow.down.doc")
+                        Text("Restore from GitHub")
+                            .font(.system(size: 15, weight: .medium))
+                    }
+                    .foregroundStyle(Theme.textPrimary)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                }
+                .buttonStyle(.plain)
+                .disabled(syncInFlight)
+            }
+            .padding(.vertical, 12)
+        }
+        .alert(
+            "Apply settings from GitHub?",
+            isPresented: Binding(
+                get: { pendingPullSnapshot != nil },
+                set: { if !$0 { pendingPullSnapshot = nil } }
+            ),
+            presenting: pendingPullSnapshot
+        ) { _ in
+            Button("Apply", role: .destructive) {
+                if let snap = pendingPullSnapshot {
+                    state.applySnapshot(snap)
+                    syncMessage = "Restored from GitHub."
+                    pendingPullSnapshot = nil
+                }
+            }
+            Button("Cancel", role: .cancel) { pendingPullSnapshot = nil }
+        } message: { snap in
+            Text("GitHub snapshot has \(snap.environments.count) environment(s), \(snap.customProviders.count) custom provider(s), and \(snap.modelAliases.count) model alias(es).")
+        }
+    }
+
+    private var settingsBackupBlurb: String {
+        if let repo = state.settingsSyncRepoFullName {
+            return "Settings are stored in \(repo). Add a new device and restore from GitHub to get the same environments, custom providers, and model aliases."
+        }
+        return "We'll create a private \(SettingsSync.repoName) repo in your account and push your settings there."
+    }
+
+    private var syncButtonTitle: String {
+        state.settingsSyncRepoFullName == nil ? "Sync to GitHub" : "Push settings"
+    }
+
+    private func pushSettings() {
+        guard let token = state.githubToken, !token.isEmpty else {
+            syncError = "Link GitHub first."
+            return
+        }
+        syncInFlight = true
+        syncError = nil
+        syncMessage = nil
+        Task {
+            do {
+                let repo = try await state.settingsSync.ensureRepo(token: token)
+                state.settingsSyncRepoFullName = repo.fullName
+                let snapshot = state.snapshotForSync()
+                try await state.settingsSync.push(
+                    snapshot: snapshot,
+                    token: token,
+                    repoFullName: repo.fullName
+                )
+                syncMessage = "Pushed to \(repo.fullName)."
+            } catch {
+                syncError = error.localizedDescription
+            }
+            syncInFlight = false
+        }
+    }
+
+    private func pullSettings() {
+        guard let token = state.githubToken, !token.isEmpty else {
+            syncError = "Link GitHub first."
+            return
+        }
+        syncInFlight = true
+        syncError = nil
+        syncMessage = nil
+        Task {
+            do {
+                let repo = try await state.settingsSync.ensureRepo(token: token)
+                state.settingsSyncRepoFullName = repo.fullName
+                if let snap = try await state.settingsSync.pull(
+                    token: token,
+                    repoFullName: repo.fullName
+                ) {
+                    pendingPullSnapshot = snap
+                } else {
+                    syncMessage = "No settings.json found in \(repo.fullName) yet."
+                }
+            } catch {
+                syncError = error.localizedDescription
+            }
+            syncInFlight = false
+        }
     }
 
     // MARK: - Skills
@@ -367,7 +534,7 @@ private struct ProviderKeysView: View {
                 } header: {
                     Text("Custom providers")
                 } footer: {
-                    Text("Custom providers use the OpenAI-compatible /v1/chat/completions or Anthropic /v1/messages endpoint. The base URL must include the version segment (e.g. https://api.example.com/v1).")
+                    Text("Add Ollama, LiteLLM, OpenRouter proxies, or any OpenAI-compatible / Anthropic-compatible host. Pick the endpoint type, set the base URL (include /v1), and store this provider’s own API key — do not put it under OpenAI.")
                 }
 
                 Section {
@@ -407,40 +574,41 @@ private struct AddCustomProviderView: View {
     @State private var label: String = ""
     @State private var baseURL: String = ""
     @State private var apiKey: String = ""
-    @State private var style: Style = .openAI
+    @State private var style: CustomProviderStyle = .openAI
     @State private var error: String?
-
-    enum Style: String, CaseIterable, Identifiable {
-        case openAI = "OpenAI-compatible"
-        case anthropic = "Anthropic"
-        var id: String { rawValue }
-    }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("Display name") {
-                    TextField("My proxy", text: $label)
+                    TextField("My proxy / Ollama", text: $label)
                         .textInputAutocapitalization(.words)
                 }
                 Section {
-                    Picker("API style", selection: $style) {
-                        ForEach(Style.allCases) { Text($0.rawValue).tag($0) }
+                    Picker("Endpoint type", selection: $style) {
+                        ForEach(CustomProviderStyle.allCases) { s in
+                            Text(s.displayName).tag(s)
+                        }
                     }
-                    TextField("https://api.example.com/v1", text: $baseURL)
+                    TextField(style == .openAI
+                             ? "http://localhost:11434/v1"
+                             : "https://api.example.com/v1",
+                             text: $baseURL)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
                 } header: {
                     Text("Endpoint")
                 } footer: {
-                    Text(style == .openAI
-                         ? "Uses POST {base}/chat/completions with the OpenAI request shape."
-                         : "Uses POST {base}/messages with the Anthropic request shape.")
+                    Text(style.detail + "\nBase URL must include the version segment (e.g. …/v1), not the full /chat/completions or /messages path.")
                 }
-                Section("API key") {
-                    SecureField("sk-…", text: $apiKey)
+                Section {
+                    SecureField(style == .anthropic ? "sk-ant-…" : "sk-… / ollama (optional)", text: $apiKey)
                         .textInputAutocapitalization(.never)
+                } header: {
+                    Text("API key for this provider")
+                } footer: {
+                    Text("Stored under this custom provider only — not the built-in OpenAI field.")
                 }
                 if let error {
                     Section {
@@ -468,16 +636,17 @@ private struct AddCustomProviderView: View {
     }
 
     private func save() {
-        // The current `addCustomProvider` always registers as an
-        // OpenAI-compatible provider. We honor the user's style pick by
-        // adjusting the base URL the provider stores so the underlying
-        // client dispatches correctly.
-        let url = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        let provider = state.addCustomProvider(label: label, baseURL: url, apiKey: apiKey)
+        let provider = state.addCustomProvider(
+            label: label,
+            baseURL: baseURL,
+            apiKey: apiKey,
+            style: style
+        )
         if provider == nil {
             error = "Couldn't save. Check the base URL and try a unique label."
             return
         }
+        Task { await state.refreshModels() }
         dismiss()
     }
 }
@@ -485,14 +654,159 @@ private struct AddCustomProviderView: View {
 private struct CustomProviderRow: View {
     @EnvironmentObject var state: AppState
     let provider: CustomProvider
+    @State private var showEdit = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(provider.label)
-            Text(provider.baseURL)
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(Theme.textTertiary)
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                showEdit = true
+            } label: {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(provider.label)
+                            .foregroundStyle(Theme.textPrimary)
+                        Text(provider.style.displayName)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.textSecondary)
+                        Text(provider.baseURL)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(Theme.textTertiary)
+                            .lineLimit(1)
+                    }
+                    Spacer()
+                    Text(state.apiKey(for: provider.providerID).isEmpty ? "No key" : "••••••")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.textSecondary)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.textTertiary)
+                }
+            }
+            .sheet(isPresented: $showEdit) {
+                EditCustomProviderView(provider: provider)
+            }
+
+            CustomProviderModelsSection(provider: provider)
         }
+    }
+}
+
+/// Inline list of the models the app already discovered for this custom
+/// provider, plus a Refresh button. Empty when the catalog hasn't run yet.
+private struct CustomProviderModelsSection: View {
+    @EnvironmentObject var state: AppState
+    let provider: CustomProvider
+
+    private var models: [AIModel] {
+        state.providerResults
+            .first(where: { $0.provider == provider.providerID })?
+            .models ?? []
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Models")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.textTertiary)
+                Spacer()
+                Button {
+                    Task { await state.refreshModels() }
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.textSecondary)
+                }
+                .buttonStyle(.plain)
+            }
+
+            if models.isEmpty {
+                Text("No models loaded yet. Tap refresh.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.textTertiary)
+            } else {
+                ForEach(models) { model in
+                    Text("• " + state.displayName(for: model))
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundStyle(Theme.textSecondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+        .padding(.top, 8)
+        .padding(.leading, 16)
+        .padding(.bottom, 12)
+    }
+}
+
+/// Edit base URL, endpoint type, and API key for an existing custom provider.
+private struct EditCustomProviderView: View {
+    @EnvironmentObject var state: AppState
+    @Environment(\.dismiss) private var dismiss
+    let provider: CustomProvider
+
+    @State private var label: String = ""
+    @State private var baseURL: String = ""
+    @State private var apiKey: String = ""
+    @State private var style: CustomProviderStyle = .openAI
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Display name") {
+                    TextField("Label", text: $label)
+                }
+                Section {
+                    Picker("Endpoint type", selection: $style) {
+                        ForEach(CustomProviderStyle.allCases) { s in
+                            Text(s.displayName).tag(s)
+                        }
+                    }
+                    TextField("Base URL", text: $baseURL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                } header: {
+                    Text("Endpoint")
+                } footer: {
+                    Text(style.detail)
+                }
+                Section("API key") {
+                    SecureField("API key", text: $apiKey)
+                        .textInputAutocapitalization(.never)
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(Theme.background)
+            .navigationTitle("Edit provider")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        state.updateCustomProvider(
+                            provider,
+                            label: label,
+                            baseURL: baseURL,
+                            style: style,
+                            apiKey: apiKey
+                        )
+                        Task { await state.refreshModels() }
+                        dismiss()
+                    }
+                    .disabled(label.isEmpty || baseURL.isEmpty)
+                }
+            }
+            .onAppear {
+                label = provider.label
+                baseURL = provider.baseURL
+                style = provider.style
+                apiKey = state.apiKey(for: provider.providerID)
+            }
+        }
+        .preferredColorScheme(.dark)
     }
 }
 

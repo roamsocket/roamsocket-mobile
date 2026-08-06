@@ -1,7 +1,8 @@
 import Foundation
 
-/// OpenAI-compatible provider used by OpenAI, Groq, OpenRouter, xAI, and
-/// Mistral. All expose `GET {base}/models` with `Authorization: Bearer`.
+/// OpenAI-compatible provider used by OpenAI, Groq, OpenRouter, xAI, Mistral,
+/// and user-defined custom endpoints. All expose `GET {base}/models` with
+/// `Authorization: Bearer` and `POST {base}/chat/completions`.
 public struct OpenAICompatibleProvider: ModelProvider {
     public let id: ProviderID
     private let http: HTTPClient
@@ -10,18 +11,32 @@ public struct OpenAICompatibleProvider: ModelProvider {
     public init(id: ProviderID, http: HTTPClient = URLSessionHTTPClient(), baseURL: URL? = nil) {
         self.id = id
         self.http = http
-        self.baseURL = baseURL ?? Self.baseURL(for: id)
+        if let baseURL {
+            self.baseURL = Self.normalized(baseURL)
+        } else if let builtIn = Self.defaultBaseURL(for: id) {
+            self.baseURL = builtIn
+        } else {
+            // Custom providers must pass baseURL; this is a last-resort guard.
+            self.baseURL = URL(string: "http://invalid.invalid")!
+        }
     }
 
-    static func baseURL(for id: ProviderID) -> URL {
+    static func defaultBaseURL(for id: ProviderID) -> URL? {
         switch id {
-        case .openai: return URL(string: "https://api.openai.com/v1")!
-        case .groq: return URL(string: "https://api.groq.com/openai/v1")!
-        case .openrouter: return URL(string: "https://openrouter.ai/api/v1")!
-        case .xai: return URL(string: "https://api.x.ai/v1")!
-        case .mistral: return URL(string: "https://api.mistral.ai/v1")!
-        default: return URL(string: "https://api.openai.com/v1")!
+        case .openai: return URL(string: "https://api.openai.com/v1")
+        case .groq: return URL(string: "https://api.groq.com/openai/v1")
+        case .openrouter: return URL(string: "https://openrouter.ai/api/v1")
+        case .xai: return URL(string: "https://api.x.ai/v1")
+        case .mistral: return URL(string: "https://api.mistral.ai/v1")
+        case .anthropic, .google, .custom:
+            return nil
         }
+    }
+
+    static func normalized(_ url: URL) -> URL {
+        var s = url.absoluteString
+        while s.hasSuffix("/") { s.removeLast() }
+        return URL(string: s) ?? url
     }
 
     private struct ModelList: Decodable {

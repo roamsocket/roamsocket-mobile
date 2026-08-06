@@ -154,7 +154,7 @@ enum SessionLauncher {
         }
         if state.selectedModel == nil {
             missing.append("Pick a model.")
-        } else if state.apiKey(for: state.selectedModel!.provider).isEmpty {
+        } else if state.resolvedAPIKey(for: state.selectedModel!.provider).isEmpty {
             missing.append("Add an API key for \(state.selectedModel!.provider.displayName).")
         }
         return missing
@@ -196,6 +196,11 @@ struct CodeHomeView: View {
     @State private var showModelPicker = false
     @State private var showNewSession = false
     @State private var pushSessionConfig: SessionConfig?
+
+    /// Opens the root sidebar drawer. Wired from `RootView` so Code can open
+    /// the same destinations as Chat even though this screen hides the
+    /// system navigation bar.
+    var onOpenSidebar: () -> Void = {}
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
@@ -241,7 +246,17 @@ struct CodeHomeView: View {
     // MARK: - Header
 
     private var header: some View {
-        HStack {
+        HStack(spacing: 12) {
+            Button(action: onOpenSidebar) {
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(Theme.textPrimary)
+                    .frame(width: 44, height: 44)
+                    .background(Theme.surfaceElevated, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open sidebar")
+
             Text("Code")
                 .font(.system(size: 22, weight: .semibold))
                 .foregroundStyle(Theme.textPrimary)

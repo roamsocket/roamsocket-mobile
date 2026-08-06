@@ -1,14 +1,26 @@
 import Foundation
 
-/// Anthropic provider: `GET https://api.anthropic.com/v1/models`.
+/// Anthropic Messages provider: `GET {base}/models`, `POST {base}/messages`.
+/// Also used for user-defined Anthropic-compatible endpoints.
 public struct AnthropicProvider: ModelProvider {
-    public let id: ProviderID = .anthropic
+    public let id: ProviderID
     private let http: HTTPClient
     private let baseURL: URL
 
-    public init(http: HTTPClient = URLSessionHTTPClient(), baseURL: URL? = nil) {
+    public init(
+        id: ProviderID = .anthropic,
+        http: HTTPClient = URLSessionHTTPClient(),
+        baseURL: URL? = nil
+    ) {
+        self.id = id
         self.http = http
-        self.baseURL = baseURL ?? URL(string: "https://api.anthropic.com/v1")!
+        if let baseURL {
+            var s = baseURL.absoluteString
+            while s.hasSuffix("/") { s.removeLast() }
+            self.baseURL = URL(string: s) ?? baseURL
+        } else {
+            self.baseURL = URL(string: "https://api.anthropic.com/v1")!
+        }
     }
 
     private struct ModelList: Decodable {
@@ -34,7 +46,7 @@ public struct AnthropicProvider: ModelProvider {
             let list = try JSONDecoder().decode(ModelList.self, from: data)
             return list.data.map {
                 AIModel(
-                    provider: .anthropic,
+                    provider: id,
                     modelID: $0.id,
                     displayName: $0.display_name ?? $0.id
                 )

@@ -31,6 +31,9 @@ CODE   iOS app ──WebSocket──▶ desktop server ──▶ git clone / bas
 | `ios/project.yml` | XcodeGen spec that generates the Xcode project |
 | `desktop-server` | Node + TypeScript server: pairing, tools, git, agent loop |
 | `docs/protocol.md` | The app ↔ server wire protocol |
+| `landing/` | Static marketing landing page |
+| `AGENTS.md` | Instructions for AI coding agents (architecture, commands, invariants) |
+| `CLAUDE.md` | Claude Code–oriented workflow (hooks, verification defaults) |
 
 ## Quick start
 

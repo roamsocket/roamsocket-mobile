@@ -6,31 +6,30 @@ public struct ModelCatalog: Sendable {
 
     public init(http: HTTPClient = URLSessionHTTPClient()) { self.http = http }
 
-    /// Build the client for a provider. For custom providers, pass
-    /// `customBaseURL` so the provider knows where to send requests.
-    public func provider(_ id: ProviderID, customBaseURL: URL? = nil) -> ModelProvider {
+    /// Build the client for a provider.
+    /// - Parameters:
+    ///   - customBaseURL: Required for `.custom` providers; optional override for built-ins.
+    ///   - style: API shape for custom (or overridden) endpoints. Defaults to OpenAI-compatible.
+    public func provider(
+        _ id: ProviderID,
+        customBaseURL: URL? = nil,
+        style: CustomProviderStyle? = nil
+    ) -> ModelProvider {
         switch id {
         case .anthropic:
-            return AnthropicProvider(http: http, baseURL: customBaseURL)
+            return AnthropicProvider(id: id, http: http, baseURL: customBaseURL)
         case .google:
             return GoogleProvider(http: http, baseURL: customBaseURL)
         case .openai, .groq, .openrouter, .xai, .mistral:
             return OpenAICompatibleProvider(id: id, http: http, baseURL: customBaseURL)
-        default:
-            // Custom providers (rawValue starts with "custom:") use the
-            // OpenAI-compatible wire by default. Anthropic-style custom
-            // providers (detected via /v1/messages path) go through
-            // AnthropicProvider.
-            if let url = customBaseURL,
-               let style = detectStyle(url: url) {
-                switch style {
-                case .anthropic:
-                    return AnthropicProvider(http: http, baseURL: url)
-                case .openAI:
-                    return OpenAICompatibleProvider(id: id, http: http, baseURL: url)
-                }
+        case .custom:
+            let resolvedStyle = style ?? .openAI
+            switch resolvedStyle {
+            case .anthropic:
+                return AnthropicProvider(id: id, http: http, baseURL: customBaseURL)
+            case .openAI:
+                return OpenAICompatibleProvider(id: id, http: http, baseURL: customBaseURL)
             }
-            return OpenAICompatibleProvider(id: id, http: http, baseURL: customBaseURL)
         }
     }
 
@@ -43,25 +42,34 @@ public struct ModelCatalog: Sendable {
     }
 
     /// Fetch models from all providers that have a non-empty key, concurrently.
-    /// Never throws: failures are captured per-provider so one bad key doesn't
-    /// hide the others.
     public func fetchAll(keys: [ProviderID: String]) async -> [ProviderResult] {
-        return await fetchAll(keys: keys, customBaseURLs: [:])
+        await fetchAll(keys: keys, customBaseURLs: [:], styles: [:])
     }
 
-    /// Fetch models, threading through a per-provider custom base URL (used
-    /// for user-defined OpenAI-compatible and Anthropic-style endpoints).
+    /// Fetch models with optional per-provider base URLs and API styles.
     public func fetchAll(
         keys: [ProviderID: String],
-        customBaseURLs: [ProviderID: URL]
+        customBaseURLs: [ProviderID: URL],
+        styles: [ProviderID: CustomProviderStyle] = [:]
     ) async -> [ProviderResult] {
         let configured = keys.filter { !$0.value.isEmpty }
         return await withTaskGroup(of: ProviderResult.self) { group in
             for (id, key) in configured {
                 let baseURL = customBaseURLs[id]
+                let style = styles[id]
                 group.addTask {
                     do {
-                        let models = try await self.provider(id, customBaseURL: baseURL).listModels(apiKey: key)
+                        // Custom providers without a base URL cannot list models.
+                        if case .custom = id, baseURL == nil {
+                            throw ProviderError.transport(
+                                "Custom provider is missing a base URL. Edit it in Settings."
+                            )
+                        }
+                        let models = try await self.provider(
+                            id,
+                            customBaseURL: baseURL,
+                            style: style
+                        ).listModels(apiKey: key)
                         return ModelCatalog.ProviderResult(provider: id, models: models, error: nil)
                     } catch {
                         let message = (error as? ProviderError)?.errorDescription
@@ -74,12 +82,5 @@ public struct ModelCatalog: Sendable {
             for await r in group { results.append(r) }
             return results.sorted { $0.provider.rawValue < $1.provider.rawValue }
         }
-    }
-
-    private enum Style { case openAI, anthropic }
-    private func detectStyle(url: URL) -> Style? {
-        if url.path.contains("/v1/messages") { return .anthropic }
-        if url.path.contains("/v1/chat/completions") { return .openAI }
-        return nil
     }
 }

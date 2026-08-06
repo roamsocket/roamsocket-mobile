@@ -10,6 +10,22 @@ public struct GitHubRepo: Codable, Hashable, Sendable, Identifiable {
     public let pushedAt: Date?
 
     public var id: String { fullName }
+
+    public init(
+        fullName: String,
+        name: String,
+        owner: String,
+        isPrivate: Bool,
+        defaultBranch: String,
+        pushedAt: Date?
+    ) {
+        self.fullName = fullName
+        self.name = name
+        self.owner = owner
+        self.isPrivate = isPrivate
+        self.defaultBranch = defaultBranch
+        self.pushedAt = pushedAt
+    }
 }
 
 /// The pending state of a Device Flow authorization.
@@ -184,6 +200,160 @@ public struct GitHubClient: Sendable {
         } catch {
             throw GitHubError.decoding(String(describing: error))
         }
+    }
+
+    // MARK: User
+
+    /// Authenticated user lookup. Used so the iOS app can name the settings
+    /// repo `code-mobile-ai-settings` under the right owner.
+    public struct AuthenticatedUser: Codable, Sendable, Equatable {
+        public let login: String
+        public init(login: String) { self.login = login }
+    }
+
+    public func currentUser(token: String) async throws -> AuthenticatedUser {
+        var req = URLRequest(url: URL(string: "https://api.github.com/user")!)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        req.setValue("code-mobile-ai", forHTTPHeaderField: "User-Agent")
+        let (data, response) = try await http.data(for: req)
+        try expectOK(data, response)
+        struct Raw: Decodable { let login: String }
+        do {
+            let raw = try JSONDecoder().decode(Raw.self, from: data)
+            return AuthenticatedUser(login: raw.login)
+        } catch {
+            throw GitHubError.decoding(String(describing: error))
+        }
+    }
+
+    // MARK: Repo management (for settings sync)
+
+    /// Create a new private repo under the authenticated user. Returns the
+    /// resulting `full_name` (owner/name). Requires a token with `repo` scope.
+    public func createRepo(
+        token: String,
+        name: String,
+        description: String? = nil,
+        isPrivate: Bool = true,
+        autoInit: Bool = true
+    ) async throws -> GitHubRepo {
+        var req = URLRequest(url: URL(string: "https://api.github.com/user/repos")!)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        req.setValue("code-mobile-ai", forHTTPHeaderField: "User-Agent")
+        let body: [String: Any] = [
+            "name": name,
+            "description": description ?? "",
+            "private": isPrivate,
+            "auto_init": autoInit,
+        ]
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let (data, response) = try await http.data(for: req)
+        try expectOK(data, response)
+
+        struct Raw: Decodable {
+            struct Owner: Decodable { let login: String }
+            let name: String
+            let full_name: String
+            let `private`: Bool
+            let default_branch: String
+            let owner: Owner
+        }
+        do {
+            let raw = try JSONDecoder().decode(Raw.self, from: data)
+            return GitHubRepo(
+                fullName: raw.full_name,
+                name: raw.name,
+                owner: raw.owner.login,
+                isPrivate: raw.private,
+                defaultBranch: raw.default_branch,
+                pushedAt: nil
+            )
+        } catch {
+            throw GitHubError.decoding(String(describing: error))
+        }
+    }
+
+    /// True when a repo is reachable with this token. Used to auto-detect
+    /// whether `code-mobile-ai-settings` already exists.
+    public func repoExists(token: String, fullName: String) async throws -> Bool {
+        var req = URLRequest(url: URL(string: "https://api.github.com/repos/\(fullName)")!)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        req.setValue("code-mobile-ai", forHTTPHeaderField: "User-Agent")
+        let (_, response) = try await http.data(for: req)
+        switch response.statusCode {
+        case 200..<300: return true
+        case 404: return false
+        default: return false
+        }
+    }
+
+    public struct RepoFile: Codable, Sendable, Equatable {
+        public let path: String
+        public let sha: String
+        public let content: String  // base64
+        public init(path: String, sha: String, content: String) {
+            self.path = path; self.sha = sha; self.content = content
+        }
+    }
+
+    /// Fetch a single file from a repo. Returns nil if the file doesn't exist.
+    public func getFile(
+        token: String,
+        fullName: String,
+        path: String,
+        ref: String? = nil
+    ) async throws -> RepoFile? {
+        var components = URLComponents(string: "https://api.github.com/repos/\(fullName)/contents/\(path)")!
+        if let ref { components.queryItems = [URLQueryItem(name: "ref", value: ref)] }
+        var req = URLRequest(url: components.url!)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        req.setValue("code-mobile-ai", forHTTPHeaderField: "User-Agent")
+        let (data, response) = try await http.data(for: req)
+        if response.statusCode == 404 { return nil }
+        try expectOK(data, response)
+        struct Raw: Decodable { let sha: String; let content: String }
+        do {
+            let raw = try JSONDecoder().decode(Raw.self, from: data)
+            return RepoFile(path: path, sha: raw.sha, content: raw.content)
+        } catch {
+            throw GitHubError.decoding(String(describing: error))
+        }
+    }
+
+    /// Create or update a file in the repo. Pass the previous `sha` when
+    /// updating an existing file; pass nil for the first commit.
+    public func putFile(
+        token: String,
+        fullName: String,
+        path: String,
+        message: String,
+        content: String,
+        sha: String? = nil,
+        branch: String? = nil
+    ) async throws {
+        var components = URLComponents(string: "https://api.github.com/repos/\(fullName)/contents/\(path)")!
+        if let branch { components.queryItems = [URLQueryItem(name: "branch", value: branch)] }
+        var req = URLRequest(url: components.url!)
+        req.httpMethod = "PUT"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        req.setValue("code-mobile-ai", forHTTPHeaderField: "User-Agent")
+        var body: [String: Any] = [
+            "message": message,
+            "content": Data(content.utf8).base64EncodedString(),
+        ]
+        if let sha { body["sha"] = sha }
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let (data, response) = try await http.data(for: req)
+        try expectOK(data, response)
     }
 
     // MARK: Helpers
