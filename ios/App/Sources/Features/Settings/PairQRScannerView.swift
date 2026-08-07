@@ -77,7 +77,7 @@ struct PairQRScannerView: View {
             dismiss()
             return
         }
-        errorMessage = "Not a pairing QR. Expected a code from the AnyProv Code desktop."
+        errorMessage = "Not a pairing QR. Expected a code from the CodeSocket desktop."
     }
 
     /// Accepts JSON payload or URL-style `anyprov://pair?host=…&code=…`.
@@ -172,7 +172,7 @@ final class ScannerViewController: UIViewController, AVCaptureMetadataOutputObje
                 }
             }
         default:
-            onError?("Camera access denied. Enable it in Settings for AnyProv Code.")
+            onError?("Camera access denied. Enable it in Settings for CodeSocket.")
         }
     }
 

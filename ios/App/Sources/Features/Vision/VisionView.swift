@@ -246,7 +246,7 @@ private struct VisionModelPickerSheet: View {
                 ContentUnavailableView(
                     "No vision models",
                     systemImage: "eye.slash",
-                    description: Text("Download an on-device Vision model (Settings → On-device), or add an API key for OpenAI, Anthropic, OpenRouter, or xAI.")
+                    description: Text("Download an on-device Vision model (Settings → On-device), add an API key for OpenAI / Anthropic / OpenRouter / xAI, or mark a custom provider as Supports vision.")
                 )
                 .foregroundStyle(Theme.textSecondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

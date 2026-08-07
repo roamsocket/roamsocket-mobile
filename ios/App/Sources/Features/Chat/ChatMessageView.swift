@@ -9,6 +9,8 @@ struct ChatMessageView: View {
     var onShare: () -> Void
     var onDelete: () -> Void
     var onRegenerate: () -> Void
+    /// Highlight when this message is the source of the open artifact panel.
+    var isArtifactSource: Bool = false
 
     @State private var showCopiedToast = false
 
@@ -24,6 +26,19 @@ struct ChatMessageView: View {
                 messageActions
             }
         }
+        .padding(isArtifactSource ? 10 : 0)
+        .background(
+            isArtifactSource
+                ? RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Theme.accent.opacity(0.08))
+                : nil
+        )
+        .overlay(
+            isArtifactSource
+                ? RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Theme.accent.opacity(0.45), lineWidth: 1)
+                : nil
+        )
     }
 
     // MARK: - User Message
@@ -115,24 +130,21 @@ struct ChatMessageView: View {
                 MarkdownContentView(text: resolved.content, fontSize: 17)
             }
 
-            // Show dots only while waiting on the model after tools finish
-            // (or when there are no tool lines yet).
+            // Animated typing dots while waiting on the model after tools
+            // finish (or when there are no tool lines yet). Skip when the
+            // thinking row already shows its "Thinking..." placeholder.
             if message.isStreaming, resolved.content.isEmpty {
                 let toolsBusy = message.toolCalls?.contains {
                     if case .running = $0.status { return true }
                     if case .pending = $0.status { return true }
                     return false
                 } ?? false
-                if !toolsBusy {
-                    HStack(spacing: 4) {
-                        ForEach(0..<3) { i in
-                            Circle()
-                                .fill(Theme.textSecondary)
-                                .frame(width: 6, height: 6)
-                                .opacity(0.3 + Double(i) * 0.3)
-                        }
-                    }
-                    .padding(.top, 4)
+                let thinkingPlaceholder = resolved.text.map {
+                    $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                } ?? false
+                if !toolsBusy, !thinkingPlaceholder {
+                    TypingDotsView()
+                        .padding(.top, 4)
                 }
             }
         }

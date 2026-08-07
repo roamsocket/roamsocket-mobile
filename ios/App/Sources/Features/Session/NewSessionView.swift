@@ -84,7 +84,7 @@ struct NewSessionView: View {
             NavigationStack { ServerPairingView() }
         }
         .sheet(isPresented: $showModelPicker) {
-            ModelPickerSheet()
+            ModelPickerSheet(codingOnly: true)
         }
         .sheet(isPresented: $showPermissionPicker) {
             PermissionModeSheet(selection: $state.permissionMode)
@@ -225,19 +225,11 @@ struct NewSessionView: View {
                 .padding(.vertical, 4)
 
             HStack(spacing: 8) {
-                Button(action: {}) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(Theme.textPrimary)
-                        .frame(width: 38, height: 38)
-                        .background(Theme.background, in: Circle())
-                }
-                .buttonStyle(.plain)
-
                 ModelSelectorPill(
                     modelDisplayName: modelPillTitle,
                     onPick: { showModelPicker = true },
-                    onAddModel: { showProviderSettings = true }
+                    onAddModel: { showProviderSettings = true },
+                    requiresCodingAgent: true
                 )
 
                 Button(action: { showPermissionPicker = true }) {
@@ -277,7 +269,10 @@ struct NewSessionView: View {
     }
 
     private var modelPillTitle: String {
-        guard let model = state.selectedModel else { return "" }
+        // Coding runs on the desktop; ignore phone-only chat models here.
+        guard let model = state.selectedModel, state.modelSelectionForSession() != nil else {
+            return ""
+        }
         let name = state.displayName(for: model)
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         for effort in Effort.allCases.reversed() {

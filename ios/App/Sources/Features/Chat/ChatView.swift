@@ -5,7 +5,7 @@ import AnyProvCore
 ///  * On a fresh / empty chat, shows a centered time-based greeting with a
 ///    lightbulb icon.
 ///  * Otherwise renders a vertically scrolling message list.
-///  * The bottom composer holds a `+` button, a model pill, a mic, and a
+///  * The bottom composer holds a `+` button, a model pill, and a
 ///    gradient send button.
 struct ChatView: View {
     @StateObject private var viewModel = ChatViewModel()
@@ -51,7 +51,7 @@ struct ChatView: View {
                     } else if isEffectivelyEmpty {
                         emptyHome
                     } else {
-                        messageList
+                        chatBodyWithOptionalArtifact
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -331,7 +331,42 @@ struct ChatView: View {
         }
     }
 
-    // MARK: - Message list
+    // MARK: - Message list + optional artifact split
+
+    /// Chat transcript, optionally beside an open artifact panel (Claude-style).
+    @ViewBuilder
+    private var chatBodyWithOptionalArtifact: some View {
+        if let artifact = state.openArtifact {
+            GeometryReader { geo in
+                let wide = geo.size.width >= 700
+                if wide {
+                    HStack(spacing: 0) {
+                        messageList
+                            .frame(maxWidth: .infinity)
+                        Divider().overlay(Theme.separator)
+                        ArtifactDetailView(artifact: artifact) {
+                            state.dismissOpenArtifact()
+                        }
+                        .frame(width: min(420, geo.size.width * 0.48))
+                    }
+                } else {
+                    // Phone: stack transcript under a sheet-like top panel, or show
+                    // transcript with floating artifact full-height below a handle.
+                    ZStack(alignment: .trailing) {
+                        messageList
+                        ArtifactDetailView(artifact: artifact) {
+                            state.dismissOpenArtifact()
+                        }
+                        .frame(maxWidth: .infinity)
+                        .background(Theme.background)
+                        .transition(.move(edge: .trailing))
+                    }
+                }
+            }
+        } else {
+            messageList
+        }
+    }
 
     private var messageList: some View {
         ScrollViewReader { proxy in
@@ -343,26 +378,60 @@ struct ChatView: View {
                             onCopy: { viewModel.copyMessage(message) },
                             onShare: { viewModel.shareMessage(message) },
                             onDelete: { viewModel.deleteMessage(message) },
-                            onRegenerate: { Task { await viewModel.regenerateResponse(for: message) } }
+                            onRegenerate: { Task { await viewModel.regenerateResponse(for: message) } },
+                            isArtifactSource: isArtifactSource(message)
                         )
                         .id(message.id)
-                    }
-
-                    if viewModel.isProcessing {
-                        ProcessingIndicator()
                     }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
             }
             .onChange(of: viewModel.messages.count) { _ in
+                // Prefer explicit artifact scroll target over following the stream tail.
+                if let target = state.scrollToMessageId {
+                    withAnimation(.easeOut(duration: 0.35)) {
+                        proxy.scrollTo(target, anchor: .center)
+                    }
+                    DispatchQueue.main.async {
+                        state.scrollToMessageId = nil
+                    }
+                    return
+                }
                 if let lastMessage = viewModel.messages.last {
                     withAnimation(.easeOut(duration: 0.3)) {
                         proxy.scrollTo(lastMessage.id, anchor: .bottom)
                     }
                 }
             }
+            .onChange(of: state.scrollToMessageId) { _, target in
+                guard let target else { return }
+                withAnimation(.easeOut(duration: 0.35)) {
+                    proxy.scrollTo(target, anchor: .center)
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    if state.scrollToMessageId == target {
+                        state.scrollToMessageId = nil
+                    }
+                }
+            }
+            .onAppear {
+                if let target = state.scrollToMessageId {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                        withAnimation(.easeOut(duration: 0.35)) {
+                            proxy.scrollTo(target, anchor: .center)
+                        }
+                        state.scrollToMessageId = nil
+                    }
+                }
+            }
         }
+    }
+
+    private func isArtifactSource(_ message: ChatMessage) -> Bool {
+        guard let art = state.openArtifact else { return false }
+        if let mid = art.messageId { return message.id == mid }
+        return message.role == .assistant && message.content == art.content
     }
 
     // MARK: - Composer
@@ -405,7 +474,7 @@ struct ChatView: View {
             }
 
             // Top: text field on its own row — full width, room to breathe.
-            TextField("Message AnyProv Code", text: $viewModel.inputText, axis: .vertical)
+            TextField("Message CodeSocket", text: $viewModel.inputText, axis: .vertical)
                 .lineLimit(1...4)
                 .font(.system(size: 16))
                 .foregroundStyle(Theme.textPrimary)
@@ -413,7 +482,7 @@ struct ChatView: View {
                 .frame(minHeight: 24, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
 
-            // Bottom: controls row — +, model pill, mic, send.
+            // Bottom: controls row — +, model pill, send.
             HStack(alignment: .center, spacing: 8) {
                 // Plus: opens the AddToChat sheet
                 Button(action: { viewModel.showAddToChatSheet = true }) {
@@ -434,29 +503,17 @@ struct ChatView: View {
 
                 Spacer(minLength: 0)
 
-                // Mic
-                Button(action: {}) {
-                    Image(systemName: "mic")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(Theme.textPrimary)
-                        .frame(width: 36, height: 36)
-                }
-                .buttonStyle(.plain)
-
-                // Send button: when there's text, show an up arrow; when empty, show the
-                // voice waveform. Tapping either does the appropriate action — text goes
-                // through `sendTapped` (which routes to a coding session when the user
-                // has paired a server + selected a repo + model); the mic is a no-op
-                // placeholder for now (voice input is a separate feature).
+                // Send — only enabled when there is real input (no decorative mic / waveform).
                 Button(action: sendTapped) {
-                    Image(systemName: hasText ? "arrow.up" : "waveform")
+                    Image(systemName: "arrow.up")
                         .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(hasText ? Color.white : Theme.textSecondary)
                         .frame(width: 36, height: 36)
                         .background(sendBackground, in: Circle())
                 }
                 .buttonStyle(.plain)
                 .disabled(!hasText || viewModel.isLoadingChat || viewModel.isProcessing)
+                .accessibilityLabel("Send")
             }
         }
         .padding(.horizontal, 12)
@@ -599,23 +656,6 @@ struct ChatView: View {
         } else {
             Task { await viewModel.sendMessage() }
         }
-    }
-}
-
-/// Processing indicator shown while AI is generating.
-struct ProcessingIndicator: View {
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "clock")
-                .font(.system(size: 16))
-                .foregroundStyle(Theme.textSecondary)
-            Text("Thinking...")
-                .font(.system(size: 15))
-                .foregroundStyle(Theme.textSecondary)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

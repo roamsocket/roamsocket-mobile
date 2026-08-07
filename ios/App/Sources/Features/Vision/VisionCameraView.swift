@@ -116,7 +116,7 @@ final class VisionCameraController: UIViewController, AVCapturePhotoCaptureDeleg
                 }
             }
         case .denied, .restricted:
-            onError?("Camera access denied. Enable it in Settings for AnyProv Code.")
+            onError?("Camera access denied. Enable it in Settings for CodeSocket.")
         @unknown default:
             onError?("Camera is unavailable.")
         }

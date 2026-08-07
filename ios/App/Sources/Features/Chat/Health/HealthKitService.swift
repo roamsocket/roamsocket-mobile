@@ -309,22 +309,16 @@ final class HealthKitService: ObservableObject {
             let calendar = Calendar.current
             var byNight: [Date: TimeInterval] = [:]
             for sample in samples {
-                // Prefer asleep stages; include inBed only as fallback.
+                // Prefer asleep stages (iOS 16+ split of the old `.asleep` value).
+                // inBed is handled only as a fallback when no asleep stages exist.
                 let value = sample.value
-                let isAsleep: Bool
-                if #available(iOS 16.0, *) {
-                    let asleepValues: Set<Int> = [
-                        HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue,
-                        HKCategoryValueSleepAnalysis.asleepCore.rawValue,
-                        HKCategoryValueSleepAnalysis.asleepDeep.rawValue,
-                        HKCategoryValueSleepAnalysis.asleepREM.rawValue,
-                    ]
-                    isAsleep = asleepValues.contains(value)
-                        || value == HKCategoryValueSleepAnalysis.asleep.rawValue
-                } else {
-                    isAsleep = value == HKCategoryValueSleepAnalysis.asleep.rawValue
-                }
-                guard isAsleep else { continue }
+                let asleepValues: Set<Int> = [
+                    HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue,
+                    HKCategoryValueSleepAnalysis.asleepCore.rawValue,
+                    HKCategoryValueSleepAnalysis.asleepDeep.rawValue,
+                    HKCategoryValueSleepAnalysis.asleepREM.rawValue,
+                ]
+                guard asleepValues.contains(value) else { continue }
                 let night = calendar.startOfDay(for: sample.endDate)
                 byNight[night, default: 0] += sample.endDate.timeIntervalSince(sample.startDate)
             }

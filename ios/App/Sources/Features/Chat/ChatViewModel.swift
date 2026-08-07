@@ -250,6 +250,16 @@ final class ChatViewModel: ObservableObject {
         // (system field) and OpenAI-compatible hosts both see them. Fresh per
         // send so health stats and location stay current.
         var systemContext: [String] = []
+
+        // User profile memory (Settings → Memory), when search/generate is on.
+        // `state` was already unwrapped non-optionally in the guard above.
+        if state.memorySearchChats || state.memoryGenerateFromChats {
+            let mem = UserMemoryStore.shared.formatForSystem()
+            if !mem.isEmpty {
+                systemContext.append("User memory (private, on this device):\n\(mem)")
+            }
+        }
+
         if healthEnabled {
             do {
                 systemContext.append(try await healthService.snapshotForPrompt())
@@ -276,18 +286,7 @@ final class ChatViewModel: ObservableObject {
             do {
                 let bundle = try await webSearchService.search(userMessage: text, mode: mode) {
                     [weak self] step in
-                    await MainActor.run {
-                        guard let self,
-                              let idx = self.messages.firstIndex(where: { $0.id == assistantID })
-                        else { return }
-                        var calls = self.messages[idx].toolCalls ?? []
-                        if let existing = calls.firstIndex(where: { $0.id == step.id }) {
-                            calls[existing] = ToolCall(from: step)
-                        } else {
-                            calls.append(ToolCall(from: step))
-                        }
-                        self.messages[idx].toolCalls = calls
-                    }
+                    await self?.applyWebSearchStep(step, toAssistant: assistantID)
                 }
                 toolCalls = bundle.steps.map { ToolCall(from: $0) }
                 if let idx = messages.firstIndex(where: { $0.id == assistantID }) {
@@ -406,7 +405,25 @@ final class ChatViewModel: ObservableObject {
             }
             // Capture long outputs / code blocks as an Artifact (≥ 10 lines OR contains ```).
             // Prefer visible answer content so artifacts aren't polluted with reasoning.
-            state.artifactStore.maybeSave(chatId: activeChatID, content: parsed.content)
+            // Title starts as a heuristic, then Apple Foundation Model renames when available.
+            if let artifact = state.artifactStore.maybeSave(
+                chatId: activeChatID,
+                messageId: assistantID,
+                content: parsed.content
+            ) {
+                Task { @MainActor [weak self] in
+                    guard self != nil else { return }
+                    let named = await ArtifactTitleGenerator.suggestTitle(for: parsed.content)
+                    if named != artifact.title {
+                        state.artifactStore.updateTitle(id: artifact.id, title: named)
+                        // Keep an open split panel title in sync if this artifact is showing.
+                        if state.openArtifact?.id == artifact.id {
+                            state.openArtifact = state.artifactStore.artifacts
+                                .first(where: { $0.id == artifact.id })
+                        }
+                    }
+                }
+            }
         } catch {
             let msg = (error as? ProviderError)?.errorDescription ?? error.localizedDescription
             presentError(msg)
@@ -425,6 +442,19 @@ final class ChatViewModel: ObservableObject {
             }
             schedulePersist()
         }
+    }
+
+    /// Apply a live web-search / research step onto the streaming assistant bubble.
+    @MainActor
+    private func applyWebSearchStep(_ step: WebSearchService.Step, toAssistant assistantID: UUID) {
+        guard let idx = messages.firstIndex(where: { $0.id == assistantID }) else { return }
+        var calls = messages[idx].toolCalls ?? []
+        if let existing = calls.firstIndex(where: { $0.id == step.id }) {
+            calls[existing] = ToolCall(from: step)
+        } else {
+            calls.append(ToolCall(from: step))
+        }
+        messages[idx].toolCalls = calls
     }
 
     /// Finalize the streaming assistant bubble with content (and optional tools).

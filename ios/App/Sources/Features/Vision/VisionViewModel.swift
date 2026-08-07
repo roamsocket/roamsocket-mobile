@@ -53,13 +53,14 @@ final class VisionViewModel: ObservableObject {
         if selectedModel == nil {
             selectedModel = VisionCapability.preferredVisionModel(
                 from: state.allModels,
-                current: state.selectedModel
+                current: state.selectedModel,
+                isVision: { state.modelSupportsVision($0) }
             )
         }
     }
 
     func visionModels(from state: AppState) -> [AIModel] {
-        state.allModels.filter(VisionCapability.supportsVision)
+        state.allModels.filter { state.modelSupportsVision($0) }
     }
 
     /// Encode a captured frame and run the selected vision model.
@@ -133,10 +134,11 @@ final class VisionViewModel: ObservableObject {
         }
         guard let model = selectedModel ?? VisionCapability.preferredVisionModel(
             from: state.allModels,
-            current: state.selectedModel
+            current: state.selectedModel,
+            isVision: { state.modelSupportsVision($0) }
         ) else {
             throw ProviderError.transport(
-                "No vision model available. Add an API key for OpenAI, Anthropic, OpenRouter, or xAI in Settings."
+                "No vision model available. Add an API key for OpenAI, Anthropic, OpenRouter, or xAI in Settings, or mark a custom provider as vision-capable."
             )
         }
         selectedModel = model

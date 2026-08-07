@@ -133,11 +133,36 @@ struct ProjectItem: Identifiable, Hashable, Codable {
     let id: UUID
     var name: String
     var updatedAt: Date
+    /// Project-level system instructions (Set project instructions).
+    var instructions: String
+    /// Private project memory narrative.
+    var memory: String
+    var memoryUpdatedAt: Date?
 
-    init(id: UUID = UUID(), name: String, updatedAt: Date) {
+    init(
+        id: UUID = UUID(),
+        name: String,
+        updatedAt: Date,
+        instructions: String = "",
+        memory: String = "",
+        memoryUpdatedAt: Date? = nil
+    ) {
         self.id = id
         self.name = name
         self.updatedAt = updatedAt
+        self.instructions = instructions
+        self.memory = memory
+        self.memoryUpdatedAt = memoryUpdatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        updatedAt = try c.decode(Date.self, forKey: .updatedAt)
+        instructions = try c.decodeIfPresent(String.self, forKey: .instructions) ?? ""
+        memory = try c.decodeIfPresent(String.self, forKey: .memory) ?? ""
+        memoryUpdatedAt = try c.decodeIfPresent(Date.self, forKey: .memoryUpdatedAt)
     }
 }
 
@@ -475,6 +500,68 @@ final class ChatHistoryStore: ObservableObject {
         projectChats[new.id] = []
         save()
         return new
+    }
+
+    func updateProjectInstructions(projectID: UUID, instructions: String) {
+        guard let idx = projects.firstIndex(where: { $0.id == projectID }) else { return }
+        projects[idx].instructions = instructions
+        projects[idx].updatedAt = Date()
+        save()
+    }
+
+    func updateProjectMemory(projectID: UUID, memory: String) {
+        guard let idx = projects.firstIndex(where: { $0.id == projectID }) else { return }
+        projects[idx].memory = memory
+        projects[idx].memoryUpdatedAt = Date()
+        projects[idx].updatedAt = Date()
+        save()
+    }
+
+    /// Apply a natural-language memory adjustment (forget / remember / freeform).
+    @discardableResult
+    func applyProjectMemoryCommand(projectID: UUID, command: String) -> String {
+        guard let idx = projects.firstIndex(where: { $0.id == projectID }) else { return "" }
+        let cmd = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cmd.isEmpty else { return projects[idx].memory }
+        var next = projects[idx].memory
+        let lower = cmd.lowercased()
+        if lower.hasPrefix("forget ") {
+            let topic = String(cmd.dropFirst(7)).trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "*"))
+            if !topic.isEmpty {
+                let filtered = next
+                    .components(separatedBy: .newlines)
+                    .filter { !$0.localizedCaseInsensitiveContains(topic) }
+                let joined = filtered.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                next = joined == next.trimmingCharacters(in: .whitespacesAndNewlines)
+                    ? (next.isEmpty ? "" : next + "\n\n") + "Note: user asked to forget “\(topic)”."
+                    : joined
+            }
+        } else if lower.hasPrefix("remember that i ") || lower.hasPrefix("remember that ") {
+            let fact = cmd.replacingOccurrences(
+                of: #"^remember that(?: i)?\s+"#,
+                with: "",
+                options: [.regularExpression, .caseInsensitive]
+            ).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !fact.isEmpty {
+                let bullet = "• " + fact.prefix(1).uppercased() + fact.dropFirst()
+                next = next.isEmpty ? bullet : next + "\n\n" + bullet
+            }
+        } else if lower.hasPrefix("remember ") {
+            let fact = String(cmd.dropFirst(9)).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !fact.isEmpty {
+                let bullet = "• " + fact.prefix(1).uppercased() + fact.dropFirst()
+                next = next.isEmpty ? bullet : next + "\n\n" + bullet
+            }
+        } else {
+            let bullet = "• " + cmd
+            next = next.isEmpty ? bullet : next + "\n\n" + bullet
+        }
+        projects[idx].memory = next
+        projects[idx].memoryUpdatedAt = Date()
+        projects[idx].updatedAt = Date()
+        save()
+        return next
     }
 
     func project(for chat: ProjectChatItem) -> ProjectItem? {

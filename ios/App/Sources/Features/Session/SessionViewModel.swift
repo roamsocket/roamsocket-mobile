@@ -58,6 +58,8 @@ final class SessionViewModel: ObservableObject {
     /// Best guess at the project's web server port, if any.
     @Published var primaryWebPort: Int?
     @Published var webPreviewURL: URL?
+    /// Agent working checklist from `task_list` / `update_tasks`.
+    @Published private(set) var agentTasks: [ServerMessage.AgentTaskPayload] = []
 
     /// Composer accepts text once the desktop session exists.
     /// Soft notices (skills sync, project env warnings) must not block input.
@@ -643,7 +645,7 @@ final class SessionViewModel: ObservableObject {
         if stats.added + stats.removed > 0 {
             return "Update files (+\(stats.added)/-\(stats.removed))"
         }
-        return "Update from AnyProv Code"
+        return "Update from CodeSocket"
     }
 
     private func diffSummaryForPrompt() -> String {
@@ -789,11 +791,24 @@ final class SessionViewModel: ObservableObject {
                 }
             }
 
+        case let .taskList(_, tasks):
+            agentTasks = tasks
+
         case .terminalData, .terminalControl, .fileListResult, .fileReadResult, .fileWriteResult, .portListResult, .tunnelStatus:
             // Handled by the dedicated tools views via their own connection.
             break
         }
     }
+
+    var taskProgress: (done: Int, total: Int) {
+        let total = agentTasks.count
+        let done = agentTasks.filter {
+            $0.status == "completed" || $0.status == "cancelled"
+        }.count
+        return (done, total)
+    }
+
+    var hasAgentTasks: Bool { !agentTasks.isEmpty }
 
     private static func isFatalSessionError(_ message: String) -> Bool {
         let m = message.lowercased()

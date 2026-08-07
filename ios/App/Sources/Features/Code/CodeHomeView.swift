@@ -266,7 +266,7 @@ enum SessionLauncher {
         let activeSkills = skills ?? state.skillManager.enabledSkills
         let activeMCP = mcpServers ?? state.mcpManager.configuredMCPServers
         let prefix = state.codeBranchPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
-        let branchPrefix = prefix.isEmpty ? "apc" : prefix
+        let branchPrefix = prefix.isEmpty ? "codesocket" : prefix
         let workBranch = "\(branchPrefix)/\(slug(from: task))-\(shortId())"
         let wireId = "s_\(shortId())"
         let repoRef = RepoRef(
@@ -585,7 +585,7 @@ struct CodeHomeView: View {
             EnvironmentPickerSheet()
         }
         .sheet(isPresented: $showModelPicker) {
-            ModelPickerSheet()
+            ModelPickerSheet(codingOnly: true)
         }
         .sheet(isPresented: $showArchived) {
             ArchivedSessionsView { session in

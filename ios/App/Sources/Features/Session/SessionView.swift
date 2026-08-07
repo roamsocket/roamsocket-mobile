@@ -24,6 +24,7 @@ struct SessionView: View {
     @State private var tokenWhenPairingPresented: String?
     @State private var detailTool: SessionViewModel.Item?
     @State private var browserBusy = false
+    @State private var showTasksSheet = false
 
     private enum GitSheetAction: String, Identifiable {
         case commit, push, pr, all
@@ -89,6 +90,9 @@ struct SessionView: View {
                         .padding(.horizontal, 16)
                         .padding(.bottom, 4)
                 }
+                if model.hasAgentTasks {
+                    agentTasksBanner
+                }
                 transcript
                 if let permission = model.pendingPermission {
                     permissionBar(permission)
@@ -107,6 +111,20 @@ struct SessionView: View {
         }
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
+                if model.hasAgentTasks {
+                    Button {
+                        showTasksSheet = true
+                    } label: {
+                        let progress = model.taskProgress
+                        HStack(spacing: 4) {
+                            Image(systemName: "checklist")
+                            Text("\(progress.done)/\(progress.total)")
+                                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        }
+                        .foregroundStyle(Theme.accent)
+                    }
+                    .accessibilityLabel("Agent tasks \(model.taskProgress.done) of \(model.taskProgress.total)")
+                }
                 if model.hasDiffs {
                     let stats = model.totalDiffStats
                     Text("+\(stats.added) −\(stats.removed)")
@@ -200,7 +218,7 @@ struct SessionView: View {
         }
         .sheet(isPresented: $showGitSheet) { gitSheet }
         .sheet(isPresented: $showModelPicker) {
-            ModelPickerSheet()
+            ModelPickerSheet(codingOnly: true)
         }
         .sheet(isPresented: $showProviderSettings) {
             // Reuse the existing settings screen so the providers UI stays
@@ -232,6 +250,9 @@ struct SessionView: View {
                 ToolDetailSheet(tool: tool, summary: summary, ok: ok, output: output)
             }
         }
+        .sheet(isPresented: $showTasksSheet) {
+            AgentTasksSheet(tasks: model.agentTasks)
+        }
         .onChange(of: model.prURL) { _, url in
             if let url { openURL(url) }
         }
@@ -249,6 +270,53 @@ struct SessionView: View {
     private func presentPairingSheet() {
         tokenWhenPairingPresented = state.serverToken
         showServerPairing = true
+    }
+
+    /// Compact live checklist strip — tap for the full sheet.
+    private var agentTasksBanner: some View {
+        let progress = model.taskProgress
+        let fraction = progress.total > 0
+            ? Double(progress.done) / Double(progress.total)
+            : 0
+        let active = model.agentTasks.first { $0.status == "in_progress" }
+
+        return Button {
+            showTasksSheet = true
+        } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: "checklist")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                    Text("Tasks")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                    Text("\(progress.done)/\(progress.total)")
+                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(Theme.textSecondary)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.textTertiary)
+                }
+                ProgressView(value: fraction)
+                    .tint(Theme.accent)
+                if let active {
+                    Text(active.content)
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.textSecondary)
+                        .lineLimit(1)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+            .padding(.horizontal, 16)
+            .padding(.bottom, 8)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Agent tasks \(progress.done) of \(progress.total) complete")
+        .accessibilityHint("Opens the full task checklist")
     }
 
     private var transcript: some View {
@@ -479,19 +547,11 @@ struct SessionView: View {
             gitActionRow
 
             HStack(spacing: 8) {
-                Button { /* TODO: attach file / @-mention */ } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Theme.textPrimary)
-                        .frame(width: 32, height: 32)
-                        .background(Theme.surface, in: Circle())
-                }
-                .buttonStyle(.plain)
-
                 ModelSelectorPill(
                     modelDisplayName: modelPillTitle,
                     onPick: { showModelPicker = true },
-                    onAddModel: { showProviderSettings = true }
+                    onAddModel: { showProviderSettings = true },
+                    requiresCodingAgent: true
                 )
                 permissionPill
                 Spacer(minLength: 0)
@@ -639,7 +699,8 @@ struct SessionView: View {
     }
 
     private var modelPillTitle: String {
-        if let model = state.selectedModel {
+        // Coding uses the desktop agent — phone-only chat models stay hidden.
+        if let model = state.selectedModel, state.modelSelectionForSession() != nil {
             let name = state.displayName(for: model)
             return Self.stripEffort(from: name)
         }
@@ -1097,5 +1158,136 @@ private struct DiffCard: View {
         if line.hasPrefix("-") && !line.hasPrefix("---") { return .red }
         if line.hasPrefix("@@") { return Theme.selection }
         return Theme.textSecondary
+    }
+}
+
+// MARK: - Agent task checklist
+
+/// Full checklist of tasks the agent set for itself via `update_tasks`.
+private struct AgentTasksSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let tasks: [ServerMessage.AgentTaskPayload]
+
+    private var doneCount: Int {
+        tasks.filter { $0.status == "completed" || $0.status == "cancelled" }.count
+    }
+
+    private var fraction: Double {
+        tasks.isEmpty ? 0 : Double(doneCount) / Double(tasks.count)
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Text("\(doneCount) of \(tasks.count) complete")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(Theme.textPrimary)
+                            Spacer()
+                            Text("\(Int(fraction * 100))%")
+                                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(Theme.textSecondary)
+                        }
+                        ProgressView(value: fraction)
+                            .tint(Theme.accent)
+                    }
+                    .padding(.vertical, 4)
+                    .listRowBackground(Theme.surface)
+                }
+
+                Section {
+                    if tasks.isEmpty {
+                        Text("No tasks yet. The agent will fill this in for multi-step work.")
+                            .font(.footnote)
+                            .foregroundStyle(Theme.textSecondary)
+                            .listRowBackground(Theme.surface)
+                    } else {
+                        ForEach(tasks) { task in
+                            AgentTaskRow(task: task)
+                                .listRowBackground(Theme.surface)
+                        }
+                    }
+                } header: {
+                    Text("Checklist")
+                } footer: {
+                    Text("The coding agent updates this list as it works. Swipe isn’t needed — statuses change automatically.")
+                }
+            }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(Theme.background)
+            .navigationTitle("Agent tasks")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+}
+
+private struct AgentTaskRow: View {
+    let task: ServerMessage.AgentTaskPayload
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: iconName)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(iconColor)
+                .frame(width: 24, height: 24)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(task.content)
+                    .font(.system(size: 16, weight: task.status == "in_progress" ? .semibold : .regular))
+                    .foregroundStyle(textColor)
+                    .strikethrough(task.status == "completed" || task.status == "cancelled", color: Theme.textTertiary)
+                Text(statusLabel)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(iconColor.opacity(0.9))
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(task.content), \(statusLabel)")
+    }
+
+    private var iconName: String {
+        switch task.status {
+        case "completed": return "checkmark.circle.fill"
+        case "in_progress": return "circle.inset.filled"
+        case "cancelled": return "minus.circle.fill"
+        default: return "circle"
+        }
+    }
+
+    private var iconColor: Color {
+        switch task.status {
+        case "completed": return .green
+        case "in_progress": return Theme.accent
+        case "cancelled": return Theme.textTertiary
+        default: return Theme.textSecondary
+        }
+    }
+
+    private var textColor: Color {
+        switch task.status {
+        case "completed", "cancelled": return Theme.textTertiary
+        default: return Theme.textPrimary
+        }
+    }
+
+    private var statusLabel: String {
+        switch task.status {
+        case "completed": return "Done"
+        case "in_progress": return "In progress"
+        case "cancelled": return "Cancelled"
+        default: return "Pending"
+        }
     }
 }
