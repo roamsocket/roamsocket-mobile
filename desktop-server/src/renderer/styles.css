@@ -2872,6 +2872,71 @@ body.platform-darwin .topbar {
 .modal-option:hover { background: var(--bg-elev-2); }
 .modal-option .sub { font-size: 12px; color: var(--text-mute); }
 
+/* Electron-safe appPrompt / appConfirm / appForm (window.prompt unsupported) */
+.dialog-backdrop {
+  z-index: 80;
+}
+.dialog-modal {
+  width: min(440px, 100%);
+  max-height: min(85vh, 720px);
+}
+.dialog-modal-wide {
+  width: min(520px, 100%);
+}
+.dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  overflow: auto;
+}
+.dialog-message {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+.dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dialog-field-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  letter-spacing: 0.01em;
+}
+.dialog-field-hint {
+  margin: 0;
+  font-size: 12px;
+}
+.dialog-select {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  padding: 10px 12px;
+  outline: none;
+}
+.dialog-select:focus {
+  border-color: var(--accent);
+}
+.dialog-choice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dialog-choice-danger {
+  color: var(--danger, #f07178);
+}
+.dialog-choice-danger:hover {
+  background: color-mix(in srgb, var(--danger, #f07178) 12%, transparent);
+}
+
 @media (max-width: 800px) {
   #app { display: block; }
   .sidebar {

@@ -104,7 +104,8 @@ final class ChatViewModel: ObservableObject {
         // Prefer common productivity connectors when present in the catalog.
         let preferred = ["gmail", "gcal", "gdrive", "google-calendar", "google-drive"]
         let defaults = preferred.filter { availableIds.contains($0) }
-        self.selectedConnectors = Set(defaults.isEmpty ? availableIds.prefix(3) : defaults)
+        // Both branches must be `[String]` — `prefix` returns `ArraySlice`.
+        self.selectedConnectors = Set(defaults.isEmpty ? Array(availableIds.prefix(3)) : defaults)
         healthService.refreshAuthorizationState()
         locationService.refreshAuthorizationState()
         // Bubble nested service publishes so the Add-to-Chat sheet

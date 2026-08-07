@@ -10,7 +10,21 @@ provider keys and GitHub, repo picker, composer with streaming tool/diff
 output, history), plus a system tray so closing the window keeps the server
 running in the background.
 
-## Run
+## Install (global CLI)
+
+```bash
+npm install -g codesocket
+codesocket
+```
+
+Aliases (same entrypoint): `codesocket-server`, `anyprov-code-server`.
+
+Requires **Node.js 20+**. The first install may compile native deps (`node-pty`);
+you need a working C/C++ toolchain (Xcode CLT on macOS, build-essential on Linux).
+
+Env vars below still apply. Default port is **4319**.
+
+## Run (from this repo)
 
 ### Headless server (CLI)
 
@@ -18,6 +32,7 @@ running in the background.
 npm install
 npm run dev          # watch mode (tsx)
 npm start            # from a prior `npm run build`
+# or: node bin/codesocket.js
 ```
 
 On start it prints a **large pairing code** and an **ASCII QR** (JSON payload

@@ -80,6 +80,13 @@ import {
   openSkillDetailModal,
   openEditSkillModal,
 } from "./skill-ui.js";
+import {
+  appAlert,
+  appChoice,
+  appConfirm,
+  appForm,
+  appPrompt,
+} from "./dialogs.js";
 
 declare global {
   interface Window {
@@ -416,20 +423,42 @@ function renderRecents() {
     });
     row.addEventListener("contextmenu", (e) => {
       e.preventDefault();
-      const action = prompt("rename | star | archive | delete", "rename");
-      if (!action) return;
-      if (action === "rename") {
-        const t = prompt("Title", item.title);
-        if (t != null) history.rename(item.id, t);
-      } else if (action === "star") {
-        history.setStarred(item.id, !item.starred);
-      } else if (action === "archive") {
-        history.archive(item.id);
-      } else if (action === "delete") {
-        history.delete(item.id);
-      }
-      renderRecents();
-      if (state.route === "chats") renderChat();
+      void (async () => {
+        const action = await appChoice({
+          title: item.title || "Chat",
+          choices: [
+            { id: "rename", label: "Rename" },
+            { id: "star", label: item.starred ? "Unstar" : "Star" },
+            { id: "archive", label: "Archive" },
+            { id: "delete", label: "Delete", danger: true },
+          ],
+        });
+        if (!action) return;
+        if (action === "rename") {
+          const t = await appPrompt({
+            title: "Rename chat",
+            defaultValue: item.title,
+            required: true,
+            okLabel: "Rename",
+          });
+          if (t != null) history.rename(item.id, t.trim());
+        } else if (action === "star") {
+          history.setStarred(item.id, !item.starred);
+        } else if (action === "archive") {
+          history.archive(item.id);
+        } else if (action === "delete") {
+          const ok = await appConfirm({
+            title: "Delete chat",
+            message: `Delete “${item.title || "New chat"}”? This cannot be undone.`,
+            okLabel: "Delete",
+            danger: true,
+          });
+          if (!ok) return;
+          history.delete(item.id);
+        }
+        renderRecents();
+        if (state.route === "chats") renderChat();
+      })();
     });
     list.append(row);
   }
@@ -943,15 +972,23 @@ function buildChatComposer(): HTMLElement {
         showRoute("projects", ["projects", projectId]);
       },
       onAddFromGitHub: () => {
-        const url = prompt("GitHub PR or repository URL");
-        if (!url?.trim()) return;
-        pendingAttachments.push({
-          id: `att_gh_${Date.now()}`,
-          name: url.replace(/^https?:\/\//, "").slice(0, 48),
-          content: `GitHub reference: ${url.trim()}`,
-        });
-        if (state.openProjectId) renderProjectDetail(state.openProjectId);
-        else renderChat();
+        void (async () => {
+          const url = await appPrompt({
+            title: "Add from GitHub",
+            message: "Paste a pull request or repository URL.",
+            placeholder: "https://github.com/owner/repo/…",
+            required: true,
+            okLabel: "Add",
+          });
+          if (!url?.trim()) return;
+          pendingAttachments.push({
+            id: `att_gh_${Date.now()}`,
+            name: url.replace(/^https?:\/\//, "").slice(0, 48),
+            content: `GitHub reference: ${url.trim()}`,
+          });
+          if (state.openProjectId) renderProjectDetail(state.openProjectId);
+          else renderChat();
+        })();
       },
       onPickSkill: (skillId) => {
         // Insert blue /skill chip (active) — hover preview + click → manage
@@ -1152,14 +1189,22 @@ async function populateModelPickerList(
           );
           opt.append(left);
           opt.addEventListener("click", () => {
-            const typed = prompt("Model id for this custom provider", fallback);
-            if (!typed?.trim()) return;
-            state.provider = p.id;
-            state.model = typed.trim();
-            if (history.activeChatId) {
-              history.setModel(history.activeChatId, state.provider, state.model);
-            }
-            onPicked();
+            void (async () => {
+              const typed = await appPrompt({
+                title: "Model id",
+                message: "Enter the model id for this custom provider.",
+                defaultValue: fallback,
+                required: true,
+                okLabel: "Use model",
+              });
+              if (!typed?.trim()) return;
+              state.provider = p.id;
+              state.model = typed.trim();
+              if (history.activeChatId) {
+                history.setModel(history.activeChatId, state.provider, state.model);
+              }
+              onPicked();
+            })();
           });
           section.append(opt);
           anyModel = true;
@@ -1486,11 +1531,26 @@ function openProject(projectId: string) {
   showRoute("projects", ["projects", projectId]);
 }
 
-function createProjectFlow() {
-  const name = prompt("Project name");
-  if (!name?.trim()) return;
-  const description = prompt("Description (optional)") ?? "";
-  const p = projects.create(name, description);
+async function createProjectFlow() {
+  const values = await appForm({
+    title: "New project",
+    fields: [
+      {
+        name: "name",
+        label: "Name",
+        placeholder: "Project name",
+        required: true,
+      },
+      {
+        name: "description",
+        label: "Description (optional)",
+        placeholder: "Short blurb",
+      },
+    ],
+    okLabel: "Create",
+  });
+  if (!values) return;
+  const p = projects.create((values.name ?? "").trim(), values.description ?? "");
   openProject(p.id);
 }
 
@@ -1510,7 +1570,7 @@ function renderProjects() {
     id: "projects-search",
   }) as HTMLInputElement;
   const create = el("button", { class: "primary-btn", type: "button" }, ["New project"]);
-  create.addEventListener("click", () => createProjectFlow());
+  create.addEventListener("click", () => void createProjectFlow());
   tools.append(search, create);
   head.append(tools);
   page.append(head);
@@ -1562,17 +1622,37 @@ function renderProjects() {
       card.addEventListener("click", () => openProject(p.id));
       card.addEventListener("contextmenu", (e) => {
         e.preventDefault();
-        const action = prompt("rename | delete", "rename");
-        if (action === "rename") {
-          const t = prompt("Name", p.name);
-          if (t != null) {
-            projects.rename(p.id, t);
+        void (async () => {
+          const action = await appChoice({
+            title: p.name,
+            choices: [
+              { id: "rename", label: "Rename" },
+              { id: "delete", label: "Delete", danger: true },
+            ],
+          });
+          if (action === "rename") {
+            const t = await appPrompt({
+              title: "Rename project",
+              defaultValue: p.name,
+              required: true,
+              okLabel: "Rename",
+            });
+            if (t != null) {
+              projects.rename(p.id, t.trim());
+              paint();
+            }
+          } else if (action === "delete") {
+            const ok = await appConfirm({
+              title: "Delete project",
+              message: `Delete “${p.name}”? Chats in this project are not deleted.`,
+              okLabel: "Delete",
+              danger: true,
+            });
+            if (!ok) return;
+            projects.delete(p.id);
             paint();
           }
-        } else if (action === "delete") {
-          projects.delete(p.id);
-          paint();
-        }
+        })();
       });
       grid.append(card);
     }
@@ -2345,22 +2425,37 @@ function renderCodeHome(view: HTMLElement) {
     state.code.repo || "repo",
   ]);
   repoPill.addEventListener("click", () => {
-    const v = prompt("Repository (owner/name)", state.code.repo);
-    if (v != null) {
-      state.code.repo = v.trim();
-      renderCodeHome(view);
-    }
+    void (async () => {
+      const v = await appPrompt({
+        title: "Repository",
+        message: "owner/name",
+        defaultValue: state.code.repo,
+        placeholder: "owner/repo",
+        okLabel: "Set",
+      });
+      if (v != null) {
+        state.code.repo = v.trim();
+        renderCodeHome(view);
+      }
+    })();
   });
   pills.append(repoPill);
   const branchPill = el("span", { class: "code-pill code-pill-editable" }, [
     state.code.workBranch || "branch",
   ]);
   branchPill.addEventListener("click", () => {
-    const v = prompt("Work branch", state.code.workBranch);
-    if (v != null) {
-      state.code.workBranch = v.trim();
-      renderCodeHome(view);
-    }
+    void (async () => {
+      const v = await appPrompt({
+        title: "Work branch",
+        defaultValue: state.code.workBranch,
+        placeholder: "feature/my-change",
+        okLabel: "Set",
+      });
+      if (v != null) {
+        state.code.workBranch = v.trim();
+        renderCodeHome(view);
+      }
+    })();
   });
   pills.append(branchPill);
   dock.append(pills);
@@ -2387,22 +2482,61 @@ function renderCodeHome(view: HTMLElement) {
     `${state.code.provider} · ${state.code.model || "model"} · ${state.code.effort}`,
   ]);
   modelBtn.addEventListener("click", () => {
-    const catalog = mergeProviderCatalog(customsList()).filter((p) => p.id !== "localMetal");
-    const choices = catalog
-      .map((p) => `${p.id} (${p.label})`)
-      .join("\n");
-    const provider =
-      prompt(
-        `Provider id (built-in or custom:<slug>)\n\n${choices}`,
-        state.code.provider,
-      ) ?? state.code.provider;
-    const model = prompt("Model id", state.code.model) ?? state.code.model;
-    const effort = (prompt("Effort (low|medium|high)", state.code.effort) ??
-      state.code.effort) as Effort;
-    state.code.provider = provider.trim();
-    state.code.model = model.trim();
-    if (EFFORTS.includes(effort)) state.code.effort = effort;
-    renderCodeHome(view);
+    void (async () => {
+      const catalog = mergeProviderCatalog(customsList()).filter((p) => p.id !== "localMetal");
+      const providerOptions = catalog.map((p) => ({
+        value: p.id,
+        label: `${p.label} (${p.id})`,
+      }));
+      if (
+        state.code.provider &&
+        !providerOptions.some((o) => o.value === state.code.provider)
+      ) {
+        providerOptions.unshift({
+          value: state.code.provider,
+          label: state.code.provider,
+        });
+      }
+      if (providerOptions.length === 0) {
+        providerOptions.push({ value: "anthropic", label: "anthropic" });
+      }
+      const values = await appForm({
+        title: "Code agent model",
+        message: "Built-in or custom:<slug> providers from Settings.",
+        fields: [
+          {
+            name: "provider",
+            label: "Provider",
+            type: "select",
+            defaultValue: state.code.provider || providerOptions[0]!.value,
+            options: providerOptions,
+            required: true,
+          },
+          {
+            name: "model",
+            label: "Model id",
+            defaultValue: state.code.model,
+            placeholder: "claude-sonnet-4-…",
+            required: true,
+          },
+          {
+            name: "effort",
+            label: "Effort",
+            type: "select",
+            defaultValue: state.code.effort,
+            options: EFFORTS.map((e) => ({ value: e, label: e })),
+            required: true,
+          },
+        ],
+        okLabel: "Save",
+      });
+      if (!values) return;
+      state.code.provider = (values.provider ?? "").trim();
+      state.code.model = (values.model ?? "").trim();
+      const effort = (values.effort ?? "") as Effort;
+      if (EFFORTS.includes(effort)) state.code.effort = effort;
+      renderCodeHome(view);
+    })();
   });
   meta.append(modelBtn);
   dock.append(meta);
@@ -2415,12 +2549,21 @@ async function startCodeFromHome(ta: HTMLTextAreaElement) {
   const text = ta.value.trim();
   if (!text) return;
   if (!state.code.repo) {
-    const repo = prompt("Repository (owner/name)");
+    const repo = await appPrompt({
+      title: "Repository",
+      message: "owner/name — required to start a coding session.",
+      placeholder: "owner/repo",
+      required: true,
+      okLabel: "Continue",
+    });
     if (!repo?.trim()) return;
     state.code.repo = repo.trim();
   }
   if (!state.code.model) {
-    alert("Set a model (click the model button under the composer).");
+    await appAlert({
+      title: "Model required",
+      message: "Set a model (click the model button under the composer).",
+    });
     return;
   }
   const rec = codeSessions.create({
@@ -2801,9 +2944,16 @@ function fillSettingsProviders(panel: HTMLElement): void {
     row.append(el("div", { class: `pill ${present ? "ok" : "empty"}` }, [present ? "configured" : "empty"]));
     const setBtn = el("button", { class: "ghost-btn", type: "button" }, [present ? "Replace" : "Add"]);
     setBtn.addEventListener("click", async () => {
-      const v = prompt(`${present ? "Replace" : "Add"} API key for ${prov.label}:`, "");
-      if (!v) return;
-      await window.apc.secrets.set({ providerKeys: { [prov.id]: v } as any });
+      const v = await appPrompt({
+        title: `${present ? "Replace" : "Add"} API key`,
+        message: `API key for ${prov.label}. Stored on this machine only.`,
+        password: true,
+        placeholder: "sk-…",
+        required: true,
+        okLabel: "Save key",
+      });
+      if (!v?.trim()) return;
+      await window.apc.secrets.set({ providerKeys: { [prov.id]: v.trim() } as any });
       state.secrets = await window.apc.secrets.get();
       renderSettings();
     });
@@ -2856,7 +3006,13 @@ function fillSettingsProviders(panel: HTMLElement): void {
       present ? "Replace key" : "Add key",
     ]);
     keyBtn.addEventListener("click", async () => {
-      const v = prompt(`${present ? "Replace" : "Add"} API key for ${prov.label} (optional for local):`, "");
+      const v = await appPrompt({
+        title: `${present ? "Replace" : "Add"} API key`,
+        message: `API key for ${prov.label}. Leave blank to clear (local servers often need none).`,
+        password: true,
+        placeholder: "optional",
+        okLabel: "Save",
+      });
       if (v == null) return;
       if (!v.trim()) {
         await window.apc.secrets.clearProvider(wireId);
@@ -2868,12 +3024,17 @@ function fillSettingsProviders(panel: HTMLElement): void {
     });
     const editBtn = el("button", { class: "ghost-btn", type: "button" }, ["Edit"]);
     editBtn.addEventListener("click", () => {
-      promptEditCustomProvider(prov);
-      renderSettings();
+      void promptEditCustomProvider(prov).then(() => renderSettings());
     });
     const delBtn = el("button", { class: "danger-btn", type: "button" }, ["Remove"]);
     delBtn.addEventListener("click", async () => {
-      if (!confirm(`Remove custom provider “${prov.label}”?`)) return;
+      const ok = await appConfirm({
+        title: "Remove provider",
+        message: `Remove custom provider “${prov.label}”?`,
+        okLabel: "Remove",
+        danger: true,
+      });
+      if (!ok) return;
       removeCustomProvider(window.localStorage, prov.id);
       await window.apc.secrets.clearProvider(wireId);
       state.secrets = await window.apc.secrets.get();
@@ -2898,69 +3059,133 @@ function fillSettingsProviders(panel: HTMLElement): void {
     style: "margin-top:12px",
   }, ["Add custom provider"]);
   addCustom.addEventListener("click", () => {
-    promptAddCustomProvider();
-    renderSettings();
+    void promptAddCustomProvider().then(() => renderSettings());
   });
   customSec.append(addCustom);
   panel.append(customSec);
 }
 
-function promptAddCustomProvider(): void {
-  const label = prompt("Display name (e.g. Ollama, Work proxy)");
-  if (!label?.trim()) return;
-  const baseUrl = prompt(
-    "Base URL (include version segment, e.g. http://localhost:11434/v1)",
-    "http://localhost:11434/v1",
-  );
-  if (!baseUrl?.trim()) return;
-  const styleRaw = prompt("API style: openai or anthropic", "openai")?.trim().toLowerCase();
-  const apiStyle: CustomApiStyle = styleRaw === "anthropic" ? "anthropic" : "openai";
-  const defaultModel =
-    prompt("Default model id (optional, e.g. llama3.2)", "")?.trim() || undefined;
+async function promptAddCustomProvider(): Promise<void> {
+  const values = await appForm({
+    title: "Add custom provider",
+    message:
+      "OpenAI-compatible or Anthropic Messages endpoints (Ollama, LM Studio, proxies). Base URL should include the version segment.",
+    fields: [
+      {
+        name: "label",
+        label: "Display name",
+        placeholder: "Ollama, Work proxy…",
+        required: true,
+      },
+      {
+        name: "baseUrl",
+        label: "Base URL",
+        defaultValue: "http://localhost:11434/v1",
+        placeholder: "http://localhost:11434/v1",
+        required: true,
+        hint: "Include /v1 or equivalent path.",
+      },
+      {
+        name: "apiStyle",
+        label: "API style",
+        type: "select",
+        defaultValue: "openai",
+        options: [
+          { value: "openai", label: "OpenAI-compatible" },
+          { value: "anthropic", label: "Anthropic Messages" },
+        ],
+      },
+      {
+        name: "defaultModel",
+        label: "Default model id (optional)",
+        placeholder: "llama3.2",
+      },
+      {
+        name: "key",
+        label: "API key (optional)",
+        password: true,
+        placeholder: "Leave blank for local servers",
+      },
+    ],
+    okLabel: "Add provider",
+  });
+  if (!values) return;
+  const label = (values.label ?? "").trim();
+  const baseUrl = (values.baseUrl ?? "").trim();
+  const apiStyle: CustomApiStyle =
+    (values.apiStyle ?? "").trim().toLowerCase() === "anthropic" ? "anthropic" : "openai";
+  const defaultModel = (values.defaultModel ?? "").trim() || undefined;
+  const key = (values.key ?? "").trim();
   const rec = addCustomProvider(window.localStorage, {
-    label: label.trim(),
-    baseUrl: baseUrl.trim(),
+    label,
+    baseUrl,
     apiStyle,
     defaultModel,
   });
   if (!rec) {
-    alert("Could not save custom provider. Check the base URL (http/https).");
+    await appAlert({
+      title: "Could not save",
+      message: "Check the base URL (must be http or https).",
+    });
     return;
   }
-  const key = prompt(
-    `API key for ${rec.label} (optional — leave blank for local servers)`,
-    "",
-  );
-  if (key?.trim()) {
-    void window.apc.secrets.set({ providerKeys: { [customProviderId(rec.id)]: key.trim() } as any }).then(
-      async () => {
-        state.secrets = await window.apc.secrets.get();
-      },
-    );
+  if (key) {
+    await window.apc.secrets.set({
+      providerKeys: { [customProviderId(rec.id)]: key } as any,
+    });
+    state.secrets = await window.apc.secrets.get();
   }
 }
 
-function promptEditCustomProvider(prov: CustomProvider): void {
-  const label = prompt("Display name", prov.label);
-  if (label == null) return;
-  const baseUrl = prompt("Base URL (include /v1 or equivalent)", prov.baseUrl);
-  if (baseUrl == null) return;
-  const styleRaw = prompt("API style: openai or anthropic", prov.apiStyle)?.trim().toLowerCase();
-  if (styleRaw == null) return;
-  const apiStyle: CustomApiStyle = styleRaw === "anthropic" ? "anthropic" : "openai";
-  const defaultModel = prompt(
-    "Default model id (optional)",
-    prov.defaultModel ?? "",
-  );
-  if (defaultModel == null) return;
+async function promptEditCustomProvider(prov: CustomProvider): Promise<void> {
+  const values = await appForm({
+    title: "Edit custom provider",
+    fields: [
+      {
+        name: "label",
+        label: "Display name",
+        defaultValue: prov.label,
+        required: true,
+      },
+      {
+        name: "baseUrl",
+        label: "Base URL",
+        defaultValue: prov.baseUrl,
+        required: true,
+        hint: "Include /v1 or equivalent path.",
+      },
+      {
+        name: "apiStyle",
+        label: "API style",
+        type: "select",
+        defaultValue: prov.apiStyle,
+        options: [
+          { value: "openai", label: "OpenAI-compatible" },
+          { value: "anthropic", label: "Anthropic Messages" },
+        ],
+      },
+      {
+        name: "defaultModel",
+        label: "Default model id (optional)",
+        defaultValue: prov.defaultModel ?? "",
+      },
+    ],
+    okLabel: "Save",
+  });
+  if (!values) return;
+  const apiStyle: CustomApiStyle =
+    (values.apiStyle ?? "").trim().toLowerCase() === "anthropic" ? "anthropic" : "openai";
   const updated = updateCustomProvider(window.localStorage, prov.id, {
-    label: label.trim() || prov.label,
-    baseUrl: baseUrl.trim() || prov.baseUrl,
+    label: (values.label ?? "").trim() || prov.label,
+    baseUrl: (values.baseUrl ?? "").trim() || prov.baseUrl,
     apiStyle,
-    defaultModel: defaultModel.trim(),
+    defaultModel: (values.defaultModel ?? "").trim(),
   });
   if (!updated) {
-    alert("Could not update custom provider. Check the base URL.");
+    await appAlert({
+      title: "Could not update",
+      message: "Check the base URL (must be http or https).",
+    });
   }
 }
 
@@ -2982,9 +3207,16 @@ function fillSettingsGithub(panel: HTMLElement): void {
     state.secrets?.githubTokenPresent ? "Replace" : "Add",
   ]);
   ghSet.addEventListener("click", async () => {
-    const v = prompt("GitHub personal access token:", "");
-    if (!v) return;
-    await window.apc.secrets.set({ githubToken: v });
+    const v = await appPrompt({
+      title: "GitHub token",
+      message: "Personal access token for clone, PRs, and status chips.",
+      password: true,
+      placeholder: "ghp_… or github_pat_…",
+      required: true,
+      okLabel: "Save token",
+    });
+    if (!v?.trim()) return;
+    await window.apc.secrets.set({ githubToken: v.trim() });
     state.secrets = await window.apc.secrets.get();
     renderSettings();
   });
@@ -3436,10 +3668,18 @@ function openMemoryEntryDetail(entryId: string): void {
     titleRow.append(el("h3", {}, [cur.title]));
     const del = el("button", { class: "ghost-btn sm", type: "button" }, ["Delete"]);
     del.addEventListener("click", () => {
-      if (!confirm(`Delete memory “${cur.title}”?`)) return;
-      userMemory.delete(cur.id);
-      backdrop.remove();
-      renderSettings();
+      void (async () => {
+        const ok = await appConfirm({
+          title: "Delete memory",
+          message: `Delete memory “${cur.title}”?`,
+          okLabel: "Delete",
+          danger: true,
+        });
+        if (!ok) return;
+        userMemory.delete(cur.id);
+        backdrop.remove();
+        renderSettings();
+      })();
     });
     titleRow.append(del);
     modal.append(titleRow);
@@ -3640,16 +3880,24 @@ function fillSettingsSkills(panel: HTMLElement): void {
   const actions = el("div", { class: "tunnel-cli-actions", style: "margin-top:14px;justify-content:flex-start" });
   const create = el("button", { class: "primary-btn", type: "button" }, ["New skill"]);
   create.addEventListener("click", () => {
-    const name = prompt("Skill name (e.g. my-helper)");
-    if (!name?.trim()) return;
-    const rec = skillsStore.create({
-      name: name.trim(),
-      description: "Custom skill",
-      instructions: `# ${name.trim()}\n\nDescribe what this skill should do.\n`,
-    });
-    openEditSkillModal(rec.id, skillsStore, el, {
-      onSaved: () => renderSettings(),
-    });
+    void (async () => {
+      const name = await appPrompt({
+        title: "New skill",
+        message: "Short name used for /slash commands (e.g. my-helper).",
+        placeholder: "my-helper",
+        required: true,
+        okLabel: "Create",
+      });
+      if (!name?.trim()) return;
+      const rec = skillsStore.create({
+        name: name.trim(),
+        description: "Custom skill",
+        instructions: `# ${name.trim()}\n\nDescribe what this skill should do.\n`,
+      });
+      openEditSkillModal(rec.id, skillsStore, el, {
+        onSaved: () => renderSettings(),
+      });
+    })();
   });
   const browse = el("button", { class: "ghost-btn", type: "button" }, ["Marketplace"]);
   browse.addEventListener("click", () => {
@@ -3736,7 +3984,10 @@ async function fillSettingsMarketplace(panel: HTMLElement): Promise<void> {
         applyMarketplaceStatusToRenderer(next);
         renderSettings();
       } catch (e) {
-        alert(String((e as Error).message ?? e));
+        await appAlert({
+          title: "Marketplace error",
+          message: String((e as Error).message ?? e),
+        });
       }
     });
     row.append(en);
@@ -3744,13 +3995,22 @@ async function fillSettingsMarketplace(panel: HTMLElement): Promise<void> {
     if (!src.isDefault) {
       const rm = el("button", { class: "danger-btn sm", type: "button" }, ["Remove"]);
       rm.addEventListener("click", async () => {
-        if (!confirm(`Remove marketplace “${src.name}”?`)) return;
+        const ok = await appConfirm({
+          title: "Remove marketplace",
+          message: `Remove marketplace “${src.name}”?`,
+          okLabel: "Remove",
+          danger: true,
+        });
+        if (!ok) return;
         try {
           const next = await window.apc.marketplace.removeSource(src.id);
           applyMarketplaceStatusToRenderer(next);
           renderSettings();
         } catch (e) {
-          alert(String((e as Error).message ?? e));
+          await appAlert({
+            title: "Marketplace error",
+            message: String((e as Error).message ?? e),
+          });
         }
       });
       row.append(rm);
@@ -3769,27 +4029,48 @@ async function fillSettingsMarketplace(panel: HTMLElement): Promise<void> {
       applyMarketplaceStatusToRenderer(next);
       renderSettings();
     } catch (e) {
-      alert(String((e as Error).message ?? e));
+      await appAlert({
+        title: "Refresh failed",
+        message: String((e as Error).message ?? e),
+      });
       refresh.disabled = false;
       refresh.textContent = "Refresh all";
     }
   });
   const add = el("button", { class: "ghost-btn", type: "button" }, ["Add marketplace"]);
   add.addEventListener("click", async () => {
-    const url = prompt(
-      "Marketplace catalog URL (raw catalog.json, github.com blob/tree link, or owner/repo)",
-    );
-    if (!url?.trim()) return;
-    const name = prompt("Display name (optional)") ?? undefined;
+    const values = await appForm({
+      title: "Add marketplace",
+      message:
+        "Raw catalog.json URL, github.com blob/tree link, or owner/repo.",
+      fields: [
+        {
+          name: "url",
+          label: "Catalog URL or repo",
+          placeholder: "owner/repo or https://…/catalog.json",
+          required: true,
+        },
+        {
+          name: "name",
+          label: "Display name (optional)",
+          placeholder: "My marketplace",
+        },
+      ],
+      okLabel: "Add",
+    });
+    if (!values) return;
     try {
       const res = await window.apc.marketplace.addSource({
-        url: url.trim(),
-        name: name?.trim() || undefined,
+        url: (values.url ?? "").trim(),
+        name: (values.name ?? "").trim() || undefined,
       });
       applyMarketplaceStatusToRenderer(res.status);
       renderSettings();
     } catch (e) {
-      alert(String((e as Error).message ?? e));
+      await appAlert({
+        title: "Could not add marketplace",
+        message: String((e as Error).message ?? e),
+      });
     }
   });
   const docs = el("button", { class: "ghost-btn", type: "button" }, ["How to make one"]);
@@ -3846,11 +4127,32 @@ function fillSettingsConnectors(panel: HTMLElement): void {
     "Add custom MCP reminder",
   ]);
   add.addEventListener("click", () => {
-    const name = prompt("Connector name");
-    if (!name?.trim()) return;
-    const url = prompt("Remote MCP server URL (https://…)");
-    if (!url?.trim()) return;
-    alert(`Saved locally as a reminder. Wire MCP servers in desktop env / phone MCP manager:\n${name}\n${url}`);
+    void (async () => {
+      const values = await appForm({
+        title: "Custom MCP reminder",
+        message:
+          "This only saves a local reminder. Wire live MCP via APC_MCP_REPO or the phone Connectors manager.",
+        fields: [
+          {
+            name: "name",
+            label: "Connector name",
+            required: true,
+          },
+          {
+            name: "url",
+            label: "Remote MCP server URL",
+            placeholder: "https://…",
+            required: true,
+          },
+        ],
+        okLabel: "Save reminder",
+      });
+      if (!values) return;
+      await appAlert({
+        title: "Reminder saved",
+        message: `Saved locally as a reminder. Wire MCP servers in desktop env / phone MCP manager:\n${(values.name ?? "").trim()}\n${(values.url ?? "").trim()}`,
+      });
+    })();
   });
   sec.append(add);
   panel.append(sec);
@@ -4359,9 +4661,13 @@ function renderMetalBrowseRoot(
   const delAll = el("button", { class: "danger-btn sm", type: "button" }, ["Delete…"]);
   delAll.disabled = storage.count === 0;
   delAll.addEventListener("click", async () => {
-    if (!confirm(`Delete all ${storage.count} on-device Metal model(s)? This cannot be undone.`)) {
-      return;
-    }
+    const ok = await appConfirm({
+      title: "Delete all models",
+      message: `Delete all ${storage.count} on-device Metal model(s)? This cannot be undone.`,
+      okLabel: "Delete all",
+      danger: true,
+    });
+    if (!ok) return;
     await window.apc.metal.deleteAll();
     window.location.hash = "#/metal";
     void renderMetalManage(["metal"]);
@@ -4523,7 +4829,13 @@ function metalVariantRow(e: MetalEntry, showFamily: boolean): HTMLElement {
     });
     const del = el("button", { class: "danger-btn sm", type: "button" }, ["Delete"]);
     del.addEventListener("click", async () => {
-      if (!confirm(`Delete ${e.displayName} from this Mac?`)) return;
+      const ok = await appConfirm({
+        title: "Delete model",
+        message: `Delete ${e.displayName} from this Mac?`,
+        okLabel: "Delete",
+        danger: true,
+      });
+      if (!ok) return;
       await window.apc.metal.delete(e.hubID);
       applyHashRoute();
     });

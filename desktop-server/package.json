@@ -1,19 +1,55 @@
 {
-  "name": "codesocket-server",
+  "name": "codesocket",
   "version": "0.2.0",
-  "private": true,
   "type": "module",
-  "description": "CodeSocket desktop companion: WebSocket coding server + Electron client. Pairs with the iOS app, clones repos, runs the agent loop, and opens PRs.",
+  "description": "CodeSocket desktop companion: headless WebSocket coding server that pairs with the iOS app, clones repos, runs the agent loop, and opens PRs.",
   "license": "MIT",
-  "main": ".vite/build/main.cjs",
-  "bin": {
-    "codesocket-server": "dist/src/index.js",
-    "anyprov-code-server": "dist/src/index.js"
+  "author": "codesocket-ai",
+  "homepage": "https://github.com/kind365/code-mobile-ai#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kind365/code-mobile-ai.git",
+    "directory": "desktop-server"
   },
+  "bugs": {
+    "url": "https://github.com/kind365/code-mobile-ai/issues"
+  },
+  "keywords": [
+    "codesocket",
+    "coding-agent",
+    "websocket",
+    "ios",
+    "cli",
+    "ai",
+    "github",
+    "pairing"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    }
+  },
+  "bin": {
+    "codesocket": "bin/codesocket.js",
+    "codesocket-server": "bin/codesocket.js",
+    "anyprov-code-server": "bin/codesocket.js"
+  },
+  "files": [
+    "bin",
+    "dist/src",
+    "README.md"
+  ],
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js",
+    "start": "node dist/src/index.js",
     "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.electron.json",
     "typecheck:server": "tsc -p tsconfig.json --noEmit",
     "typecheck:electron": "tsc -p tsconfig.electron.json",

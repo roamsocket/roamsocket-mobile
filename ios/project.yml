@@ -73,6 +73,17 @@ targets:
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
+        # Universal (iPhone + iPad): declare orientations explicitly. iPad apps
+        # must support all four unless UIRequiresFullScreen is true.
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        "UISupportedInterfaceOrientations~ipad":
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         # Local-network dev tool: allow cleartext to the desktop server on your
         # LAN (http:// pairing and ws:// streaming). Tighten for App Store.
         NSAppTransportSecurity:

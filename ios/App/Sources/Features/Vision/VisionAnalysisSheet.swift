@@ -8,12 +8,12 @@ struct VisionAnalysisSheet: View {
 
     @GestureState private var dragOffset: CGFloat = 0
 
-    private let minimizedHeight: CGFloat = 72
-    private let expandedFraction: CGFloat = 0.58
+    private let minimizedHeight: CGFloat = 76
+    private let expandedFraction: CGFloat = 0.52
 
     var body: some View {
         GeometryReader { geo in
-            let maxExpanded = geo.size.height * expandedFraction
+            let maxExpanded = max(220, geo.size.height * expandedFraction)
             let targetHeight: CGFloat = {
                 switch viewModel.sheetMode {
                 case .hidden: return 0
@@ -25,10 +25,18 @@ struct VisionAnalysisSheet: View {
 
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
-                sheetChrome(maxExpanded: maxExpanded, height: height)
+                    .allowsHitTesting(false)
+
+                if viewModel.sheetMode != .hidden {
+                    sheetChrome(maxExpanded: maxExpanded, height: height)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .bottom)
             .animation(.spring(response: 0.38, dampingFraction: 0.86), value: viewModel.sheetMode)
         }
+        // Only ignore the home-indicator edge — keep leading/trailing safe so
+        // title + body text never clip under the screen edge.
         .ignoresSafeArea(edges: .bottom)
     }
 
@@ -39,18 +47,20 @@ struct VisionAnalysisSheet: View {
                 .padding(.top, 10)
                 .padding(.bottom, 8)
 
-            if viewModel.sheetMode == .minimized {
-                minimizedBar
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 14)
-            } else {
-                expandedContent
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 20)
+            Group {
+                if viewModel.sheetMode == .minimized {
+                    minimizedBar
+                } else {
+                    expandedContent
+                }
             }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 16)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity)
         .frame(height: height, alignment: .top)
+        .clipped()
         .background {
             UnevenRoundedRectangle(
                 topLeadingRadius: 22,
@@ -59,7 +69,7 @@ struct VisionAnalysisSheet: View {
                 topTrailingRadius: 22,
                 style: .continuous
             )
-            .fill(Theme.surface.opacity(0.96))
+            .fill(Theme.surface.opacity(0.98))
             .overlay {
                 UnevenRoundedRectangle(
                     topLeadingRadius: 22,
@@ -70,23 +80,22 @@ struct VisionAnalysisSheet: View {
                 )
                 .stroke(Theme.separator.opacity(0.7), lineWidth: 1)
             }
-            .shadow(color: .black.opacity(0.35), radius: 24, y: -4)
+            .shadow(color: .black.opacity(0.4), radius: 24, y: -4)
         }
         .contentShape(Rectangle())
-        .gesture(dragGesture(maxExpanded: maxExpanded))
+        .highPriorityGesture(dragGesture(maxExpanded: maxExpanded))
         .onTapGesture {
             if viewModel.sheetMode == .minimized {
                 viewModel.setSheetExpanded()
             }
         }
-        .opacity(viewModel.sheetMode == .hidden ? 0 : 1)
-        .allowsHitTesting(viewModel.sheetMode != .hidden)
     }
 
     private var grabber: some View {
         Capsule()
             .fill(Theme.textTertiary.opacity(0.55))
             .frame(width: 40, height: 5)
+            .frame(maxWidth: .infinity)
     }
 
     private var minimizedBar: some View {
@@ -111,13 +120,13 @@ struct VisionAnalysisSheet: View {
                 Text(viewModel.isThinking ? "Analyzing…" : "Analysis")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Theme.textPrimary)
+                    .lineLimit(1)
                 Text(minimizedSubtitle)
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.textSecondary)
                     .lineLimit(1)
             }
-
-            Spacer(minLength: 0)
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             if viewModel.isThinking {
                 ProgressView()
@@ -148,17 +157,25 @@ struct VisionAnalysisSheet: View {
 
     private var expandedContent: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .center, spacing: 10) {
+            HStack(alignment: .center, spacing: 8) {
                 Text(viewModel.isThinking ? "Analyzing" : "Analysis")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(Theme.textPrimary)
-                Spacer(minLength: 0)
+                    .lineLimit(1)
+                    .layoutPriority(1)
+
+                Spacer(minLength: 4)
+
                 Text(modelDisplayName)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(Theme.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
                     .background(Theme.surfaceElevated, in: Capsule())
+                    .layoutPriority(0)
+
                 Button {
                     viewModel.setSheetMinimized()
                 } label: {
@@ -175,14 +192,27 @@ struct VisionAnalysisSheet: View {
             if viewModel.isThinking {
                 thinkingBlock
             } else if case .failed(let msg) = viewModel.phase {
-                Text(msg)
-                    .font(.system(size: 15))
-                    .foregroundStyle(Color.red.opacity(0.9))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                ScrollView {
+                    Text(msg)
+                        .font(.system(size: 15))
+                        .foregroundStyle(Color.red.opacity(0.95))
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                        .textSelection(.enabled)
+                }
             } else {
                 ScrollView {
-                    MarkdownContentView(text: viewModel.analysisText, fontSize: 16)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    // Prefer plain text first so a huge Markdown parse can't
+                    // hitch the main thread right after Metal generation.
+                    if looksLikeRichMarkdown(viewModel.analysisText) {
+                        MarkdownContentView(text: viewModel.analysisText, fontSize: 16)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Text(viewModel.analysisText)
+                            .font(.system(size: 16))
+                            .foregroundStyle(Theme.textPrimary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                    }
                 }
                 .scrollIndicators(.visible)
             }
@@ -198,12 +228,24 @@ struct VisionAnalysisSheet: View {
                 Text("Looking at the photo…")
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(Theme.textSecondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
             }
             ThinkingShimmerLines()
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(.top, 4)
+    }
+
+    private func looksLikeRichMarkdown(_ text: String) -> Bool {
+        text.contains("```")
+            || text.contains("# ")
+            || text.contains("## ")
+            || text.contains("- ")
+            || text.contains("* ")
+            || text.contains("**")
+            || text.contains("[") && text.contains("](")
     }
 
     private func dragGesture(maxExpanded: CGFloat) -> some Gesture {
@@ -255,7 +297,7 @@ private struct ThinkingShimmerLines: View {
 
     private func shimmerBar(widthFraction: CGFloat) -> some View {
         GeometryReader { geo in
-            let w = geo.size.width * widthFraction
+            let w = max(0, geo.size.width * widthFraction)
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(Theme.surfaceElevated)
                 .frame(width: w, height: 12)

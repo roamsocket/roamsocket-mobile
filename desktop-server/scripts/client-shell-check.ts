@@ -162,3 +162,23 @@ const chatStream = readFileSync(path.join(root, "src/renderer/chat-stream.ts"), 
 assert.ok(chatStream.includes("baseUrl"), "chat-stream accepts baseUrl");
 assert.ok(chatStream.includes("chatRequestTarget"), "chat-stream uses shared target resolver");
 console.log("custom providers: settings CRUD + picker + baseUrl/apiStyle on chat and create_session");
+
+// Electron does not implement window.prompt(); confirm/alert are unreliable.
+// Renderer must use appPrompt / appConfirm / appAlert / appForm / appChoice.
+const dialogs = readFileSync(path.join(root, "src/renderer/dialogs.ts"), "utf8");
+assert.ok(existsSync(path.join(root, "src/renderer/dialogs.ts")), "dialogs.ts present");
+assert.ok(dialogs.includes("export function appPrompt"), "appPrompt helper");
+assert.ok(dialogs.includes("export function appConfirm"), "appConfirm helper");
+assert.ok(main.includes("appPrompt") || main.includes("appForm"), "main uses electron-safe dialogs");
+for (const [name, src] of [
+  ["main.ts", main],
+  ["skill-ui.ts", skillUi],
+  ["project-modals.ts", projectModals],
+  ["composer-menu.ts", composerMenu],
+] as const) {
+  assert.ok(!/\bprompt\s*\(/.test(src), `${name} must not call prompt()`);
+  assert.ok(!/\bconfirm\s*\(/.test(src), `${name} must not call confirm()`);
+  assert.ok(!/\balert\s*\(/.test(src), `${name} must not call alert()`);
+}
+assert.ok(css.includes("dialog-modal") || css.includes("dialog-backdrop"), "dialog styles");
+console.log("electron-safe dialogs: no prompt/confirm/alert in renderer UI");

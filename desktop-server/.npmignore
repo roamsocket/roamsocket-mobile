@@ -1,0 +1,16 @@
+# Dev / Electron packaging — never ship with the CLI package
+out/
+.vite/
+node_modules/
+scripts/
+native/
+forge.config.ts
+vite.*.config.ts
+tsconfig.electron.json
+src/electron/
+src/renderer/
+*.tsbuildinfo
+.DS_Store
+*.log
+coverage/
+.nyc_output/

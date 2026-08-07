@@ -19,22 +19,27 @@ struct VisionView: View {
 
             VisionGlowOverlay(isThinking: viewModel.isThinking)
 
-            // Chrome over the live feed.
-            VStack(spacing: 0) {
-                topBar
-                Spacer(minLength: 0)
-                bottomControls
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 8)
-            .padding(.bottom, 28)
-
-            // Analysis popover sits above the white capture button.
+            // Analysis popover sits above the white capture button, under chrome
+            // so Close / model picker stay tappable and never get clipped.
             VisionAnalysisSheet(
                 viewModel: viewModel,
                 modelDisplayName: modelLabel
             )
             .padding(.bottom, 110)
+            .zIndex(1)
+
+            // Chrome over the live feed + sheet. Spacer must not steal hits so
+            // the analysis sheet can still drag / scroll underneath.
+            VStack(spacing: 0) {
+                topBar
+                Spacer(minLength: 0)
+                    .allowsHitTesting(false)
+                bottomControls
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 8)
+            .padding(.bottom, 28)
+            .zIndex(2)
         }
         .background(Color.black.ignoresSafeArea())
         .statusBarHidden(false)
@@ -80,14 +85,16 @@ struct VisionView: View {
     @ViewBuilder
     private var cameraLayer: some View {
         ZStack {
-            // Keep the session warm under the freeze-frame so retake is instant.
+            // Pause the capture session while a still is on screen / the VLM is
+            // running. Leaving the camera hot during Metal inference competes for
+            // GPU + RAM and is a common crash source on device.
             VisionCameraView(
                 onCapture: { image in
                     viewModel.analyze(image: image)
                 },
                 onError: { cameraError = $0 },
                 captureTrigger: captureTrigger,
-                isSessionActive: true
+                isSessionActive: viewModel.capturedImage == nil && !viewModel.isThinking
             )
             .opacity(viewModel.capturedImage == nil ? 1 : 0)
 
@@ -202,7 +209,7 @@ struct VisionView: View {
             .shadow(color: Color(hex: 0x6AA9FF).opacity(viewModel.isThinking ? 0.65 : 0.25), radius: viewModel.isThinking ? 18 : 8)
         }
         .buttonStyle(.plain)
-        .disabled(!viewModel.canCapture && viewModel.isThinking)
+        .disabled(!viewModel.canCapture || viewModel.isThinking)
         .accessibilityLabel(viewModel.isThinking ? "Analyzing" : "Capture")
     }
 

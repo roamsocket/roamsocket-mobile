@@ -149,9 +149,12 @@ final class VisionCameraController: UIViewController, AVCapturePhotoCaptureDeleg
                 return
             }
             self.session.addOutput(self.photoOutput)
-            if let connection = self.photoOutput.connection(with: .video),
-               connection.isVideoOrientationSupported {
-                connection.videoOrientation = .portrait
+            // iOS 17+: videoOrientation is deprecated; portrait ≈ 90°.
+            if let connection = self.photoOutput.connection(with: .video) {
+                let portraitAngle: CGFloat = 90
+                if connection.isVideoRotationAngleSupported(portraitAngle) {
+                    connection.videoRotationAngle = portraitAngle
+                }
             }
 
             self.session.commitConfiguration()

@@ -77,7 +77,11 @@ final class VisionViewModel: ObservableObject {
     /// Encode a captured frame and run the selected vision model.
     func analyze(image: UIImage) {
         analysisTask?.cancel()
-        capturedImage = image
+        // Downscale immediately so the full sensor buffer is not retained
+        // alongside the VLM weights for the whole generation.
+        let forDisplay = Self.displayImage(from: image)
+        let forModel = Self.scaledImage(image, maxDimension: 1024)
+        capturedImage = forDisplay
         analysisText = ""
         errorMessage = nil
         phase = .analyzing
@@ -86,13 +90,15 @@ final class VisionViewModel: ObservableObject {
         analysisTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let reply = try await self.runAnalysis(image: image)
+                let reply = try await self.runAnalysis(image: forModel)
                 guard !Task.isCancelled else { return }
                 self.analysisText = reply
                 self.phase = .result
                 if self.sheetMode == .hidden {
                     self.sheetMode = .expanded
                 }
+            } catch is CancellationError {
+                // Retake / dismiss — leave UI as-is for the new state.
             } catch {
                 guard !Task.isCancelled else { return }
                 let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
@@ -155,12 +161,13 @@ final class VisionViewModel: ObservableObject {
         selectedModel = model
 
         if model.provider == .localMetal {
-            // Ensure weights are loaded before the multimodal generate call.
-            await state.ensureSelectedLocalMetalLoaded()
+            // Always pin the *vision* model as the selected Metal model before
+            // load — previously we loaded whatever chat had selected first,
+            // briefly double-resident and often the wrong weights.
             if state.selectedModel?.id != model.id {
                 state.selectedModel = model
-                await state.ensureSelectedLocalMetalLoaded()
             }
+            await state.ensureSelectedLocalMetalLoaded()
             if let loadError = state.localMetalLoadError, !loadError.isEmpty {
                 throw ProviderError.transport(loadError)
             }
@@ -171,7 +178,10 @@ final class VisionViewModel: ObservableObject {
             throw ProviderError.missingKey
         }
 
-        let jpeg = try Self.jpegData(from: image)
+        // On-device VLMs are far more memory-sensitive than cloud APIs.
+        let maxDim: CGFloat = model.provider == .localMetal ? 1024 : 1600
+        let quality: CGFloat = model.provider == .localMetal ? 0.65 : 0.72
+        let jpeg = try Self.jpegData(from: image, maxDimension: maxDim, quality: quality)
         let base64 = jpeg.base64EncodedString()
         let attachment = ProviderChatMessage.ImageAttachment(
             mimeType: "image/jpeg",
@@ -198,27 +208,65 @@ final class VisionViewModel: ObservableObject {
             throw ProviderError.transport("Custom provider is missing a base URL. Edit it in Settings.")
         }
 
-        let reply = try await catalog.provider(
-            model.provider,
-            customBaseURL: baseURL,
-            style: style
-        ).chat(
-            model: model.modelID,
-            apiKey: key,
-            messages: turns,
-            effort: state.effort
-        )
+        try Task.checkCancellation()
+
+        let reply: String
+        do {
+            reply = try await catalog.provider(
+                model.provider,
+                customBaseURL: baseURL,
+                style: style
+            ).chat(
+                model: model.modelID,
+                apiKey: key,
+                messages: turns,
+                // Cap on-device vision at medium — long high-effort generations
+                // balloon the KV cache and jetsam mid-reply on phones.
+                effort: model.provider == .localMetal
+                    ? (state.effort == .high ? .medium : state.effort)
+                    : state.effort
+            )
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // Surface Metal/VLM failures as a clean error instead of an uncaught abort.
+            let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            throw ProviderError.transport(
+                model.provider == .localMetal
+                    ? "On-device vision failed: \(msg)"
+                    : msg
+            )
+        }
+
+        try Task.checkCancellation()
 
         let parsed = ThinkingExtractor.extract(from: reply)
-        let text = parsed.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        var text = parsed.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Some VLMs (Gemma-family) return only thinking tags for short turns —
+        // fall back so we don't treat a real answer as empty.
+        if text.isEmpty, let thinking = parsed.thinking?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !thinking.isEmpty {
+            text = thinking
+        }
         guard !text.isEmpty else {
             throw ProviderError.transport("The model returned an empty analysis.")
         }
         return text
     }
 
+    /// Freeze-frame for the UI — capped so we don't keep a 12MP buffer around.
+    private static func displayImage(from image: UIImage, maxDimension: CGFloat = 1440) -> UIImage {
+        scaledImage(image, maxDimension: maxDimension)
+    }
+
     /// Downscale + JPEG-compress so multimodal payloads stay under typical API limits.
-    private static func jpegData(from image: UIImage, maxDimension: CGFloat = 1600, quality: CGFloat = 0.72) throws -> Data {
+    /// `image` is expected to already be roughly the right size; `maxDimension`
+    /// is a second safety clamp.
+    private static func jpegData(
+        from image: UIImage,
+        maxDimension: CGFloat = 1600,
+        quality: CGFloat = 0.72
+    ) throws -> Data {
         let scaled = scaledImage(image, maxDimension: maxDimension)
         guard let data = scaled.jpegData(compressionQuality: quality), !data.isEmpty else {
             throw ProviderError.transport("Could not encode the photo for analysis.")
@@ -231,8 +279,12 @@ final class VisionViewModel: ObservableObject {
         let longest = max(size.width, size.height)
         guard longest > maxDimension, longest > 0 else { return image }
         let scale = maxDimension / longest
-        let newSize = CGSize(width: size.width * scale, height: size.height * scale)
-        let renderer = UIGraphicsImageRenderer(size: newSize)
+        let newSize = CGSize(width: floor(size.width * scale), height: floor(size.height * scale))
+        guard newSize.width >= 1, newSize.height >= 1 else { return image }
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        format.opaque = true
+        let renderer = UIGraphicsImageRenderer(size: newSize, format: format)
         return renderer.image { _ in
             image.draw(in: CGRect(origin: .zero, size: newSize))
         }

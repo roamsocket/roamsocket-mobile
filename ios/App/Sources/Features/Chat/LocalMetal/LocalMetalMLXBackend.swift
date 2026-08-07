@@ -1,5 +1,8 @@
 import Foundation
 import CoreImage
+#if canImport(UIKit)
+import UIKit
+#endif
 import AnyProvCore
 import MLX
 import MLXLLM
@@ -113,6 +116,9 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
                         videos: [],
                         audios: []
                     )
+                    // Drop intermediate Metal buffers from the VLM forward pass
+                    // so the next capture / UI update isn't fighting for RAM.
+                    Memory.clearCache()
                     return try nonEmpty(output)
                 }
                 let output = try await session.respond(to: last.content)
@@ -123,8 +129,13 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
                 return try nonEmpty(output)
             }
         } catch let error as ProviderError {
+            Memory.clearCache()
             throw error
+        } catch is CancellationError {
+            Memory.clearCache()
+            throw CancellationError()
         } catch {
+            Memory.clearCache()
             throw ProviderError.transport(
                 "Metal generation failed: \(error.localizedDescription)"
             )
@@ -536,12 +547,22 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
         from attachments: [ProviderChatMessage.ImageAttachment]
     ) throws -> [UserInput.Image] {
         try attachments.map { attachment in
-            guard let data = Data(base64Encoded: attachment.base64Data),
-                  let ciImage = CIImage(data: data)
-            else {
+            guard let data = Data(base64Encoded: attachment.base64Data), !data.isEmpty else {
                 throw ProviderError.transport("Could not decode the captured photo for on-device vision.")
             }
-            return .ciImage(ciImage)
+            // Prefer CIImage; re-encode via UIImage when the JPEG has awkward
+            // EXIF/orientation that CIImage(data:) rejects.
+            if let ciImage = CIImage(data: data) {
+                return .ciImage(ciImage)
+            }
+            #if canImport(UIKit)
+            if let ui = UIImage(data: data),
+               let jpeg = ui.jpegData(compressionQuality: 0.9),
+               let ci = CIImage(data: jpeg) {
+                return .ciImage(ci)
+            }
+            #endif
+            throw ProviderError.transport("Could not decode the captured photo for on-device vision.")
         }
     }
 

@@ -3,6 +3,7 @@
  */
 import type { SkillRecord, SkillsStore } from "../client/skills-store.js";
 import { skillSlashToken } from "../client/skills-store.js";
+import { appConfirm, appPrompt } from "./dialogs.js";
 
 type ElFn = <K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -224,12 +225,21 @@ export function openSkillDetailModal(
     );
     menu.append(
       item("Replace", () => {
-        const text = prompt("Paste replacement skill markdown / instructions");
-        if (text == null) return;
-        skills.update(skill.id, { instructions: text });
-        opts.onChanged();
-        close();
-        openSkillDetailModal(skill.id, skills, el, opts);
+        void (async () => {
+          const text = await appPrompt({
+            title: "Replace skill content",
+            message: "Paste replacement skill markdown / instructions.",
+            multiline: true,
+            defaultValue: skill.instructions,
+            okLabel: "Replace",
+            required: true,
+          });
+          if (text == null) return;
+          skills.update(skill.id, { instructions: text });
+          opts.onChanged();
+          close();
+          openSkillDetailModal(skill.id, skills, el, opts);
+        })();
       }),
     );
     menu.append(
@@ -251,10 +261,18 @@ export function openSkillDetailModal(
       item(
         "Uninstall",
         () => {
-          if (!confirm(`Uninstall skill “${skill.name}”?`)) return;
-          skills.uninstall(skill.id);
-          opts.onChanged();
-          close();
+          void (async () => {
+            const ok = await appConfirm({
+              title: "Uninstall skill",
+              message: `Uninstall skill “${skill.name}”?`,
+              okLabel: "Uninstall",
+              danger: true,
+            });
+            if (!ok) return;
+            skills.uninstall(skill.id);
+            opts.onChanged();
+            close();
+          })();
         },
         true,
       ),
