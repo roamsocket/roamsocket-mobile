@@ -21,6 +21,7 @@ import os from "node:os";
 import https from "node:https";
 import http from "node:http";
 import { pipeline } from "node:stream/promises";
+import { productDataPath } from "../product.js";
 
 const execFileP = promisify(execFile);
 
@@ -115,7 +116,7 @@ function exeName(bin: string): string {
 /** Directory for app-managed tunnel binaries. Overridable via APC_BIN_DIR. */
 export function managedBinDir(): string {
   if (process.env.APC_BIN_DIR) return process.env.APC_BIN_DIR;
-  return path.join(os.homedir(), ".anyprov-code", "bin");
+  return productDataPath("bin");
 }
 
 export function ensureManagedBinDir(): string {
@@ -374,7 +375,7 @@ function download(url: string, dest: string, log: InstallLog): Promise<void> {
         u,
         {
           headers: {
-            "User-Agent": "anyprov-code-desktop",
+            "User-Agent": "CodeSocket-desktop",
             Accept: "*/*",
           },
         },

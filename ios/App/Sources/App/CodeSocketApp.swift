@@ -2,7 +2,7 @@ import SwiftUI
 import AnyProvCore
 
 @main
-struct AnyProvCodeApp: App {
+struct CodeSocketApp: App {
     @StateObject private var state = AppState(secrets: KeychainSecretStore())
 
     init() {

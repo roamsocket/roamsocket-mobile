@@ -95,7 +95,7 @@ export async function printPairingBanner(info: PairBannerInfo): Promise<void> {
   const lines: string[] = [];
   lines.push("");
   lines.push(`┌${boxLine(width)}┐`);
-  lines.push(`│${"AnyProv Code — Pairing code".padStart(Math.floor((width + 26) / 2)).padEnd(width)}│`);
+  lines.push(`│${"CodeSocket — Pairing code".padStart(Math.floor((width + 26) / 2)).padEnd(width)}│`);
   lines.push(`│${"".padEnd(width)}│`);
   lines.push(`│${spaced.padStart(Math.floor((width + spaced.length) / 2)).padEnd(width)}│`);
   lines.push(`│${"".padEnd(width)}│`);
@@ -118,7 +118,7 @@ export async function printPairingBanner(info: PairBannerInfo): Promise<void> {
   lines.push(`Pair URL: ${payload.host}`);
   // Keep this exact prefix for smoke tests / log scrapers.
   lines.push(`Pairing code: ${digits}${info.mock ? "  (MOCK agent)" : ""}`);
-  if (info.advertise) lines.push("Discovery: Bonjour _anyprov-code._tcp");
+  if (info.advertise) lines.push("Discovery: Bonjour _codesocket._tcp");
   if (info.autoTunnel && !usingTunnel) {
     lines.push("Auto tunnel: on (public URL + QR update when ready)");
   } else if (info.autoTunnel && usingTunnel) {
@@ -131,8 +131,8 @@ export async function printPairingBanner(info: PairBannerInfo): Promise<void> {
   await printQr(
     payloadJson,
     usingTunnel
-      ? "Scan with AnyProv Code → Pair server → Scan QR (tunnel URL):"
-      : "Scan with AnyProv Code → Pair server → Scan QR:",
+      ? "Scan with CodeSocket → Pair server → Scan QR (tunnel URL):"
+      : "Scan with CodeSocket → Pair server → Scan QR:",
   );
 }
 
@@ -169,7 +169,7 @@ export async function printTunnelReadyBanner(info: TunnelReadyInfo): Promise<voi
 
   await printQr(
     payloadJson,
-    "Scan with AnyProv Code → Pair server → Scan QR (public tunnel):",
+    "Scan with CodeSocket → Pair server → Scan QR (public tunnel):",
   );
 }
 

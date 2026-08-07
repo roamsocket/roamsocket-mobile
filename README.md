@@ -1,4 +1,4 @@
-# AnyProv Code
+# CodeSocket
 
 An open-source, native **iOS** coding client, plus
 a **desktop companion server** that actually runs code.
@@ -64,8 +64,8 @@ Requires a Mac with Xcode 15+ and [XcodeGen](https://github.com/yonsm/XcodeGen).
 
 ```bash
 cd ios
-xcodegen generate          # creates AnyProvCode.xcodeproj
-open AnyProvCode.xcodeproj
+xcodegen generate          # creates CodeSocket.xcodeproj
+open CodeSocket.xcodeproj
 ```
 
 Run on a simulator or device, then in **Settings**:
@@ -88,7 +88,7 @@ cd landing
 npm install
 npm run dev          # local preview (Wrangler)
 npx wrangler login   # once
-npm run deploy       # https://anyprov-code.<account>.workers.dev
+npm run deploy       # https://codesocket.<account>.workers.dev
 ```
 
 See [`landing/README.md`](./landing/README.md) for custom domains and Git-connected builds.

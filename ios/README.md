@@ -8,8 +8,8 @@ Requires Xcode 15+ and [XcodeGen](https://github.com/yonsm/XcodeGen)
 (`brew install xcodegen`).
 
 ```bash
-xcodegen generate      # reads project.yml → AnyProvCode.xcodeproj
-open AnyProvCode.xcodeproj
+xcodegen generate      # reads project.yml → CodeSocket.xcodeproj
+open CodeSocket.xcodeproj
 ```
 
 The app target depends on the local `AnyProvCore` Swift package plus
@@ -22,10 +22,11 @@ Metal chat.
 device supports it (iOS 26+ with Apple Intelligence enabled). Chat only —
 coding sessions never use it (`ProviderID.appleFoundation.supportsCodingAgent == false`).
 
-**Metal (MLX)** models use [mlx-swift-lm](https://github.com/ml-explore/mlx-swift-lm).
-They appear under **Settings → On-device (Metal)** and only in the **chat**
-model picker — coding sessions never use them
-(`ProviderID.localMetal.supportsCodingAgent == false`).
+**Metal (MLX)** on the phone uses [mlx-swift-lm](https://github.com/ml-explore/mlx-swift-lm).
+Phone weights appear under **Settings → On-device (Metal)** and in the **chat**
+model picker. **Coding** sessions list Metal models installed on the paired
+**desktop** instead (`GET /metal/models`), because phone and desktop stores
+may not match.
 
 First CLI build may need:
 
@@ -34,7 +35,7 @@ First CLI build may need:
 xcodebuild -downloadComponent MetalToolchain
 
 # Trust SPM build plugins (mlx-swift ships a Linux CudaBuild plugin)
-xcodebuild -project AnyProvCode.xcodeproj -scheme AnyProvCode \
+xcodebuild -project CodeSocket.xcodeproj -scheme CodeSocket \
   -destination 'platform=iOS Simulator,name=iPhone 16' \
   -skipPackagePluginValidation -skipMacroValidation \
   build

@@ -9,14 +9,14 @@ import { VitePlugin } from "@electron-forge/plugin-vite";
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
-    name: "AnyProv Code",
-    executableName: "anyprov-code",
-    appBundleId: "app.anyprovcode.desktop",
+    name: "CodeSocket",
+    executableName: "codesocket",
+    appBundleId: "app.codesocket.desktop",
   },
   rebuildConfig: {},
   makers: [
     new MakerZIP({}, ["darwin", "linux", "win32"]),
-    new MakerSquirrel({ name: "anyprov_code" }, ["win32"]),
+    new MakerSquirrel({ name: "codesocket" }, ["win32"]),
     new MakerDMG({}, ["darwin"]),
     new MakerDeb({}),
     new MakerRpm({}),

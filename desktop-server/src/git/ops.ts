@@ -7,7 +7,7 @@
 import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import os from "node:os";
+import { productDataPath } from "../product.js";
 
 export interface RepoConfig {
   url: string;
@@ -42,7 +42,7 @@ function run(cwd: string, args: string[], env: Record<string, string> = {}): Pro
 }
 
 export function defaultRoot(): string {
-  return path.join(os.homedir(), ".anyprov-code/sync");
+  return productDataPath("sync");
 }
 
 export async function ensureDir(p: string): Promise<string> {

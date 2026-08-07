@@ -1,19 +1,21 @@
 /**
  * Local-network discovery (Bonjour / mDNS).
  *
- * The desktop publishes `_anyprov-code._tcp` so phones on the same LAN can
+ * The desktop publishes `_codesocket._tcp` so phones on the same LAN can
  * find the coding server without typing an IP. Pairing still requires the
  * 6-digit code — we never put secrets in the TXT record.
  *
  * Service type must stay in sync with iOS:
  *   ios/AnyProvCore/.../Server/ServerDiscovery.swift
  *   Info.plist → NSBonjourServices
+ *   product.BONJOUR_SERVICE_TYPE
  */
 import os from "node:os";
 import Bonjour from "bonjour-service";
+import { BONJOUR_SERVICE_TYPE } from "./product.js";
 
 /** Bonjour service type (without leading underscore / protocol). */
-export const APC_BONJOUR_TYPE = "anyprov-code";
+export const APC_BONJOUR_TYPE = BONJOUR_SERVICE_TYPE;
 
 export interface AdvertiseOptions {
   name: string;

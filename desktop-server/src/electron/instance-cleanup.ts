@@ -1,5 +1,5 @@
 /**
- * Detect and kill leftover AnyProv Code / desktop-server processes that
+ * Detect and kill leftover CodeSocket / desktop-server processes that
  * would block a clean Electron launch (usually something still holding the
  * HTTP port, or a headless `tsx watch` / `npm start` still running).
  */
@@ -26,7 +26,7 @@ const SUPERVISOR_RE =
  */
 /** Match current and legacy product process names. */
 const APC_SERVER_RE =
-  /(?:anyprov-code-server|code-mobile-ai-server|(?:^|[\\/\s])tsx(?:\s+watch)?\s+.*(?:src[\\/])?index\.ts|node\s+.*desktop-server[\\/].*dist[\\/](?:src[\\/])?index\.js|desktop-server[\\/](?:src[\\/]index\.ts|dist[\\/](?:src[\\/])?index\.js)|AnyProv Code\.app[\\/]Contents[\\/]MacOS[\\/]anyprov-code|Code Mobile AI\.app[\\/]Contents[\\/]MacOS[\\/]code-mobile-ai|(?:^|[\\/\s])(?:anyprov-code|code-mobile-ai)(?:\.exe)?(?:\s|$))/i;
+  /(?:codesocket-server|anyprov-code-server|code-mobile-ai-server|(?:^|[\\/\s])tsx(?:\s+watch)?\s+.*(?:src[\\/])?index\.ts|node\s+.*desktop-server[\\/].*dist[\\/](?:src[\\/])?index\.js|desktop-server[\\/](?:src[\\/]index\.ts|dist[\\/](?:src[\\/])?index\.js)|CodeSocket\.app[\\/]Contents[\\/]MacOS[\\/](?:codesocket|anyprov-code)|Code Mobile AI\.app[\\/]Contents[\\/]MacOS[\\/]code-mobile-ai|(?:^|[\\/\s])(?:codesocket|anyprov-code|code-mobile-ai)(?:\.exe)?(?:\s|$))/i;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -138,7 +138,7 @@ async function listApcServerProcesses(): Promise<ConflictingProcess[]> {
           "-NonInteractive",
           "-Command",
           `Get-CimInstance Win32_Process | Where-Object {
-            $_.CommandLine -match 'anyprov-code|code-mobile-ai|desktop-server.*(index\\.(ts|js)|AnyProv Code|Code Mobile AI)'
+            $_.CommandLine -match 'codesocket|anyprov-code|code-mobile-ai|desktop-server.*(index\\.(ts|js)|CodeSocket|Code Mobile AI)'
           } | Select-Object ProcessId, CommandLine | ConvertTo-Csv -NoTypeInformation`,
         ],
         { maxBuffer: 4 * 1024 * 1024, windowsHide: true },
@@ -155,7 +155,7 @@ async function listApcServerProcesses(): Promise<ConflictingProcess[]> {
         out.push({
           pid,
           command: truncateCmd(command),
-          reason: "AnyProv Code server process",
+          reason: "CodeSocket server process",
         });
       }
     } catch {
@@ -182,7 +182,7 @@ async function listApcServerProcesses(): Promise<ConflictingProcess[]> {
       out.push({
         pid,
         command: truncateCmd(command),
-        reason: "AnyProv Code server process",
+        reason: "CodeSocket server process",
       });
     }
   } catch {
@@ -320,7 +320,7 @@ export function formatConflictDetail(conflicts: ConflictingProcess[], port: numb
     (c) => `• PID ${c.pid} — ${c.reason}\n  ${c.command || "(unknown command)"}`,
   );
   return (
-    `Another process is using port ${port} or looks like a leftover AnyProv Code server.\n\n` +
+    `Another process is using port ${port} or looks like a leftover CodeSocket server.\n\n` +
     `${lines.join("\n\n")}\n\n` +
     `Quit those processes so this launch can start cleanly?`
   );

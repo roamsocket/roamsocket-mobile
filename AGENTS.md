@@ -1,10 +1,10 @@
-# AGENTS.md — working in anyprov-code
+# AGENTS.md — working in CodeSocket
 
 Instructions for AI coding agents (Codex, Cursor, Grok, etc.) working in this repository.
 
 ## What this project is
 
-**AnyProv Code** is an open-source, native **iOS** client plus a **desktop companion** that runs the coding agent.
+**CodeSocket** is an open-source, native **iOS** client plus a **desktop companion** that runs the coding agent.
 
 | Mode | Path | Needs server? |
 |------|------|----------------|
@@ -16,12 +16,12 @@ BYOK: Anthropic, OpenAI, Ollama/OpenAI-compatible, Groq, OpenRouter, xAI, Mistra
 ## Repo map
 
 ```
-anyprov-code/
+codesocket/  (repo may still be checked out as code-mobile-ai)
 ├── ios/                      # SwiftUI app + AnyProvCore package
 │   ├── App/Sources/          # UI (edit these, not the generated xcodeproj)
 │   ├── AnyProvCore/         # Foundation-only: providers, GitHub, protocol, skills
 │   ├── project.yml           # XcodeGen source of truth
-│   ├── AnyProvCode.xcodeproj/  # GENERATED — do not hand-edit
+│   ├── CodeSocket.xcodeproj/  # GENERATED — do not hand-edit
 │   └── scripts/              # watch-xcode.sh, xcode helpers
 ├── desktop-server/           # Node/TS companion + Electron UI
 │   ├── src/                  # server, agent, tools, electron, renderer
@@ -36,7 +36,7 @@ anyprov-code/
 
 | Path | Role |
 |------|------|
-| `App/` | `AnyProvCodeApp`, `AppState`, `RootView`, Keychain |
+| `App/` | App entry, `AppState`, `RootView`, Keychain |
 | `DesignSystem/` | `Theme`, shared components |
 | `Features/Chat/` | Main chat UI (default landing) |
 | `Features/Code/` | `CodeHomeView` — coding entry |
@@ -119,7 +119,7 @@ Env: `PORT` (default 4319), `APC_MOCK=1`, `APC_NAME`.
 ```bash
 cd ios
 xcodegen generate                 # project.yml → .xcodeproj
-open AnyProvCode.xcodeproj
+open CodeSocket.xcodeproj
 
 cd AnyProvCore
 swift build
@@ -187,7 +187,7 @@ Open `landing/public/index.html` for a local file preview without Wrangler.
 
 ## What not to do
 
-- Don't hand-edit `ios/AnyProvCode.xcodeproj` as the primary workflow — edit `project.yml` / sources and regenerate.
+- Don't hand-edit `ios/CodeSocket.xcodeproj` as the primary workflow — edit `project.yml` / sources and regenerate.
 - Don't commit build products or `.xcuserstate`.
 - Don't break chat-without-server: chat must keep working with only a provider key.
 - Don't add a second theme or terracotta accents without an explicit product decision.

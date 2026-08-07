@@ -5,7 +5,7 @@
  */
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "anyprov-code",
+  "name": "codesocket",
   "compatibility_date": "2026-08-06",
   "preview_urls": true,
   "assets": {

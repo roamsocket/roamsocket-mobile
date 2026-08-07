@@ -1,6 +1,6 @@
 # desktop-server
 
-Node + TypeScript companion server for the anyprov-code iOS app. It pairs with
+Node + TypeScript companion server for the **CodeSocket** iOS app. It pairs with
 the app over a WebSocket, clones a GitHub repo, drives the agent loop against a
 provider, executes tools, and opens a pull request.
 
@@ -41,11 +41,13 @@ npm run make             # build distributable installers (.dmg/.exe/.zip)
 ```
 
 The Electron shell runs the same HTTP + WebSocket server in-process and opens
-a single window. Closing the window hides the app to the macOS menu bar /
-Windows task tray by default. The first close asks whether you want the app
-to fully quit on future closes; the answer is remembered.
+a full desktop **client** (sidebar: Chats, Projects, Artifacts, Code, Settings —
+no Vision) with BYOK chat streaming, on-device Metal models on macOS (chat only),
+and coding sessions against the local agent. Closing the window hides the app
+to the macOS menu bar / Windows task tray by default. The first close asks
+whether you want the app to fully quit on future closes; the answer is remembered.
 
-To really quit: tray menu → *Quit AnyProv Code*, or `Cmd-Q` on macOS.
+To really quit: tray menu → *Quit CodeSocket*, or `Cmd-Q` on macOS.
 
 ### Environment
 
@@ -53,13 +55,13 @@ To really quit: tray menu → *Quit AnyProv Code*, or `Cmd-Q` on macOS.
 |-----|---------|---------|
 | `PORT` | `4319` | HTTP + WebSocket port |
 | `APC_HOST` | `0.0.0.0` | bind address (`0.0.0.0` = LAN-reachable) |
-| `APC_NAME` | `anyprov-code desktop` | shown when pairing / Bonjour |
+| `APC_NAME` | `CodeSocket desktop` | shown when pairing / Bonjour |
 | `APC_ADVERTISE` | on | set `0` to disable Bonjour/mDNS LAN broadcast |
 | `APC_AUTO_TUNNEL` | on | set `0` to disable auto public tunnel after phone pair |
 | `APC_CLI_SETTINGS` | on (TTY) | set `0` to skip the interactive settings prompt |
 | `APC_MOCK` | unset | `1` runs a deterministic offline agent (no API key) |
 
-Shared connection prefs live in `~/.anyprov-code/desktop-prefs.json` (Electron
+Shared connection prefs live under `~/.codesocket/` (or legacy `~/.anyprov-code/` if already present) as `desktop-prefs.json` (Electron
 settings UI and the CLI menu edit the same file).
 
 ## Verify
@@ -92,12 +94,16 @@ src/
     main.ts             Electron main process: window, tray, close-to-tray,
                         IPC, safeStorage-backed secret persistence.
     preload.ts          contextBridge surface for the renderer.
+  client/               Pure UI helpers (greeting, history, projects, artifacts, theme)
+  metal/                On-device MLX catalog, download store, mlx-lm runtime (chat only)
   renderer/
-    index.html          Sidebar shell (Home / History / Settings).
-    styles.css          Dark, native-feeling theme.
-    main.ts             Hash-routed SPA: composer, streaming session,
-                        history list, settings (provider keys + GitHub).
-scripts/smoke.ts        offline end-to-end test
+    index.html          Full client shell (Chats / Projects / Artifacts / Code / Settings).
+    styles.css          Cool blue-grey theme shared with iOS.
+    main.ts             Hash-routed SPA: chat, code sessions, projects, artifacts, settings.
+    chat-stream.ts      BYOK provider streaming for chat mode.
+scripts/smoke.ts        offline end-to-end protocol test
+scripts/client-unit.ts  pure client module tests
+scripts/metal-check.ts  Metal catalog + runtime error-path checks
 forge.config.ts         Electron Forge + Vite plugin config
 vite.{main,preload,renderer}.config.ts   per-target Vite configs
 ```

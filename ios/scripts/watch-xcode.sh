@@ -37,7 +37,7 @@ IGNORE_PATTERNS=(
   "\\.build/"
   "build/"
   "DerivedData/"
-  "AnyProvCode\\.xcodeproj/"  # generated — don't watch the generated output
+  "CodeSocket\\.xcodeproj/"  # generated — don't watch the generated output
   "\\.swiftpm/"
   "\\.git/"
 )

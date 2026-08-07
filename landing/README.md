@@ -1,6 +1,6 @@
 # Landing (Cloudflare Workers)
 
-Static marketing site for **AnyProv Code**. No build step — HTML, CSS, and JS under `public/` are served as [Workers static assets](https://developers.cloudflare.com/workers/static-assets/).
+Static marketing site for **CodeSocket**. No build step — HTML, CSS, and JS under `public/` are served as [Workers static assets](https://developers.cloudflare.com/workers/static-assets/).
 
 ```
 landing/
@@ -30,7 +30,7 @@ Or open `public/index.html` directly in a browser (no Wrangler required).
 cd landing
 npm install
 npx wrangler login   # once per machine
-npm run deploy       # → https://anyprov-code.<account>.workers.dev
+npm run deploy       # → https://codesocket.<account>.workers.dev
 ```
 
 Dry-run (validate upload, no publish):
@@ -49,7 +49,7 @@ npm run deploy:dry
 
 ### Custom domain
 
-In the [Cloudflare dashboard](https://dash.cloudflare.com/) → **Workers & Pages** → **anyprov-code** → **Settings** → **Domains & Routes**, attach a custom domain. DNS must be on the same Cloudflare account.
+In the [Cloudflare dashboard](https://dash.cloudflare.com/) → **Workers & Pages** → **codesocket** → **Settings** → **Domains & Routes**, attach a custom domain. DNS must be on the same Cloudflare account.
 
 ### Git-connected deploys (optional)
 

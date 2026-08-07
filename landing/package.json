@@ -1,7 +1,7 @@
 {
-  "name": "anyprov-code-landing",
+  "name": "codesocket-landing",
   "private": true,
-  "description": "AnyProv Code marketing site — static assets on Cloudflare Workers",
+  "description": "CodeSocket marketing site — static assets on Cloudflare Workers",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",

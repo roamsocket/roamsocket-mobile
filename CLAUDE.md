@@ -4,7 +4,7 @@ Tooling-oriented notes for agents working in this repository. For the full archi
 
 ## Mission
 
-You are working on **AnyProv Code** (`anyprov-code`): a native iOS coding client with a desktop companion that runs the real coding agent (clone → tools → diffs → PR). Users bring their own API keys and endpoints.
+You are working on **CodeSocket**: a native iOS coding client with a desktop companion that runs the real coding agent (clone → tools → diffs → PR). Users bring their own API keys and endpoints.
 
 Prefer **correctness over drive-by refactors**. Match existing patterns in the feature area you touch.
 

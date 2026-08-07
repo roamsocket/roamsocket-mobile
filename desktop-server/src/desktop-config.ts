@@ -1,11 +1,11 @@
 /**
  * Shared desktop preferences for headless CLI + Electron.
- * Stored at ~/.anyprov-code/desktop-prefs.json (Electron may also keep a
+ * Stored under product data dir as desktop-prefs.json (Electron may also keep a
  * copy under userData for window/tray prefs).
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { productDataDir } from "./product.js";
 
 export type TunnelProviderPref = "auto" | "ngrok" | "cloudflare" | "localtunnel" | "bore";
 
@@ -40,7 +40,7 @@ export const DEFAULT_DESKTOP_PREFS: DesktopPrefs = {
 };
 
 function configDir(): string {
-  return path.join(os.homedir(), ".anyprov-code");
+  return productDataDir();
 }
 
 export function desktopPrefsPath(): string {
