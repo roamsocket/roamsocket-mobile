@@ -130,9 +130,9 @@ struct ChatMessageView: View {
                 MarkdownContentView(text: resolved.content, fontSize: 17)
             }
 
-            // Animated typing dots while waiting on the model after tools
+            // Animated typing indicator while waiting on the model after tools
             // finish (or when there are no tool lines yet). Skip when the
-            // thinking row already shows its "Thinking..." placeholder.
+            // thinking row already shows its own "Thinking" + dots placeholder.
             if message.isStreaming, resolved.content.isEmpty {
                 let toolsBusy = message.toolCalls?.contains {
                     if case .running = $0.status { return true }
@@ -143,7 +143,7 @@ struct ChatMessageView: View {
                     $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 } ?? false
                 if !toolsBusy, !thinkingPlaceholder {
-                    TypingDotsView()
+                    AssistantTypingIndicator()
                         .padding(.top, 4)
                 }
             }

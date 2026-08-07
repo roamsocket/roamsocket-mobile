@@ -38,6 +38,8 @@ import {
   setWebSearch,
   setResearch,
   activateSkill,
+  applyMarketplaceConnectors,
+  applyMarketplacePluginCategories,
   SkillsStore,
   UserMemoryStore,
   MEMORY_CATEGORY_ORDER,
@@ -53,6 +55,15 @@ import {
   friendlyModelLabel,
   listCloudModels,
   isUsableChatSelection,
+  loadCustomProviders,
+  addCustomProvider,
+  updateCustomProvider,
+  removeCustomProvider,
+  customProviderId,
+  resolveProviderEndpoint,
+  mergeProviderCatalog,
+  type CustomProvider,
+  type CustomApiStyle,
 } from "../client/index.js";
 import { streamChat } from "./chat-stream.js";
 import {
@@ -198,7 +209,8 @@ async function lightweightComplete(opts: {
     if (!prefs.linkedProvider || !prefs.linkedModel) return null;
     try {
       const key = await window.apc.secrets.readProviderKey(prefs.linkedProvider);
-      if (!key && prefs.linkedProvider !== "localMetal") return null;
+      const ep = endpointFor(prefs.linkedProvider);
+      if (!key && prefs.linkedProvider !== "localMetal" && !ep) return null;
       const text = await streamChat({
         provider: prefs.linkedProvider,
         model: prefs.linkedModel,
@@ -207,6 +219,8 @@ async function lightweightComplete(opts: {
           { role: "system", content: opts.system },
           { role: "user", content: opts.user },
         ],
+        baseUrl: ep?.baseUrl,
+        apiStyle: ep?.apiStyle,
         onDelta: () => {},
       });
       const trimmed = text.trim();
@@ -251,12 +265,34 @@ type SettingsTab =
   | "skills"
   | "connectors"
   | "plugins"
+  | "marketplace"
   | "memory"
   | "effort";
+
+type MarketplaceStatus = Awaited<ReturnType<ApcApi["marketplace"]["status"]>>;
+
+/** Apply marketplace catalog into renderer-local connector / plugin menus. */
+function applyMarketplaceStatusToRenderer(status: MarketplaceStatus): void {
+  state.marketplace = status;
+  const connectors = status.catalog.connectors.map((c) => ({
+    id: c.id,
+    name: c.name,
+    available: c.available === false ? false : true,
+  }));
+  if (connectors.length) applyMarketplaceConnectors(connectors);
+  const cats = status.catalog.pluginCategories.map((c) => ({
+    id: c.id,
+    label: c.label,
+  }));
+  if (cats.length) applyMarketplacePluginCategories(cats);
+  // Reload composer tools so new connector ids get default toggles.
+  composerTools = loadComposerTools(window.localStorage);
+}
 
 const state = {
   bootstrap: null as Awaited<ReturnType<ApcApi["bootstrap"]>> | null,
   secrets: null as Awaited<ReturnType<ApcApi["secrets"]["get"]>> | null,
+  marketplace: null as MarketplaceStatus | null,
   route: "chats" as SidebarDestination,
   settingsTab: "general" as SettingsTab,
   // Chat model selection — empty until the user picks a *real* model
@@ -402,6 +438,20 @@ function renderRecents() {
 // ---------------------------------------------------------------------------
 // Chat view
 // ---------------------------------------------------------------------------
+/** Custom providers configured in local storage (non-secret metadata). */
+function customsList(): CustomProvider[] {
+  return loadCustomProviders(window.localStorage);
+}
+
+function isCustomConfigured(providerId: string): boolean {
+  return resolveProviderEndpoint(providerId, customsList()) != null;
+}
+
+/** Endpoint override for chat/code when provider is custom or has a stored base URL. */
+function endpointFor(providerId: string) {
+  return resolveProviderEndpoint(providerId, customsList());
+}
+
 /** True when current chat selection is a real available model (not a fake default). */
 function hasUsableChatModel(): boolean {
   const hasKey =
@@ -411,6 +461,7 @@ function hasUsableChatModel(): boolean {
   return isUsableChatSelection(state.provider, state.model, {
     hasProviderKey: hasKey,
     metalDownloadedIds: state.metalDownloadedIds,
+    customConfigured: isCustomConfigured(state.provider),
   });
 }
 
@@ -519,8 +570,28 @@ function renderChat() {
       state.scrollToMessageId ??
       openArt?.sourceMessageId ??
       (openArt ? findMessageIdForArtifact(thread!, openArt) : null);
+    const lastMsg = thread!.messages[thread!.messages.length - 1];
     for (const m of thread!.messages) {
-      const node = messageNode(m.role, m.content, false, m.id);
+      const isLiveEmptyAssistant =
+        state.chatBusy &&
+        m.role === "assistant" &&
+        m.id === lastMsg?.id &&
+        !m.content.trim();
+      const node = messageNode(
+        m.role,
+        m.content,
+        state.chatBusy && m.role === "assistant" && m.id === lastMsg?.id,
+        m.id,
+      );
+      if (isLiveEmptyAssistant) {
+        // Clear empty text so the typing indicator is the only signal.
+        const bubble = node.querySelector(".bubble");
+        if (bubble) {
+          bubble.textContent = "";
+          bubble.classList.add("typing");
+          bubble.append(typingIndicatorNode());
+        }
+      }
       if (highlightId && m.id === highlightId) {
         node.classList.add("msg-artifact-source");
       }
@@ -728,6 +799,22 @@ function messageNode(
   const bubble = el("div", { class: `bubble${streaming ? " streaming" : ""}` }, [content]);
   wrap.append(bubble);
   return wrap;
+}
+
+/** "Thinking" + three bouncing dots while the assistant has no text yet. */
+function typingIndicatorNode(): HTMLElement {
+  const row = el("div", {
+    class: "typing-indicator",
+    role: "status",
+    "aria-label": "Assistant is thinking",
+  });
+  row.append(el("span", { class: "typing-label" }, ["Thinking"]));
+  const dots = el("span", { class: "typing-dots", "aria-hidden": "true" });
+  for (let i = 0; i < 3; i++) {
+    dots.append(el("span", { class: "typing-dot" }));
+  }
+  row.append(dots);
+  return row;
 }
 
 function goSettingsTab(tab: typeof state.settingsTab): void {
@@ -1023,15 +1110,22 @@ async function populateModelPickerList(
   listHost.innerHTML = "";
   let anyModel = false;
 
-  // --- Cloud providers with keys: live model list only ---
-  for (const p of CHAT_PROVIDERS) {
+  const catalog = mergeProviderCatalog(customsList());
+
+  // --- Cloud + custom providers: live model list when reachable ---
+  for (const p of catalog) {
     if (p.id === "localMetal") continue;
+    const custom = p.id.startsWith("custom:");
     const present = !!state.secrets?.providerKeys[p.id]?.present;
-    if (!present) continue;
+    const ep = endpointFor(p.id);
+    if (!custom && !present) continue;
+    if (custom && !ep) continue;
 
     const section = el("div", { class: "model-picker-section" });
     section.append(
-      el("div", { class: "settings-hint", style: "margin:10px 0 4px" }, [p.label]),
+      el("div", { class: "settings-hint", style: "margin:10px 0 4px" }, [
+        custom ? `${p.label} (custom)` : p.label,
+      ]),
     );
     const loading = el("div", { class: "settings-hint" }, ["Loading models…"]);
     section.append(loading);
@@ -1039,14 +1133,43 @@ async function populateModelPickerList(
 
     try {
       const key = (await window.apc.secrets.readProviderKey(p.id)) || "";
-      const models = await listCloudModels(p.id, key);
+      const models = await listCloudModels(p.id, key, {
+        baseUrl: ep?.baseUrl,
+        apiStyle: ep?.apiStyle,
+      });
       loading.remove();
       if (models.length === 0) {
-        section.append(
-          el("div", { class: "settings-hint" }, [
-            "No models returned for this key. Check the key in Settings.",
-          ]),
-        );
+        // Custom endpoints may not expose /models — offer default / freeform.
+        if (custom) {
+          const fallback = p.defaultModel || "default";
+          const opt = el("button", { class: "modal-option", type: "button" });
+          const left = el("div", {});
+          left.append(el("div", {}, [fallback]));
+          left.append(
+            el("div", { class: "sub" }, [
+              ep?.baseUrl ? `Use model id at ${ep.baseUrl}` : "Enter model id",
+            ]),
+          );
+          opt.append(left);
+          opt.addEventListener("click", () => {
+            const typed = prompt("Model id for this custom provider", fallback);
+            if (!typed?.trim()) return;
+            state.provider = p.id;
+            state.model = typed.trim();
+            if (history.activeChatId) {
+              history.setModel(history.activeChatId, state.provider, state.model);
+            }
+            onPicked();
+          });
+          section.append(opt);
+          anyModel = true;
+        } else {
+          section.append(
+            el("div", { class: "settings-hint" }, [
+              "No models returned for this key. Check the key in Settings.",
+            ]),
+          );
+        }
         continue;
       }
       anyModel = true;
@@ -1074,16 +1197,16 @@ async function populateModelPickerList(
     }
   }
 
-  // Providers without keys → single CTA (not fake models)
+  // Built-ins without keys → single CTA (not fake models)
   const missingKeys = CHAT_PROVIDERS.filter(
     (p) => p.id !== "localMetal" && !state.secrets?.providerKeys[p.id]?.present,
   );
-  if (missingKeys.length > 0) {
+  if (missingKeys.length > 0 || customsList().length === 0) {
     const add = el("button", { class: "modal-option", type: "button" });
     add.append(el("div", {}, ["+ Add a model"]));
     add.append(
       el("div", { class: "sub" }, [
-        "Add an API key in Settings to list real models from Anthropic, OpenAI, and more",
+        "Add an API key or custom provider in Settings → Providers",
       ]),
     );
     add.addEventListener("click", () => {
@@ -1193,8 +1316,14 @@ async function onChatSend(ta: HTMLTextAreaElement) {
 
   if (state.provider !== "localMetal") {
     const key = await window.apc.secrets.readProviderKey(state.provider);
-    if (!key) {
+    const customOk = isCustomConfigured(state.provider);
+    if (!key && !customOk) {
       state.chatError = `Add an API key for ${state.provider} in Settings.`;
+      renderChat();
+      return;
+    }
+    if (state.provider.startsWith("custom:") && !customOk) {
+      state.chatError = "This custom provider is missing a base URL. Fix it in Settings → Providers.";
       renderChat();
       return;
     }
@@ -1267,12 +1396,15 @@ async function onChatSend(ta: HTMLTextAreaElement) {
       history.updateLastAssistant(thread.id, full);
       renderChat();
     } else {
-      const apiKey = (await window.apc.secrets.readProviderKey(state.provider))!;
+      const apiKey = (await window.apc.secrets.readProviderKey(state.provider)) || "";
+      const ep = endpointFor(state.provider);
       full = await streamChat({
         provider: state.provider,
         model: state.model,
         apiKey,
         messages: turns,
+        baseUrl: ep?.baseUrl,
+        apiStyle: ep?.apiStyle,
         onDelta: (chunk) => {
           full += chunk;
           history.updateLastAssistant(thread.id, full);
@@ -1280,6 +1412,7 @@ async function onChatSend(ta: HTMLTextAreaElement) {
           if (live) {
             live.textContent = full;
             live.classList.add("streaming");
+            live.classList.remove("typing");
           }
         },
       });
@@ -2254,12 +2387,20 @@ function renderCodeHome(view: HTMLElement) {
     `${state.code.provider} · ${state.code.model || "model"} · ${state.code.effort}`,
   ]);
   modelBtn.addEventListener("click", () => {
-    const provider = prompt("Provider id", state.code.provider) ?? state.code.provider;
+    const catalog = mergeProviderCatalog(customsList()).filter((p) => p.id !== "localMetal");
+    const choices = catalog
+      .map((p) => `${p.id} (${p.label})`)
+      .join("\n");
+    const provider =
+      prompt(
+        `Provider id (built-in or custom:<slug>)\n\n${choices}`,
+        state.code.provider,
+      ) ?? state.code.provider;
     const model = prompt("Model id", state.code.model) ?? state.code.model;
     const effort = (prompt("Effort (low|medium|high)", state.code.effort) ??
       state.code.effort) as Effort;
-    state.code.provider = provider;
-    state.code.model = model;
+    state.code.provider = provider.trim();
+    state.code.model = model.trim();
     if (EFFORTS.includes(effort)) state.code.effort = effort;
     renderCodeHome(view);
   });
@@ -2389,15 +2530,25 @@ async function onCodeSend(ta: HTMLTextAreaElement) {
   if (!body) return;
 
   const isMetal = state.code.provider === "localMetal";
+  const codeEp = endpointFor(state.code.provider);
   const apiKey = isMetal
     ? "local"
-    : await window.apc.secrets.readProviderKey(state.code.provider);
-  if (!apiKey) {
+    : (await window.apc.secrets.readProviderKey(state.code.provider)) || "";
+  if (!apiKey && !codeEp) {
     appendCodeBubble(
       body,
       "error",
       "missing API key",
       `Add a key for ${state.code.provider} in Settings before sending a coding task.`,
+    );
+    return;
+  }
+  if (state.code.provider.startsWith("custom:") && !codeEp) {
+    appendCodeBubble(
+      body,
+      "error",
+      "missing base URL",
+      "This custom provider needs a base URL in Settings → Providers.",
     );
     return;
   }
@@ -2444,7 +2595,10 @@ async function onCodeSend(ta: HTMLTextAreaElement) {
           provider: state.code.provider,
           model: state.code.model,
           effort: state.code.effort,
-          apiKey,
+          apiKey: apiKey || "none",
+          ...(codeEp
+            ? { baseUrl: codeEp.baseUrl, apiStyle: codeEp.apiStyle }
+            : {}),
         },
         permissionMode: "acceptEdits",
         skills: [],
@@ -2496,6 +2650,7 @@ function renderSettings() {
     { id: "lightweight", label: "Lightweight Tasks", group: "App" },
     { id: "connection", label: "Connection", group: "App" },
     { id: "effort", label: "Effort", group: "Chat" },
+    { id: "marketplace", label: "Marketplace", group: "Customize" },
     { id: "skills", label: "Skills", group: "Customize" },
     { id: "connectors", label: "Connectors", group: "Customize" },
     { id: "memory", label: "Manage memory", group: "Customize" },
@@ -2540,6 +2695,7 @@ function fillSettingsPanel(panel: HTMLElement, tab: SettingsTab): void {
     connection: "Connection",
     effort: "Effort",
     memory: "Manage memory",
+    marketplace: "Marketplace",
     skills: "Skills",
     connectors: "Connectors",
     plugins: "Plugins",
@@ -2555,6 +2711,7 @@ function fillSettingsPanel(panel: HTMLElement, tab: SettingsTab): void {
   else if (tab === "connection") fillSettingsConnection(panel);
   else if (tab === "effort") fillSettingsEffort(panel);
   else if (tab === "memory") fillSettingsMemory(panel);
+  else if (tab === "marketplace") void fillSettingsMarketplace(panel);
   else if (tab === "skills") fillSettingsSkills(panel);
   else if (tab === "connectors") fillSettingsConnectors(panel);
   else if (tab === "plugins") fillSettingsPlugins(panel);
@@ -2661,6 +2818,150 @@ function fillSettingsProviders(panel: HTMLElement): void {
     providers.append(row);
   }
   panel.append(providers);
+
+  // --- Custom / OpenAI-compatible & Anthropic proxy endpoints ---
+  const customSec = el("div", { class: "settings-section" });
+  customSec.append(el("h3", {}, ["Custom providers"]));
+  customSec.append(
+    el("p", { class: "settings-hint" }, [
+      "Add OpenAI-compatible or Anthropic Messages endpoints (Ollama, LM Studio, proxies). Base URL should include the version segment (e.g. http://localhost:11434/v1). Keys are optional for local servers.",
+    ]),
+  );
+
+  const customs = customsList();
+  if (customs.length === 0) {
+    customSec.append(
+      el("p", { class: "settings-hint" }, ["No custom providers yet."]),
+    );
+  }
+  for (const prov of customs) {
+    const wireId = customProviderId(prov.id);
+    const present = !!state.secrets?.providerKeys[wireId]?.present;
+    const row = el("div", { class: "provider-row" });
+    const title = el("div", {});
+    title.append(document.createTextNode(prov.label));
+    title.append(
+      el("div", { class: "settings-hint", style: "margin:0" }, [
+        `${wireId} · ${prov.apiStyle} · ${prov.baseUrl}`,
+      ]),
+    );
+    row.append(title);
+    row.append(
+      el("div", { class: `pill ${present ? "ok" : "empty"}` }, [
+        present ? "key set" : "no key",
+      ]),
+    );
+    const actions = el("div", { class: "provider-row-actions" });
+    const keyBtn = el("button", { class: "ghost-btn", type: "button" }, [
+      present ? "Replace key" : "Add key",
+    ]);
+    keyBtn.addEventListener("click", async () => {
+      const v = prompt(`${present ? "Replace" : "Add"} API key for ${prov.label} (optional for local):`, "");
+      if (v == null) return;
+      if (!v.trim()) {
+        await window.apc.secrets.clearProvider(wireId);
+      } else {
+        await window.apc.secrets.set({ providerKeys: { [wireId]: v.trim() } as any });
+      }
+      state.secrets = await window.apc.secrets.get();
+      renderSettings();
+    });
+    const editBtn = el("button", { class: "ghost-btn", type: "button" }, ["Edit"]);
+    editBtn.addEventListener("click", () => {
+      promptEditCustomProvider(prov);
+      renderSettings();
+    });
+    const delBtn = el("button", { class: "danger-btn", type: "button" }, ["Remove"]);
+    delBtn.addEventListener("click", async () => {
+      if (!confirm(`Remove custom provider “${prov.label}”?`)) return;
+      removeCustomProvider(window.localStorage, prov.id);
+      await window.apc.secrets.clearProvider(wireId);
+      state.secrets = await window.apc.secrets.get();
+      if (state.provider === wireId) {
+        state.provider = "anthropic";
+        state.model = "";
+      }
+      if (state.code.provider === wireId) {
+        state.code.provider = "anthropic";
+        state.code.model = "";
+      }
+      renderSettings();
+    });
+    actions.append(keyBtn, " ", editBtn, " ", delBtn);
+    row.append(actions);
+    customSec.append(row);
+  }
+
+  const addCustom = el("button", {
+    class: "primary-btn",
+    type: "button",
+    style: "margin-top:12px",
+  }, ["Add custom provider"]);
+  addCustom.addEventListener("click", () => {
+    promptAddCustomProvider();
+    renderSettings();
+  });
+  customSec.append(addCustom);
+  panel.append(customSec);
+}
+
+function promptAddCustomProvider(): void {
+  const label = prompt("Display name (e.g. Ollama, Work proxy)");
+  if (!label?.trim()) return;
+  const baseUrl = prompt(
+    "Base URL (include version segment, e.g. http://localhost:11434/v1)",
+    "http://localhost:11434/v1",
+  );
+  if (!baseUrl?.trim()) return;
+  const styleRaw = prompt("API style: openai or anthropic", "openai")?.trim().toLowerCase();
+  const apiStyle: CustomApiStyle = styleRaw === "anthropic" ? "anthropic" : "openai";
+  const defaultModel =
+    prompt("Default model id (optional, e.g. llama3.2)", "")?.trim() || undefined;
+  const rec = addCustomProvider(window.localStorage, {
+    label: label.trim(),
+    baseUrl: baseUrl.trim(),
+    apiStyle,
+    defaultModel,
+  });
+  if (!rec) {
+    alert("Could not save custom provider. Check the base URL (http/https).");
+    return;
+  }
+  const key = prompt(
+    `API key for ${rec.label} (optional — leave blank for local servers)`,
+    "",
+  );
+  if (key?.trim()) {
+    void window.apc.secrets.set({ providerKeys: { [customProviderId(rec.id)]: key.trim() } as any }).then(
+      async () => {
+        state.secrets = await window.apc.secrets.get();
+      },
+    );
+  }
+}
+
+function promptEditCustomProvider(prov: CustomProvider): void {
+  const label = prompt("Display name", prov.label);
+  if (label == null) return;
+  const baseUrl = prompt("Base URL (include /v1 or equivalent)", prov.baseUrl);
+  if (baseUrl == null) return;
+  const styleRaw = prompt("API style: openai or anthropic", prov.apiStyle)?.trim().toLowerCase();
+  if (styleRaw == null) return;
+  const apiStyle: CustomApiStyle = styleRaw === "anthropic" ? "anthropic" : "openai";
+  const defaultModel = prompt(
+    "Default model id (optional)",
+    prov.defaultModel ?? "",
+  );
+  if (defaultModel == null) return;
+  const updated = updateCustomProvider(window.localStorage, prov.id, {
+    label: label.trim() || prov.label,
+    baseUrl: baseUrl.trim() || prov.baseUrl,
+    apiStyle,
+    defaultModel: defaultModel.trim(),
+  });
+  if (!updated) {
+    alert("Could not update custom provider. Check the base URL.");
+  }
 }
 
 function fillSettingsGithub(panel: HTMLElement): void {
@@ -3350,11 +3651,152 @@ function fillSettingsSkills(panel: HTMLElement): void {
       onSaved: () => renderSettings(),
     });
   });
-  const browse = el("button", { class: "ghost-btn", type: "button" }, ["Browse skills"]);
+  const browse = el("button", { class: "ghost-btn", type: "button" }, ["Marketplace"]);
   browse.addEventListener("click", () => {
+    state.settingsTab = "marketplace";
+    renderSettings();
+  });
+  const docs = el("button", { class: "ghost-btn", type: "button" }, ["Browse community"]);
+  docs.addEventListener("click", () => {
     void window.apc.shell.open("https://github.com/anthropics/skills");
   });
-  actions.append(create, browse);
+  actions.append(create, browse, docs);
+
+  const mpSkills = state.marketplace?.catalog.skills ?? [];
+  if (mpSkills.length) {
+    sec.append(el("div", { class: "settings-subhead", style: "margin-top:18px" }, ["From marketplace"]));
+    const mpTable = el("div", { class: "settings-table skills-table" });
+    for (const s of mpSkills.slice(0, 12)) {
+      const row = el("div", { class: "settings-table-row" });
+      row.append(el("span", {}, [s.name + (s.featured ? " ★" : "")]));
+      row.append(el("span", { class: "settings-hint" }, [s.description.slice(0, 80)]));
+      mpTable.append(row);
+    }
+    sec.append(mpTable);
+  }
+
+  sec.append(actions);
+  panel.append(sec);
+}
+
+async function fillSettingsMarketplace(panel: HTMLElement): Promise<void> {
+  const sec = el("div", { class: "settings-section" });
+  sec.append(
+    el("p", { class: "settings-hint" }, [
+      "Marketplaces publish connectors, skill listings, plugins, and recommended Metal models via catalog.json. The official source is kind365/codesocket-marketplace — add your own GitHub repos anytime.",
+    ]),
+  );
+
+  let status: MarketplaceStatus;
+  try {
+    status = state.marketplace ?? (await window.apc.marketplace.status());
+    state.marketplace = status;
+  } catch (err) {
+    sec.append(
+      el("div", { class: "notice warn" }, [
+        `Could not load marketplaces: ${(err as Error).message ?? err}`,
+      ]),
+    );
+    panel.append(sec);
+    return;
+  }
+
+  const meta = el("div", { class: "settings-hint", style: "margin-bottom:12px" });
+  meta.textContent = status.usingBundledOnly
+    ? "Using bundled catalog (offline or no successful fetch yet)."
+    : `Merged catalog: ${status.catalog.connectors.length} connectors · ${status.catalog.skills.length} skills · ${status.catalog.plugins.length} plugins · ${status.catalog.metalModels.length} Metal models`;
+  sec.append(meta);
+
+  const list = el("div", { class: "settings-table" });
+  for (const src of status.sources) {
+    const row = el("div", { class: "settings-table-row", style: "align-items:flex-start;gap:10px" });
+    const left = el("div", { style: "flex:1;min-width:0" });
+    left.append(
+      el("div", { class: "settings-skill-name" }, [
+        src.name + (src.isDefault ? " (default)" : ""),
+      ]),
+    );
+    left.append(
+      el("div", { class: "settings-hint", style: "word-break:break-all" }, [src.url]),
+    );
+    if (src.lastError) {
+      left.append(el("div", { class: "settings-hint", style: "color:var(--warn,#e8a838)" }, [src.lastError]));
+    } else if (src.catalogName) {
+      left.append(el("div", { class: "settings-hint" }, [src.catalogName]));
+    }
+    row.append(left);
+
+    const en = el("button", {
+      class: `ghost-btn sm${src.enabled ? "" : ""}`,
+      type: "button",
+    }, [src.enabled ? "On" : "Off"]);
+    en.addEventListener("click", async () => {
+      try {
+        const next = await window.apc.marketplace.setSourceEnabled(src.id, !src.enabled);
+        applyMarketplaceStatusToRenderer(next);
+        renderSettings();
+      } catch (e) {
+        alert(String((e as Error).message ?? e));
+      }
+    });
+    row.append(en);
+
+    if (!src.isDefault) {
+      const rm = el("button", { class: "danger-btn sm", type: "button" }, ["Remove"]);
+      rm.addEventListener("click", async () => {
+        if (!confirm(`Remove marketplace “${src.name}”?`)) return;
+        try {
+          const next = await window.apc.marketplace.removeSource(src.id);
+          applyMarketplaceStatusToRenderer(next);
+          renderSettings();
+        } catch (e) {
+          alert(String((e as Error).message ?? e));
+        }
+      });
+      row.append(rm);
+    }
+    list.append(row);
+  }
+  sec.append(list);
+
+  const actions = el("div", { class: "tunnel-cli-actions", style: "margin-top:14px;justify-content:flex-start" });
+  const refresh = el("button", { class: "primary-btn", type: "button" }, ["Refresh all"]);
+  refresh.addEventListener("click", async () => {
+    refresh.disabled = true;
+    refresh.textContent = "Refreshing…";
+    try {
+      const next = await window.apc.marketplace.refresh();
+      applyMarketplaceStatusToRenderer(next);
+      renderSettings();
+    } catch (e) {
+      alert(String((e as Error).message ?? e));
+      refresh.disabled = false;
+      refresh.textContent = "Refresh all";
+    }
+  });
+  const add = el("button", { class: "ghost-btn", type: "button" }, ["Add marketplace"]);
+  add.addEventListener("click", async () => {
+    const url = prompt(
+      "Marketplace catalog URL (raw catalog.json, github.com blob/tree link, or owner/repo)",
+    );
+    if (!url?.trim()) return;
+    const name = prompt("Display name (optional)") ?? undefined;
+    try {
+      const res = await window.apc.marketplace.addSource({
+        url: url.trim(),
+        name: name?.trim() || undefined,
+      });
+      applyMarketplaceStatusToRenderer(res.status);
+      renderSettings();
+    } catch (e) {
+      alert(String((e as Error).message ?? e));
+    }
+  });
+  const docs = el("button", { class: "ghost-btn", type: "button" }, ["How to make one"]);
+  docs.addEventListener("click", () => {
+    void window.apc.shell.open("https://github.com/kind365/codesocket-marketplace");
+  });
+  actions.append(refresh, add, docs);
   sec.append(actions);
   panel.append(sec);
 }
@@ -3363,26 +3805,45 @@ function fillSettingsConnectors(panel: HTMLElement): void {
   const sec = el("div", { class: "settings-section" });
   sec.append(
     el("p", { class: "settings-hint" }, [
-      "Connectors (MCP servers) extend chat and coding with external tools. Add custom remote MCP URLs or sync from APC_MCP_REPO.",
+      "Connectors from enabled marketplaces appear in the composer + menu. Wire live MCP servers via APC_MCP_REPO or the phone Connectors manager. Manage catalogs under Settings → Marketplace.",
     ]),
   );
 
+  const catalog = state.marketplace?.catalog.connectors ?? [];
   const popular = el("div", { class: "connector-popular" });
-  for (const name of ["GitHub", "Gmail", "Google Drive", "Notion"]) {
-    const card = el("div", { class: "connector-card" });
-    card.append(el("span", { class: "connector-name" }, [name]));
-    const connect = el("button", { class: "ghost-btn sm", type: "button" }, ["Connect"]);
-    connect.addEventListener("click", () => {
-      alert(`${name}: configure via MCP on the desktop server or phone Connectors screen when paired.`);
-    });
-    card.append(connect);
-    popular.append(card);
+  if (catalog.length === 0) {
+    popular.append(
+      el("div", { class: "settings-hint" }, [
+        "No marketplace connectors loaded yet. Open Marketplace and Refresh.",
+      ]),
+    );
+  } else {
+    for (const c of catalog) {
+      const card = el("div", { class: "connector-card" });
+      card.append(el("span", { class: "connector-name" }, [c.name]));
+      const badge = el(
+        "span",
+        { class: `pill ${c.available === false ? "empty" : "ok"}` },
+        [c.available === false ? "soon" : c.category || "available"],
+      );
+      card.append(badge);
+      popular.append(card);
+    }
   }
-  sec.append(el("div", { class: "settings-subhead" }, ["Popular"]));
+  sec.append(el("div", { class: "settings-subhead" }, ["From marketplace"]));
   sec.append(popular);
 
-  const add = el("button", { class: "primary-btn", type: "button", style: "margin-top:16px" }, [
-    "Add custom connector",
+  const openMp = el("button", { class: "ghost-btn", type: "button", style: "margin-top:16px" }, [
+    "Manage marketplaces",
+  ]);
+  openMp.addEventListener("click", () => {
+    state.settingsTab = "marketplace";
+    renderSettings();
+  });
+  sec.append(openMp);
+
+  const add = el("button", { class: "primary-btn", type: "button", style: "margin-top:12px" }, [
+    "Add custom MCP reminder",
   ]);
   add.addEventListener("click", () => {
     const name = prompt("Connector name");
@@ -3399,9 +3860,10 @@ function fillSettingsPlugins(panel: HTMLElement): void {
   const sec = el("div", { class: "settings-section" });
   sec.append(
     el("p", { class: "settings-hint" }, [
-      "Plugins bundle skills and tools. Install from a marketplace repo or your own GitHub account on the paired phone / skills pipeline.",
+      "Plugins are marketplace bundles of skills. Edit catalog.json in a marketplace repo to publish new packs. Browse sources under Settings → Marketplace.",
     ]),
   );
+  const plugins = state.marketplace?.catalog.plugins ?? [];
   const table = el("div", { class: "settings-table" });
   table.append(
     el("div", { class: "settings-table-head" }, [
@@ -3409,13 +3871,32 @@ function fillSettingsPlugins(panel: HTMLElement): void {
       el("span", {}, ["Skills"]),
     ]),
   );
-  table.append(
-    el("div", { class: "settings-table-row muted" }, [
-      el("span", {}, ["No plugins installed in this window"]),
-      el("span", {}, ["0"]),
-    ]),
-  );
+  if (plugins.length === 0) {
+    table.append(
+      el("div", { class: "settings-table-row muted" }, [
+        el("span", {}, ["No plugins in merged catalog"]),
+        el("span", {}, ["0"]),
+      ]),
+    );
+  } else {
+    for (const p of plugins) {
+      table.append(
+        el("div", { class: "settings-table-row" }, [
+          el("span", {}, [p.name + (p.featured ? " ★" : "")]),
+          el("span", {}, [String(p.skillIds?.length ?? 0)]),
+        ]),
+      );
+    }
+  }
   sec.append(table);
+  const openMp = el("button", { class: "ghost-btn", type: "button", style: "margin-top:14px" }, [
+    "Manage marketplaces",
+  ]);
+  openMp.addEventListener("click", () => {
+    state.settingsTab = "marketplace";
+    renderSettings();
+  });
+  sec.append(openMp);
   panel.append(sec);
 }
 
@@ -4187,8 +4668,22 @@ async function main() {
   // Title-bar inset padding (traffic lights) only on macOS hiddenInset chrome.
   document.body.classList.add(`platform-${state.bootstrap.platform}`);
 
+  // Marketplace: apply cached merge into composer menus, then refresh remotes.
+  try {
+    const cached = await window.apc.marketplace.status();
+    applyMarketplaceStatusToRenderer(cached);
+  } catch {
+    /* ignore */
+  }
+  void window.apc.marketplace
+    .refresh()
+    .then((s) => applyMarketplaceStatusToRenderer(s))
+    .catch(() => {
+      /* offline — keep cache / bundled */
+    });
+
   // Refresh Metal inventory, then restore last model only if still usable
-  // (downloaded Metal or cloud provider with a key — never a hard-coded default).
+  // (downloaded Metal, cloud key, or configured custom endpoint — never a hard-coded default).
   await refreshMetalDownloadedCache();
   const prefs = state.secrets?.modelPrefs;
   if (prefs) {
@@ -4201,6 +4696,7 @@ async function main() {
         !isUsableChatSelection(provider, pref.model, {
           hasProviderKey: hasKey,
           metalDownloadedIds: state.metalDownloadedIds,
+          customConfigured: isCustomConfigured(provider),
         })
       ) {
         continue;

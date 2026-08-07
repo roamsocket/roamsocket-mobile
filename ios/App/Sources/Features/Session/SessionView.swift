@@ -7,6 +7,7 @@ import AnyProvCore
 struct SessionView: View {
     @EnvironmentObject var state: AppState
     @Environment(\.openURL) private var openURL
+    @Environment(\.dismiss) private var dismiss
     @StateObject private var model: SessionViewModel
     @State private var followUp = ""
     @State private var showGitSheet = false
@@ -102,6 +103,11 @@ struct SessionView: View {
         }
         .navigationTitle(config.repo.fullName)
         .navigationBarTitleDisplayMode(.inline)
+        // Code home hides its bar; force this screen's chrome visible when
+        // presented full-screen so git / workspace actions are tappable.
+        .toolbar(.visible, for: .navigationBar)
+        .toolbarBackground(Theme.background, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
         .onAppear {
             model.state = state
             model.loadPersistedTranscript(from: state.codeSessionStore)
@@ -110,6 +116,19 @@ struct SessionView: View {
             model.persistTranscript()
         }
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                        .frame(width: 32, height: 32)
+                        .background(Theme.surfaceElevated, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close session")
+            }
             ToolbarItemGroup(placement: .topBarTrailing) {
                 if model.hasAgentTasks {
                     Button {
@@ -219,6 +238,7 @@ struct SessionView: View {
         .sheet(isPresented: $showGitSheet) { gitSheet }
         .sheet(isPresented: $showModelPicker) {
             ModelPickerSheet(codingOnly: true)
+                .environmentObject(state)
         }
         .sheet(isPresented: $showProviderSettings) {
             // Reuse the existing settings screen so the providers UI stays
@@ -227,6 +247,7 @@ struct SessionView: View {
             // from the "+ Add a model" pill so they don't have to tap
             // through again.
             AppSettingsView(initialFocus: .providers)
+                .environmentObject(state)
         }
         .sheet(isPresented: $showPermissionSheet) {
             PermissionModeSheet(selection: permissionBinding)
@@ -326,6 +347,11 @@ struct SessionView: View {
                     ForEach(model.items) { item in
                         row(for: item).id(item.id)
                     }
+                    if shouldShowTypingIndicator {
+                        AssistantTypingIndicator()
+                            .id("typing-indicator")
+                            .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    }
                     if let error = model.connectionError {
                         VStack(alignment: .leading, spacing: 10) {
                             Text(error)
@@ -358,12 +384,48 @@ struct SessionView: View {
                     }
                 }
                 .padding(16)
+                .animation(.easeOut(duration: 0.2), value: shouldShowTypingIndicator)
             }
             .onChange(of: model.items.count) { _, _ in
-                if let last = model.items.last {
-                    withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
-                }
+                scrollTranscriptToEnd(proxy: proxy)
             }
+            .onChange(of: shouldShowTypingIndicator) { _, show in
+                if show { scrollTranscriptToEnd(proxy: proxy) }
+            }
+        }
+    }
+
+    /// True while the agent is mid-turn and nothing else at the tail of the
+    /// transcript already signals progress (live assistant text, thinking
+    /// row, or an in-flight tool card).
+    private var shouldShowTypingIndicator: Bool {
+        guard model.isRunning else { return false }
+        guard let last = model.items.last else { return true }
+        switch last {
+        case .user, .diff, .notice:
+            return true
+        case let .assistant(_, text):
+            let parsed = ThinkingExtractor.extract(from: text)
+            if !parsed.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return false
+            }
+            // Any thinking tags (empty placeholder or body) already show
+            // progress via ThinkingBlock.
+            if parsed.thinking != nil {
+                return false
+            }
+            return true
+        case let .tool(_, _, _, ok, _):
+            // In-flight tool (ok == nil) shows its own card status.
+            return ok != nil
+        }
+    }
+
+    private func scrollTranscriptToEnd(proxy: ScrollViewProxy) {
+        if shouldShowTypingIndicator {
+            withAnimation { proxy.scrollTo("typing-indicator", anchor: .bottom) }
+        } else if let last = model.items.last {
+            withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
         }
     }
 

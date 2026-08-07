@@ -397,6 +397,8 @@ final class AppState: ObservableObject {
         seedDefaultEnvironmentIfNeeded()
         restorePairingFromDisk()
         Task { await attemptServerReconnect() }
+        // Official + user marketplaces: connectors, skill listings, plugins, Metal.
+        Task { await MarketplaceStore.shared.refresh() }
     }
 
     // MARK: - Desktop pairing persistence + auto-reconnect

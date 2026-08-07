@@ -50,12 +50,23 @@ final class VisionViewModel: ObservableObject {
 
     func bind(state: AppState) {
         self.state = state
-        if selectedModel == nil {
-            selectedModel = VisionCapability.preferredVisionModel(
-                from: state.allModels,
-                current: state.selectedModel,
-                isVision: { state.modelSupportsVision($0) }
-            )
+        // Keep selection vision-capable: replace text-only picks when a VLM is available.
+        let preferred = VisionCapability.preferredVisionModel(
+            from: state.allModels,
+            current: selectedModel ?? state.selectedModel,
+            isVision: { state.modelSupportsVision($0) }
+        )
+        if let preferred {
+            let currentIsVision = selectedModel.map { state.modelSupportsVision($0) } ?? false
+            let currentStillListed = selectedModel.map { current in
+                state.allModels.contains(where: { $0.id == current.id })
+            } ?? false
+            if selectedModel == nil || !currentIsVision || !currentStillListed {
+                selectedModel = preferred
+            }
+        } else if let current = selectedModel,
+                  !state.allModels.contains(where: { $0.id == current.id }) {
+            selectedModel = nil
         }
     }
 

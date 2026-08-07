@@ -565,7 +565,43 @@ body.platform-darwin .topbar {
   animation: blink 1s step-end infinite;
   color: var(--accent);
 }
+/* Hide caret when the typing-indicator row is present (empty reply wait). */
+.msg .bubble.streaming.typing::after {
+  content: none;
+}
 @keyframes blink { 50% { opacity: 0; } }
+
+.typing-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-dim);
+  font-size: 14px;
+  line-height: 1.4;
+  min-height: 1.4em;
+}
+.typing-indicator .typing-label {
+  color: var(--text-dim);
+}
+.typing-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.typing-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  opacity: 0.35;
+  animation: typing-wave 1.05s ease-in-out infinite;
+}
+.typing-dot:nth-child(2) { animation-delay: 0.15s; }
+.typing-dot:nth-child(3) { animation-delay: 0.3s; }
+@keyframes typing-wave {
+  0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-3px); }
+}
 
 .scroll-fab {
   position: absolute;
@@ -2373,6 +2409,13 @@ body.platform-darwin .topbar {
   border-top: 1px solid var(--line);
 }
 .provider-row:first-of-type { border-top: 0; }
+.provider-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  justify-content: flex-end;
+}
 .pill {
   padding: 4px 8px;
   border-radius: 999px;

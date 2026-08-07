@@ -1,8 +1,13 @@
 /**
  * List real models for a keyed cloud provider (renderer / unit-testable).
- * Returns [] when the key is missing, the provider is unsupported, or the API fails.
- * Never invents static “default” model ids.
+ * Returns [] when the key is missing (built-ins), the provider is unsupported,
+ * or the API fails. Never invents static “default” model ids.
+ *
+ * Custom / proxy endpoints pass `baseUrl` (+ optional `apiStyle`) so listing
+ * hits the user host rather than a built-in cloud default.
  */
+import type { CustomApiStyle } from "./custom-providers.js";
+
 export interface ListedCloudModel {
   id: string;
   displayName: string;
@@ -21,41 +26,81 @@ export type FetchLike = (
   init?: { headers?: Record<string, string>; signal?: AbortSignal },
 ) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>;
 
+export interface ListCloudModelsOptions {
+  /** Override host (custom providers / proxies). Includes version segment. */
+  baseUrl?: string;
+  /** Wire format when using baseUrl. Defaults to openai. */
+  apiStyle?: CustomApiStyle;
+  fetchImpl?: FetchLike;
+  signal?: AbortSignal;
+}
+
 /**
- * Fetch models for a BYOK provider. Empty when key is blank or listing fails.
+ * Fetch models for a BYOK provider. Empty when listing fails.
+ * Built-ins still require a non-empty API key. Custom endpoints with `baseUrl`
+ * may list with an empty key (local Ollama-style servers).
  */
 export async function listCloudModels(
   provider: string,
   apiKey: string,
-  fetchImpl: FetchLike = globalThis.fetch.bind(globalThis) as FetchLike,
+  fetchImplOrOpts?: FetchLike | ListCloudModelsOptions,
   signal?: AbortSignal,
 ): Promise<ListedCloudModel[]> {
+  // Back-compat: (provider, key, fetchImpl, signal) or (provider, key, opts)
+  let fetchImpl: FetchLike = globalThis.fetch.bind(globalThis) as FetchLike;
+  let baseUrl: string | undefined;
+  let apiStyle: CustomApiStyle | undefined;
+  let abort = signal;
+
+  if (typeof fetchImplOrOpts === "function") {
+    fetchImpl = fetchImplOrOpts;
+  } else if (fetchImplOrOpts && typeof fetchImplOrOpts === "object") {
+    if (fetchImplOrOpts.fetchImpl) fetchImpl = fetchImplOrOpts.fetchImpl;
+    baseUrl = fetchImplOrOpts.baseUrl;
+    apiStyle = fetchImplOrOpts.apiStyle;
+    if (fetchImplOrOpts.signal) abort = fetchImplOrOpts.signal;
+  }
+
   const key = (apiKey || "").trim();
-  if (!key || provider === "localMetal" || provider === "local-metal") {
+  if (provider === "localMetal" || provider === "local-metal") {
     return [];
   }
 
+  const override = baseUrl?.replace(/\/+$/, "");
+
   try {
+    if (override) {
+      const style = apiStyle === "anthropic" ? "anthropic" : "openai";
+      // Local / custom hosts often accept empty keys.
+      if (style === "anthropic") {
+        return await listAnthropicAt(override, key || "none", fetchImpl, abort);
+      }
+      return await listOpenAICompatible(override, key || "none", fetchImpl, abort);
+    }
+
+    if (!key) return [];
+
     if (provider === "anthropic") {
-      return await listAnthropic(key, fetchImpl, signal);
+      return await listAnthropicAt("https://api.anthropic.com/v1", key, fetchImpl, abort);
     }
     if (provider === "google") {
-      return await listGoogle(key, fetchImpl, signal);
+      return await listGoogle(key, fetchImpl, abort);
     }
     const base = OPENAI_BASE[provider];
     if (!base) return [];
-    return await listOpenAICompatible(base, key, fetchImpl, signal);
+    return await listOpenAICompatible(base, key, fetchImpl, abort);
   } catch {
     return [];
   }
 }
 
-async function listAnthropic(
+async function listAnthropicAt(
+  base: string,
   apiKey: string,
   fetchImpl: FetchLike,
   signal?: AbortSignal,
 ): Promise<ListedCloudModel[]> {
-  const res = await fetchImpl("https://api.anthropic.com/v1/models", {
+  const res = await fetchImpl(`${base.replace(/\/+$/, "")}/models`, {
     headers: {
       "x-api-key": apiKey,
       "anthropic-version": "2023-06-01",
@@ -123,6 +168,8 @@ export function isUsableChatSelection(
   opts: {
     hasProviderKey: boolean;
     metalDownloadedIds?: Set<string> | string[];
+    /** Custom provider is configured with a base URL (key optional). */
+    customConfigured?: boolean;
   },
 ): boolean {
   if (!provider || !model?.trim()) return false;
@@ -132,6 +179,9 @@ export function isUsableChatSelection(
         ? opts.metalDownloadedIds
         : new Set(opts.metalDownloadedIds ?? []);
     return set.has(model) || set.has(model.replace(/^lmstudio-community\//, ""));
+  }
+  if (provider.startsWith("custom:")) {
+    return opts.customConfigured === true || opts.hasProviderKey;
   }
   return opts.hasProviderKey;
 }

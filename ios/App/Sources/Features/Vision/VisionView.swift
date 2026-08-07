@@ -41,12 +41,18 @@ struct VisionView: View {
         .preferredColorScheme(.dark)
         .onAppear {
             viewModel.bind(state: state)
-            if state.allModels.isEmpty {
-                Task { await state.refreshModels() }
+            // Always re-list so a just-downloaded on-device Vision model appears
+            // even when cloud / Apple Intelligence models already filled the catalog.
+            Task {
+                await state.refreshModels()
+                viewModel.bind(state: state)
             }
         }
         .onChange(of: state.allModels.map(\.id)) { _, _ in
-            if viewModel.selectedModel == nil {
+            // Prefer auto-selecting a Vision model once downloads land.
+            if viewModel.selectedModel == nil
+                || (viewModel.selectedModel.map { !state.modelSupportsVision($0) } ?? false)
+            {
                 viewModel.bind(state: state)
             }
         }

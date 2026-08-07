@@ -189,8 +189,11 @@ public actor LocalMetalCatalog {
     /// Bumped when remote source changes so stale mlx-community caches are dropped.
     private let cacheKey = "localMetal.remoteCatalog.v2.lmstudio"
     private let cacheDateKey = "localMetal.remoteCatalog.fetchedAt.v2.lmstudio"
+    private let marketplaceRecommendedKey = "localMetal.marketplaceRecommended.v1"
     private var remote: [LocalMetalCatalogEntry] = []
     private var lastFetch: Date?
+    /// Recommended list from marketplace merge (overrides static `recommended` when non-empty).
+    private var marketplaceRecommended: [LocalMetalCatalogEntry] = []
 
     public init() {
         if let data = UserDefaults.standard.data(forKey: cacheKey),
@@ -200,6 +203,25 @@ public actor LocalMetalCatalog {
         if let t = UserDefaults.standard.object(forKey: cacheDateKey) as? Date {
             lastFetch = t
         }
+        if let data = UserDefaults.standard.data(forKey: marketplaceRecommendedKey),
+           let decoded = try? JSONDecoder().decode([LocalMetalCatalogEntry].self, from: data) {
+            marketplaceRecommended = decoded
+        }
+    }
+
+    /// Apply marketplace Metal recommendations (iOS platform). Empty clears override.
+    public func applyMarketplaceRecommended(_ entries: [LocalMetalCatalogEntry]) {
+        marketplaceRecommended = entries
+        if let data = try? JSONEncoder().encode(entries) {
+            UserDefaults.standard.set(data, forKey: marketplaceRecommendedKey)
+        } else if entries.isEmpty {
+            UserDefaults.standard.removeObject(forKey: marketplaceRecommendedKey)
+        }
+    }
+
+    /// Active recommended list: marketplace when present, else bundled static.
+    public func activeRecommended() -> [LocalMetalCatalogEntry] {
+        marketplaceRecommended.isEmpty ? Self.recommended : marketplaceRecommended
     }
 
     /// Full browse list: recommended → registry → remote LM Studio (deduped by hub id).
@@ -207,8 +229,12 @@ public actor LocalMetalCatalog {
         if preferFreshRemote || remote.isEmpty {
             _ = try? await refreshFromLMStudio()
         }
-        return Self.merge(recommended: Self.recommended, registry: Self.registry, remote: remote)
-            .map(Self.withFriendlyName)
+        return Self.merge(
+            recommended: activeRecommended(),
+            registry: Self.registry,
+            remote: remote
+        )
+        .map(Self.withFriendlyName)
     }
 
     public func lastRemoteFetchDate() -> Date? { lastFetch }
@@ -221,7 +247,109 @@ public actor LocalMetalCatalog {
         if let hit = recommended.first(where: { $0.hubID == hubID }) {
             return hit.displayName
         }
+        // Marketplace overrides live on the actor; static helper falls back to pretty name.
         return prettyName(from: hubID)
+    }
+
+    /// Whether static catalog entries tag this hub id as Vision (recommended + registry).
+    public static func isCatalogVisionModel(hubID: String) -> Bool {
+        if let hit = recommended.first(where: { $0.hubID == hubID }) {
+            return hit.tags.contains(.vision)
+        }
+        if let hit = registry.first(where: { $0.hubID == hubID }) {
+            return hit.tags.contains(.vision)
+        }
+        // Case-insensitive match (HF ids can vary in casing across sources).
+        let lower = hubID.lowercased()
+        if let hit = recommended.first(where: { $0.hubID.lowercased() == lower }) {
+            return hit.tags.contains(.vision)
+        }
+        if let hit = registry.first(where: { $0.hubID.lowercased() == lower }) {
+            return hit.tags.contains(.vision)
+        }
+        return false
+    }
+
+    /// Hub-id heuristics for Apple Silicon / MLX vision-language models.
+    /// Shared by Vision mode, catalog tagging, and the MLX VLM load path.
+    public static func isLikelyVisionHubID(_ modelID: String) -> Bool {
+        let id = modelID.lowercased()
+        if id.contains("whisper") || id.contains("embed") || id.contains("tts") {
+            return false
+        }
+        // Explicit text-only Gemma 3n LM builds.
+        if id.contains("gemma-3n") && id.contains("-lm-") { return false }
+        if id.contains("gemma3_text") { return false }
+
+        if isCatalogVisionModel(hubID: modelID) { return true }
+
+        if id.contains("gemma-4") || id.contains("gemma4") { return true }
+        if id.contains("gemma-3-4b") || id.contains("gemma-3-12b") || id.contains("gemma-3-27b") {
+            return true
+        }
+        // Multimodal Gemma 3n (non-lm) weights.
+        if id.contains("gemma-3n") { return true }
+
+        if id.contains("paligemma")
+            || id.contains("smolvlm")
+            || id.contains("fastvlm")
+            || id.contains("pixtral")
+            || id.contains("llava")
+            || id.contains("moondream")
+            || id.contains("paddleocr")
+            || id.contains("kimi-vl")
+            || id.contains("mage-vl")
+            || id.contains("internvl")
+            || id.contains("idefics")
+            || id.contains("minicpm-v")
+            || id.contains("minicpm_v")
+            || id.contains("deepseek-vl")
+            || id.contains("deepseek_vl")
+            || id.contains("multimodal")
+        {
+            return true
+        }
+        if id.contains("qwen2-vl")
+            || id.contains("qwen2.5-vl")
+            || id.contains("qwen3-vl")
+            || id.contains("qwen2_vl")
+            || id.contains("qwen2_5_vl")
+            || id.contains("qwen3_vl")
+            || id.contains("qwen-vl")
+        {
+            return true
+        }
+        // LFM vision (dots in version break naive `lfm2-vl` substring checks).
+        if id.contains("lfm2-vl") || id.contains("lfm2.5-vl") || id.contains("lfm2_vl")
+            || id.contains("lfm2.5_vl")
+        {
+            return true
+        }
+        if id.contains("ministral-3") { return true }
+        if id.contains("vision") || id.contains("vlm") { return true }
+        // Generic VL token in id (avoid matching "vl" inside unrelated names carefully).
+        if id.contains("-vl-") || id.contains("_vl_") || id.contains("-vl_")
+            || id.hasSuffix("-vl") || id.contains("/vl-")
+            || id.contains("-vl.") || id.contains("_vl.")
+        {
+            return true
+        }
+        // `SomethingVL-` / `SomethingVL2` compact forms (InternVL, SmolVLM already covered).
+        if id.range(of: #"(?:^|[^a-z])vl(?:\d|[_\-]|$)"#, options: .regularExpression) != nil {
+            // Avoid pure text tokens that only share letters (e.g. "revolve").
+            if id.contains("vl") && (
+                id.contains("instruct") || id.contains("mlx") || id.contains("chat")
+                    || id.contains("4bit") || id.contains("8bit") || id.contains("bf16")
+            ) {
+                // Still require a VL-ish boundary near "vl"
+                if id.contains("vl-") || id.contains("vl_") || id.contains("vl2")
+                    || id.contains("vl1") || id.hasSuffix("vl")
+                {
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     /// Copy of an entry with a friendly `displayName` (safe for cached remote rows).

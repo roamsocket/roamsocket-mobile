@@ -432,7 +432,14 @@ struct CodeHomeView: View {
     @State private var showModelPicker = false
     @State private var showNewSession = false
     @State private var showArchived = false
-    @State private var pushSessionConfig: SessionConfig?
+    /// Live coding session presented as a full-screen cover (same path as Chat).
+    /// Nested `navigationDestination` under Code was unreliable: sessions never
+    /// opened and toolbar actions looked dead.
+    @State private var activeSessionConfig: SessionConfig?
+    /// Session prepared while New Session is open — presented after that cover dismisses.
+    @State private var pendingSessionConfig: SessionConfig?
+    /// Session to re-open after the archived list sheet finishes dismissing.
+    @State private var pendingReattachSession: CodeSession?
     @State private var archiveCandidate: CodeSession?
     @State private var showArchiveKillConfirm = false
     @State private var renameTarget: CodeSession?
@@ -440,6 +447,7 @@ struct CodeHomeView: View {
     @State private var showServerPairing = false
     @State private var showDeviceConnectionHelp = false
     @State private var tokenWhenPairingPresented: String?
+    @State private var launchError: String?
 
     /// Opens the root sidebar drawer. Wired from `RootView` so Code can open
     /// the same destinations as Chat even though this screen hides the
@@ -454,32 +462,34 @@ struct CodeHomeView: View {
             VStack(spacing: 0) {
                 header
                 // Single List so swipe-to-archive works (swipeActions need List rows).
-                // Avoid wrapping rows in Button — that often steals the swipe gesture.
+                // Prefer plain Buttons over onTapGesture so taps always fire.
                 List {
                     Section {
                         if state.serverName == nil && state.serverToken == nil {
-                            devicesEmpty
-                                .contentShape(Rectangle())
-                                .onTapGesture { presentPairingSheet() }
-                                .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-                                .listRowBackground(Color.clear)
-                                .listRowSeparator(.hidden)
-                                .accessibilityAddTraits(.isButton)
-                                .accessibilityHint("Opens pairing to connect a desktop server")
+                            Button {
+                                presentPairingSheet()
+                            } label: {
+                                devicesEmpty
+                            }
+                            .buttonStyle(.plain)
+                            .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .accessibilityHint("Opens pairing to connect a desktop server")
                         } else {
-                            deviceRow(
-                                name: state.serverName ?? "Desktop",
-                                status: state.desktopReachability
-                            )
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    Task { await handleDeviceTap() }
-                                }
-                                .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-                                .listRowBackground(Color.clear)
-                                .listRowSeparator(.hidden)
-                                .accessibilityAddTraits(.isButton)
-                                .accessibilityHint("Reconnect to the desktop server")
+                            Button {
+                                Task { await handleDeviceTap() }
+                            } label: {
+                                deviceRow(
+                                    name: state.serverName ?? "Desktop",
+                                    status: state.desktopReachability
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .accessibilityHint("Reconnect to the desktop server")
                         }
                     } header: {
                         Text("Devices")
@@ -496,45 +506,46 @@ struct CodeHomeView: View {
                                 .listRowSeparator(.hidden)
                         } else {
                             ForEach(filteredSessions) { session in
-                                sessionCard(session)
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        reattach(session: session)
+                                Button {
+                                    Task { await reattach(session: session) }
+                                } label: {
+                                    sessionCard(session)
+                                }
+                                .buttonStyle(.plain)
+                                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                                .listRowBackground(Color.clear)
+                                .listRowSeparator(.hidden)
+                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                    Button {
+                                        requestArchive(session)
+                                    } label: {
+                                        Label("Archive", systemImage: "archivebox")
                                     }
-                                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
-                                    .listRowBackground(Color.clear)
-                                    .listRowSeparator(.hidden)
-                                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                        Button {
-                                            requestArchive(session)
-                                        } label: {
-                                            Label("Archive", systemImage: "archivebox")
-                                        }
-                                        .tint(Theme.accent)
-                                        Button {
-                                            beginRename(session)
-                                        } label: {
-                                            Label("Rename", systemImage: "pencil")
-                                        }
-                                        .tint(Theme.textSecondary)
+                                    .tint(Theme.accent)
+                                    Button {
+                                        beginRename(session)
+                                    } label: {
+                                        Label("Rename", systemImage: "pencil")
                                     }
-                                    .contextMenu {
-                                        Button {
-                                            beginRename(session)
-                                        } label: {
-                                            Label("Rename", systemImage: "pencil")
-                                        }
-                                        Button {
-                                            requestArchive(session)
-                                        } label: {
-                                            Label("Archive", systemImage: "archivebox")
-                                        }
-                                        Button(role: .destructive) {
-                                            sessionStore.remove(session.id)
-                                        } label: {
-                                            Label("Delete", systemImage: "trash")
-                                        }
+                                    .tint(Theme.textSecondary)
+                                }
+                                .contextMenu {
+                                    Button {
+                                        beginRename(session)
+                                    } label: {
+                                        Label("Rename", systemImage: "pencil")
                                     }
+                                    Button {
+                                        requestArchive(session)
+                                    } label: {
+                                        Label("Archive", systemImage: "archivebox")
+                                    }
+                                    Button(role: .destructive) {
+                                        sessionStore.remove(session.id)
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                }
                             }
                         }
                     } header: {
@@ -554,8 +565,13 @@ struct CodeHomeView: View {
                                         .font(.system(size: 12))
                                         .foregroundStyle(Theme.textTertiary)
                                 }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(Theme.surfaceElevated, in: Capsule())
+                                .contentShape(Capsule())
                             }
                             .buttonStyle(.plain)
+                            .accessibilityLabel("Filter sessions")
                         }
                         .textCase(nil)
                     }
@@ -567,30 +583,42 @@ struct CodeHomeView: View {
             newSessionFAB
                 .padding(.trailing, 18)
                 .padding(.bottom, 22)
+                .zIndex(1)
         }
-        .navigationBarHidden(true)
+        .toolbar(.hidden, for: .navigationBar)
         .task {
             // Refresh desktop reachability whenever Code home is shown.
             // Coalesces with launch reconnect via AppState.reconnectTask.
             guard state.serverToken != nil else { return }
             await state.attemptServerReconnect()
         }
-        .navigationDestination(item: $pushSessionConfig) { config in
-            SessionView(config: config)
+        // Match Chat: present sessions in a full-screen NavigationStack so
+        // toolbar / sheets / dismiss work even though Code hides its own bar.
+        .fullScreenCover(item: $activeSessionConfig) { config in
+            NavigationStack {
+                SessionView(config: config)
+            }
+            .environmentObject(state)
         }
         .sheet(isPresented: $showFilterSheet) {
             SessionFilterSheet(selection: $statusFilter)
         }
         .sheet(isPresented: $showEnvironmentPicker) {
             EnvironmentPickerSheet()
+                .environmentObject(state)
         }
         .sheet(isPresented: $showModelPicker) {
             ModelPickerSheet(codingOnly: true)
+                .environmentObject(state)
         }
-        .sheet(isPresented: $showArchived) {
+        .sheet(isPresented: $showArchived, onDismiss: {
+            guard let session = pendingReattachSession else { return }
+            pendingReattachSession = nil
+            Task { await reattach(session: session) }
+        }) {
             ArchivedSessionsView { session in
+                pendingReattachSession = session
                 showArchived = false
-                reattach(session: session)
             }
             .environmentObject(state)
         }
@@ -617,10 +645,19 @@ struct CodeHomeView: View {
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
-        .fullScreenCover(isPresented: $showNewSession) {
-            NewSessionView { config, task in
-                startSession(config: config, title: task)
+        .fullScreenCover(isPresented: $showNewSession, onDismiss: {
+            // Present the new session only after this cover is fully gone —
+            // simultaneous cover + cover / nav is a common silent no-op.
+            guard let pending = pendingSessionConfig else { return }
+            pendingSessionConfig = nil
+            DispatchQueue.main.async {
+                activeSessionConfig = pending
             }
+        }) {
+            NewSessionView { config, task in
+                pendingSessionConfig = storeNewSession(config: config, title: task)
+            }
+            .environmentObject(state)
         }
         .confirmationDialog(
             "Stop work on the desktop?",
@@ -657,6 +694,17 @@ struct CodeHomeView: View {
         } message: {
             Text("Choose a short name for this coding session.")
         }
+        .alert(
+            "Can't open session",
+            isPresented: Binding(
+                get: { launchError != nil },
+                set: { if !$0 { launchError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { launchError = nil }
+        } message: {
+            Text(launchError ?? "")
+        }
     }
 
     // MARK: - Header
@@ -669,6 +717,7 @@ struct CodeHomeView: View {
                     .foregroundStyle(Theme.textPrimary)
                     .frame(width: 44, height: 44)
                     .background(Theme.surfaceElevated, in: Circle())
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Open sidebar")
@@ -685,6 +734,7 @@ struct CodeHomeView: View {
                     .foregroundStyle(Theme.textPrimary)
                     .frame(width: 44, height: 44)
                     .background(Theme.surfaceElevated, in: Circle())
+                    .contentShape(Circle())
                     .overlay(alignment: .topTrailing) {
                         let n = sessionStore.archivedSessions.count
                         if n > 0 {
@@ -969,6 +1019,7 @@ struct CodeHomeView: View {
             .padding(.vertical, 12)
             .background(Theme.accent, in: Capsule())
             .shadow(color: .black.opacity(0.35), radius: 8, x: 0, y: 4)
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Start a new coding session")
@@ -1005,9 +1056,9 @@ struct CodeHomeView: View {
             }
         }
         // If this session is open full-screen, close it so the connection policy applies.
-        if pushSessionConfig?.localSessionId == session.id {
+        if activeSessionConfig?.localSessionId == session.id {
             if killAgent {
-                pushSessionConfig = nil
+                activeSessionConfig = nil
             }
             // When keeping agent running, SessionViewModel observes disconnectWhenDone
             // and tears down the phone socket on session_done.
@@ -1028,7 +1079,9 @@ struct CodeHomeView: View {
         }
     }
 
-    private func startSession(config: SessionConfig, title: String) {
+    /// Persist a new session row and return the config used to open SessionView.
+    /// Presentation is owned by the caller (deferred when New Session is open).
+    private func storeNewSession(config: SessionConfig, title: String) -> SessionConfig {
         let session = CodeSession(
             title: title,
             repoFullName: config.repo.fullName,
@@ -1038,11 +1091,7 @@ struct CodeHomeView: View {
             environment: config.environment
         )
         sessionStore.add(session)
-        // Keep selected repo in sync so other pickers stay coherent.
-        if state.selectedRepo?.fullName != session.repoFullName {
-            // Best-effort: leave selectedRepo alone if we only have a name.
-        }
-        pushSessionConfig = SessionConfig(
+        return SessionConfig(
             id: config.id,
             wireSessionId: config.wireSessionId,
             localSessionId: session.id,
@@ -1059,49 +1108,55 @@ struct CodeHomeView: View {
         )
     }
 
-    private func reattach(session: CodeSession) {
+    private func presentSession(_ config: SessionConfig) {
+        activeSessionConfig = config
+    }
+
+    private func reattach(session: CodeSession) async {
         // Rebuild from the persisted session — do not require the currently
         // selected repo (that blocked opening history until a new session).
         // Always open a fresh WS and send create_session with the same wire
         // id so the desktop rebinds (live) or re-clones (after restart).
-        Task {
-            guard await ensureDesktopConnected() else { return }
-            guard let endpoint = state.serverEndpoint,
-                  let token = state.serverToken,
-                  let model = state.modelSelectionForSession() else {
-                // Connected but missing model/key — SessionLauncher surfaces this
-                // for new sessions; for reattach show pairing/help isn't right.
-                return
-            }
-            let repoRef = RepoRef(
-                fullName: session.repoFullName,
-                baseBranch: session.baseBranch,
-                workBranch: session.workBranch,
-                githubToken: state.githubToken
-            )
-            // Re-open does not mean the agent is mid-turn yet.
-            sessionStore.update(session.id) {
-                $0.status = .working
-                $0.agentActive = false
-            }
-            let config = SessionConfig(
-                wireSessionId: session.wireSessionId,
-                localSessionId: session.id,
-                endpoint: endpoint,
-                token: token,
-                repo: repoRef,
-                // Environment is fixed for the life of the session.
-                environment: session.environment ?? state.selectedEnvironment,
-                model: model,
-                permissionMode: state.permissionMode,
-                firstMessage: session.title,
-                skills: state.skillManager.enabledSkills.map(\.content),
-                mcpServers: state.mcpManager.configuredMCPServers,
-                resuming: true,
-                prURL: session.prURL
-            )
-            pushSessionConfig = config
+        guard await ensureDesktopConnected() else { return }
+        guard let endpoint = state.serverEndpoint, let token = state.serverToken else {
+            launchError = "Pair a desktop server in Settings, then try again."
+            return
         }
+        guard let model = state.modelSelectionForSession() else {
+            let missing = SessionLauncher.missingRequirements(in: state)
+            launchError = missing.isEmpty
+                ? "Pick a coding model with an API key, then open this session again."
+                : missing.joined(separator: " ")
+            return
+        }
+        let repoRef = RepoRef(
+            fullName: session.repoFullName,
+            baseBranch: session.baseBranch,
+            workBranch: session.workBranch,
+            githubToken: state.githubToken
+        )
+        // Re-open does not mean the agent is mid-turn yet.
+        sessionStore.update(session.id) {
+            $0.status = .working
+            $0.agentActive = false
+        }
+        let config = SessionConfig(
+            wireSessionId: session.wireSessionId,
+            localSessionId: session.id,
+            endpoint: endpoint,
+            token: token,
+            repo: repoRef,
+            // Environment is fixed for the life of the session.
+            environment: session.environment ?? state.selectedEnvironment,
+            model: model,
+            permissionMode: state.permissionMode,
+            firstMessage: session.title,
+            skills: state.skillManager.enabledSkills.map(\.content),
+            mcpServers: state.mcpManager.configuredMCPServers,
+            resuming: true,
+            prURL: session.prURL
+        )
+        presentSession(config)
     }
 
     private func relativeTime(_ date: Date) -> String {
@@ -1136,19 +1191,23 @@ struct ArchivedSessionsView: View {
                 } else {
                     List {
                         ForEach(sessions) { session in
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(session.title)
-                                    .font(.system(size: 16, weight: .medium))
-                                    .foregroundStyle(Theme.textPrimary)
-                                    .lineLimit(2)
-                                Text("\(session.repoFullName) · \(session.transcript.count) messages")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(Theme.textTertiary)
+                            Button {
+                                onOpen(session)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(session.title)
+                                        .font(.system(size: 16, weight: .medium))
+                                        .foregroundStyle(Theme.textPrimary)
+                                        .lineLimit(2)
+                                    Text("\(session.repoFullName) · \(session.transcript.count) messages")
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(Theme.textTertiary)
+                                }
+                                .padding(.vertical, 4)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
                             }
-                            .padding(.vertical, 4)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
-                            .onTapGesture { onOpen(session) }
+                            .buttonStyle(.plain)
                             .swipeActions(edge: .trailing) {
                                 Button(role: .destructive) {
                                     state.codeSessionStore.remove(session.id)

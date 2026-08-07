@@ -53,6 +53,10 @@ import {
   resetMetalPythonCache,
 } from "../metal/index.js";
 import {
+  applyMarketplaceToDesktop,
+  getMarketplaceStore,
+} from "../marketplace/index.js";
+import {
   getFoundationStatus,
   foundationGenerate,
   ensureFoundationCliBuilt,
@@ -714,6 +718,44 @@ function registerIpc(): void {
     app.quit();
   });
 
+  // --- Marketplace (connectors / skills / plugins / metal catalogs) -------
+  ipcMain.handle("marketplace:status", async () => getMarketplaceStore().status());
+  ipcMain.handle("marketplace:refresh", async () => {
+    const status = await getMarketplaceStore().refresh();
+    applyMarketplaceToDesktop(status.catalog);
+    return status;
+  });
+  ipcMain.handle(
+    "marketplace:addSource",
+    async (_e, input: { name?: string; url: string; enabled?: boolean }) => {
+      const src = getMarketplaceStore().addSource(input);
+      const status = await getMarketplaceStore().refresh();
+      applyMarketplaceToDesktop(status.catalog);
+      return { source: src, status };
+    },
+  );
+  ipcMain.handle("marketplace:removeSource", async (_e, id: string) => {
+    getMarketplaceStore().removeSource(id);
+    const status = await getMarketplaceStore().refresh();
+    applyMarketplaceToDesktop(status.catalog);
+    return status;
+  });
+  ipcMain.handle(
+    "marketplace:setSourceEnabled",
+    async (_e, id: string, enabled: boolean) => {
+      getMarketplaceStore().setSourceEnabled(id, enabled);
+      const status = await getMarketplaceStore().refresh();
+      applyMarketplaceToDesktop(status.catalog);
+      return status;
+    },
+  );
+  ipcMain.handle("marketplace:setSourceUrl", async (_e, id: string, url: string) => {
+    getMarketplaceStore().setSourceUrl(id, url);
+    const status = await getMarketplaceStore().refresh();
+    applyMarketplaceToDesktop(status.catalog);
+    return status;
+  });
+
   // --- On-device Metal ----------------------------------------------------
   ipcMain.handle("metal:status", async () => getMetalRuntimeStatus());
   ipcMain.handle("metal:catalog", async () => getMetalStore().catalogWithStatus());
@@ -859,6 +901,19 @@ app.whenReady().then(async () => {
   // so installs work without admin and are found by the tunnel spawner.
   process.env.APC_BIN_DIR = path.join(app.getPath("userData"), "bin");
   registerIpc();
+
+  // Apply last-known marketplace merge immediately, then refresh remotes.
+  try {
+    applyMarketplaceToDesktop(getMarketplaceStore().getCatalog());
+  } catch {
+    /* ignore */
+  }
+  void getMarketplaceStore()
+    .refresh()
+    .then((status) => applyMarketplaceToDesktop(status.catalog))
+    .catch(() => {
+      /* offline — keep bundled / cache */
+    });
 
   const port = Number(process.env.PORT ?? 4319);
   // Bind all interfaces so phones on the LAN can pair; override with APC_HOST.

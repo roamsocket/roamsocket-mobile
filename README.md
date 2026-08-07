@@ -31,6 +31,7 @@ CODE   iOS app ──WebSocket──▶ desktop server ──▶ git clone / bas
 | `desktop-server` | Node + TypeScript server: pairing, tools, git, agent loop |
 | `docs/protocol.md` | The app ↔ server wire protocol |
 | `landing/` | Static marketing page (Cloudflare Workers assets) |
+| `marketplace/` | Pointer to the official marketplace repo (catalog lives separately) |
 | `AGENTS.md` | Instructions for AI coding agents (architecture, commands, invariants) |
 | `CLAUDE.md` | Agent workflow notes (hooks, verification defaults) |
 

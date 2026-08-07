@@ -32,8 +32,11 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
     private let hubClient: HubClient
 
     init() {
+        // Must match LocalMetalModelStore / LocalMetalPaths so downloads appear
+        // in Settings, chat picker, and Vision. Falls back to legacy AnyProvCode
+        // only when that tree already has weights (migration).
         let dir = (try? LocalMetalModelStore.shared.hubCacheDirectorySync())
-            ?? FileManager.default.temporaryDirectory.appendingPathComponent("AnyProvCode-hf", isDirectory: true)
+            ?? FileManager.default.temporaryDirectory.appendingPathComponent("CodeSocket-hf", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let hubCache = HubCache(cacheDirectory: dir)
         self.hubCache = hubCache
@@ -268,9 +271,20 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
         guard let repoID = Repo.ID(rawValue: modelID) else {
             throw ProviderError.transport("Invalid model id “\(modelID)”.")
         }
+        // Engine cache root (CodeSocket or legacy AnyProvCode, whichever we bind to).
         let repoDir = hubCache.repoDirectory(repo: repoID, kind: .model)
         if FileManager.default.fileExists(atPath: repoDir.path) {
             try FileManager.default.removeItem(at: repoDir)
+        }
+        // Also wipe the same hub id under every known app-support hub root so
+        // split CodeSocket / AnyProvCode trees cannot leave orphan weights.
+        let folderName = LocalMetalPaths.hubRepoFolderName(for: modelID)
+        for root in LocalMetalPaths.hubCacheRootsToScan() {
+            let extra = root.appendingPathComponent(folderName, isDirectory: true)
+            if extra.standardizedFileURL != repoDir.standardizedFileURL,
+               FileManager.default.fileExists(atPath: extra.path) {
+                try? FileManager.default.removeItem(at: extra)
+            }
         }
         await LocalMetalModelStore.shared.markDeleted(modelID: modelID)
     }
@@ -289,6 +303,10 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
     func isDownloaded(modelID: String) async -> Bool {
         if modelID.hasPrefix("local/") {
             let name = String(modelID.dropFirst("local/".count))
+            // Canonical + legacy LocalModels roots.
+            if await LocalMetalModelStore.shared.isDownloadedOnDisk(modelID: modelID) {
+                return true
+            }
             if let dir = try? await LocalMetalModelStore.shared.modelsDirectory() {
                 let folder = dir.appendingPathComponent(name, isDirectory: true)
                 return LocalMetalModelStore.hasUsableModelCache(at: folder)
@@ -300,7 +318,7 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
         guard let repoID = Repo.ID(rawValue: modelID) else { return false }
         let repoDir = hubCache.repoDirectory(repo: repoID, kind: .model)
         if LocalMetalModelStore.hasUsableModelCache(at: repoDir) { return true }
-        // Fallback: disk scan via store (same app-support root).
+        // Fallback: store scans CodeSocket + legacy AnyProvCode trees.
         return await LocalMetalModelStore.shared.isDownloadedOnDisk(modelID: modelID)
     }
 
@@ -511,30 +529,7 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
 
     /// Hub-id heuristic matching VisionCapability / MLXVLM registry families.
     private static func isLikelyVLM(_ modelID: String) -> Bool {
-        let id = modelID.lowercased()
-        if id.contains("whisper") || id.contains("embed") || id.contains("tts") { return false }
-        if id.contains("gemma-3n") && id.contains("-lm-") { return false }
-        if id.contains("gemma-4") || id.contains("gemma4") { return true }
-        if id.contains("gemma-3-4b") || id.contains("gemma-3-12b") || id.contains("gemma-3-27b") {
-            return true
-        }
-        if id.contains("gemma-3n") { return true }
-        if id.contains("paligemma") || id.contains("smolvlm") || id.contains("fastvlm")
-            || id.contains("paddleocr") || id.contains("moondream") || id.contains("pixtral")
-            || id.contains("kimi-vl") || id.contains("mage-vl")
-        {
-            return true
-        }
-        if id.contains("qwen2-vl") || id.contains("qwen2.5-vl") || id.contains("qwen3-vl")
-            || id.contains("qwen2_vl") || id.contains("qwen2_5_vl") || id.contains("qwen3_vl")
-        {
-            return true
-        }
-        if id.contains("lfm2-vl") || id.contains("lfm2.5-vl") { return true }
-        if id.contains("ministral-3") { return true }
-        if id.contains("vision") || id.contains("vlm") { return true }
-        if id.contains("-vl-") || id.contains("_vl_") || id.hasSuffix("-vl") { return true }
-        return false
+        LocalMetalCatalog.isLikelyVisionHubID(modelID)
     }
 
     private static func userInputImages(
@@ -837,16 +832,33 @@ private actor ContainerCache {
 
 extension LocalMetalModelStore {
     /// Nonisolated path resolution for hub cache (used from engine init).
+    ///
+    /// Prefer the canonical `CodeSocket` tree so downloads match
+    /// `LocalMetalModelStore` inventory. If only the pre-rebrand
+    /// `AnyProvCode` cache has weights, keep using it so existing
+    /// downloads stay visible (Vision + chat).
     nonisolated func hubCacheDirectorySync() throws -> URL {
-        let base = try FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
-        let dir = base
-            .appendingPathComponent("AnyProvCode/LocalModels/hf-hub", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
+        let canonical = try LocalMetalPaths.hubCacheDirectory()
+        // Prefer legacy only when it already has usable model trees and the
+        // canonical cache is empty — avoids splitting new downloads.
+        if let legacy = LocalMetalPaths.legacyHubCacheDirectoryIfPresent(),
+           Self.hubCacheLooksPopulated(legacy),
+           !Self.hubCacheLooksPopulated(canonical) {
+            return legacy
+        }
+        return canonical
+    }
+
+    /// True when a hub-cache root has at least one `models--*` tree that looks complete.
+    nonisolated private static func hubCacheLooksPopulated(_ root: URL) -> Bool {
+        guard let kids = try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else { return false }
+        return kids.contains {
+            $0.lastPathComponent.hasPrefix("models--")
+                && LocalMetalModelStore.hasUsableModelCache(at: $0)
+        }
     }
 }

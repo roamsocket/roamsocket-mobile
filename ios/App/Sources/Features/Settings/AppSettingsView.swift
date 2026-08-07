@@ -11,6 +11,7 @@ struct AppSettingsView: View {
     @State private var showServerPair = false
     @State private var showSkills = false
     @State private var showMCP = false
+    @State private var showMarketplace = false
     @State private var showMemory = false
     @State private var showAbout = false
     @State private var showProviderKeys = false
@@ -51,6 +52,7 @@ struct AppSettingsView: View {
                         effortSection
                         codingSection
                         settingsBackupSection
+                        marketplaceSection
                         skillsSection
                         mcpSection
                         memorySection
@@ -87,6 +89,9 @@ struct AppSettingsView: View {
         }
         .sheet(isPresented: $showSkills) {
             InstalledSkillsView()
+        }
+        .sheet(isPresented: $showMarketplace) {
+            MarketplaceSettingsView()
         }
         .sheet(isPresented: $showMCP) {
             ConnectorManagerView()
@@ -508,6 +513,39 @@ struct AppSettingsView: View {
                 syncError = error.localizedDescription
             }
             syncInFlight = false
+        }
+    }
+
+    // MARK: - Marketplace
+
+    private var marketplaceSection: some View {
+        settingsCard(header: "Marketplace") {
+            Button {
+                showMarketplace = true
+            } label: {
+                HStack(spacing: 14) {
+                    Image(systemName: "storefront")
+                        .font(.system(size: 20))
+                        .foregroundStyle(Theme.textPrimary)
+                        .frame(width: 28)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Connectors, skills, plugins, Metal")
+                            .font(.system(size: 17, weight: .regular))
+                            .foregroundStyle(Theme.textPrimary)
+                        Text("Official catalog + your GitHub marketplace repos")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Theme.textSecondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundStyle(Theme.textSecondary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         }
     }
 

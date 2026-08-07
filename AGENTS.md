@@ -27,6 +27,7 @@ codesocket/  (repo may still be checked out as code-mobile-ai)
 │   ├── src/                  # server, agent, tools, electron, renderer
 │   └── scripts/smoke.ts      # offline e2e protocol test
 ├── docs/protocol.md          # Human-readable wire protocol
+├── marketplace/              # Pointer docs → kind365/codesocket-marketplace
 ├── landing/                  # Marketing site → Cloudflare Workers assets
 ├── AGENTS.md                 # This file
 └── CLAUDE.md                 # Agent-oriented notes
@@ -53,6 +54,7 @@ Pure Foundation (no SwiftUI). Safe to build/test without Xcode:
 - `Providers/` — model listing + chat clients  
 - `GitHub/` — PAT / device-flow, repo list  
 - `Server/` — Codable protocol + WebSocket client (**must mirror** TS)  
+- `Marketplace/` — multi-source catalog (connectors, skills, plugins, Metal)  
 - `Skills/`, `Artifacts/`, `Sync/`
 
 ### Desktop server (`desktop-server/src`)
@@ -68,8 +70,20 @@ Pure Foundation (no SwiftUI). Safe to build/test without Xcode:
 | `git/` | clone, branch, commit, push, diff |
 | `electron/` | Main process, tray, safeStorage |
 | `renderer/` | Desktop client UI (vanilla TS + CSS) |
+| `marketplace/` | Multi-source marketplace fetch/merge (connectors, skills, plugins, Metal) |
 
 Default port: **4319**.
+
+### Marketplace (owner + user catalogs)
+
+- **Official repo (separate):** [kind365/codesocket-marketplace](https://github.com/kind365/codesocket-marketplace)
+- **Default catalog URL:** `https://raw.githubusercontent.com/kind365/codesocket-marketplace/main/catalog.json`
+- **Authoring guide:** that repo’s README (“How to make your own marketplace”).
+- **Desktop:** Settings → Marketplace; applies to composer connectors/plugins + Metal list.
+- **iOS:** Settings → Marketplace; same sources feed connectors, skill browse, Metal recommended.
+- Users can **add extra marketplace repos** (raw `catalog.json` URL, GitHub blob/tree, or `owner/repo`).
+- User skills/MCP git repos (`APC_SKILLS_REPO` / `APC_MCP_REPO`) remain separate private sync.
+- This monorepo’s `marketplace/` folder is a **pointer only** — do not put the live catalog here.
 
 ## Critical invariants
 

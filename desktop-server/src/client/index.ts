@@ -1,6 +1,7 @@
 export * from "./theme.js";
 export * from "./greeting.js";
 export * from "./providers-meta.js";
+export * from "./custom-providers.js";
 export * from "./history-store.js";
 export * from "./projects-store.js";
 export * from "./artifacts-store.js";

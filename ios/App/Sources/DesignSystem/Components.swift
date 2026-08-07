@@ -406,3 +406,23 @@ struct TypingDotsView: View {
         .accessibilityLabel("Assistant is typing")
     }
 }
+
+/// Label + bouncing dots so the user can see the AI is working before
+/// the first tokens (or between tool turns).
+struct AssistantTypingIndicator: View {
+    var label: String = "Thinking"
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.system(size: 14))
+                .foregroundStyle(Theme.textTertiary)
+            TypingDotsView()
+                .scaleEffect(0.85, anchor: .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Assistant is thinking")
+        .accessibilityAddTraits(.updatesFrequently)
+    }
+}

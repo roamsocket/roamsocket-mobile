@@ -29,7 +29,25 @@ export interface MetalCatalogEntry {
   chatOnly: true;
 }
 
-/** Curated desktop chat models (no Vision). */
+/**
+ * Optional remote / marketplace override (set by marketplace apply).
+ * When null, `listChatMetalCatalog` uses the bundled recommended list.
+ */
+let remoteMetalCatalog: MetalCatalogEntry[] | null = null;
+
+/** Replace the live Metal catalog from marketplace merge. Pass null to reset. */
+export function setRemoteMetalCatalog(entries: MetalCatalogEntry[] | null): void {
+  remoteMetalCatalog =
+    entries && entries.length > 0
+      ? entries.map((e) => ({ ...e, chatOnly: true as const }))
+      : null;
+}
+
+export function getRemoteMetalCatalog(): MetalCatalogEntry[] | null {
+  return remoteMetalCatalog;
+}
+
+/** Curated desktop chat models (no Vision). Bundled fallback. */
 export const RECOMMENDED_METAL_MODELS: MetalCatalogEntry[] = [
   {
     hubID: "lmstudio-community/LFM2.5-1.2B-Instruct-MLX-4bit",
@@ -122,8 +140,9 @@ export const RECOMMENDED_METAL_MODELS: MetalCatalogEntry[] = [
 ];
 
 export function listChatMetalCatalog(): MetalCatalogEntry[] {
+  const base = remoteMetalCatalog ?? RECOMMENDED_METAL_MODELS;
   // Explicitly drop vision-tagged entries if any sneak in.
-  return RECOMMENDED_METAL_MODELS.filter((e) => !e.tags.includes("vision"));
+  return base.filter((e) => !e.tags.includes("vision"));
 }
 
 export function findMetalEntry(hubID: string): MetalCatalogEntry | undefined {

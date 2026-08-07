@@ -38,6 +38,10 @@ import {
   composerToolsSystemHints,
   SKILL_CATALOG,
   CONNECTOR_CATALOG,
+  PLUGIN_CATEGORIES,
+  DEFAULT_CONNECTOR_CATALOG,
+  applyMarketplaceConnectors,
+  applyMarketplacePluginCategories,
   SkillsStore,
   skillSlashToken,
   setResearch,
@@ -49,6 +53,15 @@ import {
   MEMORY_IMPORT_PROMPT,
   listCloudModels,
   isUsableChatSelection,
+  loadCustomProviders,
+  addCustomProvider,
+  updateCustomProvider,
+  removeCustomProvider,
+  customProviderId,
+  resolveProviderEndpoint,
+  chatRequestTarget,
+  mergeProviderCatalog,
+  findCustomProvider,
 } from "../src/client/index.js";
 import { metalInstallPlatformGate } from "../src/metal/install.js";
 import {
@@ -57,7 +70,16 @@ import {
   findMetalEntry,
   familyNameForHub,
   sectionForEntry,
+  setRemoteMetalCatalog,
 } from "../src/metal/catalog.js";
+import {
+  parseMarketplaceCatalog,
+  mergeMarketplaceCatalogs,
+  normalizeMarketplaceUrl,
+  metalModelsForPlatform,
+  BUNDLED_MARKETPLACE_CATALOG,
+} from "../src/marketplace/index.js";
+import { getAgentAdapter } from "../src/providers/index.js";
 
 let failed = 0;
 function check(name: string, fn: () => void) {
@@ -569,6 +591,241 @@ check("isUsableChatSelection rejects empty and uninstalled Metal", () => {
     }),
     true,
   );
+  // Custom providers: usable when configured even without a key
+  assert.equal(
+    isUsableChatSelection("custom:ollama", "llama3.2", {
+      hasProviderKey: false,
+      customConfigured: true,
+    }),
+    true,
+  );
+  assert.equal(
+    isUsableChatSelection("custom:ollama", "llama3.2", {
+      hasProviderKey: false,
+      customConfigured: false,
+    }),
+    false,
+  );
+});
+
+check("custom providers: create / update / delete + load/save", () => {
+  const store = memoryStorage();
+  assert.deepEqual(loadCustomProviders(store), []);
+
+  const created = addCustomProvider(store, {
+    label: "Ollama",
+    baseUrl: "http://localhost:11434/v1",
+    apiStyle: "openai",
+    defaultModel: "llama3.2",
+  });
+  assert.ok(created);
+  assert.equal(created!.id, "ollama");
+  assert.equal(created!.baseUrl, "http://localhost:11434/v1");
+  assert.equal(created!.apiStyle, "openai");
+  assert.equal(customProviderId(created!.id), "custom:ollama");
+
+  const listed = loadCustomProviders(store);
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0]!.label, "Ollama");
+
+  // Persist round-trip
+  const again = loadCustomProviders(store);
+  assert.equal(again[0]!.baseUrl, "http://localhost:11434/v1");
+
+  const updated = updateCustomProvider(store, "ollama", {
+    label: "Local Ollama",
+    baseUrl: "http://127.0.0.1:11434/v1/",
+    apiStyle: "openai",
+    defaultModel: "qwen2.5",
+  });
+  assert.ok(updated);
+  assert.equal(updated!.label, "Local Ollama");
+  assert.equal(updated!.baseUrl, "http://127.0.0.1:11434/v1");
+  assert.equal(updated!.defaultModel, "qwen2.5");
+
+  const anth = addCustomProvider(store, {
+    label: "Anthropic Proxy",
+    baseUrl: "https://proxy.example.com/v1",
+    apiStyle: "anthropic",
+    id: "anth-proxy",
+  });
+  assert.ok(anth);
+  assert.equal(anth!.apiStyle, "anthropic");
+  assert.equal(loadCustomProviders(store).length, 2);
+
+  assert.equal(findCustomProvider(store, "custom:ollama")?.label, "Local Ollama");
+  assert.equal(removeCustomProvider(store, "ollama"), true);
+  assert.equal(findCustomProvider(store, "ollama"), undefined);
+  assert.equal(loadCustomProviders(store).length, 1);
+
+  // Invalid URL rejected
+  assert.equal(
+    addCustomProvider(store, { label: "Bad", baseUrl: "not-a-url" }),
+    null,
+  );
+});
+
+check("resolveProviderEndpoint + chatRequestTarget use custom base URL", () => {
+  const customs = [
+    {
+      id: "ollama",
+      label: "Ollama",
+      baseUrl: "http://localhost:11434/v1",
+      apiStyle: "openai" as const,
+    },
+    {
+      id: "anth-proxy",
+      label: "Proxy",
+      baseUrl: "https://proxy.example.com/anthropic/v1",
+      apiStyle: "anthropic" as const,
+    },
+  ];
+
+  const ollama = resolveProviderEndpoint("custom:ollama", customs);
+  assert.ok(ollama);
+  assert.equal(ollama!.baseUrl, "http://localhost:11434/v1");
+  assert.equal(ollama!.apiStyle, "openai");
+
+  const target = chatRequestTarget("custom:ollama", ollama);
+  assert.equal(target.style, "openai");
+  if (target.style === "openai") {
+    assert.equal(target.url, "http://localhost:11434/v1/chat/completions");
+    assert.ok(!target.url.includes("api.openai.com"), "must not use built-in OpenAI host");
+  }
+
+  const anthEp = resolveProviderEndpoint("custom:anth-proxy", customs);
+  assert.ok(anthEp);
+  const anthTarget = chatRequestTarget("custom:anth-proxy", anthEp);
+  assert.equal(anthTarget.style, "anthropic");
+  if (anthTarget.style === "anthropic") {
+    assert.equal(anthTarget.url, "https://proxy.example.com/anthropic/v1/messages");
+    assert.ok(!anthTarget.url.includes("api.anthropic.com"));
+  }
+
+  // Missing custom config → error style, not silent OpenAI fallback
+  const missing = chatRequestTarget("custom:missing", null);
+  assert.equal(missing.style, "error");
+
+  // Built-in anthropic without override
+  const builtIn = chatRequestTarget("anthropic", null);
+  assert.equal(builtIn.style, "anthropic");
+  if (builtIn.style === "anthropic") {
+    assert.ok(builtIn.url.includes("api.anthropic.com"));
+  }
+
+  // Explicit override wins over catalog
+  const override = resolveProviderEndpoint("openai", [], {
+    baseUrl: "http://proxy.local/v1",
+    apiStyle: "openai",
+  });
+  assert.equal(override?.baseUrl, "http://proxy.local/v1");
+  const overrideTarget = chatRequestTarget("openai", override);
+  assert.equal(overrideTarget.style, "openai");
+  if (overrideTarget.style === "openai") {
+    assert.equal(overrideTarget.url, "http://proxy.local/v1/chat/completions");
+  }
+});
+
+check("mergeProviderCatalog includes custom:<slug> rows", () => {
+  const merged = mergeProviderCatalog([
+    { id: "ollama", label: "Ollama", defaultModel: "llama3.2" },
+  ]);
+  assert.ok(merged.some((p) => p.id === "anthropic"));
+  const custom = merged.find((p) => p.id === "custom:ollama");
+  assert.ok(custom);
+  assert.equal(custom!.label, "Ollama");
+  assert.equal(custom!.defaultModel, "llama3.2");
+});
+
+check("getAgentAdapter custom: with baseUrl does not throw needs baseUrl", () => {
+  // Without baseUrl → clear error (shipped path)
+  assert.throws(
+    () => getAgentAdapter("custom:ollama"),
+    /needs a baseUrl/,
+  );
+  // With baseUrl + openai style → adapter that hits override host
+  const openaiAdapter = getAgentAdapter("custom:ollama", {
+    baseUrl: "http://localhost:11434/v1",
+    apiStyle: "openai",
+  });
+  assert.equal(openaiAdapter.id, "custom:ollama");
+  // With anthropic style
+  const anthAdapter = getAgentAdapter("custom:proxy", {
+    baseUrl: "https://proxy.example.com/v1",
+    apiStyle: "anthropic",
+  });
+  assert.equal(anthAdapter.id, "custom:proxy");
+});
+
+check("marketplace: parse, merge, URL normalize, platform filter", () => {
+  const raw = {
+    schemaVersion: 1,
+    name: "Test MP",
+    connectors: [{ id: "notion", name: "Notion", available: true }],
+    skills: [{ id: "s1", name: "s1", description: "d" }],
+    plugins: [{ id: "p1", name: "P1", skillIds: ["s1"] }],
+    pluginCategories: [{ id: "engineering", label: "Engineering" }],
+    metalModels: [
+      {
+        hubID: "org/phone-only-MLX-4bit",
+        displayName: "Phone",
+        tags: ["recommended"],
+        platforms: ["ios"],
+      },
+      {
+        hubID: "org/desk-MLX-4bit",
+        displayName: "Desk",
+        tags: ["recommended"],
+        platforms: ["desktop"],
+      },
+    ],
+  };
+  const cat = parseMarketplaceCatalog(raw);
+  assert.ok(cat);
+  assert.equal(cat!.connectors[0]!.id, "notion");
+  assert.equal(metalModelsForPlatform(cat!, "ios").length, 1);
+  assert.equal(metalModelsForPlatform(cat!, "desktop").length, 1);
+
+  const merged = mergeMarketplaceCatalogs([BUNDLED_MARKETPLACE_CATALOG, cat!]);
+  assert.ok(merged.connectors.some((c) => c.id === "notion"));
+  assert.ok(merged.connectors.some((c) => c.id === "gmail"));
+
+  assert.ok(
+    normalizeMarketplaceUrl("kind365/my-mp").includes(
+      "raw.githubusercontent.com/kind365/my-mp/main/catalog.json",
+    ),
+  );
+  assert.ok(
+    normalizeMarketplaceUrl(
+      "https://github.com/o/r/blob/main/marketplace/catalog.json",
+    ).includes("raw.githubusercontent.com/o/r/main/marketplace/catalog.json"),
+  );
+});
+
+check("marketplace apply updates connector + metal catalogs", () => {
+  applyMarketplaceConnectors([
+    { id: "notion", name: "Notion" },
+    { id: "gmail", name: "Gmail" },
+  ]);
+  assert.ok(CONNECTOR_CATALOG.some((c) => c.id === "notion"));
+  applyMarketplacePluginCategories([{ id: "research", label: "Research" }]);
+  assert.ok(PLUGIN_CATEGORIES.some((c) => c.id === "research"));
+  // Restore defaults so later checks stay stable.
+  applyMarketplaceConnectors([...DEFAULT_CONNECTOR_CATALOG]);
+
+  setRemoteMetalCatalog([
+    {
+      hubID: "test/remote-MLX-4bit",
+      displayName: "Remote Test",
+      approxSize: "~1 GB",
+      blurb: "from marketplace",
+      tags: ["recommended"],
+      chatOnly: true,
+    },
+  ]);
+  assert.ok(listChatMetalCatalog().some((e) => e.hubID === "test/remote-MLX-4bit"));
+  setRemoteMetalCatalog(null);
+  assert.ok(!listChatMetalCatalog().some((e) => e.hubID === "test/remote-MLX-4bit"));
 });
 
 async function runAsyncChecks() {
@@ -609,6 +866,83 @@ async function runAsyncChecks() {
     console.error(
       `FAIL listCloudModels: ${(err as Error).message}`,
     );
+  }
+
+  // Custom base URL listing must hit the override host, not api.openai.com
+  try {
+    const seen: string[] = [];
+    const mockCustom = async (url: string) => {
+      seen.push(url);
+      if (url.startsWith("http://localhost:11434/v1/models")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: [{ id: "llama3.2" }, { id: "qwen2.5" }] }),
+        };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    };
+    const customListed = await listCloudModels("custom:ollama", "", {
+      baseUrl: "http://localhost:11434/v1",
+      apiStyle: "openai",
+      fetchImpl: mockCustom,
+    });
+    assert.equal(customListed.length, 2);
+    assert.equal(customListed[0]!.id, "llama3.2");
+    assert.ok(seen.some((u) => u.includes("localhost:11434")));
+    assert.ok(!seen.some((u) => u.includes("api.openai.com")));
+    console.log("ok  listCloudModels custom baseUrl hits override host");
+  } catch (err) {
+    failed += 1;
+    console.error(`FAIL listCloudModels custom baseUrl: ${(err as Error).message}`);
+  }
+
+  // Agent adapter with custom baseUrl must call that host (not cloud defaults)
+  try {
+    const seen: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | { url: string }, _init?: RequestInit) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.href
+            : String((input as { url: string }).url);
+      seen.push(url);
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "hi from custom", tool_calls: [] } }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+
+    try {
+      const adapter = getAgentAdapter("custom:ollama", {
+        baseUrl: "http://127.0.0.1:9999/v1",
+        apiStyle: "openai",
+      });
+      const events = [];
+      for await (const ev of adapter.stream({
+        model: "llama3.2",
+        apiKey: "none",
+        effort: "low",
+        system: "test",
+        messages: [{ role: "user", text: "hello" }],
+        tools: [],
+      })) {
+        events.push(ev);
+      }
+      assert.ok(seen.some((u) => u.startsWith("http://127.0.0.1:9999/v1/chat/completions")));
+      assert.ok(!seen.some((u) => u.includes("api.openai.com")));
+      assert.ok(events.some((e) => e.kind === "text" && e.text.includes("hi from custom")));
+      console.log("ok  getAgentAdapter custom baseUrl streams to override host");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  } catch (err) {
+    failed += 1;
+    console.error(`FAIL getAgentAdapter custom fetch: ${(err as Error).message}`);
   }
 }
 

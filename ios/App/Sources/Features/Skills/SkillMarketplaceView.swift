@@ -1,55 +1,42 @@
 import SwiftUI
 import AnyProvCore
 
-/// Lists skills synced from the user's configured skills repo. No bundled
-/// marketplace — every skill here was added either on the desktop side or
-/// directly in the repo, and synced over the WebSocket.
+/// Browse marketplace skill listings (official + user-added marketplaces)
+/// alongside skills already synced from the user's skills repo.
 struct SkillMarketplaceView: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var marketplace = MarketplaceStore.shared
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                if state.skillManager.installedSkills.isEmpty {
-                    VStack(spacing: 16) {
-                        Image(systemName: "tray")
-                            .font(.system(size: 48))
-                            .foregroundStyle(Theme.textTertiary)
-                        Text("No skills yet")
-                            .font(.system(size: 18, weight: .medium))
-                            .foregroundStyle(Theme.textSecondary)
-                        Text("Skills from your configured skills repo will appear here. Add one to the repo or ask the desktop to sync.")
-                            .font(.system(size: 14))
-                            .foregroundStyle(Theme.textTertiary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 32)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if marketplace.skills.isEmpty && state.skillManager.installedSkills.isEmpty {
+                    emptyState
                 } else {
                     List {
-                        Section {
-                            ForEach(state.skillManager.installedSkills) { skill in
-                                SkillCard(skill: skill) {
-                                    state.skillManager.toggleSkill(skill.id)
+                        if !marketplace.skills.isEmpty {
+                            Section {
+                                ForEach(marketplace.skills) { skill in
+                                    marketplaceSkillRow(skill)
                                 }
-                                .swipeActions {
-                                    Button(role: .destructive) {
-                                        Task {
-                                            try? await state.skillsMCPClient.deleteSkill(
-                                                id: skill.id,
-                                                over: state.serverClient
-                                            )
-                                        }
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
-                                }
+                            } header: {
+                                Text("Marketplace")
+                            } footer: {
+                                Text("From enabled marketplace repos. Install full skill bodies via your skills repo or desktop.")
                             }
-                        } header: {
-                            Text("Skills")
-                        } footer: {
-                            Text("Synced from your skills repo. Toggle to include in coding sessions.")
+                        }
+
+                        if !state.skillManager.installedSkills.isEmpty {
+                            Section {
+                                ForEach(state.skillManager.installedSkills) { skill in
+                                    installedSkillRow(skill)
+                                }
+                            } header: {
+                                Text("Installed (synced)")
+                            } footer: {
+                                Text("Synced from your skills repo. Toggle to include in coding sessions.")
+                            }
                         }
                     }
                     .listStyle(.insetGrouped)
@@ -66,6 +53,7 @@ struct SkillMarketplaceView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         Task {
+                            await marketplace.refresh()
                             try? await state.skillsMCPClient.requestSkillsSync(over: state.serverClient)
                         }
                     } label: {
@@ -73,15 +61,65 @@ struct SkillMarketplaceView: View {
                     }
                 }
             }
+            .task {
+                if marketplace.skills.isEmpty {
+                    await marketplace.refresh()
+                }
+            }
         }
     }
-}
 
-private struct SkillCard: View {
-    let skill: Skill
-    let onToggle: () -> Void
+    private var emptyState: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "tray")
+                .font(.system(size: 48))
+                .foregroundStyle(Theme.textTertiary)
+            Text("No skills yet")
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(Theme.textSecondary)
+            Text("Enable a marketplace in Settings → Marketplace, or sync a skills repo from the desktop.")
+                .font(.system(size: 14))
+                .foregroundStyle(Theme.textTertiary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
 
-    var body: some View {
+    private func marketplaceSkillRow(_ skill: MarketplaceSkillListing) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Image(systemName: "sparkles")
+                    .foregroundStyle(Theme.accent)
+                Text(skill.name)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                if skill.featured == true {
+                    Text("Featured")
+                        .font(.system(size: 11, weight: .medium))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Theme.accent.opacity(0.2), in: Capsule())
+                        .foregroundStyle(Theme.accent)
+                }
+                Spacer()
+                if let src = skill.source {
+                    Text(src.capitalized)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textTertiary)
+                }
+            }
+            if !skill.description.isEmpty {
+                Text(skill.description)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.textSecondary)
+                    .lineLimit(3)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func installedSkillRow(_ skill: Skill) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Image(systemName: "sparkles")
@@ -92,7 +130,7 @@ private struct SkillCard: View {
                 Spacer()
                 Toggle("", isOn: Binding(
                     get: { skill.isEnabled },
-                    set: { _ in onToggle() }
+                    set: { _ in state.skillManager.toggleSkill(skill.id) }
                 ))
                 .toggleStyle(SwitchToggleStyle(tint: Theme.accent))
                 .labelsHidden()
@@ -105,5 +143,17 @@ private struct SkillCard: View {
             }
         }
         .padding(.vertical, 4)
+        .swipeActions {
+            Button(role: .destructive) {
+                Task {
+                    try? await state.skillsMCPClient.deleteSkill(
+                        id: skill.id,
+                        over: state.serverClient
+                    )
+                }
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
     }
 }

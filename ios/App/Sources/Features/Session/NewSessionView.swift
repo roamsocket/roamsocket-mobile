@@ -60,6 +60,7 @@ struct NewSessionView: View {
         .navigationBarHidden(true)
         .sheet(isPresented: $showRepositoryPicker) {
             RepositoryPickerSheet()
+                .environmentObject(state)
         }
         .sheet(isPresented: $showGitHubLink, onDismiss: {
             // After a successful link, continue into the repo picker.
@@ -71,6 +72,7 @@ struct NewSessionView: View {
             }
         }) {
             NavigationStack { GitHubLinkView() }
+                .environmentObject(state)
         }
         .sheet(isPresented: $showServerPairing, onDismiss: {
             // After a successful pair, retry starting the session so the user
@@ -82,18 +84,22 @@ struct NewSessionView: View {
             }
         }) {
             NavigationStack { ServerPairingView() }
+                .environmentObject(state)
         }
         .sheet(isPresented: $showModelPicker) {
             ModelPickerSheet(codingOnly: true)
+                .environmentObject(state)
         }
         .sheet(isPresented: $showPermissionPicker) {
             PermissionModeSheet(selection: $state.permissionMode)
         }
         .sheet(isPresented: $showProviderSettings) {
             AppSettingsView(initialFocus: .providers)
+                .environmentObject(state)
         }
         .sheet(isPresented: $showEnvironmentPicker) {
             EnvironmentPickerSheet()
+                .environmentObject(state)
         }
         .onChange(of: state.selectedRepo?.fullName) { _, _ in
             errorMessage = nil

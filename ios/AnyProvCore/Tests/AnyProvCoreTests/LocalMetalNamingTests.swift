@@ -103,6 +103,53 @@ final class LocalMetalNamingTests: XCTestCase {
         XCTAssertNil(LocalMetalModelStore.hubID(fromRepoFolder: "not-a-repo"))
     }
 
+    // MARK: - Vision hub detection (Vision mode + MLXVLM load path)
+
+    func testLikelyVisionHubIDsMatchCatalogVisionModels() {
+        let visionHubs = [
+            "mlx-community/gemma-4-e2b-it-4bit",
+            "mlx-community/gemma-4-e4b-it-4bit",
+            "mlx-community/Qwen3-VL-2B-Instruct-4bit",
+            "mlx-community/Qwen2.5-VL-3B-Instruct-4bit",
+            "mlx-community/LFM2.5-VL-1.6B-4bit",
+            "mlx-community/SmolVLM2-500M-Video-Instruct-mlx",
+            "mlx-community/PaddleOCR-VL-1.5-bf16",
+            "mlx-community/gemma-3-4b-it-qat-4bit",
+        ]
+        for hub in visionHubs {
+            XCTAssertTrue(
+                LocalMetalCatalog.isLikelyVisionHubID(hub),
+                "expected vision: \(hub)"
+            )
+            XCTAssertTrue(
+                LocalMetalCatalog.isCatalogVisionModel(hubID: hub),
+                "catalog should tag vision: \(hub)"
+            )
+        }
+    }
+
+    func testTextOnlyHubsAreNotVision() {
+        let textHubs = [
+            "mlx-community/Qwen3-1.7B-4bit",
+            "lmstudio-community/Qwen3-0.6B-MLX-4bit",
+            "mlx-community/gemma-3n-E4B-it-lm-4bit",
+            "mlx-community/Llama-3.2-1B-Instruct-4bit",
+            "mlx-community/SmolLM-135M-Instruct-4bit",
+        ]
+        for hub in textHubs {
+            XCTAssertFalse(
+                LocalMetalCatalog.isLikelyVisionHubID(hub),
+                "expected text-only: \(hub)"
+            )
+        }
+    }
+
+    func testCanonicalAndLegacyPathRootsDiffer() {
+        XCTAssertEqual(LocalMetalPaths.relativeRoot, "CodeSocket/LocalModels")
+        XCTAssertEqual(LocalMetalPaths.legacyRelativeRoot, "AnyProvCode/LocalModels")
+        XCTAssertNotEqual(LocalMetalPaths.relativeRoot, LocalMetalPaths.legacyRelativeRoot)
+    }
+
     // MARK: - Download completeness
 
     func testHasUsableModelCacheRequiresConfigAndWeights() throws {

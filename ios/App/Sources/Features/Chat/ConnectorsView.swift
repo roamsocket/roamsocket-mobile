@@ -1,13 +1,13 @@
 import SwiftUI
 import AnyProvCore
 
-/// Connectors list view. Reads the configured connectors from
-/// `AppState.mcpManager` (synced from the desktop server's git repo via
-/// the WebSocket), and tracks per-chat enablement via `ChatViewModel`.
+/// Connectors list view. Shows marketplace catalog connectors (discovery)
+/// plus MCP servers synced from the user's connector repo via the desktop.
 struct ConnectorsView: View {
     @ObservedObject var viewModel: ChatViewModel
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var marketplace = MarketplaceStore.shared
 
     var body: some View {
         NavigationStack {
@@ -17,20 +17,102 @@ struct ConnectorsView: View {
                 VStack(spacing: 0) {
                     header
                     ScrollView {
-                        VStack(spacing: 0) {
-                            if state.mcpManager.configuredServers.isEmpty {
-                                emptyState
-                                    .padding(.top, 16)
-                            } else {
+                        VStack(spacing: 16) {
+                            discoveryToggle
+                                .padding(.horizontal, 16)
+                                .padding(.top, 16)
+
+                            if !marketplace.connectors.isEmpty {
+                                sectionHeader("Marketplace")
+                                marketplaceConnectorsList
+                            }
+
+                            if !state.mcpManager.configuredServers.isEmpty {
+                                sectionHeader("Configured (synced)")
                                 connectorsList
-                                    .padding(.top, 16)
+                            } else if marketplace.connectors.isEmpty {
+                                emptyState
                             }
                         }
+                        .padding(.bottom, 16)
                     }
                 }
             }
             .navigationBarHidden(true)
+            .task {
+                if marketplace.connectors.isEmpty {
+                    await marketplace.refresh()
+                }
+                viewModel.applyMarketplaceConnectors(marketplace.connectors)
+            }
         }
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(Theme.textTertiary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 20)
+    }
+
+    private var marketplaceConnectorsList: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(marketplace.connectors.enumerated()), id: \.element.id) { index, item in
+                let available = item.isAvailable
+                HStack(spacing: 14) {
+                    Image(systemName: item.icon ?? "puzzlepiece.extension")
+                        .font(.system(size: 20))
+                        .foregroundStyle(available ? Theme.textPrimary : Theme.textTertiary)
+                        .frame(width: 32, height: 32)
+                        .background(Theme.surfaceElevated, in: RoundedRectangle(cornerRadius: 8))
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(item.name)
+                            .font(.system(size: 17))
+                            .foregroundStyle(available ? Theme.textPrimary : Theme.textTertiary)
+                        if let d = item.description, !d.isEmpty {
+                            Text(d)
+                                .font(.system(size: 12))
+                                .foregroundStyle(Theme.textTertiary)
+                                .lineLimit(1)
+                        }
+                    }
+
+                    Spacer()
+
+                    if available {
+                        Toggle("", isOn: Binding(
+                            get: { viewModel.selectedConnectors.contains(item.id) },
+                            set: { on in
+                                if on {
+                                    viewModel.selectedConnectors.insert(item.id)
+                                } else {
+                                    viewModel.selectedConnectors.remove(item.id)
+                                }
+                            }
+                        ))
+                        .toggleStyle(SwitchToggleStyle(tint: Theme.accent))
+                        .labelsHidden()
+                    } else {
+                        Text("Soon")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(Theme.textTertiary)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+                .opacity(available ? 1 : 0.65)
+
+                if index < marketplace.connectors.count - 1 {
+                    Divider()
+                        .background(Theme.separator)
+                        .padding(.leading, 60)
+                }
+            }
+        }
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.cardRadius))
+        .padding(.horizontal, 16)
     }
 
     // MARK: - Header

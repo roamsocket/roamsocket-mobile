@@ -104,6 +104,20 @@ assert.ok(css.includes("skill-slash-chip"), "skill chip styles");
 assert.ok(css.includes("skill-detail-modal") || css.includes("skill-detail"), "skill detail styles");
 console.log("skills: slash chips, hover preview, detail/edit modals");
 
+// Marketplace (connectors / skills / plugins / metal catalogs)
+assert.ok(main.includes("fillSettingsMarketplace") || main.includes("marketplace"), "marketplace settings");
+assert.ok(main.includes("applyMarketplaceStatusToRenderer"), "marketplace applied to renderer");
+assert.ok(main.includes("applyMarketplaceConnectors"), "marketplace connectors wired");
+assert.ok(main.includes('"marketplace"'), "marketplace settings tab");
+const marketplaceDir = path.join(root, "src/marketplace");
+assert.ok(
+  ["types.ts", "store.ts", "parse.ts", "apply.ts"].every((f) =>
+    existsSync(path.join(marketplaceDir, f)),
+  ),
+  "marketplace module files",
+);
+console.log("marketplace: multi-source catalog for connectors/skills/plugins/metal");
+
 // Chat send uses shipped pure turn builders (not inline-only stubs)
 assert.ok(main.includes("buildUserContent"), "user content builder");
 assert.ok(main.includes("buildChatSystemContent"), "system content builder");
@@ -127,3 +141,24 @@ assert.ok(
   "metal installRuntime IPC call",
 );
 console.log("chat-turn builders + metal installRuntime wired; no composer coming-soon stub");
+
+// Custom providers: Settings CRUD + chat/code wiring
+assert.ok(main.includes("addCustomProvider"), "settings add custom provider");
+assert.ok(main.includes("updateCustomProvider"), "settings edit custom provider");
+assert.ok(main.includes("removeCustomProvider"), "settings remove custom provider");
+assert.ok(main.includes("promptAddCustomProvider"), "add custom provider UI");
+assert.ok(main.includes("Custom providers"), "custom providers section copy");
+assert.ok(main.includes("mergeProviderCatalog"), "picker includes custom catalog");
+assert.ok(main.includes("baseUrl: ep?.baseUrl") || main.includes("baseUrl: codeEp.baseUrl"), "chat/code pass baseUrl");
+assert.ok(main.includes("apiStyle"), "apiStyle threaded to stream/session");
+assert.ok(
+  /create_session[\s\S]*baseUrl/.test(main) || main.includes("baseUrl: codeEp.baseUrl"),
+  "create_session model includes baseUrl for custom",
+);
+const customStore = readFileSync(path.join(root, "src/client/custom-providers.ts"), "utf8");
+assert.ok(customStore.includes("loadCustomProviders"), "custom provider store");
+assert.ok(customStore.includes("chatRequestTarget"), "chat request target resolver");
+const chatStream = readFileSync(path.join(root, "src/renderer/chat-stream.ts"), "utf8");
+assert.ok(chatStream.includes("baseUrl"), "chat-stream accepts baseUrl");
+assert.ok(chatStream.includes("chatRequestTarget"), "chat-stream uses shared target resolver");
+console.log("custom providers: settings CRUD + picker + baseUrl/apiStyle on chat and create_session");

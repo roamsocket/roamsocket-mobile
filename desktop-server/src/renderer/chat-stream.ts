@@ -1,7 +1,15 @@
 /**
  * BYOK chat streaming from the renderer (Anthropic SSE + OpenAI-compatible).
  * Metal models are handled via main-process IPC (not this module).
+ *
+ * Custom / proxy hosts pass `baseUrl` + `apiStyle` so requests never fall
+ * through to built-in cloud defaults.
  */
+import {
+  chatRequestTarget,
+  type CustomApiStyle,
+  type ResolvedEndpoint,
+} from "../client/custom-providers.js";
 
 export interface ChatTurn {
   role: "user" | "assistant" | "system";
@@ -15,30 +23,42 @@ export interface StreamChatOptions {
   messages: ChatTurn[];
   signal?: AbortSignal;
   onDelta: (text: string) => void;
+  /** Override host for custom / proxy endpoints (includes version segment). */
+  baseUrl?: string;
+  /** Wire format when baseUrl is set (or custom: provider). Defaults to openai. */
+  apiStyle?: CustomApiStyle;
 }
-
-const OPENAI_BASE: Record<string, string> = {
-  openai: "https://api.openai.com/v1",
-  groq: "https://api.groq.com/openai/v1",
-  openrouter: "https://openrouter.ai/api/v1",
-  xai: "https://api.x.ai/v1",
-  mistral: "https://api.mistral.ai/v1",
-};
 
 export async function streamChat(opts: StreamChatOptions): Promise<string> {
   if (opts.provider === "localMetal") {
     throw new Error("Metal chat must use the desktop Metal runtime (IPC), not HTTP stream.");
   }
-  if (opts.provider === "anthropic") {
-    return streamAnthropic(opts);
+
+  const endpoint: ResolvedEndpoint | null =
+    opts.baseUrl?.trim()
+      ? {
+          baseUrl: opts.baseUrl.replace(/\/+$/, ""),
+          apiStyle: opts.apiStyle === "anthropic" ? "anthropic" : "openai",
+        }
+      : null;
+
+  const target = chatRequestTarget(opts.provider, endpoint);
+  if (target.style === "error") {
+    throw new Error(target.message);
   }
-  if (opts.provider === "google") {
+  if (target.style === "metal") {
+    throw new Error("Metal chat must use the desktop Metal runtime (IPC), not HTTP stream.");
+  }
+  if (target.style === "google") {
     return streamGoogle(opts);
   }
-  return streamOpenAICompatible(opts);
+  if (target.style === "anthropic") {
+    return streamAnthropic(opts, target.url);
+  }
+  return streamOpenAICompatible(opts, target.url);
 }
 
-async function streamAnthropic(opts: StreamChatOptions): Promise<string> {
+async function streamAnthropic(opts: StreamChatOptions, url: string): Promise<string> {
   const system = opts.messages.filter((m) => m.role === "system").map((m) => m.content).join("\n");
   const messages = opts.messages
     .filter((m) => m.role === "user" || m.role === "assistant")
@@ -47,7 +67,7 @@ async function streamAnthropic(opts: StreamChatOptions): Promise<string> {
       content: [{ type: "text", text: m.content }],
     }));
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetch(url, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -100,13 +120,12 @@ async function streamAnthropic(opts: StreamChatOptions): Promise<string> {
   return full;
 }
 
-async function streamOpenAICompatible(opts: StreamChatOptions): Promise<string> {
-  const base = OPENAI_BASE[opts.provider] ?? OPENAI_BASE.openai!;
-  const res = await fetch(`${base}/chat/completions`, {
+async function streamOpenAICompatible(opts: StreamChatOptions, url: string): Promise<string> {
+  const res = await fetch(url, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      authorization: `Bearer ${opts.apiKey}`,
+      authorization: `Bearer ${opts.apiKey || "none"}`,
     },
     body: JSON.stringify({
       model: opts.model,

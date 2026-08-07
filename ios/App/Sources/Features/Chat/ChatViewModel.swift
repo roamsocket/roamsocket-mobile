@@ -98,9 +98,13 @@ final class ChatViewModel: ObservableObject {
 
     init(catalog: ModelCatalog = ModelCatalog()) {
         self.catalog = catalog
-        // Default connectors — these are *ids* of connectors the user has
-        // authorised; the actual data fetching lives in the desktop server.
-        self.selectedConnectors = ["gmail", "google-calendar", "google-drive"]
+        // Seed connector list from marketplace (official + user-added catalogs).
+        applyMarketplaceConnectors(MarketplaceStore.shared.connectors)
+        let availableIds = connectors.filter(\.isEnabled).map(\.id)
+        // Prefer common productivity connectors when present in the catalog.
+        let preferred = ["gmail", "gcal", "gdrive", "google-calendar", "google-drive"]
+        let defaults = preferred.filter { availableIds.contains($0) }
+        self.selectedConnectors = Set(defaults.isEmpty ? availableIds.prefix(3) : defaults)
         healthService.refreshAuthorizationState()
         locationService.refreshAuthorizationState()
         // Bubble nested service publishes so the Add-to-Chat sheet
@@ -115,6 +119,26 @@ final class ChatViewModel: ObservableObject {
                 self?.objectWillChange.send()
             }
             .store(in: &cancellables)
+        MarketplaceStore.shared.objectWillChange
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.applyMarketplaceConnectors(MarketplaceStore.shared.connectors)
+            }
+            .store(in: &cancellables)
+    }
+
+    /// Map marketplace connector rows into chat UI models.
+    func applyMarketplaceConnectors(_ items: [MarketplaceConnector]) {
+        connectors = items.map { item in
+            Connector(
+                id: item.id,
+                name: item.name,
+                iconName: item.icon ?? "puzzlepiece.extension",
+                itemCount: 0,
+                isEnabled: item.isAvailable,
+                description: item.description
+            )
+        }
     }
 
     // MARK: - Health

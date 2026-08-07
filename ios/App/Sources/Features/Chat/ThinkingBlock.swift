@@ -74,14 +74,7 @@ struct ThinkingBlock: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 // Empty open `<think>` tag: live typing wave instead of static "Thinking..."
-                HStack(spacing: 8) {
-                    Text("Thinking")
-                        .font(.system(size: 14))
-                        .foregroundStyle(Theme.textTertiary)
-                    TypingDotsView()
-                        .scaleEffect(0.85, anchor: .leading)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                AssistantTypingIndicator()
             }
 
             if showCopiedToast {

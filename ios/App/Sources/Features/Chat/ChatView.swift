@@ -122,6 +122,7 @@ struct ChatView: View {
             NavigationStack {
                 SessionView(config: config)
             }
+            .environmentObject(state)
         }
     }
 

@@ -21,6 +21,7 @@
     "src/renderer/**/*.d.ts",
     "src/client/**/*.ts",
     "src/metal/**/*.ts",
+    "src/marketplace/**/*.ts",
     "forge.config.ts",
     "vite.*.config.ts"
   ],

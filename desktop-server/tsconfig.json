@@ -27,6 +27,7 @@
     "src/tools/**/*.ts",
     "src/client/**/*.ts",
     "src/metal/**/*.ts",
+    "src/marketplace/**/*.ts",
     "scripts/**/*.ts"
   ],
   "exclude": [

@@ -64,3 +64,30 @@ export function providerLabel(id: string): string {
 export function defaultModelFor(providerId: string): string {
   return CHAT_PROVIDERS.find((p) => p.id === providerId)?.defaultModel ?? "";
 }
+
+/** Built-in catalog entry shape reused when merging custom providers into pickers. */
+export interface ProviderCatalogEntry {
+  id: string;
+  label: string;
+  defaultModel: string;
+}
+
+/**
+ * Built-ins plus custom providers as picker rows.
+ * Custom rows use wire id `custom:<slug>`.
+ */
+export function mergeProviderCatalog(
+  customs: Array<{ id: string; label: string; defaultModel?: string }>,
+): ProviderCatalogEntry[] {
+  const builtIns: ProviderCatalogEntry[] = CHAT_PROVIDERS.map((p) => ({
+    id: p.id,
+    label: p.label,
+    defaultModel: p.defaultModel,
+  }));
+  const customRows: ProviderCatalogEntry[] = customs.map((c) => ({
+    id: c.id.startsWith("custom:") ? c.id : `custom:${c.id}`,
+    label: c.label,
+    defaultModel: c.defaultModel ?? "",
+  }));
+  return [...builtIns, ...customRows];
+}

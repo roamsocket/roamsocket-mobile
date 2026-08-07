@@ -18,6 +18,8 @@ enum VisionCapability {
         if model.provider == .appleFoundation { return false }
 
         // On-device Metal VLMs (Gemma 4, Qwen-VL, SmolVLM, …).
+        // Prefer catalog Vision tags + shared hub-id heuristics so downloads
+        // marked Vision in Settings always appear in Vision mode.
         if model.provider == .localMetal {
             return isLikelyLocalVLM(model.modelID)
         }
@@ -144,51 +146,6 @@ enum VisionCapability {
 
     /// Hub-id heuristics for Apple Silicon / MLX vision-language models.
     static func isLikelyLocalVLM(_ modelID: String) -> Bool {
-        let id = modelID.lowercased()
-        if id.contains("whisper") || id.contains("embed") || id.contains("tts") {
-            return false
-        }
-        // Explicit text-only Gemma 3n LM builds.
-        if id.contains("gemma-3n") && id.contains("-lm-") { return false }
-        if id.contains("gemma3_text") { return false }
-
-        if id.contains("gemma-4") || id.contains("gemma4") { return true }
-        if id.contains("gemma-3-4b") || id.contains("gemma-3-12b") || id.contains("gemma-3-27b") {
-            return true
-        }
-        // Multimodal Gemma 3n (non-lm) weights.
-        if id.contains("gemma-3n") { return true }
-
-        if id.contains("paligemma")
-            || id.contains("smolvlm")
-            || id.contains("fastvlm")
-            || id.contains("pixtral")
-            || id.contains("llava")
-            || id.contains("moondream")
-            || id.contains("paddleocr")
-            || id.contains("kimi-vl")
-            || id.contains("mage-vl")
-        {
-            return true
-        }
-        if id.contains("qwen2-vl")
-            || id.contains("qwen2.5-vl")
-            || id.contains("qwen3-vl")
-            || id.contains("qwen2_vl")
-            || id.contains("qwen2_5_vl")
-            || id.contains("qwen3_vl")
-        {
-            return true
-        }
-        if id.contains("lfm2-vl") || id.contains("lfm2.5-vl") { return true }
-        if id.contains("ministral-3") { return true }
-        if id.contains("vision") || id.contains("vlm") { return true }
-        // Generic VL token in id (avoid matching "vl" inside unrelated names carefully).
-        if id.contains("-vl-") || id.contains("_vl_") || id.contains("-vl_")
-            || id.hasSuffix("-vl") || id.contains("/vl-")
-        {
-            return true
-        }
-        return false
+        LocalMetalCatalog.isLikelyVisionHubID(modelID)
     }
 }

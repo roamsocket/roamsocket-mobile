@@ -116,6 +116,77 @@ public enum LocalMetalRuntime {
     public static var isReady: Bool { engine != nil }
 }
 
+// MARK: - On-disk paths
+
+/// Application Support roots for phone Metal weights.
+///
+/// Canonical root is `CodeSocket/LocalModels`. Pre-rebrand builds wrote to
+/// `AnyProvCode/LocalModels` — that legacy tree is still **scanned** so
+/// downloads remain visible after the rename (Vision + chat pickers).
+public enum LocalMetalPaths {
+    /// Current app-support relative root for on-device models.
+    public static let relativeRoot = "CodeSocket/LocalModels"
+    /// Pre-rebrand root (still scanned for existing downloads).
+    public static let legacyRelativeRoot = "AnyProvCode/LocalModels"
+
+    /// Application Support directory (created if needed).
+    public static func applicationSupportDirectory() throws -> URL {
+        try FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+    }
+
+    /// Canonical models root (created).
+    public static func modelsDirectory() throws -> URL {
+        let dir = try applicationSupportDirectory()
+            .appendingPathComponent(relativeRoot, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    /// Canonical HF hub cache (created). Engine downloads must use this path.
+    public static func hubCacheDirectory() throws -> URL {
+        let dir = try modelsDirectory().appendingPathComponent("hf-hub", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    /// Legacy models root if it exists (not created).
+    public static func legacyModelsDirectoryIfPresent() -> URL? {
+        guard let base = try? applicationSupportDirectory() else { return nil }
+        let dir = base.appendingPathComponent(legacyRelativeRoot, isDirectory: true)
+        return FileManager.default.fileExists(atPath: dir.path) ? dir : nil
+    }
+
+    /// Legacy HF hub cache if present (not created).
+    public static func legacyHubCacheDirectoryIfPresent() -> URL? {
+        guard let root = legacyModelsDirectoryIfPresent() else { return nil }
+        let dir = root.appendingPathComponent("hf-hub", isDirectory: true)
+        return FileManager.default.fileExists(atPath: dir.path) ? dir : nil
+    }
+
+    /// All hub-cache roots to scan (canonical first, then legacy).
+    public static func hubCacheRootsToScan() -> [URL] {
+        var roots: [URL] = []
+        if let canonical = try? hubCacheDirectory() {
+            roots.append(canonical)
+        }
+        if let legacy = legacyHubCacheDirectoryIfPresent(),
+           !roots.contains(where: { $0.standardizedFileURL == legacy.standardizedFileURL }) {
+            roots.append(legacy)
+        }
+        return roots
+    }
+
+    /// Repo folder name for a hub id: `org/name` → `models--org--name`.
+    public static func hubRepoFolderName(for modelID: String) -> String {
+        "models--" + modelID.replacingOccurrences(of: "/", with: "--")
+    }
+}
+
 // MARK: - Model inventory
 
 /// Catalog + on-disk inventory for **downloadable** Metal chat models.
@@ -134,22 +205,12 @@ public actor LocalMetalModelStore {
 
     /// Root for hub cache + optional user-copied trees.
     public func modelsDirectory() throws -> URL {
-        let base = try FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
-        let dir = base.appendingPathComponent("CodeSocket/LocalModels", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
+        try LocalMetalPaths.modelsDirectory()
     }
 
     /// Hugging Face hub cache root used by the MLX downloader (app-scoped).
     public func hubCacheDirectory() throws -> URL {
-        let dir = try modelsDirectory().appendingPathComponent("hf-hub", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
+        try LocalMetalPaths.hubCacheDirectory()
     }
 
     /// Record a successful download so the UI / picker stay in sync even when
@@ -176,6 +237,10 @@ public actor LocalMetalModelStore {
         if let root = try? modelsDirectory() {
             total += directoryByteSize(root)
         }
+        // Include legacy pre-rebrand cache so Settings storage matches inventory.
+        if let legacy = LocalMetalPaths.legacyModelsDirectoryIfPresent() {
+            total += directoryByteSize(legacy)
+        }
         return total
     }
 
@@ -186,16 +251,22 @@ public actor LocalMetalModelStore {
         // Persisted success only counts when the cache still looks complete.
         // Never treat “folder exists” alone as ready (partial trees / wiped weights).
         if knownDownloadedIDs().contains(modelID) {
-            if onDisk { return true }
-            // Stale mark — incomplete, wiped, or prior loose heuristic.
+            if onDisk {
+                return true
+            }
+            // Engine may still see weights (e.g. legacy path) even when the
+            // canonical scan is empty — do not wipe the mark until both fail.
+            if let engine = LocalMetalRuntime.engine, await engine.isDownloaded(modelID: modelID) {
+                markDownloaded(modelID: modelID)
+                return true
+            }
             markDeleted(modelID: modelID)
         }
 
         if let engine = LocalMetalRuntime.engine {
             let ready = await engine.isDownloaded(modelID: modelID)
             if ready {
-                // Only persist when disk also verifies (engine may report in-RAM only).
-                if onDisk { markDownloaded(modelID: modelID) }
+                markDownloaded(modelID: modelID)
                 return true
             }
         }
@@ -207,20 +278,21 @@ public actor LocalMetalModelStore {
         return false
     }
 
-    /// Disk-only check (no engine required) — looks for HF hub layout under our cache.
+    /// Disk-only check (no engine required) — looks for HF hub layout under our
+    /// canonical cache **and** the pre-rebrand `AnyProvCode` tree.
     public func isDownloadedOnDisk(modelID: String) -> Bool {
-        if let repoDir = repoDirectory(for: modelID),
-           Self.hasUsableModelCache(at: repoDir) {
-            return true
+        for repoDir in repoDirectories(for: modelID) {
+            if Self.hasUsableModelCache(at: repoDir) { return true }
         }
-        if let root = try? modelsDirectory() {
-            let leaf = modelID.split(separator: "/").last.map(String.init) ?? modelID
+        let roots = modelsRootsToScan()
+        let leaf = modelID.split(separator: "/").last.map(String.init) ?? modelID
+        for root in roots {
             let local = root.appendingPathComponent(leaf, isDirectory: true)
             if Self.hasUsableModelCache(at: local) { return true }
             if modelID.hasPrefix("local/") {
                 let name = String(modelID.dropFirst("local/".count))
                 let folder = root.appendingPathComponent(name, isDirectory: true)
-                return Self.hasUsableModelCache(at: folder)
+                if Self.hasUsableModelCache(at: folder) { return true }
             }
         }
         return false
@@ -241,13 +313,13 @@ public actor LocalMetalModelStore {
             ))
         }
 
-        // Scan HF hub cache for anything already downloaded (not limited to static catalog).
-        if let cacheRoot = try? hubCacheDirectory(),
-           let kids = try? FileManager.default.contentsOfDirectory(
-            at: cacheRoot,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-           ) {
+        // Scan HF hub caches (canonical CodeSocket + legacy AnyProvCode).
+        for cacheRoot in LocalMetalPaths.hubCacheRootsToScan() {
+            guard let kids = try? FileManager.default.contentsOfDirectory(
+                at: cacheRoot,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            ) else { continue }
             for url in kids {
                 guard url.lastPathComponent.hasPrefix("models--"),
                       Self.hasUsableModelCache(at: url),
@@ -262,10 +334,10 @@ public actor LocalMetalModelStore {
         // Persisted downloads (covers edge cases where blob layout is incomplete to scan).
         for hubID in knownDownloadedIDs() {
             guard seen.insert(hubID).inserted else { continue }
-            // Require a complete cache (config + real weights), not just a leftover folder.
+            // Accept disk **or** engine (engine may resolve legacy path / in-RAM).
             var ready = isDownloadedOnDisk(modelID: hubID)
             if !ready, let engine = LocalMetalRuntime.engine {
-                ready = await engine.isDownloaded(modelID: hubID) && isDownloadedOnDisk(modelID: hubID)
+                ready = await engine.isDownloaded(modelID: hubID)
             }
             guard ready else {
                 markDeleted(modelID: hubID)
@@ -280,10 +352,12 @@ public actor LocalMetalModelStore {
         for entry in catalog {
             guard seen.insert(entry.hubID).inserted else { continue }
             let ready: Bool
-            if let engine = LocalMetalRuntime.engine {
+            if isDownloadedOnDisk(modelID: entry.hubID) {
+                ready = true
+            } else if let engine = LocalMetalRuntime.engine {
                 ready = await engine.isDownloaded(modelID: entry.hubID)
             } else {
-                ready = isDownloadedOnDisk(modelID: entry.hubID)
+                ready = false
             }
             guard ready else {
                 seen.remove(entry.hubID)
@@ -293,13 +367,13 @@ public actor LocalMetalModelStore {
             appendModel(hubID: entry.hubID, displayName: LocalMetalCatalog.displayName(for: entry.hubID))
         }
 
-        // User-copied MLX trees under Application Support/LocalModels (not hf-hub).
-        if let dir = try? modelsDirectory(),
-           let kids = try? FileManager.default.contentsOfDirectory(
-            at: dir,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-           ) {
+        // User-copied MLX trees under LocalModels (not hf-hub), both path roots.
+        for dir in modelsRootsToScan() {
+            guard let kids = try? FileManager.default.contentsOfDirectory(
+                at: dir,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            ) else { continue }
             for url in kids {
                 if url.lastPathComponent == "hf-hub" { continue }
                 var isDir: ObjCBool = false
@@ -317,26 +391,48 @@ public actor LocalMetalModelStore {
 
     /// Approximate byte size of a cached model (best-effort).
     public func approximateByteSize(modelID: String) -> Int64? {
-        if let repoDir = repoDirectory(for: modelID),
-           FileManager.default.fileExists(atPath: repoDir.path) {
-            let size = directoryByteSize(repoDir)
-            if size > 0 { return size }
+        for repoDir in repoDirectories(for: modelID) {
+            if FileManager.default.fileExists(atPath: repoDir.path) {
+                let size = directoryByteSize(repoDir)
+                if size > 0 { return size }
+            }
         }
-        if modelID.hasPrefix("local/"), let root = try? modelsDirectory() {
+        if modelID.hasPrefix("local/") {
             let name = String(modelID.dropFirst("local/".count))
-            let folder = root.appendingPathComponent(name, isDirectory: true)
-            let size = directoryByteSize(folder)
-            if size > 0 { return size }
+            for root in modelsRootsToScan() {
+                let folder = root.appendingPathComponent(name, isDirectory: true)
+                let size = directoryByteSize(folder)
+                if size > 0 { return size }
+            }
         }
         return nil
     }
 
     // MARK: - Paths
 
+    /// Canonical + legacy model roots that exist (canonical always created first).
+    private func modelsRootsToScan() -> [URL] {
+        var roots: [URL] = []
+        if let canonical = try? modelsDirectory() {
+            roots.append(canonical)
+        }
+        if let legacy = LocalMetalPaths.legacyModelsDirectoryIfPresent(),
+           !roots.contains(where: { $0.standardizedFileURL == legacy.standardizedFileURL }) {
+            roots.append(legacy)
+        }
+        return roots
+    }
+
+    /// Possible HF repo directories for a hub id (canonical + legacy caches).
+    private func repoDirectories(for modelID: String) -> [URL] {
+        let folderName = LocalMetalPaths.hubRepoFolderName(for: modelID)
+        return LocalMetalPaths.hubCacheRootsToScan().map {
+            $0.appendingPathComponent(folderName, isDirectory: true)
+        }
+    }
+
     private func repoDirectory(for modelID: String) -> URL? {
-        guard let cacheRoot = try? hubCacheDirectory() else { return nil }
-        let folderName = "models--" + modelID.replacingOccurrences(of: "/", with: "--")
-        return cacheRoot.appendingPathComponent(folderName, isDirectory: true)
+        repoDirectories(for: modelID).first
     }
 
     // MARK: - Detection

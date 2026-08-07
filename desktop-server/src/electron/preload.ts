@@ -43,6 +43,60 @@ interface SecretPayload {
   modelPrefs: Record<string, { model: string; effort: "low" | "medium" | "high" }>;
 }
 
+interface MarketplaceSourceInfo {
+  id: string;
+  name: string;
+  url: string;
+  enabled: boolean;
+  isDefault?: boolean;
+  lastFetchedAt?: number;
+  lastError?: string | null;
+  catalogName?: string | null;
+}
+
+interface MarketplaceStatusInfo {
+  sources: MarketplaceSourceInfo[];
+  catalog: {
+    schemaVersion: number;
+    updatedAt?: string;
+    name?: string;
+    description?: string;
+    connectors: Array<{
+      id: string;
+      name: string;
+      description?: string;
+      available?: boolean;
+      category?: string;
+    }>;
+    skills: Array<{
+      id: string;
+      name: string;
+      description: string;
+      category?: string;
+      featured?: boolean;
+    }>;
+    plugins: Array<{
+      id: string;
+      name: string;
+      description?: string;
+      category?: string;
+      skillIds?: string[];
+      featured?: boolean;
+    }>;
+    pluginCategories: Array<{ id: string; label: string }>;
+    metalModels: Array<{
+      hubID: string;
+      displayName: string;
+      approxSize?: string;
+      blurb?: string;
+      tags?: string[];
+      platforms?: string[];
+    }>;
+  };
+  lastMergedAt: number | null;
+  usingBundledOnly: boolean;
+}
+
 const api = {
   bootstrap: (): Promise<BootstrapInfo> => ipcRenderer.invoke("app:getBootstrap"),
 
@@ -120,6 +174,27 @@ const api = {
 
   window: { hide: (): Promise<void> => ipcRenderer.invoke("window:hide") },
   app: { quit: (): Promise<void> => ipcRenderer.invoke("app:quit") },
+
+  /**
+   * Marketplace catalogs (connectors, skills, plugins, Metal models).
+   * Default official source + user-added GitHub raw catalog.json URLs.
+   */
+  marketplace: {
+    status: (): Promise<MarketplaceStatusInfo> => ipcRenderer.invoke("marketplace:status"),
+    refresh: (): Promise<MarketplaceStatusInfo> => ipcRenderer.invoke("marketplace:refresh"),
+    addSource: (input: {
+      name?: string;
+      url: string;
+      enabled?: boolean;
+    }): Promise<{ source: MarketplaceSourceInfo; status: MarketplaceStatusInfo }> =>
+      ipcRenderer.invoke("marketplace:addSource", input),
+    removeSource: (id: string): Promise<MarketplaceStatusInfo> =>
+      ipcRenderer.invoke("marketplace:removeSource", id),
+    setSourceEnabled: (id: string, enabled: boolean): Promise<MarketplaceStatusInfo> =>
+      ipcRenderer.invoke("marketplace:setSourceEnabled", id, enabled),
+    setSourceUrl: (id: string, url: string): Promise<MarketplaceStatusInfo> =>
+      ipcRenderer.invoke("marketplace:setSourceUrl", id, url),
+  },
 
   /** On-device Metal / MLX models — managed in a dedicated desktop view. */
   metal: {

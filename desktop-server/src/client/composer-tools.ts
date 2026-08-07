@@ -44,7 +44,8 @@ export const SKILL_CATALOG: SkillCatalogEntry[] = BUILTIN_SKILLS.map((s) => ({
   description: s.description,
 }));
 
-export const CONNECTOR_CATALOG: ConnectorCatalogEntry[] = [
+/** Built-in connector list (overridden at runtime by marketplace merge). */
+export const DEFAULT_CONNECTOR_CATALOG: ConnectorCatalogEntry[] = [
   { id: "cashapp", name: "Cash App" },
   { id: "figma", name: "Figma" },
   { id: "gmail", name: "Gmail" },
@@ -55,37 +56,76 @@ export const CONNECTOR_CATALOG: ConnectorCatalogEntry[] = [
   { id: "github", name: "GitHub" },
 ];
 
-export const PLUGIN_CATEGORIES: PluginCategory[] = [
+/** Live connector catalog — marketplace applies updates in place. */
+export let CONNECTOR_CATALOG: ConnectorCatalogEntry[] = [...DEFAULT_CONNECTOR_CATALOG];
+
+export const DEFAULT_PLUGIN_CATEGORIES: PluginCategory[] = [
   { id: "marketing", label: "Marketing" },
   { id: "productivity", label: "Productivity" },
   { id: "engineering", label: "Engineering" },
   { id: "design", label: "Design" },
 ];
 
+/** Live plugin categories — marketplace applies updates in place. */
+export let PLUGIN_CATEGORIES: PluginCategory[] = [...DEFAULT_PLUGIN_CATEGORIES];
+
+/** Replace connector catalog from a marketplace merge (non-empty only). */
+export function applyMarketplaceConnectors(entries: ConnectorCatalogEntry[]): void {
+  if (!entries.length) return;
+  CONNECTOR_CATALOG = entries.map((c) => ({ ...c }));
+}
+
+/** Replace plugin categories from a marketplace merge (non-empty only). */
+export function applyMarketplacePluginCategories(entries: PluginCategory[]): void {
+  if (!entries.length) return;
+  PLUGIN_CATEGORIES = entries.map((c) => ({ ...c }));
+}
+
 const DEFAULTS: ComposerToolsState = {
   webSearch: true,
   research: false,
   connectors: Object.fromEntries(
-    CONNECTOR_CATALOG.map((c) => [c.id, c.available === false ? false : true]),
+    DEFAULT_CONNECTOR_CATALOG.map((c) => [c.id, c.available === false ? false : true]),
   ),
   recentSkillIds: [],
   activeSkillIds: [],
 };
 
+function defaultConnectorToggles(): Record<string, boolean> {
+  return Object.fromEntries(
+    CONNECTOR_CATALOG.map((c) => [c.id, c.available === false ? false : true]),
+  );
+}
+
 export function loadComposerTools(storage: StorageLike): ComposerToolsState {
   try {
     const raw = storage.getItem(KEY);
-    if (!raw) return structuredClone(DEFAULTS);
+    const baseConnectors = defaultConnectorToggles();
+    if (!raw) {
+      return {
+        webSearch: DEFAULTS.webSearch,
+        research: DEFAULTS.research,
+        connectors: baseConnectors,
+        recentSkillIds: [],
+        activeSkillIds: [],
+      };
+    }
     const parsed = JSON.parse(raw) as Partial<ComposerToolsState>;
     return {
       webSearch: parsed.webSearch ?? DEFAULTS.webSearch,
       research: parsed.research ?? DEFAULTS.research,
-      connectors: { ...DEFAULTS.connectors, ...(parsed.connectors ?? {}) },
+      connectors: { ...baseConnectors, ...(parsed.connectors ?? {}) },
       recentSkillIds: Array.isArray(parsed.recentSkillIds) ? parsed.recentSkillIds : [],
       activeSkillIds: Array.isArray(parsed.activeSkillIds) ? parsed.activeSkillIds : [],
     };
   } catch {
-    return structuredClone(DEFAULTS);
+    return {
+      webSearch: DEFAULTS.webSearch,
+      research: DEFAULTS.research,
+      connectors: defaultConnectorToggles(),
+      recentSkillIds: [],
+      activeSkillIds: [],
+    };
   }
 }
 
