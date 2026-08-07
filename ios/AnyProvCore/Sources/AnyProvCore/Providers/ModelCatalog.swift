@@ -20,7 +20,7 @@ public struct ModelCatalog: Sendable {
             return AnthropicProvider(id: id, http: http, baseURL: customBaseURL)
         case .google:
             return GoogleProvider(http: http, baseURL: customBaseURL)
-        case .openai, .groq, .openrouter, .xai, .mistral:
+        case .openai, .groq, .openrouter, .xai, .mistral, .minimax:
             return OpenAICompatibleProvider(id: id, http: http, baseURL: customBaseURL)
         case .localMetal:
             return LocalMetalProvider()

@@ -156,6 +156,21 @@ final class ProviderTests: XCTestCase {
         XCTAssertTrue(id.supportsCodingAgent)
     }
 
+    func testMiniMaxProviderIDRoundTrips() throws {
+        let id = ProviderID.minimax
+        XCTAssertEqual(id.rawValue, "minimax")
+        XCTAssertEqual(id.displayName, "MiniMax")
+        XCTAssertEqual(ProviderID(rawValue: "minimax"), .minimax)
+        XCTAssertEqual(ProviderID(rawValue: "mini-max"), .minimax)
+        XCTAssertTrue(id.requiresAPIKey)
+        XCTAssertTrue(id.supportsCodingAgent)
+        XCTAssertEqual(OpenAICompatibleProvider.defaultBaseURL(for: .minimax)?.absoluteString, "https://api.minimax.io/v1")
+
+        let data = try JSONEncoder().encode(id)
+        let decoded = try JSONDecoder().decode(ProviderID.self, from: data)
+        XCTAssertEqual(decoded, .minimax)
+    }
+
     func testDesktopMetalModelMapsToAIModel() {
         let m = DesktopMetalModel(hubID: "mlx-community/foo", displayName: "Foo", downloadedAt: 1)
         let ai = m.asAIModel()

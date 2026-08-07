@@ -72,7 +72,7 @@ open CodeSocket.xcodeproj
 Run on a simulator or device, then in **Settings**:
 
 1. Add one or more **provider API keys** (Anthropic, OpenAI, Google, Groq,
-   OpenRouter, xAI, Mistral). Tap *Refresh models* to load them.
+   OpenRouter, xAI, Mistral, MiniMax). Tap *Refresh models* to load them.
 2. **Link GitHub** — paste a personal access token, or set an OAuth app client
    id and use Device Flow.
 3. **Pair with a server** — enter the desktop server's address and the pairing

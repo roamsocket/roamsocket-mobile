@@ -13,6 +13,7 @@ public enum ProviderID: Hashable, Sendable, Identifiable, Codable {
     case openrouter
     case xai
     case mistral
+    case minimax
     /// Metal (MLX). Phone weights are chat-only; **desktop-installed** Metal
     /// models (listed via `GET /metal/models`) can drive coding sessions.
     case localMetal
@@ -32,6 +33,7 @@ public enum ProviderID: Hashable, Sendable, Identifiable, Codable {
         case .openrouter: return "openrouter"
         case .xai: return "xai"
         case .mistral: return "mistral"
+        case .minimax: return "minimax"
         case .localMetal: return "local-metal"
         case .appleFoundation: return "apple-foundation"
         case .custom(let slug): return "custom:\(slug)"
@@ -47,6 +49,7 @@ public enum ProviderID: Hashable, Sendable, Identifiable, Codable {
         case "openrouter": self = .openrouter
         case "xai": self = .xai
         case "mistral": self = .mistral
+        case "minimax", "mini-max": self = .minimax
         case "local-metal", "localMetal", "local", "metal": self = .localMetal
         case "apple-foundation", "apple", "foundation-models", "apple-intelligence":
             self = .appleFoundation
@@ -60,7 +63,7 @@ public enum ProviderID: Hashable, Sendable, Identifiable, Codable {
 
     /// Built-in providers only (excludes user-defined `.custom`).
     public static var allBuiltInCases: [ProviderID] {
-        [.anthropic, .openai, .google, .groq, .openrouter, .xai, .mistral, .localMetal, .appleFoundation]
+        [.anthropic, .openai, .google, .groq, .openrouter, .xai, .mistral, .minimax, .localMetal, .appleFoundation]
     }
 
     /// Alias used by settings UIs that list first-party providers.
@@ -76,6 +79,7 @@ public enum ProviderID: Hashable, Sendable, Identifiable, Codable {
         case .openrouter: return "OpenRouter"
         case .xai: return "xAI"
         case .mistral: return "Mistral"
+        case .minimax: return "MiniMax"
         case .localMetal: return "On-device (Metal)"
         case .appleFoundation: return "Apple Intelligence"
         case .custom(let slug): return slug

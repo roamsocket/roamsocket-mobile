@@ -58,8 +58,8 @@ swift test             # provider parsing + protocol Codable round-trips
 
 It contains:
 
-- `Providers/` — `ModelProvider` clients for all seven providers and
-  `ModelCatalog` for concurrent model listing.
+- `Providers/` — `ModelProvider` clients for built-in cloud + on-device
+  providers and `ModelCatalog` for concurrent model listing.
 - `GitHub/` — Device Flow OAuth + PAT and repository listing.
 - `Server/` — the WebSocket client and Codable protocol types mirroring
   `desktop-server/src/protocol.ts`.

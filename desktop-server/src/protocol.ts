@@ -22,6 +22,7 @@ export const BuiltInProviderId = z.enum([
   "openrouter",
   "xai",
   "mistral",
+  "minimax",
 ]);
 export type BuiltInProviderId = z.infer<typeof BuiltInProviderId>;
 

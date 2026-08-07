@@ -1,8 +1,8 @@
 import Foundation
 
 /// OpenAI-compatible provider used by OpenAI, Groq, OpenRouter, xAI, Mistral,
-/// and user-defined custom endpoints. All expose `GET {base}/models` with
-/// `Authorization: Bearer` and `POST {base}/chat/completions`.
+/// MiniMax, and user-defined custom endpoints. All expose `GET {base}/models`
+/// with `Authorization: Bearer` and `POST {base}/chat/completions`.
 public struct OpenAICompatibleProvider: ModelProvider {
     public let id: ProviderID
     private let http: HTTPClient
@@ -28,6 +28,7 @@ public struct OpenAICompatibleProvider: ModelProvider {
         case .openrouter: return URL(string: "https://openrouter.ai/api/v1")
         case .xai: return URL(string: "https://api.x.ai/v1")
         case .mistral: return URL(string: "https://api.mistral.ai/v1")
+        case .minimax: return URL(string: "https://api.minimax.io/v1")
         case .anthropic, .google, .localMetal, .appleFoundation, .custom:
             return nil
         }

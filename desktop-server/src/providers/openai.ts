@@ -1,6 +1,6 @@
 /**
  * OpenAI-compatible Chat Completions adapter (/v1/chat/completions).
- * Reused for OpenAI, Groq, OpenRouter, xAI, Mistral, and any custom base URL.
+ * Reused for OpenAI, Groq, OpenRouter, xAI, Mistral, MiniMax, and any custom base URL.
  * Non-streaming for robustness; emits the assistant text as a single event.
  */
 import type { ProviderId } from "../protocol.js";
@@ -12,6 +12,7 @@ const BASE_URLS: Record<string, string> = {
   openrouter: "https://openrouter.ai/api/v1",
   xai: "https://api.x.ai/v1",
   mistral: "https://api.mistral.ai/v1",
+  minimax: "https://api.minimax.io/v1",
 };
 
 function stripTrailingSlash(url: string): string {

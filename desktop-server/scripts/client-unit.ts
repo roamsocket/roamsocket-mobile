@@ -122,10 +122,11 @@ check("sidebar destinations include required routes and exclude vision", () => {
   assert.ok(!(SIDEBAR_DESTINATIONS as readonly string[]).includes("vision"));
 });
 
-check("provider list includes anthropic and localMetal", () => {
+check("provider list includes anthropic, minimax, and localMetal", () => {
   const ids = CHAT_PROVIDERS.map((p) => p.id);
   assert.ok(ids.includes("anthropic"));
   assert.ok(ids.includes("openai"));
+  assert.ok(ids.includes("minimax"));
   assert.ok(ids.includes("localMetal"));
 });
 

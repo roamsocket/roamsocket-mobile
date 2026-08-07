@@ -19,7 +19,7 @@ export interface AgentAdapterOptions {
  * Resolve the server-side agent adapter for a provider.
  *
  * Anthropic and the OpenAI-compatible providers (OpenAI, Groq, OpenRouter,
- * xAI, Mistral) drive the coding agent loop. Desktop Metal (`localMetal` /
+ * xAI, Mistral, MiniMax) drive the coding agent loop. Desktop Metal (`localMetal` /
  * `local-metal`) uses the on-device MLX runtime with a text tool-call protocol.
  * Custom endpoints (`custom:…` or any provider with `baseUrl`) use `apiStyle`
  * to pick the wire format. Google Gemini is chat/listing only from the app
@@ -55,6 +55,7 @@ export function getAgentAdapter(
     case "openrouter":
     case "xai":
     case "mistral":
+    case "minimax":
       return makeOpenAICompatibleAdapter(provider);
     case "google":
       throw new Error(

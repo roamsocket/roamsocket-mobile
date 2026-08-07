@@ -33,6 +33,14 @@ const CLOUD_ALIASES: Array<{ match: RegExp; label: string }> = [
   { match: /mistral-large/i, label: "Mistral Large" },
   { match: /mistral-small/i, label: "Mistral Small" },
   { match: /pixtral/i, label: "Pixtral" },
+  { match: /minimax-m3/i, label: "MiniMax M3" },
+  { match: /minimax-m2\.7-highspeed/i, label: "MiniMax M2.7 Highspeed" },
+  { match: /minimax-m2\.7/i, label: "MiniMax M2.7" },
+  { match: /minimax-m2\.5-highspeed/i, label: "MiniMax M2.5 Highspeed" },
+  { match: /minimax-m2\.5/i, label: "MiniMax M2.5" },
+  { match: /minimax-m2\.1-highspeed/i, label: "MiniMax M2.1 Highspeed" },
+  { match: /minimax-m2\.1/i, label: "MiniMax M2.1" },
+  { match: /minimax-m2/i, label: "MiniMax M2" },
 ];
 
 /**

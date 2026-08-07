@@ -19,6 +19,7 @@ const OPENAI_BASE: Record<string, string> = {
   openrouter: "https://openrouter.ai/api/v1",
   xai: "https://api.x.ai/v1",
   mistral: "https://api.mistral.ai/v1",
+  minimax: "https://api.minimax.io/v1",
 };
 
 export type FetchLike = (

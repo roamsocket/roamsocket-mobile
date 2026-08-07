@@ -11,7 +11,7 @@ Instructions for AI coding agents (Codex, Cursor, Grok, etc.) working in this re
 | **Chat** | iOS app → provider `/v1` APIs with the user's API key | No |
 | **Code** | iOS app ↔ desktop server over WebSocket | Yes — clones repos, runs tools, streams diffs, opens PRs |
 
-BYOK: Anthropic, OpenAI, Ollama/OpenAI-compatible, Groq, OpenRouter, xAI, Mistral (Google chat/listing only for agent).
+BYOK: Anthropic, OpenAI, Ollama/OpenAI-compatible, Groq, OpenRouter, xAI, Mistral, MiniMax (Google chat/listing only for agent).
 
 ## Repo map
 
@@ -27,7 +27,7 @@ codesocket/  (repo may still be checked out as code-mobile-ai)
 │   ├── src/                  # server, agent, tools, electron, renderer
 │   └── scripts/smoke.ts      # offline e2e protocol test
 ├── docs/protocol.md          # Human-readable wire protocol
-├── marketplace/              # Pointer docs → kind365/codesocket-marketplace
+├── marketplace/              # Pointer docs → codesocket-ai/codesocket-marketplace
 ├── landing/                  # Marketing site → Cloudflare Workers assets
 ├── AGENTS.md                 # This file
 └── CLAUDE.md                 # Agent-oriented notes
@@ -76,8 +76,8 @@ Default port: **4319**.
 
 ### Marketplace (owner + user catalogs)
 
-- **Official repo (separate):** [kind365/codesocket-marketplace](https://github.com/kind365/codesocket-marketplace)
-- **Default catalog URL:** `https://raw.githubusercontent.com/kind365/codesocket-marketplace/main/catalog.json`
+- **Official repo (separate):** [codesocket-ai/codesocket-marketplace](https://github.com/codesocket-ai/codesocket-marketplace)
+- **Default catalog URL:** `https://raw.githubusercontent.com/codesocket-ai/codesocket-marketplace/main/catalog.json`
 - **Authoring guide:** that repo’s README (“How to make your own marketplace”).
 - **Desktop:** Settings → Marketplace; applies to composer connectors/plugins + Metal list.
 - **iOS:** Settings → Marketplace; same sources feed connectors, skill browse, Metal recommended.

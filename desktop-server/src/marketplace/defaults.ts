@@ -1,0 +1,137 @@
+/**
+ * Bundled offline fallback — keep in sync with
+ * https://github.com/codesocket-ai/codesocket-marketplace (catalog.json).
+ */
+import type { MarketplaceCatalog } from "./types.js";
+import { emptyCatalog, MARKETPLACE_SCHEMA_VERSION } from "./types.js";
+
+export const BUNDLED_MARKETPLACE_CATALOG: MarketplaceCatalog = emptyCatalog({
+  schemaVersion: MARKETPLACE_SCHEMA_VERSION,
+  updatedAt: "2026-08-07",
+  name: "CodeSocket Official Marketplace",
+  description:
+    "Bundled fallback of the official catalog. Prefer live fetch from the default GitHub marketplace repo.",
+  connectors: [
+    { id: "cashapp", name: "Cash App", description: "Send and request money with Cash App.", available: true, category: "finance" },
+    { id: "figma", name: "Figma", description: "Browse design files and frames from Figma.", available: true, category: "design" },
+    { id: "gmail", name: "Gmail", description: "Search and summarize email from Gmail.", available: true, category: "productivity" },
+    { id: "godaddy", name: "GoDaddy", description: "Domain and DNS management via GoDaddy.", available: true, category: "web" },
+    { id: "gcal", name: "Google Calendar", description: "Upcoming events and scheduling context.", available: true, category: "productivity" },
+    { id: "gdrive", name: "Google Drive", description: "Find and summarize Drive documents.", available: true, category: "productivity" },
+    { id: "granola", name: "Granola", description: "Meeting notes from Granola.", available: false, category: "productivity" },
+    { id: "github", name: "GitHub", description: "Issues, PRs, and repository context.", available: true, category: "engineering" },
+  ],
+  skills: [
+    { id: "apa-formatting", name: "apa-formatting", description: "APA citations and paper structure", category: "documentation", author: "CodeSocket", source: "official" },
+    { id: "canvas-design", name: "canvas-design", description: "Canvas / visual layout guidance", category: "design", author: "CodeSocket", source: "official" },
+    { id: "doc-coauthoring", name: "doc-coauthoring", description: "Collaborative document drafting", category: "documentation", author: "CodeSocket", source: "official" },
+    { id: "frontend-design-css", name: "frontend-design-css", description: "Premium HTML Landing Page Generator", category: "frontend", author: "CodeSocket", source: "official", featured: true },
+    { id: "internal-comms", name: "internal-comms", description: "Internal status and announcements", category: "other", author: "CodeSocket", source: "official" },
+    { id: "mcp-builder", name: "mcp-builder", description: "Guide for creating high-quality MCP servers", category: "devops", author: "CodeSocket", source: "official", featured: true },
+    { id: "morning", name: "morning", description: "Daily brief and prioritization", category: "other", author: "CodeSocket", source: "official" },
+    { id: "skill-creator", name: "skill-creator", description: "Author new agent skills", category: "other", author: "CodeSocket", source: "official", featured: true },
+    { id: "theme-factory", name: "theme-factory", description: "UI theme tokens and palettes", category: "design", author: "CodeSocket", source: "official" },
+  ],
+  plugins: [
+    { id: "marketing-kit", name: "Marketing kit", description: "Landing pages, campaigns, and brand voice helpers.", category: "marketing", skillIds: ["frontend-design-css", "theme-factory"], featured: true },
+    { id: "productivity-kit", name: "Productivity kit", description: "Daily briefs, internal comms, and doc coauthoring.", category: "productivity", skillIds: ["morning", "internal-comms", "doc-coauthoring"], featured: true },
+    { id: "engineering-kit", name: "Engineering kit", description: "MCP builders and developer-oriented skills.", category: "engineering", skillIds: ["mcp-builder", "skill-creator"], featured: true },
+    { id: "design-kit", name: "Design kit", description: "Canvas layout and theme tokens.", category: "design", skillIds: ["canvas-design", "theme-factory"], featured: false },
+  ],
+  pluginCategories: [
+    { id: "marketing", label: "Marketing" },
+    { id: "productivity", label: "Productivity" },
+    { id: "engineering", label: "Engineering" },
+    { id: "design", label: "Design" },
+  ],
+  metalModels: [
+    {
+      hubID: "lmstudio-community/LFM2.5-1.2B-Instruct-MLX-4bit",
+      displayName: "LFM2.5 1.2B",
+      approxSize: "~0.7 GB",
+      blurb: "Liquid AI LFM2.5 — strong everyday chat and a great on-device starting point.",
+      tags: ["recommended", "best", "new"],
+      platforms: ["ios", "desktop"],
+    },
+    {
+      hubID: "lmstudio-community/Qwen3-0.6B-MLX-4bit",
+      displayName: "Qwen 3 0.6B",
+      approxSize: "~0.4 GB",
+      blurb: "Tiny Qwen 3 for low storage and fast replies.",
+      tags: ["recommended", "new"],
+      platforms: ["ios", "desktop"],
+    },
+    {
+      hubID: "lmstudio-community/Qwen3-1.7B-MLX-4bit",
+      displayName: "Qwen 3 1.7B",
+      approxSize: "~1.0 GB",
+      blurb: "Balanced Qwen 3 size for everyday on-device chat.",
+      tags: ["recommended", "new"],
+      platforms: ["ios", "desktop"],
+    },
+    {
+      hubID: "lmstudio-community/Qwen3-4B-Instruct-2507-MLX-4bit",
+      displayName: "Qwen 3 4B Instruct",
+      approxSize: "~2.3 GB",
+      blurb: "Stronger Qwen 3 instruct for higher quality when RAM allows.",
+      tags: ["recommended", "new"],
+      platforms: ["ios", "desktop"],
+    },
+    {
+      hubID: "lmstudio-community/Qwen3-4B-Thinking-2507-MLX-4bit",
+      displayName: "Qwen 3 4B Thinking",
+      approxSize: "~2.3 GB",
+      blurb: "Qwen 3 thinking variant for chain-of-thought style replies.",
+      tags: ["recommended", "thinking", "new"],
+      platforms: ["ios", "desktop"],
+    },
+    {
+      hubID: "lmstudio-community/Qwen2.5-0.5B-Instruct-MLX-4bit",
+      displayName: "Qwen 2.5 0.5B",
+      approxSize: "~0.3 GB",
+      blurb: "Ultra-small Qwen 2.5 instruct for smoke tests and tight storage.",
+      tags: ["recommended"],
+      platforms: ["ios", "desktop"],
+    },
+    {
+      hubID: "lmstudio-community/Qwen2.5-1.5B-Instruct-MLX-4bit",
+      displayName: "Qwen 2.5 1.5B",
+      approxSize: "~0.9 GB",
+      blurb: "Compact multilingual instruct model with solid multi-turn chat.",
+      tags: ["recommended"],
+      platforms: ["ios", "desktop"],
+    },
+    {
+      hubID: "lmstudio-community/Qwen2.5-3B-Instruct-MLX-4bit",
+      displayName: "Qwen 2.5 3B",
+      approxSize: "~1.8 GB",
+      blurb: "Larger Qwen 2.5 instruct for higher-quality chat when RAM allows.",
+      tags: ["recommended"],
+      platforms: ["ios", "desktop"],
+    },
+    {
+      hubID: "lmstudio-community/Qwen2.5-Coder-1.5B-Instruct-MLX-4bit",
+      displayName: "Qwen 2.5 Coder 1.5B",
+      approxSize: "~0.9 GB",
+      blurb: "Small code-focused instruct model for on-device coding chat.",
+      tags: ["recommended"],
+      platforms: ["ios", "desktop"],
+    },
+    {
+      hubID: "lmstudio-community/Phi-4-mini-reasoning-MLX-4bit",
+      displayName: "Phi 4 Mini Reasoning",
+      approxSize: "~2.2 GB",
+      blurb: "Microsoft Phi 4 mini for compact reasoning and chat.",
+      tags: ["recommended", "thinking", "new"],
+      platforms: ["ios", "desktop"],
+    },
+    {
+      hubID: "lmstudio-community/gemma-3-270m-it-qat-MLX-4bit",
+      displayName: "Gemma 3 270M QAT",
+      approxSize: "~0.2 GB",
+      blurb: "Tiny Gemma for smoke tests and ultra-low storage.",
+      tags: ["recommended"],
+      platforms: ["ios", "desktop"],
+    },
+  ],
+});

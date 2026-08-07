@@ -3683,7 +3683,7 @@ async function fillSettingsMarketplace(panel: HTMLElement): Promise<void> {
   const sec = el("div", { class: "settings-section" });
   sec.append(
     el("p", { class: "settings-hint" }, [
-      "Marketplaces publish connectors, skill listings, plugins, and recommended Metal models via catalog.json. The official source is kind365/codesocket-marketplace — add your own GitHub repos anytime.",
+      "Marketplaces publish connectors, skill listings, plugins, and recommended Metal models via catalog.json. The official source is codesocket-ai/codesocket-marketplace — add your own GitHub repos anytime.",
     ]),
   );
 
@@ -3794,7 +3794,7 @@ async function fillSettingsMarketplace(panel: HTMLElement): Promise<void> {
   });
   const docs = el("button", { class: "ghost-btn", type: "button" }, ["How to make one"]);
   docs.addEventListener("click", () => {
-    void window.apc.shell.open("https://github.com/kind365/codesocket-marketplace");
+    void window.apc.shell.open("https://github.com/codesocket-ai/codesocket-marketplace");
   });
   actions.append(refresh, add, docs);
   sec.append(actions);

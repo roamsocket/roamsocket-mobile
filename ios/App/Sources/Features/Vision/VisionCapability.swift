@@ -91,6 +91,11 @@ enum VisionCapability {
             }
         }
 
+        // MiniMax-M3 accepts image (and video) input via OpenAI-compatible parts.
+        if model.provider == .minimax {
+            return id.contains("minimax-m3")
+        }
+
         return false
     }
 

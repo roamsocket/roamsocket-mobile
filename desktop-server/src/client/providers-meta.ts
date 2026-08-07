@@ -7,6 +7,7 @@ export const CHAT_PROVIDERS = [
   { id: "openrouter", label: "OpenRouter", defaultModel: "openai/gpt-4o-mini" },
   { id: "xai", label: "xAI", defaultModel: "grok-3" },
   { id: "mistral", label: "Mistral", defaultModel: "mistral-large-latest" },
+  { id: "minimax", label: "MiniMax", defaultModel: "MiniMax-M3" },
   { id: "localMetal", label: "On-device Metal", defaultModel: "" },
 ] as const;
 
