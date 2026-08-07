@@ -11,9 +11,11 @@ struct AppSettingsView: View {
     @State private var showServerPair = false
     @State private var showSkills = false
     @State private var showMCP = false
+    @State private var showMemory = false
     @State private var showAbout = false
     @State private var showProviderKeys = false
     @State private var showLocalMetal = false
+    @State private var showLightweightTasks = false
     @State private var syncInFlight = false
     @State private var syncMessage: String?
     @State private var syncError: String?
@@ -46,10 +48,12 @@ struct AppSettingsView: View {
                         accountSection
                         appearanceSection
                         chatSection
+                        effortSection
                         codingSection
                         settingsBackupSection
                         skillsSection
                         mcpSection
+                        memorySection
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
@@ -87,6 +91,10 @@ struct AppSettingsView: View {
         .sheet(isPresented: $showMCP) {
             ConnectorManagerView()
         }
+        .sheet(isPresented: $showMemory) {
+            ManageMemoryView()
+                .environmentObject(state)
+        }
         .sheet(isPresented: $showAbout) {
             AboutSheet()
         }
@@ -95,6 +103,9 @@ struct AppSettingsView: View {
         }
         .sheet(isPresented: $showLocalMetal) {
             LocalMetalSettingsView()
+        }
+        .sheet(isPresented: $showLightweightTasks) {
+            LightweightTasksSettingsView()
         }
     }
 
@@ -171,6 +182,20 @@ struct AppSettingsView: View {
                 )
             }
             .buttonStyle(.plain)
+
+            Divider().background(Theme.separator)
+
+            Button {
+                showLightweightTasks = true
+            } label: {
+                let s = LightweightTasksSettings.load()
+                row(
+                    systemImage: "bolt.horizontal.circle",
+                    title: "Lightweight Tasks",
+                    trailing: s.mode.displayName
+                )
+            }
+            .buttonStyle(.plain)
         }
     }
 
@@ -216,7 +241,7 @@ struct AppSettingsView: View {
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
-                TextField("apc", text: $state.codeBranchPrefix)
+                TextField("codesocket", text: $state.codeBranchPrefix)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .padding(10)
@@ -239,7 +264,7 @@ struct AppSettingsView: View {
 
     private var previewBranchExample: String {
         let p = state.codeBranchPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
-        let prefix = p.isEmpty ? "apc" : p
+        let prefix = p.isEmpty ? "codesocket" : p
         return "\(prefix)/your-task-a1b2c3d4"
     }
 
@@ -289,6 +314,50 @@ struct AppSettingsView: View {
                 iconColor: Theme.accent,
                 isOn: $state.alwaysExpandThinking
             )
+        }
+    }
+
+    // MARK: - Effort (Claude-style explanations)
+
+    private var effortSection: some View {
+        settingsCard(header: "Effort") {
+            EffortControl(effort: $state.effort)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+        }
+    }
+
+    // MARK: - Memory (submenu entry; full UI in ManageMemoryView)
+
+    private var memorySection: some View {
+        settingsCard(header: "Memory") {
+            Button {
+                showMemory = true
+            } label: {
+                HStack(spacing: 14) {
+                    Image(systemName: "brain.head.profile")
+                        .font(.system(size: 20))
+                        .foregroundStyle(Theme.textPrimary)
+                        .frame(width: 28)
+                    Text("Manage memory")
+                        .font(.system(size: 17, weight: .regular))
+                        .foregroundStyle(Theme.textPrimary)
+                    Spacer()
+                    let count = UserMemoryStore.shared.list().count
+                    if count > 0 {
+                        Text("\(count) saved")
+                            .font(.system(size: 15))
+                            .foregroundStyle(Theme.textSecondary)
+                    }
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundStyle(Theme.textSecondary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         }
     }
 
@@ -661,6 +730,7 @@ private struct AddCustomProviderView: View {
     @State private var baseURL: String = ""
     @State private var apiKey: String = ""
     @State private var style: CustomProviderStyle = .openAI
+    @State private var supportsVision: Bool = false
     @State private var error: String?
 
     var body: some View {
@@ -687,6 +757,11 @@ private struct AddCustomProviderView: View {
                     Text("Endpoint")
                 } footer: {
                     Text(style.detail + "\nBase URL must include the version segment (e.g. …/v1), not the full /chat/completions or /messages path.")
+                }
+                Section {
+                    Toggle("Supports vision", isOn: $supportsVision)
+                } footer: {
+                    Text("When on, models from this provider appear in Vision mode and show a Vision badge (except embeddings / TTS-style model ids). Use for Ollama VLMs, multimodal proxies, and similar.")
                 }
                 Section {
                     SecureField(style == .anthropic ? "sk-ant-…" : "sk-… / ollama (optional)", text: $apiKey)
@@ -725,7 +800,8 @@ private struct AddCustomProviderView: View {
             label: label,
             baseURL: baseURL,
             apiKey: apiKey,
-            style: style
+            style: style,
+            supportsVision: supportsVision
         )
         if provider == nil {
             error = "Couldn't save. Check the base URL and try a unique label."
@@ -748,8 +824,18 @@ private struct CustomProviderRow: View {
             } label: {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(provider.label)
-                            .foregroundStyle(Theme.textPrimary)
+                        HStack(spacing: 8) {
+                            Text(provider.label)
+                                .foregroundStyle(Theme.textPrimary)
+                            if provider.supportsVision {
+                                Text("Vision")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(Color.yellow)
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 3)
+                                    .background(Color.yellow.opacity(0.18), in: Capsule())
+                            }
+                        }
                         Text(provider.style.displayName)
                             .font(.system(size: 12))
                             .foregroundStyle(Theme.textSecondary)
@@ -811,10 +897,17 @@ private struct CustomProviderModelsSection: View {
                     .foregroundStyle(Theme.textTertiary)
             } else {
                 ForEach(models) { model in
-                    Text("• " + state.displayName(for: model))
-                        .font(.system(size: 13, design: .monospaced))
-                        .foregroundStyle(Theme.textSecondary)
-                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text("• " + state.displayName(for: model))
+                            .font(.system(size: 13, design: .monospaced))
+                            .foregroundStyle(Theme.textSecondary)
+                            .lineLimit(1)
+                        if state.modelSupportsVision(model) {
+                            Text("Vision")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(Color.yellow)
+                        }
+                    }
                 }
             }
         }
@@ -834,6 +927,7 @@ private struct EditCustomProviderView: View {
     @State private var baseURL: String = ""
     @State private var apiKey: String = ""
     @State private var style: CustomProviderStyle = .openAI
+    @State private var supportsVision: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -856,6 +950,11 @@ private struct EditCustomProviderView: View {
                 } footer: {
                     Text(style.detail)
                 }
+                Section {
+                    Toggle("Supports vision", isOn: $supportsVision)
+                } footer: {
+                    Text("When on, models from this provider appear in Vision mode and show a Vision badge (except embeddings / TTS-style model ids).")
+                }
                 Section("API key") {
                     SecureField("API key", text: $apiKey)
                         .textInputAutocapitalization(.never)
@@ -876,7 +975,8 @@ private struct EditCustomProviderView: View {
                             label: label,
                             baseURL: baseURL,
                             style: style,
-                            apiKey: apiKey
+                            apiKey: apiKey,
+                            supportsVision: supportsVision
                         )
                         Task { await state.refreshModels() }
                         dismiss()
@@ -888,6 +988,7 @@ private struct EditCustomProviderView: View {
                 label = provider.label
                 baseURL = provider.baseURL
                 style = provider.style
+                supportsVision = provider.supportsVision
                 apiKey = state.apiKey(for: provider.providerID)
             }
         }
@@ -945,7 +1046,7 @@ private struct AboutSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("AnyProv Code")
+                        Text("CodeSocket")
                             .font(.system(size: 22, weight: .semibold))
                             .foregroundStyle(Theme.textPrimary)
                         Text("Version \(appVersion)")

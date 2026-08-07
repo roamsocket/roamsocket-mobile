@@ -2,9 +2,14 @@ import SwiftUI
 import AnyProvCore
 
 /// Captured assistant outputs that meet the artifact threshold (≥ 10 lines
-/// or contains a code block). Tap an item to see it full-screen with copy.
+/// or contains a code block). Opening an item jumps to the source chat,
+/// scrolls to the producing message, and opens a split artifact panel.
 struct ArtifactsListView: View {
     @EnvironmentObject var state: AppState
+    /// When set, opening an artifact loads that chat and pops back to root chat.
+    var history: ChatHistoryStore?
+    var path: Binding<[RootRoute]>?
+    var onOpenedInChat: (() -> Void)?
 
     var body: some View {
         ZStack {
@@ -14,25 +19,22 @@ struct ArtifactsListView: View {
             } else {
                 List {
                     ForEach(state.artifactStore.artifacts) { artifact in
-                        artifactCard(artifact)
-                            .background {
-                                NavigationLink {
-                                    ArtifactDetailView(artifact: artifact)
-                                } label: {
-                                    EmptyView()
-                                }
-                                .opacity(0)
+                        Button {
+                            open(artifact)
+                        } label: {
+                            artifactCard(artifact)
+                        }
+                        .buttonStyle(.plain)
+                        .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            Button(role: .destructive) {
+                                state.artifactStore.delete(artifact.id)
+                            } label: {
+                                Label("Delete", systemImage: "trash")
                             }
-                            .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
-                            .listRowSeparator(.hidden)
-                            .listRowBackground(Color.clear)
-                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                Button(role: .destructive) {
-                                    state.artifactStore.delete(artifact.id)
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
-                            }
+                        }
                     }
                 }
                 .listStyle(.plain)
@@ -59,6 +61,20 @@ struct ArtifactsListView: View {
         }
     }
 
+    private func open(_ artifact: Artifact) {
+        if let chatId = artifact.chatId, let history {
+            // Prefer global recents; project chats still set active id so load can resolve.
+            if let item = history.recents.first(where: { $0.id == chatId }) {
+                history.openChat(item)
+            } else {
+                history.activeChatID = chatId
+            }
+        }
+        state.presentArtifact(artifact)
+        path?.wrappedValue = []
+        onOpenedInChat?()
+    }
+
     private var empty: some View {
         VStack(spacing: 12) {
             Image(systemName: "square.stack.3d.up")
@@ -67,7 +83,7 @@ struct ArtifactsListView: View {
             Text("No artifacts yet")
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(Theme.textPrimary)
-            Text("Long assistant replies and code blocks you receive in chat will appear here automatically.")
+            Text("Long assistant replies and code blocks you receive in chat will appear here automatically. Tap one to open it beside the original message.")
                 .font(.system(size: 14))
                 .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)
@@ -94,6 +110,14 @@ struct ArtifactsListView: View {
                     Text(artifact.createdAt, style: .date)
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.textTertiary)
+                    if artifact.chatId != nil {
+                        Text("·")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.textTertiary)
+                        Text("In chat")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.accent)
+                    }
                 }
                 .lineLimit(1)
             }
@@ -117,31 +141,70 @@ struct ArtifactsListView: View {
     }
 }
 
-/// Read-only full-screen view of an artifact with a copy button.
+/// Read-only document panel for the chat split view (and standalone navigation).
 struct ArtifactDetailView: View {
     let artifact: Artifact
+    var onClose: (() -> Void)? = nil
 
     var body: some View {
         ZStack {
             Theme.background.ignoresSafeArea()
-            ScrollView {
-                Text(artifact.content)
-                    .font(.system(size: 14, design: .monospaced))
+            VStack(spacing: 0) {
+                HStack {
+                    Text("Artifact")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.textTertiary)
+                        .textCase(.uppercase)
+                    Spacer()
+                    Button {
+                        UIPasteboard.general.string = artifact.content
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .foregroundStyle(Theme.textPrimary)
+                    }
+                    if let onClose {
+                        Button(action: onClose) {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(Theme.textPrimary)
+                                .frame(width: 32, height: 32)
+                                .background(Theme.surfaceElevated, in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 4)
+
+                Text(artifact.title)
+                    .font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(Theme.textPrimary)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-                    .padding(16)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 10)
+
+                ScrollView {
+                    Text(artifact.content)
+                        .font(.system(size: 14))
+                        .foregroundStyle(Theme.textPrimary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                        .padding(16)
+                }
             }
         }
         .navigationTitle(artifact.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    UIPasteboard.general.string = artifact.content
-                } label: {
-                    Image(systemName: "doc.on.doc")
-                        .foregroundStyle(Theme.textPrimary)
+            if onClose == nil {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        UIPasteboard.general.string = artifact.content
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .foregroundStyle(Theme.textPrimary)
+                    }
                 }
             }
         }

@@ -18,6 +18,8 @@ struct RootView: View {
     @State private var path: [RootRoute] = []
     /// Bumps when the user picks a recent chat so ChatView reloads messages.
     @State private var chatResumeToken = UUID()
+    @State private var showWalkthrough =
+        !LightweightTasksSettings.load().walkthroughCompleted
 
     var body: some View {
         ZStack {
@@ -34,7 +36,11 @@ struct RootView: View {
                         case .projects:
                             ProjectsListView(history: history)
                         case .artifacts:
-                            ArtifactsListView()
+                            ArtifactsListView(
+                                history: history,
+                                path: $path,
+                                onOpenedInChat: { chatResumeToken = UUID() }
+                            )
                         case .code:
                             CodeHomeView(onOpenSidebar: { setSidebarOpen(true) })
                         case .projectDetail(let project):
@@ -104,6 +110,12 @@ struct RootView: View {
         .sheet(isPresented: $showSettings) {
             AppSettingsView()
         }
+        .fullScreenCover(isPresented: $showWalkthrough) {
+            OnboardingWalkthroughView {
+                showWalkthrough = false
+            }
+            .environmentObject(state)
+        }
         .fullScreenCover(isPresented: $showVision) {
             VisionView()
                 .environmentObject(state)
@@ -145,27 +157,53 @@ struct RootView: View {
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
-        ToolbarItem(placement: .topBarLeading) {
-            Button(action: { setSidebarOpen(!sidebarOpen) }) {
-                Image(systemName: "line.3.horizontal")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(Theme.textPrimary)
-                    .frame(width: 44, height: 44)
-                    .background(Theme.surfaceElevated, in: Circle())
+        // On iOS 26+ the nav bar applies a liquid-glass shared background
+        // around toolbar items. We already draw our own circle, so hide the
+        // system chrome to avoid a double ring.
+        if #available(iOS 26.0, *) {
+            ToolbarItem(placement: .topBarLeading) {
+                menuToolbarButton
             }
-            .buttonStyle(.plain)
-        }
-        ToolbarItem(placement: .topBarTrailing) {
-            Button(action: { showSettings = true }) {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(Theme.textPrimary)
-                    .frame(width: 44, height: 44)
-                    .background(Theme.surfaceElevated, in: Circle())
+            .sharedBackgroundVisibility(.hidden)
+
+            ToolbarItem(placement: .topBarTrailing) {
+                settingsToolbarButton
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Settings")
+            .sharedBackgroundVisibility(.hidden)
+        } else {
+            ToolbarItem(placement: .topBarLeading) {
+                menuToolbarButton
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                settingsToolbarButton
+            }
         }
+    }
+
+    private var menuToolbarButton: some View {
+        Button(action: { setSidebarOpen(!sidebarOpen) }) {
+            Image(systemName: "line.3.horizontal")
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(Theme.textPrimary)
+                .frame(width: 40, height: 40)
+                .background(Theme.surfaceElevated, in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Menu")
+    }
+
+    private var settingsToolbarButton: some View {
+        Button(action: { showSettings = true }) {
+            Image(systemName: "gearshape")
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(Theme.textPrimary)
+                .frame(width: 40, height: 40)
+                .background(Theme.surfaceElevated, in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Settings")
     }
 
     // MARK: - Routing
