@@ -1,8 +1,11 @@
 import type { Tool } from "./types.js";
 import { bashTool } from "./bash.js";
 import { readFileTool, writeFileTool, editTool, globTool } from "./files.js";
+import { updateTasksTool } from "./todos.js";
 
 export * from "./types.js";
+export type { AgentTask, AgentTaskStatus } from "./todos.js";
+export { applyTaskUpdate, formatTaskChecklist, normalizeTasks } from "./todos.js";
 
 /** All tools the agent can call, keyed by name. */
 export const TOOLS: Record<string, Tool> = {
@@ -11,6 +14,7 @@ export const TOOLS: Record<string, Tool> = {
   [writeFileTool.name]: writeFileTool,
   [editTool.name]: editTool,
   [globTool.name]: globTool,
+  [updateTasksTool.name]: updateTasksTool,
 };
 
 /** Tools that mutate the filesystem — these gate on permission mode. */

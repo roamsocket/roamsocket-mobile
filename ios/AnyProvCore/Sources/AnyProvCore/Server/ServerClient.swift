@@ -40,6 +40,7 @@ public actor ServerClient {
         case notConnected
         case connectFailed(String)
         case sendFailed(String)
+        case httpFailed(String)
 
         public var errorDescription: String? {
             switch self {
@@ -48,6 +49,7 @@ public actor ServerClient {
             case .notConnected: return "Not connected to a server."
             case let .connectFailed(m): return m
             case let .sendFailed(m): return m
+            case let .httpFailed(m): return m
             }
         }
     }
@@ -94,6 +96,32 @@ public actor ServerClient {
             throw ClientError.pairFailed(body)
         }
         return try JSONDecoder().decode(PairResponse.self, from: data)
+    }
+
+    /// List Metal models installed on the paired desktop (coding agent).
+    public func listDesktopMetalModels(
+        endpoint: Endpoint,
+        token: String
+    ) async throws -> DesktopMetalModelsResponse {
+        var req = URLRequest(url: endpoint.baseURL.appendingPathComponent("metal/models"))
+        req.httpMethod = "GET"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.timeoutInterval = 20
+
+        let session = URLSession(configuration: baseConfiguration)
+        defer { session.finishTasksAndInvalidate() }
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else {
+            throw ClientError.httpFailed("No HTTP response from desktop.")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? "HTTP \(http.statusCode)"
+            if http.statusCode == 401 {
+                throw ClientError.httpFailed("Desktop rejected the pairing token. Re-pair and try again.")
+            }
+            throw ClientError.httpFailed(body)
+        }
+        return try JSONDecoder().decode(DesktopMetalModelsResponse.self, from: data)
     }
 
     // MARK: WebSocket

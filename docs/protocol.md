@@ -13,7 +13,7 @@ servers without typing an IP:
 
 | | |
 |--|--|
-| Service type | `_anyprov-code._tcp` |
+| Service type | `_codesocket._tcp` |
 | Port | HTTP listen port (default `4319`) |
 | TXT | `name` (server display name), `version`, `path` (`/`) |
 
@@ -45,7 +45,7 @@ successful health check.
 
 ### `GET /health`
 ```json
-{ "ok": true, "name": "anyprov-code desktop", "version": "0.1.0", "publicUrl": "https://…", "tunnelStatus": "up" }
+{ "ok": true, "name": "CodeSocket desktop", "version": "0.1.0", "publicUrl": "https://…", "tunnelStatus": "up" }
 ```
 
 ### `POST /pair`
@@ -55,10 +55,31 @@ Request:
 ```
 Response `200`:
 ```json
-{ "token": "…", "serverName": "anyprov-code desktop", "serverVersion": "0.1.0", "publicUrl": "https://…?" }
+{ "token": "…", "serverName": "CodeSocket desktop", "serverVersion": "0.1.0", "publicUrl": "https://…?" }
 ```
 `publicUrl` is set only if a tunnel is already up. `401` on a wrong code. The
 `token` is a bearer token used to open the WebSocket.
+
+### `GET /metal/models`
+Lists **desktop-installed** Metal / MLX models the coding agent can use. Auth
+required (`Authorization: Bearer <token>` from pairing, or `?token=`).
+
+Response `200`:
+```json
+{
+  "provider": "localMetal",
+  "runtimeReady": true,
+  "supported": true,
+  "detail": "…",
+  "models": [
+    { "hubID": "mlx-community/…", "displayName": "Llama …", "downloadedAt": 1710000000000 }
+  ]
+}
+```
+
+The phone coding model picker shows these models (not phone-local Metal
+weights, which may not match the desktop store). Provider wire values
+`localMetal` and `local-metal` both mean desktop Metal.
 
 ## WebSocket `GET /session?token=…`
 
@@ -88,7 +109,8 @@ Every frame is a JSON object with a `type` discriminator.
 
 `permissionMode` is one of `acceptEdits`, `plan`, `ask` (the composer's
 permission pill). `provider` is one of `anthropic`, `openai`, `google`, `groq`,
-`openrouter`, `xai`, `mistral`, or a custom id `custom:<slug>`.
+`openrouter`, `xai`, `mistral`, `localMetal` / `local-metal` (desktop Metal),
+or a custom id `custom:<slug>`.
 
 `model` may also include optional fields for user-defined endpoints:
 
@@ -108,6 +130,7 @@ fall back to the built-in OpenAI / Anthropic cloud hosts.
 | `assistant_delta`    | `sessionId`, `text` (streamed assistant text / tool stdout) |
 | `tool_call`          | `sessionId`, `callId`, `tool`, `summary`, `input` |
 | `tool_result`        | `sessionId`, `callId`, `ok`, `output` |
+| `task_list`          | `sessionId`, `tasks[]` (`id`, `content`, `status`) — agent checklist snapshot |
 | `diff`               | `sessionId`, `path`, `patch`, `added`, `removed` |
 | `permission_request` | `sessionId`, `requestId`, `tool`, `summary` |
 | `session_done`       | `sessionId`, `stopReason?` |
@@ -148,3 +171,22 @@ srv  → pr_created {url}
 When `permissionMode` is `ask`, mutating tools pause with a
 `permission_request`; the app replies with `permission_response`. When it is
 `plan`, mutating tools are described but not executed.
+
+### Agent task checklist
+
+The agent may call the `update_tasks` tool to maintain a short working list.
+After each successful call the server emits a full `task_list` snapshot:
+
+```json
+{
+  "type": "task_list",
+  "sessionId": "…",
+  "tasks": [
+    { "id": "1", "content": "Read auth module", "status": "completed" },
+    { "id": "2", "content": "Add unit tests", "status": "in_progress" }
+  ]
+}
+```
+
+`status` is one of `pending`, `in_progress`, `completed`, `cancelled`. On
+session reattach the server re-sends the current list when non-empty.

@@ -10,14 +10,25 @@
  */
 import { randomUUID } from "node:crypto";
 import type { ModelSelection, PermissionMode, ServerMessage, EnvironmentConfig } from "../protocol.js";
-import { TOOLS, MUTATING_TOOLS } from "../tools/index.js";
+import {
+  TOOLS,
+  MUTATING_TOOLS,
+  applyTaskUpdate,
+  formatTaskChecklist,
+  type AgentTask,
+} from "../tools/index.js";
 import { diffFiles } from "../git/github.js";
 import { getAgentAdapter, type NormalizedMessage, type ProviderAdapter } from "../providers/index.js";
 
 const BASE_SYSTEM_PROMPT = `You are a coding agent running on the user's desktop in a cloned Git repository.
 Work directly in the repository using the provided tools. Make focused, correct changes.
 Prefer reading files before editing them. Run tests or builds when relevant.
-When you have completed the request, stop and briefly summarize what you changed.`;
+When you have completed the request, stop and briefly summarize what you changed.
+
+## Task checklist
+For multi-step work, call the \`update_tasks\` tool early with a short checklist (3–8 items).
+Update statuses as you go (one \`in_progress\` when possible; mark \`completed\` when done).
+Use stable task ids so merges update the same items. The user sees this list live on their phone.`;
 
 const MAX_ROUNDS = 24;
 
@@ -44,6 +55,8 @@ export class AgentSession {
   private readonly systemPrompt: string;
   /** Mutable so a reattached WebSocket can rebind emit / signal / model. */
   private deps: AgentDeps;
+  /** Working checklist the agent maintains via `update_tasks`. */
+  private agentTasks: AgentTask[] = [];
 
   constructor(deps: AgentDeps) {
     this.deps = deps;
@@ -54,6 +67,21 @@ export class AgentSession {
         apiStyle: deps.model.apiStyle,
       });
     this.systemPrompt = this.buildSystemPrompt();
+  }
+
+  /** Current checklist snapshot (for reattach / debug). */
+  get tasks(): readonly AgentTask[] {
+    return this.agentTasks;
+  }
+
+  /** Push the current checklist to the app (e.g. after WebSocket reattach). */
+  emitTaskList(): void {
+    if (this.agentTasks.length === 0) return;
+    this.deps.emit({
+      type: "task_list",
+      sessionId: this.deps.sessionId,
+      tasks: this.agentTasks,
+    });
   }
 
   /**
@@ -196,6 +224,21 @@ export class AgentSession {
             }
           } else {
             result = await tool.execute(call.input, baseCtx);
+          }
+
+          // Apply checklist state after a successful update_tasks call and
+          // push a full snapshot so the phone checklist stays live.
+          if (call.name === "update_tasks" && result.ok) {
+            this.agentTasks = applyTaskUpdate(this.agentTasks, call.input);
+            result = {
+              ok: true,
+              output: formatTaskChecklist(this.agentTasks),
+            };
+            this.deps.emit({
+              type: "task_list",
+              sessionId,
+              tasks: this.agentTasks,
+            });
           }
         }
 

@@ -140,6 +140,54 @@ public struct PairResponse: Codable, Sendable {
     }
 }
 
+/// One Metal / MLX model installed on the desktop (`GET /metal/models`).
+public struct DesktopMetalModel: Codable, Hashable, Sendable, Identifiable {
+    public let hubID: String
+    public let displayName: String
+    public let downloadedAt: Double?
+
+    public var id: String { hubID }
+
+    public init(hubID: String, displayName: String, downloadedAt: Double? = nil) {
+        self.hubID = hubID
+        self.displayName = displayName
+        self.downloadedAt = downloadedAt
+    }
+
+    /// Map to the shared catalog model type for the coding picker.
+    public func asAIModel() -> AIModel {
+        AIModel(
+            provider: .localMetal,
+            modelID: hubID,
+            displayName: displayName + " · Desktop",
+            contextWindow: nil
+        )
+    }
+}
+
+/// Response body for `GET /metal/models`.
+public struct DesktopMetalModelsResponse: Codable, Sendable {
+    public let provider: String
+    public let runtimeReady: Bool
+    public let supported: Bool
+    public let detail: String
+    public let models: [DesktopMetalModel]
+
+    public init(
+        provider: String = "localMetal",
+        runtimeReady: Bool,
+        supported: Bool,
+        detail: String,
+        models: [DesktopMetalModel]
+    ) {
+        self.provider = provider
+        self.runtimeReady = runtimeReady
+        self.supported = supported
+        self.detail = detail
+        self.models = models
+    }
+}
+
 // MARK: app -> server
 
 public struct RepoRef: Codable, Sendable {
@@ -358,6 +406,21 @@ public enum ServerMessage: Decodable, Sendable {
     case tunnelStatus(sessionId: String, tunnels: [TunnelPayload], availableProviders: [String])
     /// Coding-server public URL after auto tunnel starts (phone should switch here).
     case remoteEndpoint(status: String, url: String?, provider: String?, error: String?)
+    /// Agent working checklist snapshot (`update_tasks` tool).
+    case taskList(sessionId: String, tasks: [AgentTaskPayload])
+
+    public struct AgentTaskPayload: Codable, Hashable, Sendable, Identifiable {
+        public let id: String
+        public let content: String
+        /// `pending` | `in_progress` | `completed` | `cancelled`
+        public let status: String
+
+        public init(id: String, content: String, status: String) {
+            self.id = id
+            self.content = content
+            self.status = status
+        }
+    }
 
     public struct FileEntryPayload: Codable, Hashable, Sendable {
         public let name: String
@@ -394,6 +457,7 @@ public enum ServerMessage: Decodable, Sendable {
         case entries, diff, content, truncated, ports, port, pid, command
         case name, isDirectory, size, modifiedAt, changeStatus, changes
         case tunnels, availableProviders, provider, status, error, tunnelId
+        case tasks
     }
 
     // CodingKeys already cover remote_endpoint fields: status, url, provider, error
@@ -505,6 +569,10 @@ public enum ServerMessage: Decodable, Sendable {
                 url: try c.decodeIfPresent(String.self, forKey: .url),
                 provider: try c.decodeIfPresent(String.self, forKey: .provider),
                 error: try c.decodeIfPresent(String.self, forKey: .error))
+        case "task_list":
+            self = .taskList(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                tasks: try c.decode([AgentTaskPayload].self, forKey: .tasks))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .type, in: c, debugDescription: "Unknown server message type: \(type)")

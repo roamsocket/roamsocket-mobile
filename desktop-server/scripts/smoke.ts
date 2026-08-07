@@ -137,6 +137,7 @@ async function main(): Promise<void> {
     ws.close();
 
     assert(seen.includes("session_created"), "session_created received");
+    assert(seen.includes("task_list"), "task_list received (agent checklist)");
     assert(seen.includes("tool_call"), "tool_call received");
     assert(seen.includes("tool_result"), "tool_result received");
     assert(diffForNotes, "diff for NOTES.md received");

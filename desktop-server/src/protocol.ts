@@ -568,6 +568,25 @@ export const RemoteEndpointMsg = z.object({
 });
 export type RemoteEndpointMsg = z.infer<typeof RemoteEndpointMsg>;
 
+/** One item in the agent's working checklist (`update_tasks` tool). */
+export const AgentTaskItem = z.object({
+  id: z.string(),
+  content: z.string(),
+  status: z.enum(["pending", "in_progress", "completed", "cancelled"]),
+});
+export type AgentTaskItem = z.infer<typeof AgentTaskItem>;
+
+/**
+ * Full snapshot of the agent's task checklist for a session.
+ * Emitted after each successful `update_tasks` tool call (and on reattach).
+ */
+export const TaskListMsg = z.object({
+  type: z.literal("task_list"),
+  sessionId: z.string(),
+  tasks: z.array(AgentTaskItem),
+});
+export type TaskListMsg = z.infer<typeof TaskListMsg>;
+
 export const ServerMessage = z.discriminatedUnion("type", [
   SessionCreatedMsg,
   AssistantDeltaMsg,
@@ -589,6 +608,7 @@ export const ServerMessage = z.discriminatedUnion("type", [
   PortListResultMsg,
   TunnelStatusMsg,
   RemoteEndpointMsg,
+  TaskListMsg,
 ]);
 export type ServerMessage = z.infer<typeof ServerMessage>;
 

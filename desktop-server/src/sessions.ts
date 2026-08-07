@@ -55,6 +55,8 @@ export class SessionManager {
         baseBranch: existing.repo.baseBranch ?? "main",
         workBranch: existing.repo.workBranch,
       });
+      // Replay checklist so the phone checklist recovers after reconnect.
+      existing.agent.emitTaskList();
       return;
     }
 

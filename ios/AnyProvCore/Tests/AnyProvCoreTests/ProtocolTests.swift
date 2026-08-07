@@ -242,6 +242,13 @@ final class ProtocolTests: XCTestCase {
         guard case let .error(sessionId2, message) = err else { return XCTFail("wrong case") }
         XCTAssertNil(sessionId2)
         XCTAssertEqual(message, "boom")
+
+        let tasks = try decoder.decode(ServerMessage.self, from: json(
+            #"{"type":"task_list","sessionId":"s1","tasks":[{"id":"1","content":"Plan","status":"completed"},{"id":"2","content":"Ship","status":"in_progress"}]}"#))
+        guard case let .taskList(_, items) = tasks else { return XCTFail("wrong case") }
+        XCTAssertEqual(items.count, 2)
+        XCTAssertEqual(items[0].content, "Plan")
+        XCTAssertEqual(items[1].status, "in_progress")
     }
 
     func testEnvParsing() {
