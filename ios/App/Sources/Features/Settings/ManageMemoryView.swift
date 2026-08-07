@@ -34,16 +34,8 @@ struct ManageMemoryView: View {
             .navigationTitle("Manage memory")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button {
-                        dismiss()
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(Theme.textSecondary)
-                            .frame(width: 32, height: 32)
-                            .background(Theme.surfaceElevated, in: Circle())
-                    }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
                 }
             }
             .sheet(isPresented: $showMemoryImport) {

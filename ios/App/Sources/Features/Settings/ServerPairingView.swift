@@ -153,6 +153,11 @@ struct ServerPairingView: View {
         .background(Theme.background)
         .navigationTitle("Pair server")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Done") { dismiss() }
+            }
+        }
         .refreshable {
             browser.start()
         }
