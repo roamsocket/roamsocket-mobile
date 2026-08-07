@@ -413,7 +413,7 @@ public actor LocalMetalCatalog {
             throw ProviderError.transport("Invalid LM Studio catalog URL.")
         }
         var request = URLRequest(url: url)
-        request.setValue("CodeSocket/1.0 (local-metal-catalog)", forHTTPHeaderField: "User-Agent")
+        request.setValue("RoamSocket/1.0 (local-metal-catalog)", forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 30
 
         let (data, response) = try await URLSession.shared.data(for: request)

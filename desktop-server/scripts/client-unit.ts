@@ -99,14 +99,34 @@ check("theme tokens match mobile cool blue-grey", () => {
   assert.equal(THEME.accent.toLowerCase(), "#6aa9ff");
 });
 
-check("product identity is CodeSocket", async () => {
-  const { PRODUCT_NAME, PRODUCT_SLUG, productDataDir } = await import("../src/product.js");
-  assert.equal(PRODUCT_NAME, "CodeSocket");
-  assert.equal(PRODUCT_SLUG, "codesocket");
+check("product identity is RoamSocket", async () => {
+  const { PRODUCT_NAME, PRODUCT_SLUG, BONJOUR_SERVICE_TYPE, DATA_DIRNAME, LEGACY_DATA_DIRNAMES, productDataDir } =
+    await import("../src/product.js");
+  assert.equal(PRODUCT_NAME, "RoamSocket");
+  assert.equal(PRODUCT_SLUG, "roamsocket");
+  assert.equal(BONJOUR_SERVICE_TYPE, "roamsocket");
+  assert.equal(DATA_DIRNAME, ".roamsocket");
+  assert.ok(LEGACY_DATA_DIRNAMES.includes(".codesocket"), "legacy data dir still listed for migration");
   assert.ok(
-    productDataDir().includes(".codesocket") || productDataDir().includes(".anyprov-code"),
+    productDataDir().includes(".roamsocket") ||
+      productDataDir().includes(".codesocket") ||
+      productDataDir().includes(".anyprov-code"),
     "data dir is product or legacy path",
   );
+
+  // Drive the shipped package identity (not a re-implementation): real package.json on disk.
+  const pkgPath = new URL("../package.json", import.meta.url);
+  const pkg = JSON.parse(await (await import("node:fs/promises")).readFile(pkgPath, "utf8")) as {
+    name: string;
+    bin: Record<string, string>;
+    keywords?: string[];
+  };
+  assert.equal(pkg.name, "roamsocket");
+  assert.ok(pkg.bin.roamsocket, "primary CLI bin is roamsocket");
+  assert.equal(pkg.bin.roamsocket, "bin/roamsocket.js");
+  // Former slug lives only under LEGACY_DATA_DIRNAMES — must not be an npm keyword.
+  const formerSlug = LEGACY_DATA_DIRNAMES[0].replace(/^\./, "");
+  assert.ok(!(pkg.keywords ?? []).includes(formerSlug), "keywords must not advertise former product slug");
 });
 
 check("sidebar destinations include required routes and exclude vision", () => {

@@ -1,15 +1,20 @@
 /**
  * Shared marketplace catalog types (connectors, skills, plugins, Metal models).
- * Schema mirrors codesocket-ai/codesocket-marketplace catalog.json.
+ * Schema mirrors the official marketplace catalog.json (GitHub raw URL below).
  */
 
 export const MARKETPLACE_SCHEMA_VERSION = 1;
 
-/** Default raw catalog URL (separate official marketplace repo). */
+/**
+ * Default raw catalog URL for the official RoamSocket marketplace.
+ * Host path is the external GitHub location (not product branding).
+ */
 export const DEFAULT_MARKETPLACE_URL =
   "https://raw.githubusercontent.com/codesocket-ai/codesocket-marketplace/main/catalog.json";
 
-export const DEFAULT_MARKETPLACE_SOURCE_ID = "codesocket-official";
+export const DEFAULT_MARKETPLACE_SOURCE_ID = "roamsocket-official";
+/** LEGACY default source ids — remapped on load so users keep one official entry. */
+export const LEGACY_MARKETPLACE_SOURCE_IDS = ["codesocket-official"] as const;
 
 export type MetalTag =
   | "recommended"
@@ -86,7 +91,7 @@ export interface MarketplaceSource {
   /** Full URL to catalog.json (raw GitHub, HTTP, or file URL). */
   url: string;
   enabled: boolean;
-  /** Built-in CodeSocket official — cannot be deleted, only disabled. */
+  /** Built-in RoamSocket official — cannot be deleted, only disabled. */
   isDefault?: boolean;
   lastFetchedAt?: number;
   lastError?: string | null;

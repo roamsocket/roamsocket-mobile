@@ -1,10 +1,11 @@
 # Marketplace (moved)
 
-The **official CodeSocket marketplace** lives in a **separate public repo**:
+The **official RoamSocket marketplace** lives in a **separate public repo**.
+The host path below is the current external GitHub location (not the product name):
 
 | | |
 |--|--|
-| **Repository** | [codesocket-ai/codesocket-marketplace](https://github.com/codesocket-ai/codesocket-marketplace) |
+| **Repository (external host)** | [codesocket-ai/codesocket-marketplace](https://github.com/codesocket-ai/codesocket-marketplace) |
 | **Catalog URL** | `https://raw.githubusercontent.com/codesocket-ai/codesocket-marketplace/main/catalog.json` |
 | **Authoring docs** | In that repo’s [README](https://github.com/codesocket-ai/codesocket-marketplace#how-to-make-your-own-marketplace) |
 

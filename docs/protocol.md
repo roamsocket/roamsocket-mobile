@@ -13,7 +13,7 @@ servers without typing an IP:
 
 | | |
 |--|--|
-| Service type | `_codesocket._tcp` |
+| Service type | `_roamsocket._tcp` |
 | Port | HTTP listen port (default `4319`) |
 | TXT | `name` (server display name), `version`, `path` (`/`) |
 
@@ -45,7 +45,7 @@ successful health check.
 
 ### `GET /health`
 ```json
-{ "ok": true, "name": "CodeSocket desktop", "version": "0.1.0", "publicUrl": "https://…", "tunnelStatus": "up" }
+{ "ok": true, "name": "RoamSocket desktop", "version": "0.1.0", "publicUrl": "https://…", "tunnelStatus": "up" }
 ```
 
 ### `POST /pair`
@@ -55,7 +55,7 @@ Request:
 ```
 Response `200`:
 ```json
-{ "token": "…", "serverName": "CodeSocket desktop", "serverVersion": "0.1.0", "publicUrl": "https://…?" }
+{ "token": "…", "serverName": "RoamSocket desktop", "serverVersion": "0.1.0", "publicUrl": "https://…?" }
 ```
 `publicUrl` is set only if a tunnel is already up. `401` on a wrong code. The
 `token` is a bearer token used to open the WebSocket.

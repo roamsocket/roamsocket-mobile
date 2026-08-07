@@ -8,8 +8,8 @@ Requires Xcode 15+ and [XcodeGen](https://github.com/yonsm/XcodeGen)
 (`brew install xcodegen`).
 
 ```bash
-xcodegen generate      # reads project.yml → CodeSocket.xcodeproj
-open CodeSocket.xcodeproj
+xcodegen generate      # reads project.yml → RoamSocket.xcodeproj
+open RoamSocket.xcodeproj
 ```
 
 The app target depends on the local `AnyProvCore` Swift package plus
@@ -35,7 +35,7 @@ First CLI build may need:
 xcodebuild -downloadComponent MetalToolchain
 
 # Trust SPM build plugins (mlx-swift ships a Linux CudaBuild plugin)
-xcodebuild -project CodeSocket.xcodeproj -scheme CodeSocket \
+xcodebuild -project RoamSocket.xcodeproj -scheme RoamSocket \
   -destination 'platform=iOS Simulator,name=iPhone 16' \
   -skipPackagePluginValidation -skipMacroValidation \
   build

@@ -92,7 +92,7 @@ export interface RunningServer {
 const DEFAULT_PORT = 4319;
 /** Listen on all interfaces so LAN phones can pair (override with APC_HOST). */
 const DEFAULT_HOST = "0.0.0.0";
-const DEFAULT_NAME = process.env.APC_NAME ?? "CodeSocket desktop";
+const DEFAULT_NAME = process.env.APC_NAME ?? "RoamSocket desktop";
 const DEFAULT_VERSION = "0.2.0";
 
 /** Configured skills/MCP repos. Read once at startup. The desktop is the
@@ -124,8 +124,8 @@ async function loadSyncConfig(): Promise<SyncConfig> {
       token: process.env.APC_MCP_TOKEN ?? json.mcpRepo?.token ?? "",
     },
     author: {
-      name: process.env.APC_AUTHOR_NAME ?? json.author?.name ?? "CodeSocket",
-      email: process.env.APC_AUTHOR_EMAIL ?? json.author?.email ?? "bot@codesocket.local",
+      name: process.env.APC_AUTHOR_NAME ?? json.author?.name ?? "RoamSocket",
+      email: process.env.APC_AUTHOR_EMAIL ?? json.author?.email ?? "bot@roamsocket.local",
     },
   };
 }
@@ -523,7 +523,7 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
       if (err.code === "EADDRINUSE") {
         reject(
           new Error(
-            `Port ${port} is already in use. Quit the other CodeSocket / desktop-server process, or set PORT to a free port.`,
+            `Port ${port} is already in use. Quit the other RoamSocket / desktop-server process, or set PORT to a free port.`,
           ),
         );
         return;

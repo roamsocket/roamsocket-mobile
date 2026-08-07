@@ -2,7 +2,7 @@
 
 ## `apc-foundation-cli` (macOS)
 
-Runs **Apple Intelligence** (Foundation Models) for CodeSocket **Lightweight Tasks**
+Runs **Apple Intelligence** (Foundation Models) for RoamSocket **Lightweight Tasks**
 (chat titles, artifact names, short summaries) from the Electron app.
 
 ### Requirements
@@ -15,9 +15,9 @@ Runs **Apple Intelligence** (Foundation Models) for CodeSocket **Lightweight Tas
 ```bash
 cd desktop-server/native
 swiftc -O -o apc-foundation-cli apc-foundation-cli.swift
-mkdir -p ~/.codesocket/bin
-cp apc-foundation-cli ~/.codesocket/bin/
-chmod +x ~/.codesocket/bin/apc-foundation-cli
+mkdir -p ~/.roamsocket/bin
+cp apc-foundation-cli ~/.roamsocket/bin/
+chmod +x ~/.roamsocket/bin/apc-foundation-cli
 ```
 
 On first Lightweight Task that needs Foundation, the Electron main process also

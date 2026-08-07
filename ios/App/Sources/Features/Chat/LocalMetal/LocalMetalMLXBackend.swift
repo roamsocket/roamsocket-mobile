@@ -39,7 +39,7 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
         // in Settings, chat picker, and Vision. Falls back to legacy AnyProvCode
         // only when that tree already has weights (migration).
         let dir = (try? LocalMetalModelStore.shared.hubCacheDirectorySync())
-            ?? FileManager.default.temporaryDirectory.appendingPathComponent("CodeSocket-hf", isDirectory: true)
+            ?? FileManager.default.temporaryDirectory.appendingPathComponent("RoamSocket-hf", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let hubCache = HubCache(cacheDirectory: dir)
         self.hubCache = hubCache
@@ -282,13 +282,13 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
         guard let repoID = Repo.ID(rawValue: modelID) else {
             throw ProviderError.transport("Invalid model id “\(modelID)”.")
         }
-        // Engine cache root (CodeSocket or legacy AnyProvCode, whichever we bind to).
+        // Engine cache root (RoamSocket or legacy AnyProvCode, whichever we bind to).
         let repoDir = hubCache.repoDirectory(repo: repoID, kind: .model)
         if FileManager.default.fileExists(atPath: repoDir.path) {
             try FileManager.default.removeItem(at: repoDir)
         }
         // Also wipe the same hub id under every known app-support hub root so
-        // split CodeSocket / AnyProvCode trees cannot leave orphan weights.
+        // split RoamSocket / AnyProvCode trees cannot leave orphan weights.
         let folderName = LocalMetalPaths.hubRepoFolderName(for: modelID)
         for root in LocalMetalPaths.hubCacheRootsToScan() {
             let extra = root.appendingPathComponent(folderName, isDirectory: true)
@@ -329,7 +329,7 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
         guard let repoID = Repo.ID(rawValue: modelID) else { return false }
         let repoDir = hubCache.repoDirectory(repo: repoID, kind: .model)
         if LocalMetalModelStore.hasUsableModelCache(at: repoDir) { return true }
-        // Fallback: store scans CodeSocket + legacy AnyProvCode trees.
+        // Fallback: store scans RoamSocket + legacy AnyProvCode trees.
         return await LocalMetalModelStore.shared.isDownloadedOnDisk(modelID: modelID)
     }
 
@@ -854,7 +854,7 @@ private actor ContainerCache {
 extension LocalMetalModelStore {
     /// Nonisolated path resolution for hub cache (used from engine init).
     ///
-    /// Prefer the canonical `CodeSocket` tree so downloads match
+    /// Prefer the canonical `RoamSocket` tree so downloads match
     /// `LocalMetalModelStore` inventory. If only the pre-rebrand
     /// `AnyProvCode` cache has weights, keep using it so existing
     /// downloads stay visible (Vision + chat).

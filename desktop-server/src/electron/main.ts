@@ -232,7 +232,7 @@ function showPairingCodeWindow(code: string): void {
     border:1px solid #262c34;min-width:280px;text-align:center}
   .hint{font-size:13px;color:#6b727b;text-align:center;max-width:320px;line-height:1.4}
 </style></head><body><div class="wrap">
-  <div class="label">CodeSocket</div>
+  <div class="label">RoamSocket</div>
   <div class="code" id="code">${spaced}</div>
   <div class="hint">Enter this code on your phone to pair<br/>(Settings → Desktop server)</div>
 </div></body></html>`;
@@ -342,7 +342,7 @@ function buildTrayIcon(): Electron.NativeImage {
 function createTray(): void {
   if (tray) return;
   tray = new Tray(buildTrayIcon());
-  tray.setToolTip("CodeSocket");
+  tray.setToolTip("RoamSocket");
   refreshTrayMenu();
   tray.on("click", () => {
     if (process.platform === "darwin") {
@@ -390,7 +390,7 @@ function refreshTrayMenu(): void {
       },
     },
     {
-      label: "Quit CodeSocket",
+      label: "Quit RoamSocket",
       click: () => {
         isQuitting = true;
         app.quit();
@@ -432,7 +432,7 @@ async function handleWindowClose(event: Electron.Event): Promise<void> {
       buttons: ["Hide to tray", "Quit app"],
       defaultId: 0,
       cancelId: 0,
-      title: "Close CodeSocket?",
+      title: "Close RoamSocket?",
       message: "Closing the window keeps the server running in the background.",
       detail:
         "Hide to tray: the app stays in the menu bar / task tray and the WebSocket server keeps running so paired devices stay connected.\n\n" +
@@ -458,7 +458,7 @@ function createWindow(): void {
     minWidth: 880,
     minHeight: 560,
     show: !prefs.startMinimized,
-    title: "CodeSocket",
+    title: "RoamSocket",
     backgroundColor: "#0b0d10",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     webPreferences: {
@@ -861,8 +861,8 @@ async function promptKillConflictingInstances(port: number): Promise<boolean> {
     buttons: ["Quit other instances", "Cancel"],
     defaultId: 0,
     cancelId: 1,
-    title: "Another CodeSocket is running",
-    message: "Quit other CodeSocket processes?",
+    title: "Another RoamSocket is running",
+    message: "Quit other RoamSocket processes?",
     detail: formatConflictDetail(conflicts, port),
     noLink: true,
   });

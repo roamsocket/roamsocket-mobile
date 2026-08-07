@@ -5,7 +5,7 @@
  */
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "codesocket",
+  "name": "roamsocket",
   "compatibility_date": "2026-08-06",
   "preview_urls": true,
   "assets": {

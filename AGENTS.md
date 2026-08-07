@@ -1,10 +1,10 @@
-# AGENTS.md — working in CodeSocket
+# AGENTS.md — working in RoamSocket
 
 Instructions for AI coding agents (Codex, Cursor, Grok, etc.) working in this repository.
 
 ## What this project is
 
-**CodeSocket** is an open-source, native **iOS** client plus a **desktop companion** that runs the coding agent.
+**RoamSocket** is an open-source, native **iOS** client plus a **desktop companion** that runs the coding agent.
 
 | Mode | Path | Needs server? |
 |------|------|----------------|
@@ -16,18 +16,18 @@ BYOK: Anthropic, OpenAI, Ollama/OpenAI-compatible, Groq, OpenRouter, xAI, Mistra
 ## Repo map
 
 ```
-codesocket/  (repo may still be checked out as code-mobile-ai)
+roamsocket/  (repo may still be checked out as code-mobile-ai)
 ├── ios/                      # SwiftUI app + AnyProvCore package
 │   ├── App/Sources/          # UI (edit these, not the generated xcodeproj)
 │   ├── AnyProvCore/         # Foundation-only: providers, GitHub, protocol, skills
 │   ├── project.yml           # XcodeGen source of truth
-│   ├── CodeSocket.xcodeproj/  # GENERATED — do not hand-edit
+│   ├── RoamSocket.xcodeproj/  # GENERATED — do not hand-edit
 │   └── scripts/              # watch-xcode.sh, xcode helpers
 ├── desktop-server/           # Node/TS companion + Electron UI
 │   ├── src/                  # server, agent, tools, electron, renderer
 │   └── scripts/smoke.ts      # offline e2e protocol test
 ├── docs/protocol.md          # Human-readable wire protocol
-├── marketplace/              # Pointer docs → codesocket-ai/codesocket-marketplace
+├── marketplace/              # Pointer docs → external official catalog host
 ├── landing/                  # Marketing site → Cloudflare Workers assets
 ├── AGENTS.md                 # This file
 └── CLAUDE.md                 # Agent-oriented notes
@@ -76,8 +76,8 @@ Default port: **4319**.
 
 ### Marketplace (owner + user catalogs)
 
-- **Official repo (separate):** [codesocket-ai/codesocket-marketplace](https://github.com/codesocket-ai/codesocket-marketplace)
-- **Default catalog URL:** `https://raw.githubusercontent.com/codesocket-ai/codesocket-marketplace/main/catalog.json`
+- **Official repo (separate external host):** [codesocket-ai/codesocket-marketplace](https://github.com/codesocket-ai/codesocket-marketplace)
+- **Default catalog URL:** `https://raw.githubusercontent.com/codesocket-ai/codesocket-marketplace/main/catalog.json` (host path is external; product name is RoamSocket)
 - **Authoring guide:** that repo’s README (“How to make your own marketplace”).
 - **Desktop:** Settings → Marketplace; applies to composer connectors/plugins + Metal list.
 - **iOS:** Settings → Marketplace; same sources feed connectors, skill browse, Metal recommended.
@@ -133,7 +133,7 @@ Env: `PORT` (default 4319), `APC_MOCK=1`, `APC_NAME`.
 ```bash
 cd ios
 xcodegen generate                 # project.yml → .xcodeproj
-open CodeSocket.xcodeproj
+open RoamSocket.xcodeproj
 
 cd AnyProvCore
 swift build
@@ -201,7 +201,7 @@ Open `landing/public/index.html` for a local file preview without Wrangler.
 
 ## What not to do
 
-- Don't hand-edit `ios/CodeSocket.xcodeproj` as the primary workflow — edit `project.yml` / sources and regenerate.
+- Don't hand-edit `ios/RoamSocket.xcodeproj` as the primary workflow — edit `project.yml` / sources and regenerate.
 - Don't commit build products or `.xcuserstate`.
 - Don't break chat-without-server: chat must keep working with only a provider key.
 - Don't add a second theme or terracotta accents without an explicit product decision.

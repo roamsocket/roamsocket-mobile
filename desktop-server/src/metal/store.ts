@@ -309,7 +309,7 @@ async function listRepoFiles(hubID: string): Promise<HFTreeEntry[]> {
   const url = `https://huggingface.co/api/models/${hubID}/tree/main?recursive=1`;
   const res = await fetch(url, {
     headers: {
-      "user-agent": "CodeSocket-desktop/1.0 (metal-store)",
+      "user-agent": "RoamSocket-desktop/1.0 (metal-store)",
       accept: "application/json",
     },
   });
@@ -337,7 +337,7 @@ async function downloadFileStreaming(
   const url = `https://huggingface.co/${hubID}/resolve/main/${encodedPath}?download=true`;
   const res = await fetch(url, {
     headers: {
-      "user-agent": "CodeSocket-desktop/1.0 (metal-store)",
+      "user-agent": "RoamSocket-desktop/1.0 (metal-store)",
     },
     redirect: "follow",
   });

@@ -57,10 +57,13 @@ public struct DiscoveredServer: Identifiable, Hashable, Sendable {
 /// `desktop-server/src/discovery.ts` / `product.ts` and `NSBonjourServices`
 /// in the app Info.plist.
 public enum ServerDiscovery {
-    public static let bonjourType = "_codesocket._tcp"
+    public static let bonjourType = "_roamsocket._tcp"
+    /// LEGACY Bonjour type from pre-RoamSocket desktop builds; browsed for soft transition only.
+    public static let legacyBonjourType = "_codesocket._tcp"
+    public static let allBonjourTypes = [bonjourType, legacyBonjourType]
 }
 
-/// Browses the LAN for CodeSocket desktop servers.
+/// Browses the LAN for RoamSocket desktop servers.
 ///
 /// Call `start()` when the pairing screen appears and `stop()` on dismiss.
 /// Results stream into `servers` on the main queue.
@@ -69,15 +72,17 @@ public final class ServerBrowser: ObservableObject {
     @Published public private(set) var isBrowsing: Bool = false
     @Published public private(set) var lastError: String?
 
-    private var browser: NWBrowser?
+    private var browsers: [NWBrowser] = []
+    /// Live browse keys per Bonjour type so multi-type discovery can merge safely.
+    private var keysByType: [String: Set<String>] = [:]
     private var resolvers: [String: NWConnection] = [:]
-    private let queue = DispatchQueue(label: "com.anyprovcode.server-browser")
+    private let queue = DispatchQueue(label: "app.roamsocket.server-browser")
     private let lock = NSLock()
 
     public init() {}
 
     deinit {
-        browser?.cancel()
+        browsers.forEach { $0.cancel() }
         lock.lock()
         let connections = Array(resolvers.values)
         resolvers.removeAll()
@@ -92,64 +97,76 @@ public final class ServerBrowser: ObservableObject {
             self.isBrowsing = true
         }
 
-        let descriptor = NWBrowser.Descriptor.bonjour(type: ServerDiscovery.bonjourType, domain: "local.")
-        let params = NWParameters()
-        params.includePeerToPeer = true
+        for type in ServerDiscovery.allBonjourTypes {
+            let descriptor = NWBrowser.Descriptor.bonjour(type: type, domain: "local.")
+            let params = NWParameters()
+            params.includePeerToPeer = true
 
-        let browser = NWBrowser(for: descriptor, using: params)
-        self.browser = browser
+            let browser = NWBrowser(for: descriptor, using: params)
+            browsers.append(browser)
 
-        browser.stateUpdateHandler = { [weak self] state in
-            guard let self else { return }
-            DispatchQueue.main.async {
-                switch state {
-                case .ready:
-                    self.isBrowsing = true
-                    self.lastError = nil
-                case .failed(let error):
-                    self.isBrowsing = false
-                    self.lastError = error.localizedDescription
-                case .cancelled:
-                    self.isBrowsing = false
-                default:
-                    break
+            browser.stateUpdateHandler = { [weak self] state in
+                guard let self else { return }
+                DispatchQueue.main.async {
+                    switch state {
+                    case .ready:
+                        self.isBrowsing = true
+                        self.lastError = nil
+                    case .failed(let error):
+                        // One type failing (e.g. legacy) should not stop the other.
+                        if self.browsers.allSatisfy({
+                            if case .failed = $0.state { return true }
+                            return false
+                        }) {
+                            self.isBrowsing = false
+                            self.lastError = error.localizedDescription
+                        }
+                    case .cancelled:
+                        break
+                    default:
+                        break
+                    }
                 }
             }
-        }
 
-        browser.browseResultsChangedHandler = { [weak self] results, _ in
-            self?.handleBrowseResults(results)
-        }
+            browser.browseResultsChangedHandler = { [weak self] results, _ in
+                self?.handleBrowseResults(results, serviceType: type)
+            }
 
-        browser.start(queue: queue)
+            browser.start(queue: queue)
+        }
     }
 
     public func stop() {
-        browser?.cancel()
-        browser = nil
+        browsers.forEach { $0.cancel() }
+        browsers = []
         lock.lock()
+        keysByType.removeAll()
         let connections = Array(resolvers.values)
         resolvers.removeAll()
         lock.unlock()
         connections.forEach { $0.cancel() }
         DispatchQueue.main.async {
+            self.servers = []
             self.isBrowsing = false
         }
     }
 
-    private func handleBrowseResults(_ results: Set<NWBrowser.Result>) {
+    private func handleBrowseResults(_ results: Set<NWBrowser.Result>, serviceType: String) {
         let serviceKeys = Set(results.compactMap { Self.serviceKey(for: $0) })
 
-        DispatchQueue.main.async {
-            self.servers.removeAll { !serviceKeys.contains($0.id) }
-        }
-
         lock.lock()
-        for key in resolvers.keys where !serviceKeys.contains(key) {
+        keysByType[serviceType] = serviceKeys
+        let allKeys = Set(keysByType.values.flatMap { $0 })
+        for key in resolvers.keys where !allKeys.contains(key) {
             resolvers[key]?.cancel()
             resolvers[key] = nil
         }
         lock.unlock()
+
+        DispatchQueue.main.async {
+            self.servers.removeAll { !allKeys.contains($0.id) }
+        }
 
         for result in results {
             guard let key = Self.serviceKey(for: result) else { continue }

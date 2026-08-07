@@ -1,10 +1,10 @@
 {
-  "name": "codesocket",
+  "name": "roamsocket",
   "version": "0.2.0",
   "type": "module",
-  "description": "CodeSocket desktop companion: headless WebSocket coding server that pairs with the iOS app, clones repos, runs the agent loop, and opens PRs.",
+  "description": "RoamSocket desktop companion: headless WebSocket coding server that pairs with the iOS app, clones repos, runs the agent loop, and opens PRs.",
   "license": "MIT",
-  "author": "codesocket-ai",
+  "author": "roamsocket",
   "homepage": "https://github.com/kind365/code-mobile-ai#readme",
   "repository": {
     "type": "git",
@@ -15,7 +15,7 @@
     "url": "https://github.com/kind365/code-mobile-ai/issues"
   },
   "keywords": [
-    "codesocket",
+    "roamsocket",
     "coding-agent",
     "websocket",
     "ios",
@@ -36,6 +36,7 @@
     }
   },
   "bin": {
+    "roamsocket": "bin/roamsocket.js",
     "codesocket": "bin/codesocket.js",
     "codesocket-server": "bin/codesocket.js",
     "anyprov-code-server": "bin/codesocket.js"

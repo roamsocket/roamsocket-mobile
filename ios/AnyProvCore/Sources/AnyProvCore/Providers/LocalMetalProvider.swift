@@ -120,12 +120,12 @@ public enum LocalMetalRuntime {
 
 /// Application Support roots for phone Metal weights.
 ///
-/// Canonical root is `CodeSocket/LocalModels`. Pre-rebrand builds wrote to
+/// Canonical root is `RoamSocket/LocalModels`. Pre-rebrand builds wrote to
 /// `AnyProvCode/LocalModels` — that legacy tree is still **scanned** so
 /// downloads remain visible after the rename (Vision + chat pickers).
 public enum LocalMetalPaths {
     /// Current app-support relative root for on-device models.
-    public static let relativeRoot = "CodeSocket/LocalModels"
+    public static let relativeRoot = "RoamSocket/LocalModels"
     /// Pre-rebrand root (still scanned for existing downloads).
     public static let legacyRelativeRoot = "AnyProvCode/LocalModels"
 
@@ -313,7 +313,7 @@ public actor LocalMetalModelStore {
             ))
         }
 
-        // Scan HF hub caches (canonical CodeSocket + legacy AnyProvCode).
+        // Scan HF hub caches (canonical RoamSocket + legacy AnyProvCode).
         for cacheRoot in LocalMetalPaths.hubCacheRootsToScan() {
             guard let kids = try? FileManager.default.contentsOfDirectory(
                 at: cacheRoot,

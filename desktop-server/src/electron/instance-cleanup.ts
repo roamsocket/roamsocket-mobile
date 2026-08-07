@@ -1,5 +1,5 @@
 /**
- * Detect and kill leftover CodeSocket / desktop-server processes that
+ * Detect and kill leftover RoamSocket / desktop-server processes that
  * would block a clean Electron launch (usually something still holding the
  * HTTP port, or a headless `tsx watch` / `npm start` still running).
  */
@@ -24,9 +24,12 @@ const SUPERVISOR_RE =
  * Command lines that look like our headless companion server or a packaged
  * main binary — not every process whose cwd happens to sit under the repo.
  */
-/** Match current and legacy product process names. */
+/**
+ * Match current RoamSocket process names plus LEGACY CLI/app names so
+ * instance cleanup still finds older installs during transition.
+ */
 const APC_SERVER_RE =
-  /(?:codesocket-server|anyprov-code-server|code-mobile-ai-server|(?:^|[\\/\s])tsx(?:\s+watch)?\s+.*(?:src[\\/])?index\.ts|node\s+.*desktop-server[\\/].*dist[\\/](?:src[\\/])?index\.js|desktop-server[\\/](?:src[\\/]index\.ts|dist[\\/](?:src[\\/])?index\.js)|CodeSocket\.app[\\/]Contents[\\/]MacOS[\\/](?:codesocket|anyprov-code)|Code Mobile AI\.app[\\/]Contents[\\/]MacOS[\\/]code-mobile-ai|(?:^|[\\/\s])(?:codesocket|anyprov-code|code-mobile-ai)(?:\.exe)?(?:\s|$))/i;
+  /(?:roamsocket-server|codesocket-server|anyprov-code-server|code-mobile-ai-server|(?:^|[\\/\s])tsx(?:\s+watch)?\s+.*(?:src[\\/])?index\.ts|node\s+.*desktop-server[\\/].*dist[\\/](?:src[\\/])?index\.js|desktop-server[\\/](?:src[\\/]index\.ts|dist[\\/](?:src[\\/])?index\.js)|RoamSocket\.app[\\/]Contents[\\/]MacOS[\\/](?:roamsocket|codesocket|anyprov-code)|Code Mobile AI\.app[\\/]Contents[\\/]MacOS[\\/]code-mobile-ai|(?:^|[\\/\s])(?:roamsocket|codesocket|anyprov-code|code-mobile-ai)(?:\.exe)?(?:\s|$))/i;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -137,8 +140,9 @@ async function listApcServerProcesses(): Promise<ConflictingProcess[]> {
           "-NoProfile",
           "-NonInteractive",
           "-Command",
+          // LEGACY name fragments included so older installs are still cleaned up.
           `Get-CimInstance Win32_Process | Where-Object {
-            $_.CommandLine -match 'codesocket|anyprov-code|code-mobile-ai|desktop-server.*(index\\.(ts|js)|CodeSocket|Code Mobile AI)'
+            $_.CommandLine -match 'roamsocket|codesocket|anyprov-code|code-mobile-ai|desktop-server.*(index\\.(ts|js)|RoamSocket|Code Mobile AI)'
           } | Select-Object ProcessId, CommandLine | ConvertTo-Csv -NoTypeInformation`,
         ],
         { maxBuffer: 4 * 1024 * 1024, windowsHide: true },
@@ -155,7 +159,7 @@ async function listApcServerProcesses(): Promise<ConflictingProcess[]> {
         out.push({
           pid,
           command: truncateCmd(command),
-          reason: "CodeSocket server process",
+          reason: "RoamSocket server process",
         });
       }
     } catch {
@@ -182,7 +186,7 @@ async function listApcServerProcesses(): Promise<ConflictingProcess[]> {
       out.push({
         pid,
         command: truncateCmd(command),
-        reason: "CodeSocket server process",
+        reason: "RoamSocket server process",
       });
     }
   } catch {
@@ -320,7 +324,7 @@ export function formatConflictDetail(conflicts: ConflictingProcess[], port: numb
     (c) => `• PID ${c.pid} — ${c.reason}\n  ${c.command || "(unknown command)"}`,
   );
   return (
-    `Another process is using port ${port} or looks like a leftover CodeSocket server.\n\n` +
+    `Another process is using port ${port} or looks like a leftover RoamSocket server.\n\n` +
     `${lines.join("\n\n")}\n\n` +
     `Quit those processes so this launch can start cleanly?`
   );

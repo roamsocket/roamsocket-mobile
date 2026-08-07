@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>CodeSocket</string>
+	<string>RoamSocket</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -29,18 +29,20 @@
 	</dict>
 	<key>NSBonjourServices</key>
 	<array>
+		<string>_roamsocket._tcp</string>
+		<!-- LEGACY Bonjour type for older desktop builds only -->
 		<string>_codesocket._tcp</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>Scan pairing QR codes and capture photos for Vision analysis.</string>
 	<key>NSHealthShareUsageDescription</key>
-	<string>CodeSocket reads your Apple Health data when you turn on Health in chat, so the assistant can answer questions about steps, sleep, workouts, and other stats you choose to share.</string>
+	<string>RoamSocket reads your Apple Health data when you turn on Health in chat, so the assistant can answer questions about steps, sleep, workouts, and other stats you choose to share.</string>
 	<key>NSHealthUpdateUsageDescription</key>
-	<string>CodeSocket does not write to Apple Health. This permission is required by the system HealthKit entitlement.</string>
+	<string>RoamSocket does not write to Apple Health. This permission is required by the system HealthKit entitlement.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Connect to your desktop coding server on the local network.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>CodeSocket uses your location when you turn on Location in chat, so the assistant can answer with local context such as nearby places, weather, and time zone.</string>
+	<string>RoamSocket uses your location when you turn on Location in chat, so the assistant can answer with local context such as nearby places, weather, and time zone.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

@@ -15,6 +15,7 @@ import {
 import {
   DEFAULT_MARKETPLACE_SOURCE_ID,
   DEFAULT_MARKETPLACE_URL,
+  LEGACY_MARKETPLACE_SOURCE_IDS,
   emptyCatalog,
   type MarketplaceCatalog,
   type MarketplaceSource,
@@ -56,7 +57,7 @@ export function makeDefaultSource(): MarketplaceSource {
   const url = defaultSourceUrl();
   return {
     id: DEFAULT_MARKETPLACE_SOURCE_ID,
-    name: "CodeSocket Official",
+    name: "RoamSocket Official",
     url: url || DEFAULT_MARKETPLACE_URL,
     enabled: url.length > 0,
     isDefault: true,
@@ -65,12 +66,20 @@ export function makeDefaultSource(): MarketplaceSource {
   };
 }
 
+function isOfficialSourceId(id: string): boolean {
+  return (
+    id === DEFAULT_MARKETPLACE_SOURCE_ID ||
+    (LEGACY_MARKETPLACE_SOURCE_IDS as readonly string[]).includes(id)
+  );
+}
+
 function ensureDefaultInList(sources: MarketplaceSource[]): MarketplaceSource[] {
   const def = makeDefaultSource();
-  const without = sources.filter((s) => !s.isDefault && s.id !== DEFAULT_MARKETPLACE_SOURCE_ID);
-  const existing = sources.find((s) => s.isDefault || s.id === DEFAULT_MARKETPLACE_SOURCE_ID);
+  const without = sources.filter((s) => !s.isDefault && !isOfficialSourceId(s.id));
+  const existing = sources.find((s) => s.isDefault || isOfficialSourceId(s.id));
   if (existing) {
     // Keep user enable/disable + custom name; refresh default URL from env if set.
+    // Remap LEGACY marketplace source ids onto DEFAULT_MARKETPLACE_SOURCE_ID.
     const urlFromEnv = process.env.APC_MARKETPLACE_URL;
     return [
       {
@@ -183,7 +192,7 @@ async function fetchCatalogUrl(url: string, timeoutMs = 20_000): Promise<Marketp
       signal: ctrl.signal,
       headers: {
         Accept: "application/json",
-        "User-Agent": "CodeSocket-desktop/marketplace",
+        "User-Agent": "RoamSocket-desktop/marketplace",
       },
     });
     if (!res.ok) {
@@ -250,7 +259,7 @@ export class MarketplaceStore {
   removeSource(id: string): void {
     const src = this.sources.find((s) => s.id === id);
     if (!src) throw new Error("Marketplace not found");
-    if (src.isDefault || src.id === DEFAULT_MARKETPLACE_SOURCE_ID) {
+    if (src.isDefault || isOfficialSourceId(src.id)) {
       throw new Error("The official marketplace cannot be removed. Disable it instead.");
     }
     this.sources = this.sources.filter((s) => s.id !== id);

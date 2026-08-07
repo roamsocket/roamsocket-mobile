@@ -375,7 +375,7 @@ function download(url: string, dest: string, log: InstallLog): Promise<void> {
         u,
         {
           headers: {
-            "User-Agent": "CodeSocket-desktop",
+            "User-Agent": "RoamSocket-desktop",
             Accept: "*/*",
           },
         },

@@ -1,6 +1,6 @@
 /**
  * Bundled offline fallback — keep in sync with
- * https://github.com/codesocket-ai/codesocket-marketplace (catalog.json).
+ * the official marketplace catalog.json (default GitHub raw URL in types.ts).
  */
 import type { MarketplaceCatalog } from "./types.js";
 import { emptyCatalog, MARKETPLACE_SCHEMA_VERSION } from "./types.js";
@@ -8,7 +8,7 @@ import { emptyCatalog, MARKETPLACE_SCHEMA_VERSION } from "./types.js";
 export const BUNDLED_MARKETPLACE_CATALOG: MarketplaceCatalog = emptyCatalog({
   schemaVersion: MARKETPLACE_SCHEMA_VERSION,
   updatedAt: "2026-08-07",
-  name: "CodeSocket Official Marketplace",
+  name: "RoamSocket Official Marketplace",
   description:
     "Bundled fallback of the official catalog. Prefer live fetch from the default GitHub marketplace repo.",
   connectors: [
@@ -22,15 +22,15 @@ export const BUNDLED_MARKETPLACE_CATALOG: MarketplaceCatalog = emptyCatalog({
     { id: "github", name: "GitHub", description: "Issues, PRs, and repository context.", available: true, category: "engineering" },
   ],
   skills: [
-    { id: "apa-formatting", name: "apa-formatting", description: "APA citations and paper structure", category: "documentation", author: "CodeSocket", source: "official" },
-    { id: "canvas-design", name: "canvas-design", description: "Canvas / visual layout guidance", category: "design", author: "CodeSocket", source: "official" },
-    { id: "doc-coauthoring", name: "doc-coauthoring", description: "Collaborative document drafting", category: "documentation", author: "CodeSocket", source: "official" },
-    { id: "frontend-design-css", name: "frontend-design-css", description: "Premium HTML Landing Page Generator", category: "frontend", author: "CodeSocket", source: "official", featured: true },
-    { id: "internal-comms", name: "internal-comms", description: "Internal status and announcements", category: "other", author: "CodeSocket", source: "official" },
-    { id: "mcp-builder", name: "mcp-builder", description: "Guide for creating high-quality MCP servers", category: "devops", author: "CodeSocket", source: "official", featured: true },
-    { id: "morning", name: "morning", description: "Daily brief and prioritization", category: "other", author: "CodeSocket", source: "official" },
-    { id: "skill-creator", name: "skill-creator", description: "Author new agent skills", category: "other", author: "CodeSocket", source: "official", featured: true },
-    { id: "theme-factory", name: "theme-factory", description: "UI theme tokens and palettes", category: "design", author: "CodeSocket", source: "official" },
+    { id: "apa-formatting", name: "apa-formatting", description: "APA citations and paper structure", category: "documentation", author: "RoamSocket", source: "official" },
+    { id: "canvas-design", name: "canvas-design", description: "Canvas / visual layout guidance", category: "design", author: "RoamSocket", source: "official" },
+    { id: "doc-coauthoring", name: "doc-coauthoring", description: "Collaborative document drafting", category: "documentation", author: "RoamSocket", source: "official" },
+    { id: "frontend-design-css", name: "frontend-design-css", description: "Premium HTML Landing Page Generator", category: "frontend", author: "RoamSocket", source: "official", featured: true },
+    { id: "internal-comms", name: "internal-comms", description: "Internal status and announcements", category: "other", author: "RoamSocket", source: "official" },
+    { id: "mcp-builder", name: "mcp-builder", description: "Guide for creating high-quality MCP servers", category: "devops", author: "RoamSocket", source: "official", featured: true },
+    { id: "morning", name: "morning", description: "Daily brief and prioritization", category: "other", author: "RoamSocket", source: "official" },
+    { id: "skill-creator", name: "skill-creator", description: "Author new agent skills", category: "other", author: "RoamSocket", source: "official", featured: true },
+    { id: "theme-factory", name: "theme-factory", description: "UI theme tokens and palettes", category: "design", author: "RoamSocket", source: "official" },
   ],
   plugins: [
     { id: "marketing-kit", name: "Marketing kit", description: "Landing pages, campaigns, and brand voice helpers.", category: "marketing", skillIds: ["frontend-design-css", "theme-factory"], featured: true },

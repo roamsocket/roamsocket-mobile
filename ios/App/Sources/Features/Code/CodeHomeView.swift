@@ -266,7 +266,7 @@ enum SessionLauncher {
         let activeSkills = skills ?? state.skillManager.enabledSkills
         let activeMCP = mcpServers ?? state.mcpManager.configuredMCPServers
         let prefix = state.codeBranchPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
-        let branchPrefix = prefix.isEmpty ? "codesocket" : prefix
+        let branchPrefix = prefix.isEmpty ? "roamsocket" : prefix
         let workBranch = "\(branchPrefix)/\(slug(from: task))-\(shortId())"
         let wireId = "s_\(shortId())"
         let repoRef = RepoRef(

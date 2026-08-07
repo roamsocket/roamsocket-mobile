@@ -9,7 +9,7 @@
  * Build (macOS 26+ SDK):
  *   swiftc -O -o apc-foundation-cli apc-foundation-cli.swift
  *
- * CodeSocket Electron spawns this for Lightweight Tasks on Apple Silicon Macs.
+ * RoamSocket Electron spawns this for Lightweight Tasks on Apple Silicon Macs.
  */
 import Foundation
 

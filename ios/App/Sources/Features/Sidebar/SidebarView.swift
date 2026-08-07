@@ -64,7 +64,7 @@ struct SidebarView: View {
 
     private var header: some View {
         HStack(alignment: .center) {
-            Text("CodeSocket")
+            Text("RoamSocket")
                 .font(.system(size: 28, weight: .semibold))
                 .foregroundStyle(Theme.textPrimary)
             Spacer()

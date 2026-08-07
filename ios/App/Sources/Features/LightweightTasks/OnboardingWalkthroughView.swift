@@ -101,7 +101,7 @@ struct OnboardingWalkthroughView: View {
     private var welcomeStep: some View {
         walkthroughPage(
             icon: "sparkles",
-            title: "Welcome to CodeSocket",
+            title: "Welcome to RoamSocket",
             body: """
             Native chat and coding on your iPhone.
 

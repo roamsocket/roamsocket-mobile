@@ -114,7 +114,7 @@ struct DeviceConnectionHelpSheet: View {
             checklistRow(
                 icon: "desktopcomputer",
                 title: "Desktop server is running",
-                detail: "Open the CodeSocket desktop app or start the companion server and leave it open."
+                detail: "Open the RoamSocket desktop app or start the companion server and leave it open."
             )
             if let host = state.localEndpoint?.baseURL.host ?? state.serverEndpoint?.baseURL.host {
                 checklistRow(

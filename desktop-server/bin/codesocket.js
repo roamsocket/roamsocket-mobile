@@ -1,11 +1,6 @@
 #!/usr/bin/env node
 /**
- * Global CLI entry for `codesocket` (aliases: codesocket-server, anyprov-code-server).
- * Starts the headless WebSocket companion server.
+ * LEGACY CLI alias only — product CLI is `roamsocket`.
+ * Kept so older global installs / scripts that still call `codesocket` keep working.
  */
-import { startServer } from "../dist/src/index.js";
-
-startServer().catch((err) => {
-  console.error("Failed to start server:", err);
-  process.exit(1);
-});
+import "./roamsocket.js";

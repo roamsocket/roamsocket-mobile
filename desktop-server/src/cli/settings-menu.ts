@@ -33,7 +33,7 @@ export async function runSettingsMenu(ctx: CliSettingsContext): Promise<void> {
   const printMenu = () => {
     const info = ctx.getServerInfo();
     console.log(`
-── CodeSocket settings ─────────────────────────────
+── RoamSocket settings ─────────────────────────────
   Config file: ${desktopPrefsPath()}
   Server: ${info.name}  http://${info.host}:${info.port}
   Pairing code: ${ctx.getPairingCode()}

@@ -104,8 +104,8 @@ export async function commitAll(dir: string, message: string): Promise<boolean> 
   const status = await run(["status", "--porcelain"], { cwd: dir });
   if (!status.stdout.trim()) return false;
   // Identity is required for commit; set a bot identity locally.
-  await run(["config", "user.email", "agent@codesocket.local"], { cwd: dir });
-  await run(["config", "user.name", "CodeSocket"], { cwd: dir });
+  await run(["config", "user.email", "agent@roamsocket.local"], { cwd: dir });
+  await run(["config", "user.name", "RoamSocket"], { cwd: dir });
   const commit = await run(["commit", "-m", message], { cwd: dir });
   if (commit.code !== 0) throw new Error(`git commit failed: ${commit.stderr.trim()}`);
   return true;

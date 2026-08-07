@@ -1,7 +1,7 @@
 /**
  * Local-network discovery (Bonjour / mDNS).
  *
- * The desktop publishes `_codesocket._tcp` so phones on the same LAN can
+ * The desktop publishes `_roamsocket._tcp` so phones on the same LAN can
  * find the coding server without typing an IP. Pairing still requires the
  * 6-digit code — we never put secrets in the TXT record.
  *

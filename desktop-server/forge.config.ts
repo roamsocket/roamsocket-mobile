@@ -9,14 +9,14 @@ import { VitePlugin } from "@electron-forge/plugin-vite";
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
-    name: "CodeSocket",
-    executableName: "codesocket",
-    appBundleId: "app.codesocket.desktop",
+    name: "RoamSocket",
+    executableName: "roamsocket",
+    appBundleId: "app.roamsocket.desktop",
   },
   rebuildConfig: {},
   makers: [
     new MakerZIP({}, ["darwin", "linux", "win32"]),
-    new MakerSquirrel({ name: "codesocket" }, ["win32"]),
+    new MakerSquirrel({ name: "roamsocket" }, ["win32"]),
     new MakerDMG({}, ["darwin"]),
     new MakerDeb({}),
     new MakerRpm({}),

@@ -103,7 +103,7 @@ final class AppState: ObservableObject {
     }
 
     /// Branch name prefix for new coding sessions, e.g. `apc/fix-login-a1b2c3d4`.
-    @AppStorage("codeBranchPrefix.v1") var codeBranchPrefix: String = "codesocket"
+    @AppStorage("codeBranchPrefix.v1") var codeBranchPrefix: String = "roamsocket"
 
     /// Active desktop base URL currently used for API/WS (local or tunnel).
     @AppStorage("serverHost.v1") var serverHost: String = ""

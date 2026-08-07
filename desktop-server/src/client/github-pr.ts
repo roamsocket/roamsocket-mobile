@@ -132,7 +132,7 @@ export async function fetchGitHubPrState(
   if (!parsed) return null;
   const headers: Record<string, string> = {
     accept: "application/vnd.github+json",
-    "user-agent": "CodeSocket-desktop",
+    "user-agent": "RoamSocket-desktop",
   };
   if (token) headers.authorization = `Bearer ${token}`;
   const res = await fetch(parsed.apiUrl, { headers });

@@ -64,7 +64,7 @@ struct GitHubLinkView: View {
     private static let generateTokenURL: URL = {
         var components = URLComponents(string: "https://github.com/settings/tokens/new")!
         components.queryItems = [
-            URLQueryItem(name: "description", value: "CodeSocket"),
+            URLQueryItem(name: "description", value: "RoamSocket"),
             URLQueryItem(
                 name: "scopes",
                 value: [

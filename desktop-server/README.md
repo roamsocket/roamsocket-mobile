@@ -1,6 +1,6 @@
 # desktop-server
 
-Node + TypeScript companion server for the **CodeSocket** iOS app. It pairs with
+Node + TypeScript companion server for the **RoamSocket** iOS app. It pairs with
 the app over a WebSocket, clones a GitHub repo, drives the agent loop against a
 provider, executes tools, and opens a pull request.
 
@@ -13,11 +13,12 @@ running in the background.
 ## Install (global CLI)
 
 ```bash
-npm install -g codesocket
-codesocket
+npm install -g roamsocket
+roamsocket
 ```
 
-Aliases (same entrypoint): `codesocket-server`, `anyprov-code-server`.
+Legacy CLI aliases (install continuity only, same entrypoint): `codesocket`,
+`codesocket-server`, `anyprov-code-server`. Prefer `roamsocket`.
 
 Requires **Node.js 20+**. The first install may compile native deps (`node-pty`);
 you need a working C/C++ toolchain (Xcode CLT on macOS, build-essential on Linux).
@@ -32,7 +33,7 @@ Env vars below still apply. Default port is **4319**.
 npm install
 npm run dev          # watch mode (tsx)
 npm start            # from a prior `npm run build`
-# or: node bin/codesocket.js
+# or: node bin/roamsocket.js
 ```
 
 On start it prints a **large pairing code** and an **ASCII QR** (JSON payload
@@ -62,7 +63,7 @@ and coding sessions against the local agent. Closing the window hides the app
 to the macOS menu bar / Windows task tray by default. The first close asks
 whether you want the app to fully quit on future closes; the answer is remembered.
 
-To really quit: tray menu → *Quit CodeSocket*, or `Cmd-Q` on macOS.
+To really quit: tray menu → *Quit RoamSocket*, or `Cmd-Q` on macOS.
 
 ### Environment
 
@@ -70,13 +71,13 @@ To really quit: tray menu → *Quit CodeSocket*, or `Cmd-Q` on macOS.
 |-----|---------|---------|
 | `PORT` | `4319` | HTTP + WebSocket port |
 | `APC_HOST` | `0.0.0.0` | bind address (`0.0.0.0` = LAN-reachable) |
-| `APC_NAME` | `CodeSocket desktop` | shown when pairing / Bonjour |
+| `APC_NAME` | `RoamSocket desktop` | shown when pairing / Bonjour |
 | `APC_ADVERTISE` | on | set `0` to disable Bonjour/mDNS LAN broadcast |
 | `APC_AUTO_TUNNEL` | on | set `0` to disable auto public tunnel after phone pair |
 | `APC_CLI_SETTINGS` | on (TTY) | set `0` to skip the interactive settings prompt |
 | `APC_MOCK` | unset | `1` runs a deterministic offline agent (no API key) |
 
-Shared connection prefs live under `~/.codesocket/` (or legacy `~/.anyprov-code/` if already present) as `desktop-prefs.json` (Electron
+Shared connection prefs live under `~/.roamsocket/` (or legacy `~/.codesocket/` / `~/.anyprov-code/` if already present) as `desktop-prefs.json` (Electron
 settings UI and the CLI menu edit the same file).
 
 ## Verify

@@ -107,7 +107,7 @@ struct ServerPairingView: View {
             } header: {
                 Text("Nearby servers")
             } footer: {
-                Text("Desktops advertise themselves with Bonjour (_codesocket._tcp). Pull to refresh if a machine just started.")
+                Text("Desktops advertise themselves with Bonjour (_roamsocket._tcp). Pull to refresh if a machine just started.")
             }
 
             Section("Server address") {

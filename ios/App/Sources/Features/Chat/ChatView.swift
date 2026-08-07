@@ -475,7 +475,7 @@ struct ChatView: View {
             }
 
             // Top: text field on its own row — full width, room to breathe.
-            TextField("Message CodeSocket", text: $viewModel.inputText, axis: .vertical)
+            TextField("Message RoamSocket", text: $viewModel.inputText, axis: .vertical)
                 .lineLimit(1...4)
                 .font(.system(size: 16))
                 .foregroundStyle(Theme.textPrimary)

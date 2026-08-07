@@ -1,6 +1,6 @@
-name: CodeSocket
+name: RoamSocket
 options:
-  bundleIdPrefix: app.codesocket
+  bundleIdPrefix: app.roamsocket
   deploymentTarget:
     iOS: "17.0"
   createIntermediateGroups: true
@@ -26,7 +26,7 @@ packages:
     from: 1.3.0
 
 targets:
-  CodeSocket:
+  RoamSocket:
     type: application
     platform: iOS
     sources:
@@ -51,7 +51,7 @@ targets:
         product: Tokenizers
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: app.codesocket.app
+        PRODUCT_BUNDLE_IDENTIFIER: app.roamsocket.app
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "5.9"
@@ -62,14 +62,14 @@ targets:
         # MLX / Metal needs the increased default stack on device.
         OTHER_LDFLAGS: ["$(inherited)", "-lc++"]
     entitlements:
-      path: App/CodeSocket.entitlements
+      path: App/RoamSocket.entitlements
       properties:
         com.apple.developer.healthkit: true
         com.apple.developer.healthkit.access: []
     info:
       path: App/Info.plist
       properties:
-        CFBundleDisplayName: "CodeSocket"
+        CFBundleDisplayName: "RoamSocket"
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
@@ -91,9 +91,11 @@ targets:
           NSAllowsLocalNetworking: true
         NSLocalNetworkUsageDescription: "Connect to your desktop coding server on the local network."
         NSCameraUsageDescription: "Scan pairing QR codes and capture photos for Vision analysis."
-        # Required for NWBrowser to discover `_codesocket._tcp` (desktop Bonjour).
+        # Required for NWBrowser to discover `_roamsocket._tcp` (desktop Bonjour).
+        # LEGACY: `_codesocket._tcp` only so older desktops still advertising that type are found.
         NSBonjourServices:
+          - "_roamsocket._tcp"
           - "_codesocket._tcp"
-        NSHealthShareUsageDescription: "CodeSocket reads your Apple Health data when you turn on Health in chat, so the assistant can answer questions about steps, sleep, workouts, and other stats you choose to share."
-        NSHealthUpdateUsageDescription: "CodeSocket does not write to Apple Health. This permission is required by the system HealthKit entitlement."
-        NSLocationWhenInUseUsageDescription: "CodeSocket uses your location when you turn on Location in chat, so the assistant can answer with local context such as nearby places, weather, and time zone."
+        NSHealthShareUsageDescription: "RoamSocket reads your Apple Health data when you turn on Health in chat, so the assistant can answer questions about steps, sleep, workouts, and other stats you choose to share."
+        NSHealthUpdateUsageDescription: "RoamSocket does not write to Apple Health. This permission is required by the system HealthKit entitlement."
+        NSLocationWhenInUseUsageDescription: "RoamSocket uses your location when you turn on Location in chat, so the assistant can answer with local context such as nearby places, weather, and time zone."

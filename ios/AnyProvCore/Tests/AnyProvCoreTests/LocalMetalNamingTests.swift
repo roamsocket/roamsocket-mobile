@@ -145,7 +145,7 @@ final class LocalMetalNamingTests: XCTestCase {
     }
 
     func testCanonicalAndLegacyPathRootsDiffer() {
-        XCTAssertEqual(LocalMetalPaths.relativeRoot, "CodeSocket/LocalModels")
+        XCTAssertEqual(LocalMetalPaths.relativeRoot, "RoamSocket/LocalModels")
         XCTAssertEqual(LocalMetalPaths.legacyRelativeRoot, "AnyProvCode/LocalModels")
         XCTAssertNotEqual(LocalMetalPaths.relativeRoot, LocalMetalPaths.legacyRelativeRoot)
     }

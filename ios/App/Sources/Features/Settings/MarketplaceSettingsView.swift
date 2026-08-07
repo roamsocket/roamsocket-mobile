@@ -1,7 +1,7 @@
 import SwiftUI
 import AnyProvCore
 
-/// Manage marketplace sources: official CodeSocket catalog + user-added GitHub repos.
+/// Manage marketplace sources: official RoamSocket catalog + user-added GitHub repos.
 struct MarketplaceSettingsView: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss

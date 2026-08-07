@@ -645,7 +645,7 @@ final class SessionViewModel: ObservableObject {
         if stats.added + stats.removed > 0 {
             return "Update files (+\(stats.added)/-\(stats.removed))"
         }
-        return "Update from CodeSocket"
+        return "Update from RoamSocket"
     }
 
     private func diffSummaryForPrompt() -> String {

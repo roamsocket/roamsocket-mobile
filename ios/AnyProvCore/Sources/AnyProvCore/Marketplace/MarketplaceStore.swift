@@ -6,10 +6,15 @@ import Foundation
 public final class MarketplaceStore: ObservableObject {
     public static let shared = MarketplaceStore()
 
-    private let sourcesKey = "codesocket.marketplace.sources.v1"
-    private let cacheKey = "codesocket.marketplace.cache.v1"
-    private let perSourceKey = "codesocket.marketplace.perSource.v1"
-    private let lastMergedKey = "codesocket.marketplace.lastMerged.v1"
+    private let sourcesKey = "roamsocket.marketplace.sources.v1"
+    private let cacheKey = "roamsocket.marketplace.cache.v1"
+    private let perSourceKey = "roamsocket.marketplace.perSource.v1"
+    private let lastMergedKey = "roamsocket.marketplace.lastMerged.v1"
+    /// Pre-rename UserDefaults keys (migrate once on load).
+    private let legacySourcesKey = "codesocket.marketplace.sources.v1"
+    private let legacyCacheKey = "codesocket.marketplace.cache.v1"
+    private let legacyPerSourceKey = "codesocket.marketplace.perSource.v1"
+    private let legacyLastMergedKey = "codesocket.marketplace.lastMerged.v1"
 
     @Published public private(set) var sources: [MarketplaceSource] = []
     @Published public private(set) var catalog: MarketplaceCatalog = .empty
@@ -72,7 +77,7 @@ public final class MarketplaceStore: ObservableObject {
         guard let src = sources.first(where: { $0.id == id }) else {
             throw MarketplaceError.notFound
         }
-        if src.isDefault || src.id == defaultMarketplaceSourceID {
+        if src.isDefault || isOfficialSourceId(src.id) {
             throw MarketplaceError.cannotRemoveDefault
         }
         sources.removeAll { $0.id == id }
@@ -158,6 +163,8 @@ public final class MarketplaceStore: ObservableObject {
     // MARK: - Persistence
 
     private func loadPersisted() {
+        migrateLegacyKeysIfNeeded()
+
         if let data = UserDefaults.standard.data(forKey: sourcesKey),
            let decoded = try? JSONDecoder().decode([MarketplaceSource].self, from: data),
            !decoded.isEmpty {
@@ -174,10 +181,36 @@ public final class MarketplaceStore: ObservableObject {
 
         if let data = UserDefaults.standard.data(forKey: perSourceKey),
            let decoded = try? JSONDecoder().decode([String: MarketplaceCatalog].self, from: data) {
-            perSourceCache = decoded
+            // Remap legacy official source id in per-source cache.
+            var remapped: [String: MarketplaceCatalog] = [:]
+            for (id, cat) in decoded {
+                if legacyMarketplaceSourceIDs.contains(id) {
+                    remapped[defaultMarketplaceSourceID] = cat
+                } else {
+                    remapped[id] = cat
+                }
+            }
+            perSourceCache = remapped
         }
 
         lastMergedAt = UserDefaults.standard.object(forKey: lastMergedKey) as? Date
+    }
+
+    /// Copy legacy pre-rename UserDefaults keys into current RoamSocket keys once.
+    private func migrateLegacyKeysIfNeeded() {
+        let defaults = UserDefaults.standard
+        let pairs = [
+            (legacySourcesKey, sourcesKey),
+            (legacyCacheKey, cacheKey),
+            (legacyPerSourceKey, perSourceKey),
+            (legacyLastMergedKey, lastMergedKey),
+        ]
+        for (legacy, current) in pairs {
+            guard defaults.object(forKey: current) == nil,
+                  let value = defaults.object(forKey: legacy) else { continue }
+            defaults.set(value, forKey: current)
+            defaults.removeObject(forKey: legacy)
+        }
     }
 
     private func persistSources() {
@@ -198,22 +231,28 @@ public final class MarketplaceStore: ObservableObject {
         }
     }
 
+    private func isOfficialSourceId(_ id: String) -> Bool {
+        id == defaultMarketplaceSourceID || legacyMarketplaceSourceIDs.contains(id)
+    }
+
     private func ensureDefault(_ list: [MarketplaceSource]) -> [MarketplaceSource] {
         let def = MarketplaceSource.makeDefault()
-        let without = list.filter { !$0.isDefault && $0.id != defaultMarketplaceSourceID }
-        if let existing = list.first(where: { $0.isDefault || $0.id == defaultMarketplaceSourceID }) {
+        let without = list.filter { !$0.isDefault && !isOfficialSourceId($0.id) }
+        if let existing = list.first(where: { $0.isDefault || isOfficialSourceId($0.id) }) {
             var e = existing
             e.isDefault = true
-            if e.id != defaultMarketplaceSourceID { e = MarketplaceSource(
-                id: defaultMarketplaceSourceID,
-                name: e.name.isEmpty ? def.name : e.name,
-                url: e.url.isEmpty ? def.url : e.url,
-                enabled: e.enabled,
-                isDefault: true,
-                lastFetchedAt: e.lastFetchedAt,
-                lastError: e.lastError,
-                catalogName: e.catalogName
-            )}
+            if e.id != defaultMarketplaceSourceID {
+                e = MarketplaceSource(
+                    id: defaultMarketplaceSourceID,
+                    name: e.name.isEmpty ? def.name : e.name,
+                    url: e.url.isEmpty ? def.url : e.url,
+                    enabled: e.enabled,
+                    isDefault: true,
+                    lastFetchedAt: e.lastFetchedAt,
+                    lastError: e.lastError,
+                    catalogName: e.catalogName
+                )
+            }
             return [e] + without
         }
         return [def] + without
@@ -223,7 +262,7 @@ public final class MarketplaceStore: ObservableObject {
         guard let u = URL(string: url) else { throw MarketplaceError.invalidURL }
         var req = URLRequest(url: u)
         req.setValue("application/json", forHTTPHeaderField: "Accept")
-        req.setValue("CodeSocket-iOS/marketplace", forHTTPHeaderField: "User-Agent")
+        req.setValue("RoamSocket-iOS/marketplace", forHTTPHeaderField: "User-Agent")
         req.timeoutInterval = 20
         let (data, resp) = try await URLSession.shared.data(for: req)
         if let http = resp as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
@@ -253,7 +292,7 @@ public final class MarketplaceStore: ObservableObject {
     nonisolated public static let bundledCatalog: MarketplaceCatalog = MarketplaceCatalog(
         schemaVersion: marketplaceSchemaVersion,
         updatedAt: "2026-08-07",
-        name: "CodeSocket Official Marketplace",
+        name: "RoamSocket Official Marketplace",
         description: "Bundled offline fallback.",
         connectors: [
             .init(id: "cashapp", name: "Cash App", available: true, category: "finance"),

@@ -1,7 +1,7 @@
 {
-  "name": "codesocket-landing",
+  "name": "roamsocket-landing",
   "private": true,
-  "description": "CodeSocket marketing site — static assets on Cloudflare Workers",
+  "description": "RoamSocket marketing site — static assets on Cloudflare Workers",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",

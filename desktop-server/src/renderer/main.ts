@@ -312,7 +312,7 @@ const state = {
   code: {
     repo: "",
     baseBranch: "main",
-    workBranch: "codesocket/change",
+    workBranch: "roamsocket/change",
     provider: "" as string,
     model: "" as string,
     effort: "high" as Effort,
@@ -584,7 +584,7 @@ function renderChat() {
     hero.append(el("h1", {}, [project.name]));
     hero.append(
       el("p", { class: "hint" }, [
-        "Give CodeSocket a task and it’ll pick up your project context automatically.",
+        "Give RoamSocket a task and it’ll pick up your project context automatically.",
       ]),
     );
     mainCol.append(hero);
@@ -2010,7 +2010,7 @@ async function ensurePairedAndConnected(): Promise<{ token: string; url: string 
   const pairRes = await fetch(`http://${host}:${port}/pair`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ code, deviceName: "CodeSocket (desktop)" }),
+    body: JSON.stringify({ code, deviceName: "RoamSocket (desktop)" }),
   });
   if (!pairRes.ok) return null;
   const json = (await pairRes.json()) as { token: string };
@@ -2731,7 +2731,7 @@ async function onCodeSend(ta: HTMLTextAreaElement) {
         repo: {
           fullName: state.code.repo,
           baseBranch: state.code.baseBranch || undefined,
-          workBranch: state.code.workBranch || "codesocket/change",
+          workBranch: state.code.workBranch || "roamsocket/change",
           githubToken: gh || undefined,
         },
         model: {
@@ -3245,7 +3245,7 @@ function fillSettingsMetal(panel: HTMLElement): void {
   installCard.append(el("div", { class: "metal-install-title" }, ["Metal runtime"]));
   installCard.append(
     el("p", { class: "settings-hint" }, [
-      "Installs Python (via system/Homebrew if needed), creates a private venv under ~/.codesocket/metal-runtime, and installs mlx-lm so models can run on this Mac.",
+      "Installs Python (via system/Homebrew if needed), creates a private venv under ~/.roamsocket/metal-runtime, and installs mlx-lm so models can run on this Mac.",
     ]),
   );
   const metalActions = el("div", {
@@ -3931,7 +3931,7 @@ async function fillSettingsMarketplace(panel: HTMLElement): Promise<void> {
   const sec = el("div", { class: "settings-section" });
   sec.append(
     el("p", { class: "settings-hint" }, [
-      "Marketplaces publish connectors, skill listings, plugins, and recommended Metal models via catalog.json. The official source is codesocket-ai/codesocket-marketplace — add your own GitHub repos anytime.",
+      "Marketplaces publish connectors, skill listings, plugins, and recommended Metal models via catalog.json. The official source is the RoamSocket marketplace catalog — add your own GitHub repos anytime.",
     ]),
   );
 
@@ -4567,7 +4567,7 @@ function renderMetalBrowseRoot(
     el("p", { class: "settings-hint" }, [
       status.runtimeReady
         ? "Python and mlx-lm are ready. Reinstall if you need a clean environment."
-        : "Required before models can run. Installs Python (Homebrew only if missing), a private venv under ~/.codesocket/metal-runtime, and the mlx-lm package. macOS Apple Silicon recommended.",
+        : "Required before models can run. Installs Python (Homebrew only if missing), a private venv under ~/.roamsocket/metal-runtime, and the mlx-lm package. macOS Apple Silicon recommended.",
     ]),
   );
   const runtimeActions = el("div", {
@@ -5026,7 +5026,7 @@ async function main() {
   if (state.secrets?.lastRepo) {
     state.code.repo = state.secrets.lastRepo.fullName;
     state.code.baseBranch = state.secrets.lastRepo.baseBranch || "main";
-    state.code.workBranch = state.secrets.lastRepo.workBranch || "codesocket/change";
+    state.code.workBranch = state.secrets.lastRepo.workBranch || "roamsocket/change";
   }
 
   $("server-status").textContent = state.bootstrap.serverRunning
@@ -5131,7 +5131,7 @@ function showWalkthrough(): void {
 
     if (step === 0) {
       body.append(el("div", { class: "walkthrough-icon" }, ["✦"]));
-      body.append(el("h2", {}, ["Welcome to CodeSocket"]));
+      body.append(el("h2", {}, ["Welcome to RoamSocket"]));
       body.append(
         el("p", {}, [
           "Chat with the models you bring. Code pairs this desktop with your phone for real tools, diffs, and pull requests on your machine.",

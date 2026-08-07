@@ -1,4 +1,4 @@
-# CodeSocket
+# RoamSocket
 
 An open-source, native **iOS** coding client, plus
 a **desktop companion server** that actually runs code.
@@ -65,8 +65,8 @@ Requires a Mac with Xcode 15+ and [XcodeGen](https://github.com/yonsm/XcodeGen).
 
 ```bash
 cd ios
-xcodegen generate          # creates CodeSocket.xcodeproj
-open CodeSocket.xcodeproj
+xcodegen generate          # creates RoamSocket.xcodeproj
+open RoamSocket.xcodeproj
 ```
 
 Run on a simulator or device, then in **Settings**:
@@ -89,7 +89,7 @@ cd landing
 npm install
 npm run dev          # local preview (Wrangler)
 npx wrangler login   # once
-npm run deploy       # https://codesocket.<account>.workers.dev
+npm run deploy       # https://roamsocket.<account>.workers.dev
 ```
 
 See [`landing/README.md`](./landing/README.md) for custom domains and Git-connected builds.

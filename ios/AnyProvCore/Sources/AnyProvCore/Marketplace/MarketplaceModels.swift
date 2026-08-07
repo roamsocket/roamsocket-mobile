@@ -2,7 +2,7 @@ import Foundation
 
 /// Schema for marketplace `catalog.json` (connectors, skills, plugins, Metal models).
 /// Keep aligned with the official marketplace repo and desktop-server `src/marketplace/types.ts`.
-/// Source of truth: https://github.com/codesocket-ai/codesocket-marketplace
+/// Official RoamSocket catalog (external host path below; not product branding).
 
 public let marketplaceSchemaVersion = 1
 
@@ -10,7 +10,9 @@ public let marketplaceSchemaVersion = 1
 public let defaultMarketplaceURL =
     "https://raw.githubusercontent.com/codesocket-ai/codesocket-marketplace/main/catalog.json"
 
-public let defaultMarketplaceSourceID = "codesocket-official"
+public let defaultMarketplaceSourceID = "roamsocket-official"
+/// Previous default source ids remapped on load so users keep one official entry.
+public let legacyMarketplaceSourceIDs: Set<String> = ["codesocket-official"]
 
 public struct MarketplaceConnector: Codable, Identifiable, Hashable, Sendable {
     public let id: String
@@ -225,7 +227,7 @@ public struct MarketplaceSource: Codable, Identifiable, Hashable, Sendable {
     public static func makeDefault(url: String = defaultMarketplaceURL) -> MarketplaceSource {
         MarketplaceSource(
             id: defaultMarketplaceSourceID,
-            name: "CodeSocket Official",
+            name: "RoamSocket Official",
             url: url,
             enabled: !url.isEmpty,
             isDefault: true

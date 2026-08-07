@@ -246,7 +246,7 @@ struct AppSettingsView: View {
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
-                TextField("codesocket", text: $state.codeBranchPrefix)
+                TextField("roamsocket", text: $state.codeBranchPrefix)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .padding(10)
@@ -269,7 +269,7 @@ struct AppSettingsView: View {
 
     private var previewBranchExample: String {
         let p = state.codeBranchPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
-        let prefix = p.isEmpty ? "codesocket" : p
+        let prefix = p.isEmpty ? "roamsocket" : p
         return "\(prefix)/your-task-a1b2c3d4"
     }
 
@@ -1084,7 +1084,7 @@ private struct AboutSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("CodeSocket")
+                        Text("RoamSocket")
                             .font(.system(size: 22, weight: .semibold))
                             .foregroundStyle(Theme.textPrimary)
                         Text("Version \(appVersion)")
