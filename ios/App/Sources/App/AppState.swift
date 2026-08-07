@@ -1202,8 +1202,8 @@ final class AppState: ObservableObject {
     func resolvedAPIKey(for provider: ProviderID) -> String {
         let stored = apiKey(for: provider)
         if !stored.isEmpty { return stored }
-        // On-device Metal never needs a cloud key (chat only).
-        if provider == .localMetal { return "local" }
+        // On-device chat providers (Metal, Apple Intelligence) never need a cloud key.
+        if !provider.requiresAPIKey { return "local" }
         if case .custom = provider, apiStyle(for: provider) == .openAI {
             return "local"
         }
@@ -1303,7 +1303,7 @@ final class AppState: ObservableObject {
         var customBaseURLs: [ProviderID: URL] = [:]
         var styles: [ProviderID: CustomProviderStyle] = [:]
         for provider in ProviderID.allBuiltInCases {
-            if provider == .localMetal {
+            if !provider.requiresAPIKey {
                 keys[provider] = "local"
                 continue
             }

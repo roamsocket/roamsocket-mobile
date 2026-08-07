@@ -659,7 +659,8 @@ public actor LocalMetalCatalog {
         .init(
             hubID: "mlx-community/gemma-4-e2b-it-4bit",
             displayName: "Gemma 4 E2B",
-            approxSize: "~2 GB",
+            // HF tree size (Aug 2026): single model.safetensors ≈ 3.55 GB + tokenizer.
+            approxSize: "~3.6 GB",
             blurb: "Google Gemma 4 E2B — natively multimodal (image + text). Best on-device Vision starter.",
             source: .recommended,
             tags: [.recommended, .vision, .best, .new]
@@ -667,7 +668,9 @@ public actor LocalMetalCatalog {
         .init(
             hubID: "mlx-community/gemma-4-e4b-it-4bit",
             displayName: "Gemma 4 E4B",
-            approxSize: "~3 GB",
+            // HF tree size (Aug 2026): single model.safetensors ≈ 5.15 GB + tokenizer.
+            // Progress often sits near 0% until that large file starts landing on disk.
+            approxSize: "~5.2 GB",
             blurb: "Gemma 4 E4B multimodal. Stronger vision + chat; needs more free RAM (15 Pro class+).",
             source: .recommended,
             tags: [.recommended, .vision, .new]
@@ -675,7 +678,8 @@ public actor LocalMetalCatalog {
         .init(
             hubID: "mlx-community/gemma-4-12B-it-qat-4bit",
             displayName: "Gemma 4 12B Unified",
-            approxSize: "~7 GB",
+            // HF tree size (Aug 2026): three shards ≈ 11 GB total.
+            approxSize: "~11 GB",
             blurb: "Gemma 4 12B Unified QAT (June 2026) — encoder-free multimodal. High-end / iPad class RAM only.",
             source: .recommended,
             tags: [.vision, .new, .experimental]

@@ -15,6 +15,8 @@ public enum ProviderID: Hashable, Sendable, Identifiable, Codable {
     case mistral
     /// On-device Metal (MLX) — **chat only**, not coding sessions.
     case localMetal
+    /// Apple on-device Foundation Model (Apple Intelligence) — **chat only**.
+    case appleFoundation
     case custom(String)
 
     public var id: String { rawValue }
@@ -30,6 +32,7 @@ public enum ProviderID: Hashable, Sendable, Identifiable, Codable {
         case .xai: return "xai"
         case .mistral: return "mistral"
         case .localMetal: return "local-metal"
+        case .appleFoundation: return "apple-foundation"
         case .custom(let slug): return "custom:\(slug)"
         }
     }
@@ -44,6 +47,8 @@ public enum ProviderID: Hashable, Sendable, Identifiable, Codable {
         case "xai": self = .xai
         case "mistral": self = .mistral
         case "local-metal", "local", "metal": self = .localMetal
+        case "apple-foundation", "apple", "foundation-models", "apple-intelligence":
+            self = .appleFoundation
         default:
             guard rawValue.hasPrefix("custom:") else { return nil }
             let slug = String(rawValue.dropFirst("custom:".count))
@@ -54,7 +59,7 @@ public enum ProviderID: Hashable, Sendable, Identifiable, Codable {
 
     /// Built-in providers only (excludes user-defined `.custom`).
     public static var allBuiltInCases: [ProviderID] {
-        [.anthropic, .openai, .google, .groq, .openrouter, .xai, .mistral, .localMetal]
+        [.anthropic, .openai, .google, .groq, .openrouter, .xai, .mistral, .localMetal, .appleFoundation]
     }
 
     /// Alias used by settings UIs that list first-party providers.
@@ -71,15 +76,16 @@ public enum ProviderID: Hashable, Sendable, Identifiable, Codable {
         case .xai: return "xAI"
         case .mistral: return "Mistral"
         case .localMetal: return "On-device (Metal)"
+        case .appleFoundation: return "Apple Intelligence"
         case .custom(let slug): return slug
         }
     }
 
     /// Whether the desktop coding agent can drive this provider today.
-    /// Local Metal runs on the phone for **chat only**.
+    /// Local Metal and Apple Foundation Models run on the phone for **chat only**.
     public var supportsCodingAgent: Bool {
         switch self {
-        case .google, .localMetal: return false
+        case .google, .localMetal, .appleFoundation: return false
         default: return true
         }
     }
@@ -87,7 +93,7 @@ public enum ProviderID: Hashable, Sendable, Identifiable, Codable {
     /// Cloud API key required for network providers.
     public var requiresAPIKey: Bool {
         switch self {
-        case .localMetal: return false
+        case .localMetal, .appleFoundation: return false
         default: return true
         }
     }

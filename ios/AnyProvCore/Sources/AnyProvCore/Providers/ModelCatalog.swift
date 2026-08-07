@@ -24,6 +24,8 @@ public struct ModelCatalog: Sendable {
             return OpenAICompatibleProvider(id: id, http: http, baseURL: customBaseURL)
         case .localMetal:
             return LocalMetalProvider()
+        case .appleFoundation:
+            return AppleFoundationProvider()
         case .custom:
             let resolvedStyle = style ?? .openAI
             switch resolvedStyle {
@@ -55,9 +57,12 @@ public struct ModelCatalog: Sendable {
         styles: [ProviderID: CustomProviderStyle] = [:]
     ) async -> [ProviderResult] {
         var configured = keys.filter { !$0.value.isEmpty }
-        // Always list on-device Metal models for chat (no API key).
+        // Always list on-device chat providers (no API key).
         if configured[.localMetal] == nil {
             configured[.localMetal] = "local"
+        }
+        if configured[.appleFoundation] == nil {
+            configured[.appleFoundation] = "local"
         }
         return await withTaskGroup(of: ProviderResult.self) { group in
             for (id, key) in configured {

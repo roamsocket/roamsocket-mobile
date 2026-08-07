@@ -77,8 +77,8 @@ final class ProviderTests: XCTestCase {
         let results = await ModelCatalog(http: http).fetchAll(keys: [
             .anthropic: "a", .openai: "b",
         ])
-        // +1 for always-listed on-device Metal (chat only).
-        XCTAssertEqual(results.count, 3)
+        // +2 for always-listed on-device chat providers (Metal + Apple Intelligence).
+        XCTAssertEqual(results.count, 4)
         let anthropic = results.first { $0.provider == .anthropic }!
         let openai = results.first { $0.provider == .openai }!
         XCTAssertEqual(anthropic.models.count, 1)
@@ -86,6 +86,20 @@ final class ProviderTests: XCTestCase {
         XCTAssertTrue(openai.models.isEmpty)
         XCTAssertNotNil(openai.error)
         XCTAssertNotNil(results.first { $0.provider == .localMetal })
+        XCTAssertNotNil(results.first { $0.provider == .appleFoundation })
+    }
+
+    func testAppleFoundationProviderIDRoundTrips() throws {
+        let id = ProviderID.appleFoundation
+        XCTAssertEqual(id.rawValue, "apple-foundation")
+        XCTAssertEqual(ProviderID(rawValue: "apple"), .appleFoundation)
+        XCTAssertEqual(ProviderID(rawValue: "apple-intelligence"), .appleFoundation)
+        XCTAssertFalse(id.requiresAPIKey)
+        XCTAssertFalse(id.supportsCodingAgent)
+
+        let data = try JSONEncoder().encode(id)
+        let decoded = try JSONDecoder().decode(ProviderID.self, from: data)
+        XCTAssertEqual(decoded, .appleFoundation)
     }
 
     func testCustomProviderIDDoesNotCollapseToOpenAI() throws {
@@ -129,11 +143,13 @@ final class ProviderTests: XCTestCase {
             customBaseURLs: [custom: URL(string: "http://127.0.0.1:9999/v1")!],
             styles: [custom: .openAI]
         )
-        // custom + always-listed local Metal
-        XCTAssertEqual(results.count, 2)
+        // custom + always-listed on-device providers (Metal + Apple Intelligence)
+        XCTAssertEqual(results.count, 3)
         let customResult = results.first { $0.provider == custom }!
         XCTAssertEqual(customResult.models.map(\.modelID), ["proxy-model"])
         XCTAssertNil(customResult.error)
+        XCTAssertNotNil(results.first { $0.provider == .localMetal })
+        XCTAssertNotNil(results.first { $0.provider == .appleFoundation })
     }
 
     func testOpenAICompatibleEncodesVisionImageParts() async throws {

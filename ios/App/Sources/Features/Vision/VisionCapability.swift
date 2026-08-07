@@ -8,6 +8,9 @@ enum VisionCapability {
         // Google chat is not wired in the iOS client yet.
         if model.provider == .google { return false }
 
+        // Apple Foundation Model is text-only in this client.
+        if model.provider == .appleFoundation { return false }
+
         // On-device Metal VLMs (Gemma 4, Qwen-VL, SmolVLM, …).
         if model.provider == .localMetal {
             return isLikelyLocalVLM(model.modelID)

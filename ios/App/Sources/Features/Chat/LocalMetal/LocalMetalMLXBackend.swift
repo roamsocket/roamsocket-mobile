@@ -151,8 +151,8 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
         let broker = DownloadProgressBroker(emit: progress)
 
         // Expected size from the hub tree so we can report true byte progress even
-        // when Foundation Progress freezes mid-file (common with hierarchical Progress
-        // updated off the main thread) and while URLSession stages data in tmp/.
+        // when Foundation Progress freezes mid-file and while URLSession stages
+        // multi‑GB weights in tmp/ before they land in the hub cache.
         if let expected = try? await Self.expectedDownloadBytes(
             hubClient: hubClient,
             repoID: repoID,
@@ -161,19 +161,25 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
             await broker.setExpectedBytes(expected)
         }
 
+        // Baseline tmp occupancy so we only attribute *growth* to this download
+        // (other URLSession traffic must not inflate the bar).
+        let tmpBaseline = Self.largeTempFileBytes()
+        await broker.setTempBaseline(tmpBaseline)
+
         // Seed UI from anything already cached (resume / retry).
-        await broker.noteDiskBytes(
+        await broker.noteObservedBytes(
             cacheBytes: Self.directoryByteSize(at: repoDir),
-            stagingBytes: 0
+            tempBytes: tmpBaseline
         )
 
-        // Poll only this repo tree (blobs / incomplete / snapshots). Avoid scanning
-        // shared app temp — other URLSession traffic inflated progress.
+        // Poll cache + large temp files + last hub Progress at ~10 Hz.
         let diskPoll = Task {
             while !Task.isCancelled {
                 let cacheBytes = Self.directoryByteSize(at: repoDir)
-                await broker.noteDiskBytes(cacheBytes: cacheBytes, stagingBytes: 0)
-                try? await Task.sleep(nanoseconds: 200_000_000) // 5 Hz
+                let tempBytes = Self.largeTempFileBytes()
+                await broker.noteObservedBytes(cacheBytes: cacheBytes, tempBytes: tempBytes)
+                await broker.rescanHubProgress()
+                try? await Task.sleep(nanoseconds: 100_000_000)
             }
         }
 
@@ -184,7 +190,10 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
                 revision: "main",
                 matching: Self.modelDownloadPatterns,
                 progressHandler: { @MainActor p in
-                    Task { await broker.noteHubProgress(p) }
+                    // Fire-and-forget onto the broker actor; sampling is ~10 Hz.
+                    Task(priority: .userInitiated) {
+                        await broker.noteHubProgress(p)
+                    }
                 }
             )
             diskPoll.cancel()
@@ -395,19 +404,63 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
         sumRegularFileBytes(at: root)
     }
 
-        private static func sumRegularFileBytes(at root: URL) -> Int64 {
+    /// Sum of large regular files under the app temp directory.
+    ///
+    /// `URLSession.download` streams multi‑GB weights into tmp first; the hub cache
+    /// only grows when each file is finalized. Counting large tmp files (with a
+    /// pre-download baseline) is how mid-file progress becomes visible.
+    private static func largeTempFileBytes(minimumBytes: Int64 = 8 * 1024 * 1024) -> Int64 {
+        let fm = FileManager.default
+        var roots: [URL] = [fm.temporaryDirectory]
+        let nsTmp = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        if nsTmp.standardizedFileURL != fm.temporaryDirectory.standardizedFileURL {
+            roots.append(nsTmp)
+        }
+
+        var total: Int64 = 0
+        var seen = Set<String>()
+        for root in roots {
+            let path = root.standardizedFileURL.path
+            guard seen.insert(path).inserted else { continue }
+            // Shallow: URLSession stages CFNetworkDownload_* files near tmp root.
+            total += sumRegularFileBytes(at: root, minimumBytes: minimumBytes, maxDepth: 3)
+        }
+        return total
+    }
+
+    private static func sumRegularFileBytes(
+        at root: URL,
+        minimumBytes: Int64 = 0,
+        maxDepth: Int? = nil
+    ) -> Int64 {
         let fm = FileManager.default
         guard fm.fileExists(atPath: root.path),
               let enumerator = fm.enumerator(
                 at: root,
-                includingPropertiesForKeys: [.isRegularFileKey, .totalFileAllocatedSizeKey, .fileSizeKey],
-                options: [.skipsPackageDescendants]
+                includingPropertiesForKeys: [
+                    .isRegularFileKey,
+                    .isDirectoryKey,
+                    .totalFileAllocatedSizeKey,
+                    .fileSizeKey,
+                ],
+                options: [.skipsPackageDescendants, .skipsHiddenFiles]
               )
         else { return 0 }
 
         var total: Int64 = 0
+        let rootDepth = root.pathComponents.count
         for case let fileURL as URL in enumerator {
-            total += fileByteSize(fileURL)
+            if let maxDepth {
+                let depth = fileURL.pathComponents.count - rootDepth
+                if depth > maxDepth {
+                    enumerator.skipDescendants()
+                    continue
+                }
+            }
+            let size = fileByteSize(fileURL)
+            if size >= minimumBytes {
+                total += size
+            }
         }
         return total
     }
@@ -507,14 +560,20 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
 
 /// Merges Hugging Face `Progress` with on-disk + tmp staging growth into a monotonic 0…1.
 ///
-/// Hub `Progress` often only ticks when each file finishes (small JSON first → a few
-/// percent), then freezes while multi‑GB weights stream into a temp file. We estimate
-/// progress as `(cacheBytes + stagingBytes) / expectedBytes` so the bar keeps moving.
+/// URLSession downloads multi‑GB weights into a temp file first; the hub cache only
+/// grows when each file finishes. Foundation hierarchical `Progress` also freezes
+/// mid-file in some cases. We combine:
+///   - hub `Progress.fractionCompleted` / unit counts
+///   - hub cache size (blobs + incomplete + snapshots)
+///   - growth of large files under the app temp directory
 private actor DownloadProgressBroker {
     private let emit: @Sendable (Double) -> Void
     private var bestFraction: Double = 0
     private var expectedBytes: Int64 = 0
     private var lastEmitted: Double = -1
+    private var tempBaseline: Int64 = 0
+    /// Last Progress object from the hub client (sampled between handler callbacks).
+    private var lastHubProgress: Progress?
 
     init(emit: @escaping @Sendable (Double) -> Void) {
         self.emit = emit
@@ -524,17 +583,34 @@ private actor DownloadProgressBroker {
         expectedBytes = max(expectedBytes, bytes)
     }
 
+    func setTempBaseline(_ bytes: Int64) {
+        tempBaseline = max(0, bytes)
+    }
+
     func noteHubProgress(_ progress: Progress) {
+        lastHubProgress = progress
         if progress.totalUnitCount > 1_024 {
             expectedBytes = max(expectedBytes, progress.totalUnitCount)
         }
         raise(Self.fraction(from: progress))
     }
 
-    func noteDiskBytes(cacheBytes: Int64, stagingBytes: Int64) {
-        guard expectedBytes > 1_024 else { return }
-        let received = max(0, cacheBytes) + max(0, stagingBytes)
-        raise(min(0.99, Double(received) / Double(expectedBytes)))
+    /// Re-read the last hub Progress (URLSession updates it off-thread).
+    func rescanHubProgress() {
+        guard let progress = lastHubProgress else { return }
+        raise(Self.fraction(from: progress))
+    }
+
+    /// Cache bytes + absolute temp occupancy (baseline subtracted inside).
+    func noteObservedBytes(cacheBytes: Int64, tempBytes: Int64) {
+        let staging = max(0, tempBytes - tempBaseline)
+        let received = max(0, cacheBytes) + staging
+        if expectedBytes > 1_024 {
+            raise(min(0.99, Double(received) / Double(expectedBytes)))
+        } else if received > 1_024 * 1_024 {
+            // No tree size yet — soft estimate so the bar still moves.
+            raise(min(0.5, Double(received) / 4_000_000_000))
+        }
     }
 
     func finish() {
@@ -543,36 +619,36 @@ private actor DownloadProgressBroker {
 
     private func raise(_ value: Double) {
         let clamped = min(0.99, max(0, value))
-        guard clamped > bestFraction else { return }
+        guard clamped > bestFraction + 0.0005 || (clamped > 0 && bestFraction == 0) else {
+            if clamped > bestFraction { bestFraction = clamped }
+            return
+        }
         bestFraction = clamped
         publish(bestFraction)
     }
 
     private func publish(_ raw: Double) {
         let value = min(1, max(0, raw))
-        // Emit on meaningful steps so SwiftUI isn't flooded, but stay responsive.
-        guard value >= 1 || value >= lastEmitted + 0.005 || lastEmitted < 0 else { return }
+        // ~0.1% steps so multi‑GB transfers feel alive without flooding SwiftUI.
+        guard value >= 1 || value >= lastEmitted + 0.001 || lastEmitted < 0 else { return }
         lastEmitted = value
         emit(value)
     }
 
     static func fraction(from progress: Progress) -> Double {
-        if progress.totalUnitCount > 0 {
-            let hierarchical = progress.fractionCompleted
-            if hierarchical.isFinite, hierarchical > 0 {
-                return min(0.99, max(0, hierarchical))
-            }
-            // Parent `completedUnitCount` is often 0 with child Progress units;
-            // still try the ratio when the parent units are updated directly.
-            if progress.completedUnitCount > 0 {
-                return min(
-                    0.99,
-                    max(0, Double(progress.completedUnitCount) / Double(progress.totalUnitCount))
-                )
-            }
-        } else if progress.completedUnitCount > 0 {
-            // Indeterminate total — soft estimate from bytes written.
-            return min(0.99, Double(progress.completedUnitCount) / 1_000_000_000)
+        let hierarchical = progress.fractionCompleted
+        if hierarchical.isFinite, hierarchical > 0 {
+            return min(0.99, max(0, hierarchical))
+        }
+        if progress.totalUnitCount > 0, progress.completedUnitCount > 0 {
+            return min(
+                0.99,
+                max(0, Double(progress.completedUnitCount) / Double(progress.totalUnitCount))
+            )
+        }
+        if progress.completedUnitCount > 0 {
+            // Indeterminate total — soft estimate from completed units (often bytes).
+            return min(0.99, Double(progress.completedUnitCount) / 4_000_000_000)
         }
         return 0
     }

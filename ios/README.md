@@ -16,9 +16,13 @@ The app target depends on the local `AnyProvCore` Swift package plus
 **mlx-swift-lm** (and Hugging Face tokenizer/hub packages) for on-device
 Metal chat.
 
-### On-device Metal (chat only)
+### On-device chat models
 
-Local models use [mlx-swift-lm](https://github.com/ml-explore/mlx-swift-lm).
+**Apple Intelligence** (Foundation Models) appears in the model picker when the
+device supports it (iOS 26+ with Apple Intelligence enabled). Chat only —
+coding sessions never use it (`ProviderID.appleFoundation.supportsCodingAgent == false`).
+
+**Metal (MLX)** models use [mlx-swift-lm](https://github.com/ml-explore/mlx-swift-lm).
 They appear under **Settings → On-device (Metal)** and only in the **chat**
 model picker — coding sessions never use them
 (`ProviderID.localMetal.supportsCodingAgent == false`).

@@ -150,6 +150,7 @@ struct ModelPickerSheet: View {
                         : nil
                 )
                 .listRowBackground(Theme.surface)
+                .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                     Button(role: .destructive) {
                         Task { await deleteModel(model) }
@@ -246,7 +247,7 @@ struct ModelPickerSheet: View {
             Text("No models yet")
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(Theme.textPrimary)
-            Text("Add an API key in Settings, or download an on-device Metal model (Settings → On-device).")
+            Text("Add an API key in Settings, pick Apple Intelligence when available, or download an on-device Metal model (Settings → On-device).")
                 .font(.system(size: 15))
                 .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)
@@ -394,7 +395,6 @@ private struct ModelRow: View {
                 .accessibilityLabel("Unload \(state.displayName(for: model)) from memory")
             }
         }
-        .padding(.vertical, 8)
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)

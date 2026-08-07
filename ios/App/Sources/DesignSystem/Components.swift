@@ -114,7 +114,7 @@ struct ModelSelectorPill: View {
     }
 
     /// A usable model needs an entry AND (for cloud providers) an API key.
-    /// On-device Metal is chat-only and needs no key.
+    /// On-device chat providers (Metal, Apple Intelligence) need no key.
     var hasUsableModel: Bool {
         guard let model = state.selectedModel else { return false }
         if !model.provider.requiresAPIKey { return true }

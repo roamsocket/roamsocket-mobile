@@ -78,6 +78,7 @@
 		E894638AF7723184A20B6805 /* CodeEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45F99CD4E4C9E7BDDB3D2FEE /* CodeEditorView.swift */; };
 		E9E2ABD15C129B770C05B6BE /* HealthKitService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B5B7DA44485AF439FACFC4C /* HealthKitService.swift */; };
 		ECA29A1A476CA5882A34041F /* ConnectorsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE8898CCE5EC02E194645D78 /* ConnectorsView.swift */; };
+		ECA34AFF7816CDA455F93893 /* LocalMetalDownloadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B59DFA63A82DDF33018009A3 /* LocalMetalDownloadManager.swift */; };
 		F48596DF04D52AB622D36CB6 /* VisionAnalysisSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DFA19AF149BA3F4C2C06B55 /* VisionAnalysisSheet.swift */; };
 		F4A20A7171EEE8004F609637 /* EnvironmentPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF1FF3230FA7655038CC5F59 /* EnvironmentPickerSheet.swift */; };
 		F70ADC34DB177AC4B2CD77AA /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F72652A75E04AB54E4E2BF7 /* AppState.swift */; };
@@ -133,6 +134,7 @@
 		949EDD0121111471C2AC0A8C /* AppSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettingsView.swift; sourceTree = "<group>"; };
 		A8174AA01E1B5961840918B9 /* LocationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationService.swift; sourceTree = "<group>"; };
 		AF62391667FCED49ACA4E69B /* MessageActionsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageActionsSheet.swift; sourceTree = "<group>"; };
+		B59DFA63A82DDF33018009A3 /* LocalMetalDownloadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalMetalDownloadManager.swift; sourceTree = "<group>"; };
 		B63B97CEFDCDD93FFD0326CD /* AddToChatSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddToChatSheet.swift; sourceTree = "<group>"; };
 		B7FDB803475E0DA6C38CDB26 /* KeychainSecretStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainSecretStore.swift; sourceTree = "<group>"; };
 		B8106E5F76DA35AFD4295AAE /* ModelPickerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelPickerSheet.swift; sourceTree = "<group>"; };
@@ -446,6 +448,7 @@
 		FF8C384824E9E348D8D99ADE /* LocalMetal */ = {
 			isa = PBXGroup;
 			children = (
+				B59DFA63A82DDF33018009A3 /* LocalMetalDownloadManager.swift */,
 				51519284C5E36BFA305E8D63 /* LocalMetalMLXBackend.swift */,
 				3386A7882D3F352A774AEF5E /* MLXLocalEngine.swift */,
 			);
@@ -555,6 +558,7 @@
 				E9E2ABD15C129B770C05B6BE /* HealthKitService.swift in Sources */,
 				914235505814D382905EF7FD /* InstalledSkillsView.swift in Sources */,
 				805424B822BB2ADFAB18667A /* KeychainSecretStore.swift in Sources */,
+				ECA34AFF7816CDA455F93893 /* LocalMetalDownloadManager.swift in Sources */,
 				DD15FE1F1E66C4B485755DAF /* LocalMetalMLXBackend.swift in Sources */,
 				A8166D056AD660C4ADDB6C41 /* LocalMetalSettingsView.swift in Sources */,
 				FD4D6A2841E1E8682B91AE8D /* LocationService.swift in Sources */,

@@ -8,12 +8,12 @@ import AnyProvCore
 struct LocalMetalSettingsView: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
+    /// Process-wide downloads — survives sheet dismiss so multi‑GB hub transfers keep going.
+    @ObservedObject private var downloads = LocalMetalDownloadManager.shared
 
     @State private var entries: [LocalMetalCatalogEntry] = []
     @State private var downloaded: Set<String> = []
     @State private var loadedInMemory: Set<String> = []
-    @State private var downloadProgress: [String: Double] = [:]
-    @State private var activeDownload: String?
     @State private var status = ""
     @State private var errorText: String?
     @State private var sizes: [String: Int64] = [:]
@@ -23,6 +23,8 @@ struct LocalMetalSettingsView: View {
     @State private var isRefreshingCatalog = false
     @State private var lastCatalogFetch: Date?
     @State private var showDeleteAllConfirm = false
+
+    private var activeDownload: String? { downloads.activeModelID }
 
     private var searchQuery: String {
         search.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -146,16 +148,26 @@ struct LocalMetalSettingsView: View {
                 await refreshCatalog(force: false)
                 await reloadStatus()
             }
+            .onChange(of: downloads.activeModelID) { _, active in
+                // When a background download finishes, refresh on-disk inventory.
+                if active == nil {
+                    Task { await reloadStatus() }
+                }
+            }
+            .onChange(of: downloads.lastStatus) { _, newValue in
+                if !newValue.isEmpty { status = newValue }
+            }
+            .onChange(of: downloads.lastError) { _, newValue in
+                errorText = newValue
+            }
             .navigationDestination(for: ModelFamilyGroup.self) { family in
                 ModelFamilyDetailView(
                     family: family,
                     downloaded: $downloaded,
                     loadedInMemory: $loadedInMemory,
-                    downloadProgress: $downloadProgress,
-                    activeDownload: $activeDownload,
                     sizes: $sizes,
                     runtimeReady: runtimeReady,
-                    onDownload: { await download($0) },
+                    onDownload: { startDownload($0) },
                     onDelete: { await delete($0) },
                     onUnload: { await unload($0) },
                     onUse: { await useInChat($0) }
@@ -167,11 +179,9 @@ struct LocalMetalSettingsView: View {
                     entries: bucket == .experimental ? experimentalEntries : legacyEntries,
                     downloaded: $downloaded,
                     loadedInMemory: $loadedInMemory,
-                    downloadProgress: $downloadProgress,
-                    activeDownload: $activeDownload,
                     sizes: $sizes,
                     runtimeReady: runtimeReady,
-                    onDownload: { await download($0) },
+                    onDownload: { startDownload($0) },
                     onDelete: { await delete($0) },
                     onUnload: { await unload($0) },
                     onUse: { await useInChat($0) }
@@ -210,6 +220,8 @@ struct LocalMetalSettingsView: View {
             }
         } header: {
             Text("On this device")
+        } footer: {
+            Text("Swipe left on a downloaded model to delete it from this device.")
         }
     }
 
@@ -327,6 +339,12 @@ struct LocalMetalSettingsView: View {
                     await reloadStatus()
                 }
             }
+            if downloads.isBusy, let id = downloads.activeModelID {
+                let fraction = downloads.progressByID[id] ?? 0
+                Text("Downloading in background… \(Self.percentLabel(fraction))")
+                    .font(.footnote)
+                    .foregroundStyle(Theme.accent)
+            }
             if !status.isEmpty {
                 Text(status)
                     .font(.footnote)
@@ -338,7 +356,7 @@ struct LocalMetalSettingsView: View {
                     .foregroundStyle(.red.opacity(0.9))
             }
         } footer: {
-            Text("Unload frees RAM but keeps downloads. Delete removes weights from this device.")
+            Text("Downloads continue if you leave this screen. Unload frees RAM but keeps weights. Delete removes weights from this device.")
         }
     }
 
@@ -401,16 +419,22 @@ struct LocalMetalSettingsView: View {
             showFamily: showFamily,
             isDownloaded: downloaded.contains(entry.hubID),
             isLoaded: loadedInMemory.contains(entry.hubID),
-            progress: activeDownload == entry.hubID ? downloadProgress[entry.hubID] : nil,
+            progress: downloads.progress(for: entry.hubID),
             sizeLabel: sizeLabel(for: entry),
             runtimeReady: runtimeReady,
-            busy: activeDownload != nil,
-            onDownload: { Task { await download(entry.hubID) } },
+            busy: downloads.isBusy,
+            onDownload: { startDownload(entry.hubID) },
             onDelete: { Task { await delete(entry.hubID) } },
             onUnload: { Task { await unload(entry.hubID) } },
             onUse: { Task { await useInChat(entry.hubID) } }
         )
         .listRowBackground(Theme.surface)
+        .modifier(DownloadedModelSwipeActions(
+            isDownloaded: downloaded.contains(entry.hubID),
+            isLoaded: loadedInMemory.contains(entry.hubID),
+            onDelete: { Task { await delete(entry.hubID) } },
+            onUnload: { Task { await unload(entry.hubID) } }
+        ))
     }
 
     private func tagRow(_ tags: [LocalMetalCatalogEntry.Tag]) -> some View {
@@ -509,52 +533,20 @@ struct LocalMetalSettingsView: View {
         }
     }
 
-    private func download(_ modelID: String) async {
-        LocalMetalBootstrap.ensureRegistered()
-        guard let engine = LocalMetalRuntime.engine else {
-            errorText = "Metal runtime is not linked. Rebuild the iOS app with mlx-swift-lm packages."
-            runtimeReady = false
-            return
-        }
+    private func startDownload(_ modelID: String) {
         errorText = nil
-        status = "Downloading…"
-        activeDownload = modelID
-        downloadProgress[modelID] = 0
-        // Optimistic UI while finishing.
-        defer {
-            activeDownload = nil
+        status = "Downloading in the background…"
+        downloads.start(modelID: modelID, appState: state)
+        if let err = downloads.lastError {
+            errorText = err
         }
-        do {
-            try await engine.downloadModel(modelID: modelID) { fraction in
-                Task { @MainActor in
-                    // Keep the bar monotonic so late/out-of-order samples don't jump back.
-                    let previous = downloadProgress[modelID] ?? 0
-                    if fraction > previous {
-                        downloadProgress[modelID] = fraction
-                    }
-                }
-            }
-            downloadProgress[modelID] = 1
-            await LocalMetalModelStore.shared.markDownloaded(modelID: modelID)
-            // Update UI immediately so the button flips before refresh finishes.
-            downloaded.insert(modelID)
-            await state.refreshModels()
-            // Downloads stay on disk only; load into RAM only if this model is selected.
-            if state.selectedModel?.provider == .localMetal,
-               state.selectedModel?.modelID == modelID {
-                await state.ensureSelectedLocalMetalLoaded()
-            }
-            await reloadStatus()
-            let inPicker = state.allModels.contains {
-                $0.provider == .localMetal && $0.modelID == modelID
-            }
-            status = inPicker
-                ? "Downloaded — select it in the model picker to load into memory."
-                : "Downloaded. Tap “Refresh chat model list” if it isn’t in the picker yet."
-        } catch {
-            errorText = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            await reloadStatus()
-        }
+    }
+
+    private static func percentLabel(_ fraction: Double) -> String {
+        let pct = fraction * 100
+        if pct <= 0 { return "0%" }
+        if pct < 1 { return "<1%" }
+        return "\(Int(pct.rounded(.down)))%"
     }
 
     private func delete(_ modelID: String) async {
@@ -656,14 +648,14 @@ private struct ModelFamilyDetailView: View {
     let family: ModelFamilyGroup
     @Binding var downloaded: Set<String>
     @Binding var loadedInMemory: Set<String>
-    @Binding var downloadProgress: [String: Double]
-    @Binding var activeDownload: String?
     @Binding var sizes: [String: Int64]
     let runtimeReady: Bool
-    var onDownload: (String) async -> Void
+    var onDownload: (String) -> Void
     var onDelete: (String) async -> Void
     var onUnload: (String) async -> Void
     var onUse: (String) async -> Void
+
+    @ObservedObject private var downloads = LocalMetalDownloadManager.shared
 
     var body: some View {
         List {
@@ -681,16 +673,22 @@ private struct ModelFamilyDetailView: View {
                         showFamily: false,
                         isDownloaded: downloaded.contains(entry.hubID),
                         isLoaded: loadedInMemory.contains(entry.hubID),
-                        progress: activeDownload == entry.hubID ? downloadProgress[entry.hubID] : nil,
+                        progress: downloads.progress(for: entry.hubID),
                         sizeLabel: sizeLabel(entry),
                         runtimeReady: runtimeReady,
-                        busy: activeDownload != nil,
-                        onDownload: { Task { await onDownload(entry.hubID) } },
+                        busy: downloads.isBusy,
+                        onDownload: { onDownload(entry.hubID) },
                         onDelete: { Task { await onDelete(entry.hubID) } },
                         onUnload: { Task { await onUnload(entry.hubID) } },
                         onUse: { Task { await onUse(entry.hubID) } }
                     )
                     .listRowBackground(Theme.surface)
+                    .modifier(DownloadedModelSwipeActions(
+                        isDownloaded: downloaded.contains(entry.hubID),
+                        isLoaded: loadedInMemory.contains(entry.hubID),
+                        onDelete: { Task { await onDelete(entry.hubID) } },
+                        onUnload: { Task { await onUnload(entry.hubID) } }
+                    ))
                 }
             }
         }
@@ -717,14 +715,14 @@ private struct ModelBucketListView: View {
     let entries: [LocalMetalCatalogEntry]
     @Binding var downloaded: Set<String>
     @Binding var loadedInMemory: Set<String>
-    @Binding var downloadProgress: [String: Double]
-    @Binding var activeDownload: String?
     @Binding var sizes: [String: Int64]
     let runtimeReady: Bool
-    var onDownload: (String) async -> Void
+    var onDownload: (String) -> Void
     var onDelete: (String) async -> Void
     var onUnload: (String) async -> Void
     var onUse: (String) async -> Void
+
+    @ObservedObject private var downloads = LocalMetalDownloadManager.shared
 
     private var groups: [ModelFamilyGroup] {
         let grouped = Dictionary(grouping: entries, by: \.family)
@@ -759,16 +757,22 @@ private struct ModelBucketListView: View {
                                 showFamily: false,
                                 isDownloaded: downloaded.contains(entry.hubID),
                                 isLoaded: loadedInMemory.contains(entry.hubID),
-                                progress: activeDownload == entry.hubID ? downloadProgress[entry.hubID] : nil,
+                                progress: downloads.progress(for: entry.hubID),
                                 sizeLabel: sizeLabel(entry),
                                 runtimeReady: runtimeReady,
-                                busy: activeDownload != nil,
-                                onDownload: { Task { await onDownload(entry.hubID) } },
+                                busy: downloads.isBusy,
+                                onDownload: { onDownload(entry.hubID) },
                                 onDelete: { Task { await onDelete(entry.hubID) } },
                                 onUnload: { Task { await onUnload(entry.hubID) } },
                                 onUse: { Task { await onUse(entry.hubID) } }
                             )
                             .listRowBackground(Theme.surface)
+                            .modifier(DownloadedModelSwipeActions(
+                                isDownloaded: downloaded.contains(entry.hubID),
+                                isLoaded: loadedInMemory.contains(entry.hubID),
+                                onDelete: { Task { await onDelete(entry.hubID) } },
+                                onUnload: { Task { await onUnload(entry.hubID) } }
+                            ))
                         }
                     }
                 }
@@ -787,6 +791,36 @@ private struct ModelBucketListView: View {
         }
         if !entry.approxSize.isEmpty { return entry.approxSize }
         return "From Hugging Face"
+    }
+}
+
+// MARK: - Swipe actions for downloaded weights
+
+/// Shared trailing swipe: Delete (and Unload when loaded). No-op when not downloaded.
+private struct DownloadedModelSwipeActions: ViewModifier {
+    let isDownloaded: Bool
+    let isLoaded: Bool
+    var onDelete: () -> Void
+    var onUnload: () -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isDownloaded {
+            content
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    Button(role: .destructive, action: onDelete) {
+                        Label("Delete", systemImage: "trash")
+                    }
+                    if isLoaded {
+                        Button(action: onUnload) {
+                            Label("Unload", systemImage: "memorychip")
+                        }
+                        .tint(Theme.accent)
+                    }
+                }
+        } else {
+            content
+        }
     }
 }
 
@@ -829,9 +863,16 @@ private struct ModelDownloadRow: View {
                             .foregroundStyle(Theme.textTertiary)
                             .lineLimit(1)
                     }
-                    Text(sizeLabel)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.textTertiary)
+                    HStack(spacing: 6) {
+                        Text(sizeLabel)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.textTertiary)
+                        if isLoaded {
+                            Text("In memory")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(Theme.accent)
+                        }
+                    }
                 }
                 Spacer(minLength: 8)
                 trailingControls
@@ -845,35 +886,55 @@ private struct ModelDownloadRow: View {
             if let progress {
                 ProgressView(value: min(1, max(0, progress)))
                     .tint(Theme.accent)
-                Text("Downloading… \(Int(progress * 100))%")
+                Text("Downloading… \(percentLabel(progress))")
                     .font(.caption2)
                     .foregroundStyle(Theme.textSecondary)
             }
         }
         .padding(.vertical, 6)
+        // Long-press for secondary actions (ellipsis menu was unreliable in List rows).
+        .contextMenu {
+            if isDownloaded {
+                Button("Use in chat", systemImage: "bubble.left.and.bubble.right", action: onUse)
+                if isLoaded {
+                    Button("Unload from memory", systemImage: "memorychip", action: onUnload)
+                }
+                Link(destination: entry.downloadURL) {
+                    Label("Open on Hugging Face", systemImage: "safari")
+                }
+                Divider()
+                Button("Delete from device", systemImage: "trash", role: .destructive, action: onDelete)
+            } else {
+                Button("Download", systemImage: "arrow.down.circle", action: onDownload)
+                    .disabled(busy || !runtimeReady || progress != nil)
+                Link(destination: entry.downloadURL) {
+                    Label("Open on Hugging Face", systemImage: "safari")
+                }
+            }
+        }
     }
 
     @ViewBuilder
     private var trailingControls: some View {
         if isDownloaded {
+            // Primary action is "Use"; delete/unload via swipe or long-press.
             VStack(alignment: .trailing, spacing: 8) {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 22))
                     .foregroundStyle(.green)
                     .accessibilityLabel("Downloaded")
-                Menu {
-                    Button("Use in chat", action: onUse)
-                    if isLoaded {
-                        Button("Unload from memory", action: onUnload)
-                    }
-                    Link("Open on Hugging Face", destination: entry.downloadURL)
-                    Button("Delete", role: .destructive, action: onDelete)
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                        .font(.system(size: 20))
-                        .foregroundStyle(Theme.textSecondary)
+                Button(action: onUse) {
+                    Text("Use")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(Theme.surfaceElevated, in: Capsule())
                 }
+                .buttonStyle(.borderless)
                 .disabled(busy)
+                .accessibilityLabel("Use \(entry.displayName) in chat")
+                .accessibilityHint("Swipe left to delete from this device")
             }
         } else {
             Button(action: onDownload) {
@@ -884,9 +945,16 @@ private struct ModelDownloadRow: View {
                     .padding(.vertical, 8)
                     .background(Theme.surfaceElevated, in: Capsule())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.borderless)
             .disabled(busy || !runtimeReady || progress != nil)
         }
+    }
+
+    private func percentLabel(_ fraction: Double) -> String {
+        let pct = fraction * 100
+        if pct <= 0 { return "0%" }
+        if pct < 1 { return "<1%" }
+        return "\(Int(pct.rounded(.down)))%"
     }
 }
 
