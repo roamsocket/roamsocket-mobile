@@ -45,7 +45,7 @@ That hook regenerates the Xcode project when iOS sources / `project.yml` change 
 | Wire protocol (canonical) | `desktop-server/src/protocol.ts` → mirror Swift + docs |
 | Electron window / tray | `desktop-server/src/electron` |
 | Desktop client UI | `desktop-server/src/renderer` |
-| Marketing page | `landing/` |
+| Marketing page | separate repo: [roamsocket/roamsocket-site](https://github.com/roamsocket/roamsocket-site) (`landing/` is a pointer only) |
 
 ## Theme (do not regress)
 

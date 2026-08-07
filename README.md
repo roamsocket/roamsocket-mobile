@@ -30,7 +30,7 @@ CODE   iOS app ──WebSocket──▶ desktop server ──▶ git clone / bas
 | `ios/project.yml` | XcodeGen spec that generates the Xcode project |
 | `desktop-server` | Node + TypeScript server: pairing, tools, git, agent loop |
 | `docs/protocol.md` | The app ↔ server wire protocol |
-| `landing/` | Static marketing page (Cloudflare Workers assets) |
+| `landing/` | Pointer to the marketing site repo ([roamsocket-site](https://github.com/roamsocket/roamsocket-site)) |
 | `marketplace/` | Pointer to the official marketplace repo (catalog lives separately) |
 | `AGENTS.md` | Instructions for AI coding agents (architecture, commands, invariants) |
 | `CLAUDE.md` | Agent workflow notes (hooks, verification defaults) |
@@ -82,17 +82,18 @@ Then pick a repository and model on the home screen, describe a task, and send.
 
 ### 3. Landing page (Cloudflare)
 
-Static site under `landing/` — no build step. Deployed as [Workers static assets](https://developers.cloudflare.com/workers/static-assets/).
+The marketing site lives in a separate repo: **[roamsocket/roamsocket-site](https://github.com/roamsocket/roamsocket-site)**.
 
 ```bash
-cd landing
+git clone https://github.com/roamsocket/roamsocket-site.git
+cd roamsocket-site
 npm install
 npm run dev          # local preview (Wrangler)
 npx wrangler login   # once
 npm run deploy       # https://roamsocket.<account>.workers.dev
 ```
 
-See [`landing/README.md`](./landing/README.md) for custom domains and Git-connected builds.
+See that repo’s README for custom domains and Git-connected builds.
 
 ## Providers
 

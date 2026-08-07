@@ -28,7 +28,7 @@ roamsocket/  (repo may still be checked out as code-mobile-ai)
 │   └── scripts/smoke.ts      # offline e2e protocol test
 ├── docs/protocol.md          # Human-readable wire protocol
 ├── marketplace/              # Pointer docs → external official catalog host
-├── landing/                  # Marketing site → Cloudflare Workers assets
+├── landing/                  # Pointer docs → roamsocket/roamsocket-site
 ├── AGENTS.md                 # This file
 └── CLAUDE.md                 # Agent-oriented notes
 ```
@@ -84,6 +84,12 @@ Default port: **4319**.
 - Users can **add extra marketplace repos** (raw `catalog.json` URL, GitHub blob/tree, or `owner/repo`).
 - User skills/MCP git repos (`APC_SKILLS_REPO` / `APC_MCP_REPO`) remain separate private sync.
 - This monorepo’s `marketplace/` folder is a **pointer only** — do not put the live catalog here.
+
+### Marketing site
+
+- **Repo:** [roamsocket/roamsocket-site](https://github.com/roamsocket/roamsocket-site)
+- Cloudflare Workers static assets (`public/` + Wrangler). Edit and deploy there.
+- This monorepo’s `landing/` folder is a **pointer only** — do not put the live site here.
 
 ## Critical invariants
 
@@ -145,20 +151,17 @@ swift test                        # protocol + provider tests
 ./ios/scripts/watch-xcode.sh
 ```
 
-### Landing (Cloudflare Workers)
+### Marketing site (Cloudflare Workers)
 
-Static files under `landing/public/` (no app build). Deployed as Workers static assets via Wrangler.
+Lives in **[roamsocket/roamsocket-site](https://github.com/roamsocket/roamsocket-site)** (not this monorepo).
 
 ```bash
-cd landing
+git clone https://github.com/roamsocket/roamsocket-site.git
+cd roamsocket-site
 npm install
 npm run dev          # wrangler dev — http://localhost:8787
 npm run deploy       # requires wrangler login
-npm run deploy:dry   # validate without publishing
 ```
-
-Config: `landing/wrangler.jsonc` (`assets.directory` = `./public`), headers in `landing/public/_headers`.
-Open `landing/public/index.html` for a local file preview without Wrangler.
 
 ## How to change common things
 
