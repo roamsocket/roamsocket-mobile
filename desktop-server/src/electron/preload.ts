@@ -121,8 +121,83 @@ const api = {
   window: { hide: (): Promise<void> => ipcRenderer.invoke("window:hide") },
   app: { quit: (): Promise<void> => ipcRenderer.invoke("app:quit") },
 
+  /** On-device Metal / MLX models — managed in a dedicated desktop view. */
+  metal: {
+    status: (): Promise<{
+      providerId: string;
+      chatOnly: true;
+      platform: string;
+      arch: string;
+      supported: boolean;
+      runtimeReady: boolean;
+      runtimeLabel: string;
+      pythonPath: string | null;
+      detail: string;
+    }> => ipcRenderer.invoke("metal:status"),
+    catalog: (): Promise<
+      Array<{
+        hubID: string;
+        displayName: string;
+        approxSize: string;
+        blurb: string;
+        tags: string[];
+        chatOnly: true;
+        family: string;
+        section: string;
+        downloaded: boolean;
+        localPath?: string;
+      }>
+    > => ipcRenderer.invoke("metal:catalog"),
+    storage: (): Promise<{ bytes: number; root: string; count: number }> =>
+      ipcRenderer.invoke("metal:storage"),
+    download: (
+      hubID: string,
+    ): Promise<{ hubID: string; localPath: string; downloadedAt: number; displayName: string }> =>
+      ipcRenderer.invoke("metal:download", hubID),
+    delete: (hubID: string): Promise<{ ok: true }> => ipcRenderer.invoke("metal:delete", hubID),
+    deleteAll: (): Promise<{ ok: true; removed: number }> => ipcRenderer.invoke("metal:deleteAll"),
+    openDir: (): Promise<{ ok: true; path: string }> => ipcRenderer.invoke("metal:openDir"),
+    generate: (req: {
+      hubID: string;
+      messages: Array<{ role: "user" | "assistant" | "system"; content: string }>;
+      maxTokens?: number;
+    }): Promise<{ text: string; hubID: string; modelPath: string }> =>
+      ipcRenderer.invoke("metal:generate", req),
+    /** Install managed Python venv + mlx-lm (macOS). Streams metal:installLog. */
+    installRuntime: (): Promise<{
+      ok: boolean;
+      pythonPath: string | null;
+      detail: string;
+      error?: string;
+    }> => ipcRenderer.invoke("metal:installRuntime"),
+  },
+
+  /** Lightweight Tasks — Apple Intelligence on Mac, or linked models elsewhere. */
+  lightweight: {
+    foundationStatus: (): Promise<{
+      platform: string;
+      supported: boolean;
+      cliPath: string | null;
+      ready: boolean;
+      detail: string;
+    }> => ipcRenderer.invoke("lightweight:foundationStatus"),
+    foundationGenerate: (req: {
+      system?: string;
+      user: string;
+      maxTokens?: number;
+    }): Promise<{ ok: true; text: string } | { ok: false; error: string }> =>
+      ipcRenderer.invoke("lightweight:foundationGenerate", req),
+  },
+
   on: (
-    channel: "navigate" | "tools:installLog" | "tools:installDone" | "pairing:code",
+    channel:
+      | "navigate"
+      | "tools:installLog"
+      | "tools:installDone"
+      | "pairing:code"
+      | "metal:downloadProgress"
+      | "metal:installLog"
+      | "metal:installDone",
     listener: (payload: any) => void,
   ) => {
     const handler = (_e: unknown, p: any) => listener(p);

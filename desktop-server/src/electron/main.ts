@@ -16,7 +16,7 @@
 import { app, BrowserWindow, Tray, Menu, ipcMain, dialog, shell, clipboard, safeStorage, nativeImage } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { startServer, type RunningServer } from "../index.js";
 import {
   hostTriple,
@@ -45,8 +45,45 @@ import {
   type DesktopPrefs,
   type TunnelProviderPref,
 } from "../desktop-config.js";
+import {
+  getMetalStore,
+  getMetalRuntimeStatus,
+  metalGenerate,
+  installMetalRuntime,
+  resetMetalPythonCache,
+} from "../metal/index.js";
+import {
+  getFoundationStatus,
+  foundationGenerate,
+  ensureFoundationCliBuilt,
+} from "../lightweight/foundation-bridge.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Compile-time constants injected by `@electron-forge/plugin-vite` via Vite
+// `define` (NOT process.env). In `electron-forge start` the first is the
+// renderer dev-server URL; in production builds it is undefined and the
+// second names the renderer folder under `.vite/renderer/`.
+declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
+declare const MAIN_WINDOW_VITE_NAME: string;
+
+function rendererIndexHtml(): string {
+  const name =
+    typeof MAIN_WINDOW_VITE_NAME === "string" && MAIN_WINDOW_VITE_NAME.length > 0
+      ? MAIN_WINDOW_VITE_NAME
+      : "main_window";
+  return path.join(__dirname, "..", "renderer", name, "index.html");
+}
+
+function rendererDevServerUrl(): string | undefined {
+  // Must reference the free identifier so Vite's define can replace it.
+  // Reading process.env.MAIN_WINDOW_VITE_DEV_SERVER_URL never works — Forge
+  // does not put this in the environment.
+  return typeof MAIN_WINDOW_VITE_DEV_SERVER_URL === "string" &&
+    MAIN_WINDOW_VITE_DEV_SERVER_URL.length > 0
+    ? MAIN_WINDOW_VITE_DEV_SERVER_URL
+    : undefined;
+}
 
 // --- Single-instance lock so two launches don't fight for port 4319. -----
 const gotLock = app.requestSingleInstanceLock();
@@ -59,7 +96,7 @@ if (!gotLock) {
 }
 
 // --- Persisted UI prefs. Stored next to userData, plain JSON. -------------
-// Connection permissions also sync to ~/.anyprov-code/desktop-prefs.json
+// Connection permissions also sync to product data dir desktop-prefs.json
 // so the headless CLI and Electron share the same knobs.
 
 interface Prefs {
@@ -191,7 +228,7 @@ function showPairingCodeWindow(code: string): void {
     border:1px solid #262c34;min-width:280px;text-align:center}
   .hint{font-size:13px;color:#6b727b;text-align:center;max-width:320px;line-height:1.4}
 </style></head><body><div class="wrap">
-  <div class="label">AnyProv Code</div>
+  <div class="label">CodeSocket</div>
   <div class="code" id="code">${spaced}</div>
   <div class="hint">Enter this code on your phone to pair<br/>(Settings → Desktop server)</div>
 </div></body></html>`;
@@ -301,7 +338,7 @@ function buildTrayIcon(): Electron.NativeImage {
 function createTray(): void {
   if (tray) return;
   tray = new Tray(buildTrayIcon());
-  tray.setToolTip("AnyProv Code");
+  tray.setToolTip("CodeSocket");
   refreshTrayMenu();
   tray.on("click", () => {
     if (process.platform === "darwin") {
@@ -349,7 +386,7 @@ function refreshTrayMenu(): void {
       },
     },
     {
-      label: "Quit AnyProv Code",
+      label: "Quit CodeSocket",
       click: () => {
         isQuitting = true;
         app.quit();
@@ -391,7 +428,7 @@ async function handleWindowClose(event: Electron.Event): Promise<void> {
       buttons: ["Hide to tray", "Quit app"],
       defaultId: 0,
       cancelId: 0,
-      title: "Close AnyProv Code?",
+      title: "Close CodeSocket?",
       message: "Closing the window keeps the server running in the background.",
       detail:
         "Hide to tray: the app stays in the menu bar / task tray and the WebSocket server keeps running so paired devices stay connected.\n\n" +
@@ -417,7 +454,7 @@ function createWindow(): void {
     minWidth: 880,
     minHeight: 560,
     show: !prefs.startMinimized,
-    title: "AnyProv Code",
+    title: "CodeSocket",
     backgroundColor: "#0b0d10",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     webPreferences: {
@@ -458,18 +495,23 @@ function createWindow(): void {
     return { action: "deny" };
   });
 
-  // Dev: Vite serves the renderer with HMR; the URL is injected as
-  // MAIN_WINDOW_VITE_DEV_SERVER_URL by the Forge plugin. We retry a couple
-  // of times if the dev server is still starting up — its URL is announced
-  // slightly after our preload bundle, so the first attempt can race.
-  // Prod: the bundled HTML lives at `.vite/renderer/main_window/index.html`.
-  const devUrl = process.env["MAIN_WINDOW_VITE_DEV_SERVER_URL" as keyof NodeJS.ProcessEnv] as string | undefined;
+  // Dev: Vite serves the renderer with HMR; the URL is injected as the
+  // compile-time constant MAIN_WINDOW_VITE_DEV_SERVER_URL by the Forge Vite
+  // plugin. We retry a couple of times if the dev server is still starting.
+  // Prod: the bundled HTML lives at `.vite/renderer/${MAIN_WINDOW_VITE_NAME}/index.html`.
+  const devUrl = rendererDevServerUrl();
   if (devUrl) {
     console.log(`[apc] loading renderer from dev URL: ${devUrl}`);
     void loadWithRetry(mainWindow, devUrl, 5, 500);
   } else {
-    const indexHtml = path.join(__dirname, "..", "renderer", "main_window", "index.html");
+    const indexHtml = rendererIndexHtml();
     console.log(`[apc] loading renderer from bundled HTML: ${indexHtml}`);
+    if (!existsSync(indexHtml)) {
+      console.error(
+        `[apc] renderer HTML missing at ${indexHtml}. ` +
+        `Run via "npm run electron:dev" (Forge + Vite), or "npm run electron:package" for a production build.`,
+      );
+    }
     void mainWindow.loadFile(indexHtml).catch((err) => {
       console.error(`[apc] loadFile failed: ${(err as Error).message}`);
     });
@@ -496,8 +538,14 @@ async function loadWithRetry(
       if (last) {
         // Final fallback: load the bundled HTML so the user isn't staring
         // at a blank window.
-        const indexHtml = path.join(__dirname, "..", "renderer", "main_window", "index.html");
-        await win.loadFile(indexHtml).catch(() => undefined);
+        const indexHtml = rendererIndexHtml();
+        if (existsSync(indexHtml)) {
+          await win.loadFile(indexHtml).catch(() => undefined);
+        } else {
+          console.error(
+            `[apc] renderer dev server unreachable and no bundled HTML at ${indexHtml}`,
+          );
+        }
         return;
       }
       await new Promise((r) => setTimeout(r, delayMs));
@@ -665,6 +713,94 @@ function registerIpc(): void {
     isQuitting = true;
     app.quit();
   });
+
+  // --- On-device Metal ----------------------------------------------------
+  ipcMain.handle("metal:status", async () => getMetalRuntimeStatus());
+  ipcMain.handle("metal:catalog", async () => getMetalStore().catalogWithStatus());
+  ipcMain.handle("metal:storage", async () => ({
+    bytes: getMetalStore().totalStorageBytes(),
+    root: getMetalStore().root,
+    count: getMetalStore().listDownloaded().length,
+  }));
+  ipcMain.handle("metal:download", async (event, hubID: string) => {
+    if (typeof hubID !== "string" || !hubID.includes("/")) {
+      throw new Error("Invalid model hub id");
+    }
+    return getMetalStore().download(hubID, (p) => {
+      event.sender.send("metal:downloadProgress", p);
+    });
+  });
+  ipcMain.handle("metal:delete", async (_e, hubID: string) => {
+    getMetalStore().delete(hubID);
+    return { ok: true as const };
+  });
+  ipcMain.handle("metal:deleteAll", async () => {
+    const removed = getMetalStore().deleteAll();
+    return { ok: true as const, removed };
+  });
+  ipcMain.handle("metal:openDir", async () => {
+    const root = getMetalStore().root;
+    mkdirSync(root, { recursive: true });
+    await shell.openPath(root);
+    return { ok: true as const, path: root };
+  });
+  ipcMain.handle(
+    "metal:generate",
+    async (
+      _e,
+      req: {
+        hubID: string;
+        messages: Array<{ role: "user" | "assistant" | "system"; content: string }>;
+        maxTokens?: number;
+      },
+    ) => metalGenerate(req),
+  );
+  /** One-click Python + mlx-lm install into product metal-runtime dir */
+  ipcMain.handle("metal:installRuntime", async (event) => {
+    const sendLog = (line: string) => {
+      event.sender.send("metal:installLog", { line });
+    };
+    try {
+      sendLog("Starting Metal runtime install (Python + mlx-lm)…");
+      const result = await installMetalRuntime(sendLog);
+      resetMetalPythonCache();
+      event.sender.send("metal:installDone", result);
+      return result;
+    } catch (err) {
+      const message = String((err as Error).message ?? err);
+      sendLog(`Error: ${message}`);
+      const fail = {
+        ok: false as const,
+        pythonPath: null,
+        detail: message,
+        error: message,
+      };
+      event.sender.send("metal:installDone", fail);
+      return fail;
+    }
+  });
+
+  // --- Lightweight Tasks / Apple Foundation (macOS) ----------------------
+  ipcMain.handle("lightweight:foundationStatus", async () => {
+    await ensureFoundationCliBuilt();
+    return getFoundationStatus();
+  });
+  ipcMain.handle(
+    "lightweight:foundationGenerate",
+    async (
+      _e,
+      req: { system?: string; user: string; maxTokens?: number },
+    ) => {
+      if (!req || typeof req.user !== "string") {
+        return { ok: false as const, error: "Invalid request" };
+      }
+      return foundationGenerate({
+        system: req.system,
+        user: req.user,
+        maxTokens: req.maxTokens,
+      });
+    },
+  );
 }
 
 // --- Lifecycle. ----------------------------------------------------------
@@ -683,8 +819,8 @@ async function promptKillConflictingInstances(port: number): Promise<boolean> {
     buttons: ["Quit other instances", "Cancel"],
     defaultId: 0,
     cancelId: 1,
-    title: "Another AnyProv Code is running",
-    message: "Quit other AnyProv Code processes?",
+    title: "Another CodeSocket is running",
+    message: "Quit other CodeSocket processes?",
     detail: formatConflictDetail(conflicts, port),
     noLink: true,
   });
@@ -708,7 +844,7 @@ async function promptKillConflictingInstances(port: number): Promise<boolean> {
     dialog.showErrorBox(
       "Could not free port",
       `Port ${port} is still in use after quitting other instances.\n\n` +
-        `Quit the process manually (Activity Monitor / Task Manager) or set PORT to a free port and relaunch.`,
+      `Quit the process manually (Activity Monitor / Task Manager) or set PORT to a free port and relaunch.`,
     );
     return false;
   }
@@ -783,6 +919,75 @@ app.whenReady().then(async () => {
   createTray();
   createWindow();
   console.log("[apc] tray + window created");
+
+  // Verification hook: dump shell DOM after renderer bootstrap, then optional quit.
+  if (process.env.APC_DOM_DUMP === "1" && mainWindow) {
+    // Avoid pairing popup covering / racing the dump window.
+    prefs.showPairingCodePopup = false;
+    const win = mainWindow;
+    let dumped = false;
+    const dump = async (reason: string) => {
+      if (dumped) return;
+      try {
+        // Wait for renderer main() to paint chat empty state / nav.
+        await new Promise((r) => setTimeout(r, 1500));
+        if (win.isDestroyed()) return;
+        const snapshot = await win.webContents.executeJavaScript(`
+          (() => {
+            const nav = Array.from(document.querySelectorAll('#main-nav .nav-item, .nav-item[data-route]'))
+              .map((a) => ({
+                route: a.getAttribute('data-route'),
+                text: (a.textContent || '').replace(/\\s+/g, ' ').trim(),
+                active: a.classList.contains('active'),
+              }));
+            const viewChats = document.getElementById('view-chats');
+            const greeting = viewChats?.querySelector('.greeting')?.textContent?.trim() || null;
+            const empty = !!viewChats?.querySelector('.chat-empty');
+            const composer = !!document.getElementById('chat-input');
+            const views = ['chats','projects','artifacts','code','settings'].map((id) => ({
+              id,
+              hidden: document.getElementById('view-' + id)?.classList.contains('hidden') ?? true,
+            }));
+            const hasVisionNav = nav.some((n) => n.route === 'vision' || /vision/i.test(n.text || ''));
+            return {
+              ok: true,
+              reason: ${JSON.stringify("PLACEHOLDER")},
+              href: location.href,
+              title: document.title,
+              bodyLen: (document.body && document.body.innerHTML) ? document.body.innerHTML.length : 0,
+              nav,
+              hasVisionNav,
+              greeting,
+              emptyHome: empty,
+              composer,
+              views,
+              topbar: document.getElementById('topbar-title')?.textContent?.trim() || null,
+              appPresent: !!document.getElementById('app'),
+              sidebarPresent: !!document.getElementById('sidebar'),
+            };
+          })()
+        `.replace('"PLACEHOLDER"', JSON.stringify(reason)));
+        dumped = true;
+        console.log("[apc] DOM_SNAPSHOT " + JSON.stringify(snapshot));
+      } catch (err) {
+        console.error("[apc] DOM_SNAPSHOT_ERROR " + String((err as Error).message ?? err));
+      } finally {
+        if (dumped && process.env.APC_DOM_DUMP_QUIT === "1") {
+          isQuitting = true;
+          app.quit();
+        }
+      }
+    };
+    win.webContents.on("did-finish-load", () => {
+      console.log("[apc] did-finish-load " + win.webContents.getURL());
+      void dump("did-finish-load");
+    });
+    win.webContents.on("did-fail-load", (_e, code, desc, url) => {
+      console.error(`[apc] did-fail-load ${code} ${desc} ${url}`);
+    });
+    // Fallback if load events were missed
+    setTimeout(() => void dump("timeout"), 4000);
+  }
 
   // Apple-style verification code popup on launch.
   if (server?.pairingCode && prefs.showPairingCodePopup) {
