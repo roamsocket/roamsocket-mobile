@@ -85,25 +85,25 @@ struct VisionView: View {
     @ViewBuilder
     private var cameraLayer: some View {
         ZStack {
-            // Pause the capture session while a still is on screen / the VLM is
-            // running. Leaving the camera hot during Metal inference competes for
-            // GPU + RAM and is a common crash source on device.
-            VisionCameraView(
-                onCapture: { image in
-                    viewModel.analyze(image: image)
-                },
-                onError: { cameraError = $0 },
-                captureTrigger: captureTrigger,
-                isSessionActive: viewModel.capturedImage == nil && !viewModel.isThinking
-            )
-            .opacity(viewModel.capturedImage == nil ? 1 : 0)
-
             if let image = viewModel.capturedImage {
+                // Frozen capture. The live camera and its AVCaptureSession are fully
+                // unmounted here — not just paused — so their buffers are released
+                // instead of competing with the on-device VLM for GPU + RAM. Leaving
+                // the camera hot during Metal inference is a common crash source.
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .clipped()
+            } else {
+                VisionCameraView(
+                    onCapture: { image in
+                        viewModel.analyze(image: image)
+                    },
+                    onError: { cameraError = $0 },
+                    captureTrigger: captureTrigger,
+                    isSessionActive: true
+                )
             }
         }
     }
@@ -156,6 +156,10 @@ struct VisionView: View {
             HStack(alignment: .center, spacing: 28) {
                 if viewModel.capturedImage != nil {
                     Button {
+                        // Clear the trigger first: retake remounts a fresh camera
+                        // whose coordinator has no last-trigger, so a stale UUID here
+                        // would fire an immediate, unwanted re-capture.
+                        captureTrigger = nil
                         viewModel.retake()
                     } label: {
                         Text("Retake")

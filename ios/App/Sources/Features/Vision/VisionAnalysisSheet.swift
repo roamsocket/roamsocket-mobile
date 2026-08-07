@@ -10,6 +10,10 @@ struct VisionAnalysisSheet: View {
 
     private let minimizedHeight: CGFloat = 76
     private let expandedFraction: CGFloat = 0.52
+    /// Compact height used while the model is still thinking — only the shimmer
+    /// is on screen, so a full-height panel would just be a big empty card
+    /// covering the captured photo.
+    private let thinkingHeight: CGFloat = 210
 
     var body: some View {
         GeometryReader { geo in
@@ -18,7 +22,10 @@ struct VisionAnalysisSheet: View {
                 switch viewModel.sheetMode {
                 case .hidden: return 0
                 case .minimized: return minimizedHeight
-                case .expanded: return maxExpanded
+                case .expanded:
+                    // Keep the card compact until there's real analysis text to
+                    // show, so the photo stays visible during inference.
+                    return viewModel.isThinking ? min(maxExpanded, thinkingHeight) : maxExpanded
                 }
             }()
             let height = max(0, targetHeight - dragOffset)
@@ -34,10 +41,8 @@ struct VisionAnalysisSheet: View {
             }
             .frame(width: geo.size.width, height: geo.size.height, alignment: .bottom)
             .animation(.spring(response: 0.38, dampingFraction: 0.86), value: viewModel.sheetMode)
+            .animation(.spring(response: 0.38, dampingFraction: 0.86), value: viewModel.isThinking)
         }
-        // Only ignore the home-indicator edge — keep leading/trailing safe so
-        // title + body text never clip under the screen edge.
-        .ignoresSafeArea(edges: .bottom)
     }
 
     @ViewBuilder
@@ -62,25 +67,13 @@ struct VisionAnalysisSheet: View {
         .frame(height: height, alignment: .top)
         .clipped()
         .background {
-            UnevenRoundedRectangle(
-                topLeadingRadius: 22,
-                bottomLeadingRadius: 0,
-                bottomTrailingRadius: 0,
-                topTrailingRadius: 22,
-                style: .continuous
-            )
-            .fill(Theme.surface.opacity(0.98))
-            .overlay {
-                UnevenRoundedRectangle(
-                    topLeadingRadius: 22,
-                    bottomLeadingRadius: 0,
-                    bottomTrailingRadius: 0,
-                    topTrailingRadius: 22,
-                    style: .continuous
-                )
-                .stroke(Theme.separator.opacity(0.7), lineWidth: 1)
-            }
-            .shadow(color: .black.opacity(0.4), radius: 24, y: -4)
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(Theme.surface.opacity(0.98))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .stroke(Theme.separator.opacity(0.7), lineWidth: 1)
+                }
+                .shadow(color: .black.opacity(0.4), radius: 24, y: -4)
         }
         .contentShape(Rectangle())
         .highPriorityGesture(dragGesture(maxExpanded: maxExpanded))
