@@ -4,6 +4,7 @@
  * HTTP:
  *   GET  /health           -> { ok, name, version }
  *   POST /pair { code }    -> { token, serverName, serverVersion }
+ *   GET  /metal/models     -> installed desktop Metal models (Bearer token)
  * WebSocket:
  *   /session?token=...     -> the agent protocol (see src/protocol.ts)
  *
@@ -25,6 +26,7 @@ import { syncMCPRepo, upsertMCPServer, removeMCPServer } from "./mcp/sync.js";
 import { killTerminal, resizeTerminal, startTerminal, writeToTerminal } from "./terminal/index.js";
 import { diffAgainstBase, listChanges, listDir, readFile, writeFile } from "./workspace/files.js";
 import { listListeningPorts } from "./workspace/ports.js";
+import { productDataDir } from "./product.js";
 import {
   detectTunnelProviders,
   listTunnels,
@@ -51,6 +53,7 @@ import {
   resolvePairHost,
 } from "./cli/banner.js";
 import { runSettingsMenu } from "./cli/settings-menu.js";
+import { getMetalStore, getMetalRuntimeStatus, METAL_PROVIDER_ID } from "./metal/index.js";
 
 export interface StartServerOptions {
   port?: number;
@@ -89,7 +92,7 @@ export interface RunningServer {
 const DEFAULT_PORT = 4319;
 /** Listen on all interfaces so LAN phones can pair (override with APC_HOST). */
 const DEFAULT_HOST = "0.0.0.0";
-const DEFAULT_NAME = process.env.APC_NAME ?? "anyprov-code desktop";
+const DEFAULT_NAME = process.env.APC_NAME ?? "CodeSocket desktop";
 const DEFAULT_VERSION = "0.2.0";
 
 /** Configured skills/MCP repos. Read once at startup. The desktop is the
@@ -101,8 +104,7 @@ interface SyncConfig {
 }
 
 async function loadSyncConfig(): Promise<SyncConfig> {
-  const home = os.homedir();
-  const file = path.join(home, ".anyprov-code", "config.json");
+  const file = path.join(productDataDir(), "config.json");
   let json: Partial<SyncConfig> = {};
   try {
     const raw = await fs.readFile(file, "utf8");
@@ -122,8 +124,8 @@ async function loadSyncConfig(): Promise<SyncConfig> {
       token: process.env.APC_MCP_TOKEN ?? json.mcpRepo?.token ?? "",
     },
     author: {
-      name: process.env.APC_AUTHOR_NAME ?? json.author?.name ?? "anyprov-code",
-      email: process.env.APC_AUTHOR_EMAIL ?? json.author?.email ?? "bot@anyprov-code.local",
+      name: process.env.APC_AUTHOR_NAME ?? json.author?.name ?? "CodeSocket",
+      email: process.env.APC_AUTHOR_EMAIL ?? json.author?.email ?? "bot@codesocket.local",
     },
   };
 }
@@ -164,6 +166,40 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
       publicUrl: access?.url,
       tunnelStatus: access?.status,
     });
+  });
+
+  /**
+   * List Metal / MLX models installed on this desktop for the coding agent.
+   * Auth: `Authorization: Bearer <pair token>` (same token as the WebSocket).
+   * Phone coding pickers use this so they never offer phone-local weights that
+   * may not match the desktop store.
+   */
+  app.get("/metal/models", async (req, res) => {
+    const auth = req.header("authorization") ?? "";
+    const bearer = auth.toLowerCase().startsWith("bearer ")
+      ? auth.slice(7).trim()
+      : (typeof req.query.token === "string" ? req.query.token : "");
+    if (!pairing.verify(bearer)) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    try {
+      const status = await getMetalRuntimeStatus();
+      const models = getMetalStore().listDownloaded().map((m) => ({
+        hubID: m.hubID,
+        displayName: m.displayName,
+        downloadedAt: m.downloadedAt,
+      }));
+      res.json({
+        provider: METAL_PROVIDER_ID,
+        runtimeReady: status.runtimeReady,
+        supported: status.supported,
+        detail: status.detail,
+        models,
+      });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
   });
 
   app.post("/pair", (req, res) => {
@@ -487,7 +523,7 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
       if (err.code === "EADDRINUSE") {
         reject(
           new Error(
-            `Port ${port} is already in use. Quit the other AnyProv Code / desktop-server process, or set PORT to a free port.`,
+            `Port ${port} is already in use. Quit the other CodeSocket / desktop-server process, or set PORT to a free port.`,
           ),
         );
         return;

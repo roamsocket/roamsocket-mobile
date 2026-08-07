@@ -2,9 +2,11 @@ import type { ApiStyle, ProviderId } from "../protocol.js";
 import type { ProviderAdapter } from "./types.js";
 import { anthropicAdapter, makeAnthropicAdapter } from "./anthropic.js";
 import { makeOpenAICompatibleAdapter } from "./openai.js";
+import { isMetalProviderId, metalAgentAdapter } from "./metal.js";
 import { mockAdapter } from "./mock.js";
 
 export * from "./types.js";
+export { isMetalProviderId, metalAgentAdapter } from "./metal.js";
 
 export interface AgentAdapterOptions {
   /** Override host for custom / proxy endpoints (e.g. http://localhost:11434/v1). */
@@ -17,14 +19,21 @@ export interface AgentAdapterOptions {
  * Resolve the server-side agent adapter for a provider.
  *
  * Anthropic and the OpenAI-compatible providers (OpenAI, Groq, OpenRouter,
- * xAI, Mistral) drive the coding agent loop. Custom endpoints (`custom:…` or
- * any provider with `baseUrl`) use `apiStyle` to pick the wire format.
- * Google Gemini is chat/listing only from the app for now.
+ * xAI, Mistral) drive the coding agent loop. Desktop Metal (`localMetal` /
+ * `local-metal`) uses the on-device MLX runtime with a text tool-call protocol.
+ * Custom endpoints (`custom:…` or any provider with `baseUrl`) use `apiStyle`
+ * to pick the wire format. Google Gemini is chat/listing only from the app
+ * for now.
  */
 export function getAgentAdapter(
   provider: ProviderId,
   opts: AgentAdapterOptions = {},
 ): ProviderAdapter {
+  // Metal never uses a custom cloud base URL — weights live on this machine.
+  if (isMetalProviderId(provider)) {
+    return metalAgentAdapter;
+  }
+
   const baseUrl = opts.baseUrl?.replace(/\/+$/, "");
   const style: ApiStyle =
     opts.apiStyle ??

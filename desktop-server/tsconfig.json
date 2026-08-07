@@ -25,6 +25,8 @@
     "src/git/**/*.ts",
     "src/providers/**/*.ts",
     "src/tools/**/*.ts",
+    "src/client/**/*.ts",
+    "src/metal/**/*.ts",
     "scripts/**/*.ts"
   ],
   "exclude": [

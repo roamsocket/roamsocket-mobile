@@ -1,12 +1,13 @@
 {
-  "name": "anyprov-code-server",
+  "name": "codesocket-server",
   "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Desktop companion server for the anyprov-code iOS app. Pairs with the app over WebSocket, clones GitHub repos, runs the agent loop, and executes code. Ships as an Electron app with a built-in client UI.",
+  "description": "CodeSocket desktop companion: WebSocket coding server + Electron client. Pairs with the iOS app, clones repos, runs the agent loop, and opens PRs.",
   "license": "MIT",
   "main": ".vite/build/main.cjs",
   "bin": {
+    "codesocket-server": "dist/src/index.js",
     "anyprov-code-server": "dist/src/index.js"
   },
   "scripts": {
@@ -17,6 +18,9 @@
     "typecheck:server": "tsc -p tsconfig.json --noEmit",
     "typecheck:electron": "tsc -p tsconfig.electron.json",
     "smoke": "tsx scripts/smoke.ts",
+    "test:client": "tsx scripts/client-unit.ts && tsx scripts/client-shell-check.ts",
+    "test:metal": "tsx scripts/metal-check.ts",
+    "test:electron-dom": "tsx scripts/electron-dom-check.ts",
     "electron:dev": "electron-forge start",
     "electron:package": "electron-forge package",
     "electron:make": "electron-forge make",
