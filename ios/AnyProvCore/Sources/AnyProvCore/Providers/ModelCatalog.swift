@@ -43,6 +43,12 @@ public struct ModelCatalog: Sendable {
         public let models: [AIModel]
         public let error: String?
         public var id: String { provider.rawValue }
+
+        public init(provider: ProviderID, models: [AIModel], error: String?) {
+            self.provider = provider
+            self.models = models
+            self.error = error
+        }
     }
 
     /// Fetch models from all providers that have a non-empty key, concurrently.

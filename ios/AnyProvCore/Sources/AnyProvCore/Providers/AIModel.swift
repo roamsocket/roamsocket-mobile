@@ -13,7 +13,8 @@ public enum ProviderID: Hashable, Sendable, Identifiable, Codable {
     case openrouter
     case xai
     case mistral
-    /// On-device Metal (MLX) — **chat only**, not coding sessions.
+    /// Metal (MLX). Phone weights are chat-only; **desktop-installed** Metal
+    /// models (listed via `GET /metal/models`) can drive coding sessions.
     case localMetal
     /// Apple on-device Foundation Model (Apple Intelligence) — **chat only**.
     case appleFoundation
@@ -46,7 +47,7 @@ public enum ProviderID: Hashable, Sendable, Identifiable, Codable {
         case "openrouter": self = .openrouter
         case "xai": self = .xai
         case "mistral": self = .mistral
-        case "local-metal", "local", "metal": self = .localMetal
+        case "local-metal", "localMetal", "local", "metal": self = .localMetal
         case "apple-foundation", "apple", "foundation-models", "apple-intelligence":
             self = .appleFoundation
         default:
@@ -82,10 +83,11 @@ public enum ProviderID: Hashable, Sendable, Identifiable, Codable {
     }
 
     /// Whether the desktop coding agent can drive this provider today.
-    /// Local Metal and Apple Foundation Models run on the phone for **chat only**.
+    /// Phone Metal / Apple Intelligence remain chat-only on-device; desktop Metal
+    /// (`localMetal`) is supported when the model is installed on the server.
     public var supportsCodingAgent: Bool {
         switch self {
-        case .google, .localMetal, .appleFoundation: return false
+        case .google, .appleFoundation: return false
         default: return true
         }
     }
@@ -146,6 +148,44 @@ public enum Effort: String, Codable, CaseIterable, Sendable {
     case low, medium, high
 
     public var displayName: String { rawValue.capitalized }
+
+    /// Short label under the slider (Claude-style).
+    public var summary: String {
+        switch self {
+        case .low: return "Faster replies"
+        case .medium: return "Balanced"
+        case .high: return "Thorough reasoning"
+        }
+    }
+
+    /// Longer explanation shown beside / under the selected effort.
+    public var detail: String {
+        switch self {
+        case .low:
+            return "Minimal deliberation. Best for quick questions, simple edits, and when latency matters more than depth."
+        case .medium:
+            return "Solid default for everyday coding and chat. Weighs trade-offs without spending a long time planning."
+        case .high:
+            return "More careful multi-step reasoning. Prefer for hard bugs, architecture, refactors, and tasks with many tools."
+        }
+    }
+
+    /// Slider index 0…2
+    public var sliderIndex: Int {
+        switch self {
+        case .low: return 0
+        case .medium: return 1
+        case .high: return 2
+        }
+    }
+
+    public static func from(sliderIndex: Int) -> Effort {
+        switch sliderIndex {
+        case 0: return .low
+        case 1: return .medium
+        default: return .high
+        }
+    }
 }
 
 /// HTTP shape used for listing models and chat completions.
@@ -183,18 +223,28 @@ public struct CustomProvider: Codable, Hashable, Sendable, Identifiable {
     /// Do not include `/chat/completions` or `/messages`.
     public var baseURL: String
     public var style: CustomProviderStyle
+    /// When true, models from this provider are treated as vision-capable
+    /// (unless the model id is clearly non-vision, e.g. embeddings / TTS).
+    public var supportsVision: Bool
 
-    public init(id: String, label: String, baseURL: String, style: CustomProviderStyle = .openAI) {
+    public init(
+        id: String,
+        label: String,
+        baseURL: String,
+        style: CustomProviderStyle = .openAI,
+        supportsVision: Bool = false
+    ) {
         self.id = id
         self.label = label
         self.baseURL = baseURL
         self.style = style
+        self.supportsVision = supportsVision
     }
 
     public var providerID: ProviderID { .custom(id) }
 
     enum CodingKeys: String, CodingKey {
-        case id, label, baseURL, style
+        case id, label, baseURL, style, supportsVision
     }
 
     public init(from decoder: Decoder) throws {
@@ -204,5 +254,6 @@ public struct CustomProvider: Codable, Hashable, Sendable, Identifiable {
         baseURL = try c.decode(String.self, forKey: .baseURL)
         // Older installs only stored OpenAI-compatible customs.
         style = try c.decodeIfPresent(CustomProviderStyle.self, forKey: .style) ?? .openAI
+        supportsVision = try c.decodeIfPresent(Bool.self, forKey: .supportsVision) ?? false
     }
 }

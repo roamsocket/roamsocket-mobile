@@ -15,14 +15,12 @@ public enum SkillsMCPError: Error, LocalizedError {
     }
 }
 
-/// iOS-side stub for the skills/MCP sync client. The real git work happens
-/// on the desktop server (which has `git` in PATH and a real filesystem);
-/// this class sends upsert/delete/sync requests over the WebSocket and
-/// surfaces server-side errors.
+/// iOS client for skills/MCP sync. Git work runs on the paired desktop
+/// (filesystem + `git`); this type sends upsert/delete/sync over WebSocket
+/// and surfaces server errors.
 ///
-/// iOS keeps a local JSON cache of the latest synced state for offline
-/// viewing; edits go through `ServerClient.send(...)` with one of the
-/// `SkillsMCPMessage` types below.
+/// Local JSON cache holds the latest synced state for offline viewing; edits
+/// go through `ServerClient.send(...)` with the skills/MCP message types.
 public final class SkillsMCPClient: ObservableObject, @unchecked Sendable {
     @Published public private(set) var lastSyncError: String?
 
@@ -44,17 +42,7 @@ public final class SkillsMCPClient: ObservableObject, @unchecked Sendable {
             cachedSkills = skills
             saveCaches()
         case let .mcpSync(servers):
-            cachedMCPServers = servers.map { entry in
-                MCPServer(
-                    id: entry.id,
-                    name: entry.name,
-                    description: entry.description ?? "",
-                    command: entry.command ?? "",
-                    args: entry.args ?? [],
-                    env: entry.env ?? [:],
-                    isEnabled: entry.isEnabled ?? true
-                )
-            }
+            cachedMCPServers = servers
             saveCaches()
         default:
             break

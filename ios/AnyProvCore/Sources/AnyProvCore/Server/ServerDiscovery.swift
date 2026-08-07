@@ -53,13 +53,14 @@ public struct DiscoveredServer: Identifiable, Hashable, Sendable {
 }
 
 /// Bonjour service type published by the desktop companion.
-/// Must match `APC_BONJOUR_TYPE` in `desktop-server/src/discovery.ts`
-/// and `NSBonjourServices` in the app Info.plist.
+/// Must match `APC_BONJOUR_TYPE` / `BONJOUR_SERVICE_TYPE` in
+/// `desktop-server/src/discovery.ts` / `product.ts` and `NSBonjourServices`
+/// in the app Info.plist.
 public enum ServerDiscovery {
-    public static let bonjourType = "_anyprov-code._tcp"
+    public static let bonjourType = "_codesocket._tcp"
 }
 
-/// Browses the LAN for AnyProv Code desktop servers.
+/// Browses the LAN for CodeSocket desktop servers.
 ///
 /// Call `start()` when the pairing screen appears and `stop()` on dismiss.
 /// Results stream into `servers` on the main queue.

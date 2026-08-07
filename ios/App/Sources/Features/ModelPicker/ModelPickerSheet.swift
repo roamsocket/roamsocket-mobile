@@ -7,33 +7,66 @@ import AnyProvCore
 ///   - swipe **Edit** (rename alias) or **Delete** (hide from list / erase Metal weights)
 ///   - local Metal models can be unloaded from RAM without deleting weights
 ///   - Effort lives at the bottom as before
+///
+/// When `codingOnly` is true (coding session / new session), phone-local Metal
+/// and other phone-only providers are hidden. Desktop-installed Metal models
+/// (from the paired server) are listed instead so weights match the agent host.
 struct ModelPickerSheet: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
+
+    /// When true, only list providers the desktop coding agent can drive.
+    /// Hides phone Metal / Apple Intelligence; shows desktop Metal inventory.
+    var codingOnly: Bool = false
 
     @State private var renameTarget: AIModel?
     @State private var loadedMetalIDs: Set<String> = []
     @State private var statusMessage = ""
 
+    private var catalogResults: [ModelCatalog.ProviderResult] {
+        if codingOnly {
+            // Cloud / custom providers the agent supports — never phone Metal.
+            var results = state.providerResults.filter {
+                $0.provider.supportsCodingAgent && $0.provider != .localMetal
+            }
+            // Desktop Metal inventory (paired server), not phone weights.
+            if !state.desktopMetalModels.isEmpty || state.desktopMetalError != nil {
+                results.append(
+                    ModelCatalog.ProviderResult(
+                        provider: .localMetal,
+                        models: state.desktopMetalModels,
+                        error: state.desktopMetalModels.isEmpty ? state.desktopMetalError : nil
+                    )
+                )
+            }
+            return results
+        }
+        return state.providerResults
+    }
+
     private var nonEmptyResults: [ModelCatalog.ProviderResult] {
-        state.providerResults.filter { !state.visibleModels(in: $0).isEmpty }
+        catalogResults.filter { !state.visibleModels(in: $0).isEmpty }
     }
 
     private var emptyResults: [ModelCatalog.ProviderResult] {
-        state.providerResults.filter { $0.models.isEmpty && ($0.error != nil) }
+        catalogResults.filter { $0.models.isEmpty && ($0.error != nil) }
+    }
+
+    private var hasAnyListedModels: Bool {
+        catalogResults.contains { !state.visibleModels(in: $0).isEmpty }
     }
 
     var body: some View {
         SheetScaffold(title: "Select model", trailing: nil, onClose: { dismiss() }) {
             List {
-                if state.isLoadingModels {
+                if state.isLoadingModels || (codingOnly && state.isLoadingDesktopMetal && !hasAnyListedModels) {
                     ProgressView()
                         .tint(Theme.textSecondary)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 40)
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
-                } else if state.allModels.isEmpty {
+                } else if !hasAnyListedModels {
                     emptyState
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
@@ -50,23 +83,26 @@ struct ModelPickerSheet: View {
                     }
                 }
 
-                if state.isLoadingLocalMetal {
-                    Section {
-                        LocalMetalLoadProgressBanner(
-                            progress: state.localMetalLoadProgress,
-                            modelName: state.selectedModel.map { state.displayName(for: $0) },
-                            style: .plain
-                        )
-                        .listRowBackground(Theme.surface)
-                        .listRowSeparator(.hidden)
-                    }
-                } else if let err = state.localMetalLoadError, !err.isEmpty {
-                    Section {
-                        Text(err)
-                            .font(.footnote)
-                            .foregroundStyle(.red.opacity(0.9))
+                // Metal load/unload controls only apply when phone Metal models are listed.
+                if !codingOnly {
+                    if state.isLoadingLocalMetal {
+                        Section {
+                            LocalMetalLoadProgressBanner(
+                                progress: state.localMetalLoadProgress,
+                                modelName: state.selectedModel.map { state.displayName(for: $0) },
+                                style: .plain
+                            )
                             .listRowBackground(Theme.surface)
                             .listRowSeparator(.hidden)
+                        }
+                    } else if let err = state.localMetalLoadError, !err.isEmpty {
+                        Section {
+                            Text(err)
+                                .font(.footnote)
+                                .foregroundStyle(.red.opacity(0.9))
+                                .listRowBackground(Theme.surface)
+                                .listRowSeparator(.hidden)
+                        }
                     }
                 }
 
@@ -80,7 +116,7 @@ struct ModelPickerSheet: View {
                     }
                 }
 
-                if !loadedMetalIDs.isEmpty {
+                if !codingOnly, !loadedMetalIDs.isEmpty {
                     Section {
                         unloadAllRow
                             .listRowBackground(Theme.surface)
@@ -117,9 +153,15 @@ struct ModelPickerSheet: View {
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
             .task {
-                LocalMetalBootstrap.ensureRegistered()
+                if !codingOnly {
+                    LocalMetalBootstrap.ensureRegistered()
+                }
                 if state.allModels.isEmpty { await state.refreshModels() }
-                await refreshLoadedMetal()
+                if codingOnly {
+                    await state.refreshDesktopMetalModels()
+                } else {
+                    await refreshLoadedMetal()
+                }
             }
         }
         .presentationDetents([.large])
@@ -138,14 +180,16 @@ struct ModelPickerSheet: View {
                     model: model,
                     isSelected: state.selectedModel?.id == model.id,
                     providerDisplayName: providerDisplayName(for: result),
-                    isLoadedInMemory: model.provider == .localMetal
+                    isLoadedInMemory: !codingOnly
+                        && model.provider == .localMetal
                         && loadedMetalIDs.contains(model.modelID),
                     onSelect: {
-                        // Selection triggers AppState local-Metal load/unload policy.
+                        // Selection triggers AppState local-Metal load/unload policy
+                        // only for phone weights; desktop Metal runs on the server.
                         state.selectedModel = model
                         dismiss()
                     },
-                    onUnload: model.provider == .localMetal
+                    onUnload: (!codingOnly && model.provider == .localMetal)
                         ? { Task { await unload(model.modelID) } }
                         : nil
                 )
@@ -170,7 +214,8 @@ struct ModelPickerSheet: View {
                     } label: {
                         Label("Edit", systemImage: "pencil")
                     }
-                    if model.provider == .localMetal,
+                    if !codingOnly,
+                       model.provider == .localMetal,
                        loadedMetalIDs.contains(model.modelID) {
                         Button {
                             Task { await unload(model.modelID) }
@@ -182,7 +227,9 @@ struct ModelPickerSheet: View {
                         Task { await deleteModel(model) }
                     } label: {
                         Label(
-                            model.provider == .localMetal ? "Delete from disk" : "Remove from list",
+                            !codingOnly && model.provider == .localMetal
+                                ? "Delete from disk"
+                                : "Remove from list",
                             systemImage: "trash"
                         )
                     }
@@ -215,11 +262,17 @@ struct ModelPickerSheet: View {
     }
 
     private func providerTitle(for result: ModelCatalog.ProviderResult) -> String {
-        state.customProvider(for: result.provider)?.label ?? result.provider.displayName
+        if codingOnly, result.provider == .localMetal {
+            return "Desktop Metal"
+        }
+        return state.customProvider(for: result.provider)?.label ?? result.provider.displayName
     }
 
     private func providerDisplayName(for result: ModelCatalog.ProviderResult) -> String {
-        state.customProvider(for: result.provider)?.label ?? result.provider.displayName
+        if codingOnly, result.provider == .localMetal {
+            return "Desktop Metal"
+        }
+        return state.customProvider(for: result.provider)?.label ?? result.provider.displayName
     }
 
     @ViewBuilder
@@ -247,7 +300,7 @@ struct ModelPickerSheet: View {
             Text("No models yet")
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(Theme.textPrimary)
-            Text("Add an API key in Settings, pick Apple Intelligence when available, or download an on-device Metal model (Settings → On-device).")
+            Text(emptyStateMessage)
                 .font(.system(size: 15))
                 .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)
@@ -256,32 +309,18 @@ struct ModelPickerSheet: View {
         .padding(.vertical, 40)
     }
 
-    private var effortRow: some View {
-        Menu {
-            ForEach(Effort.allCases, id: \.self) { effort in
-                Button {
-                    state.effort = effort
-                } label: {
-                    Label(effort.displayName, systemImage: state.effort == effort ? "checkmark" : "")
-                }
-            }
-        } label: {
-            HStack {
-                Text("Effort")
-                    .font(.system(size: 20))
-                    .foregroundStyle(Theme.textPrimary)
-                Spacer()
-                Text(state.effort.displayName)
-                    .font(.system(size: 18))
-                    .foregroundStyle(Theme.textSecondary)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Theme.textTertiary)
-            }
-            .padding(.vertical, 18)
-            .padding(.horizontal, 20)
-            .background(Theme.surface, in: Capsule())
+    private var emptyStateMessage: String {
+        if codingOnly {
+            return "Coding runs on your paired desktop. Add an API key in Settings (Anthropic, OpenAI, OpenRouter, …) or download Metal models in the desktop app (Settings → On-device Metal). Phone Metal models are hidden here because weights may not match the server."
         }
+        return "Add an API key in Settings, pick Apple Intelligence when available, or download an on-device Metal model (Settings → On-device)."
+    }
+
+    private var effortRow: some View {
+        EffortControl(effort: $state.effort)
+            .padding(.vertical, 14)
+            .padding(.horizontal, 16)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20))
     }
 
     private func refreshLoadedMetal() async {
@@ -346,7 +385,7 @@ private struct ModelRow: View {
     }
 
     private var supportsVision: Bool {
-        VisionCapability.supportsVision(model)
+        state.modelSupportsVision(model)
     }
 
     var body: some View {

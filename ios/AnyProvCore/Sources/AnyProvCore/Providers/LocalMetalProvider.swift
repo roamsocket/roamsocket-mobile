@@ -1,11 +1,11 @@
 import Foundation
 
-/// Chat-only on-device inference via Metal (MLX).
+/// On-device Metal (MLX) chat on the **phone**.
 ///
 /// Models are **never bundled** in the app. Users download weights on demand
 /// (Settings → On-device (Metal)); generation uses a process-wide engine the
-/// app registers at launch (`LocalMetalRuntime`). Coding sessions never use
-/// this provider (`supportsCodingAgent == false`).
+/// app registers at launch (`LocalMetalRuntime`). Coding sessions list Metal
+/// from the paired **desktop** (`GET /metal/models`) instead of this store.
 public struct LocalMetalProvider: ModelProvider {
     public let id: ProviderID = .localMetal
 
@@ -30,6 +30,38 @@ public struct LocalMetalProvider: ModelProvider {
     }
 }
 
+// MARK: - Download progress (mirrors desktop MetalDownloadProgress)
+
+/// Structured progress for on-device Metal model downloads.
+/// Status strings are step-oriented (“Listing files…”, “Downloading weights…”)
+/// so the UI can show the same multi-step detail as the desktop manage-models view.
+public struct LocalMetalDownloadProgress: Sendable, Equatable {
+    public var fraction: Double
+    public var status: String
+    public var bytesDownloaded: Int64?
+    public var bytesTotal: Int64?
+    public var file: String?
+
+    public init(
+        fraction: Double,
+        status: String,
+        bytesDownloaded: Int64? = nil,
+        bytesTotal: Int64? = nil,
+        file: String? = nil
+    ) {
+        self.fraction = fraction
+        self.status = status
+        self.bytesDownloaded = bytesDownloaded
+        self.bytesTotal = bytesTotal
+        self.file = file
+    }
+
+    /// 0…100 integer percent for compact labels.
+    public var percent: Int {
+        Int((min(1, max(0, fraction)) * 100).rounded(.down))
+    }
+}
+
 // MARK: - Runtime registration (app injects MLX implementation)
 
 /// Engine the app registers at launch (MLX-backed).
@@ -41,13 +73,13 @@ public protocol LocalMetalGenerating: Sendable {
     ) async throws -> String
 
     /// Download weights for a catalog model id into the app’s on-device cache.
-    /// Progress is 0…1. Throws if the download fails.
+    /// Reports step status + byte-weighted fraction. Throws if the download fails.
     ///
     /// Does **not** leave the model resident in RAM — call `loadIntoMemory`
     /// when the user selects it in the model picker.
     func downloadModel(
         modelID: String,
-        progress: @escaping @Sendable (Double) -> Void
+        progress: @escaping @Sendable (LocalMetalDownloadProgress) -> Void
     ) async throws
 
     /// Load weights into RAM for chat. Idempotent if already loaded.
@@ -108,7 +140,7 @@ public actor LocalMetalModelStore {
             appropriateFor: nil,
             create: true
         )
-        let dir = base.appendingPathComponent("AnyProvCode/LocalModels", isDirectory: true)
+        let dir = base.appendingPathComponent("CodeSocket/LocalModels", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }

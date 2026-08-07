@@ -46,6 +46,30 @@ final class AppState: ObservableObject {
     private var localMetalSyncTask: Task<Void, Never>?
     private var localMetalSyncGeneration = 0
 
+    /// Artifact shown in the chat split panel (source chat + scroll target).
+    @Published var openArtifact: Artifact?
+    /// Scroll the chat transcript to this message after loading (cleared after use).
+    @Published var scrollToMessageId: UUID?
+
+    /// Open an artifact: jump to its chat (caller loads history) and show split panel.
+    func presentArtifact(_ artifact: Artifact) {
+        openArtifact = artifact
+        scrollToMessageId = artifact.messageId
+    }
+
+    func dismissOpenArtifact() {
+        openArtifact = nil
+        scrollToMessageId = nil
+    }
+
+    /// Metal models installed on the paired desktop (`GET /metal/models`).
+    /// Coding pickers show these instead of phone-local Metal weights.
+    @Published private(set) var desktopMetalModels: [AIModel] = []
+    /// Last error while refreshing desktop Metal models (nil when ok / unpaired).
+    @Published private(set) var desktopMetalError: String?
+    /// True while fetching desktop Metal inventory.
+    @Published private(set) var isLoadingDesktopMetal = false
+
     /// User-renamed models, keyed by `"provider:modelID"`. Empty entries are
     /// treated as "use the upstream name".
     @Published var modelAliases: [String: String] = [:]
@@ -57,6 +81,11 @@ final class AppState: ObservableObject {
     /// When true, every assistant message expands its Thinking section
     /// by default. When false, thinking collapses behind a one-line preview.
     @AppStorage("alwaysExpandThinking.v1") var alwaysExpandThinking: Bool = false
+
+    /// Allow the assistant to search past chats for relevant details (local).
+    @AppStorage("memory.searchChats.v1") var memorySearchChats: Bool = true
+    /// Allow generating lasting memory summaries from chats (local).
+    @AppStorage("memory.generateFromChats.v1") var memoryGenerateFromChats: Bool = true
 
     /// App chrome appearance: dark (blue-grey), OLED (true black), or light.
     @AppStorage(AppAppearance.storageKey) var appearanceRaw: String = AppAppearance.default.rawValue
@@ -74,7 +103,7 @@ final class AppState: ObservableObject {
     }
 
     /// Branch name prefix for new coding sessions, e.g. `apc/fix-login-a1b2c3d4`.
-    @AppStorage("codeBranchPrefix.v1") var codeBranchPrefix: String = "apc"
+    @AppStorage("codeBranchPrefix.v1") var codeBranchPrefix: String = "codesocket"
 
     /// Active desktop base URL currently used for API/WS (local or tunnel).
     @AppStorage("serverHost.v1") var serverHost: String = ""
@@ -1057,7 +1086,8 @@ final class AppState: ObservableObject {
         label: String,
         baseURL: String,
         apiKey: String,
-        style: CustomProviderStyle = .openAI
+        style: CustomProviderStyle = .openAI,
+        supportsVision: Bool = false
     ) -> CustomProvider? {
         let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedURL = Self.normalizeBaseURL(baseURL)
@@ -1070,7 +1100,8 @@ final class AppState: ObservableObject {
             id: slug,
             label: trimmedLabel,
             baseURL: normalizedURL,
-            style: style
+            style: style,
+            supportsVision: supportsVision
         )
         customProviders.append(provider)
         saveCustomProviders()
@@ -1085,7 +1116,8 @@ final class AppState: ObservableObject {
         label: String,
         baseURL: String,
         style: CustomProviderStyle,
-        apiKey: String?
+        apiKey: String?,
+        supportsVision: Bool? = nil
     ) {
         let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedURL = Self.normalizeBaseURL(baseURL)
@@ -1094,10 +1126,19 @@ final class AppState: ObservableObject {
         customProviders[idx].label = trimmedLabel
         customProviders[idx].baseURL = normalizedURL
         customProviders[idx].style = style
+        if let supportsVision {
+            customProviders[idx].supportsVision = supportsVision
+        }
         saveCustomProviders()
         if let apiKey {
             setAPIKey(apiKey, for: provider.providerID)
         }
+    }
+
+    /// Vision eligibility including custom-provider “supports vision” toggles.
+    func modelSupportsVision(_ model: AIModel) -> Bool {
+        let flagged = customProvider(for: model.provider)?.supportsVision == true
+        return VisionCapability.supportsVision(model, providerMarkedVisionCapable: flagged)
     }
 
     func deleteCustomProvider(_ provider: CustomProvider) {
@@ -1382,6 +1423,20 @@ final class AppState: ObservableObject {
         }
         guard !Task.isCancelled, generation == localMetalSyncGeneration else { return }
 
+        // Desktop-only Metal selections run on the paired server — do not try
+        // to load those weights into the phone's Metal runtime.
+        if let current, current.provider == .localMetal {
+            let phoneModels = await LocalMetalModelStore.shared.listModels()
+            let onPhone = phoneModels.contains { $0.modelID == current.modelID }
+            if !onPhone {
+                if generation == localMetalSyncGeneration {
+                    await engine.unloadAllFromMemory()
+                    clearLocalMetalLoadingState()
+                }
+                return
+            }
+        }
+
         let keepID: String? = (current?.provider == .localMetal) ? current?.modelID : nil
 
         // Unload everything that shouldn't be resident.
@@ -1501,13 +1556,65 @@ final class AppState: ObservableObject {
         }
     }
 
+    // MARK: Desktop Metal (coding)
+
+    /// Refresh installed Metal models on the paired desktop. Safe no-op when unpaired.
+    func refreshDesktopMetalModels() async {
+        guard let endpoint = serverEndpoint, let token = serverToken, !token.isEmpty else {
+            desktopMetalModels = []
+            desktopMetalError = nil
+            isLoadingDesktopMetal = false
+            return
+        }
+        isLoadingDesktopMetal = true
+        defer { isLoadingDesktopMetal = false }
+        do {
+            let response = try await serverClient.listDesktopMetalModels(
+                endpoint: endpoint,
+                token: token
+            )
+            desktopMetalModels = response.models.map { $0.asAIModel() }
+            if response.models.isEmpty {
+                desktopMetalError = response.runtimeReady
+                    ? nil
+                    : response.detail
+            } else if !response.runtimeReady {
+                // Models are listed even when mlx-lm is missing so the user can
+                // see inventory; surface runtime readiness as a soft warning.
+                desktopMetalError = response.detail
+            } else {
+                desktopMetalError = nil
+            }
+        } catch {
+            desktopMetalModels = []
+            desktopMetalError = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+        }
+    }
+
+    /// Whether this model is installed on the paired desktop Metal store.
+    func isDesktopMetalModel(_ model: AIModel) -> Bool {
+        model.provider == .localMetal
+            && desktopMetalModels.contains { $0.modelID == model.modelID }
+    }
+
     // MARK: Model selection for a session
 
     /// Build the `ModelSelection` the server needs, pulling the key from Keychain.
-    /// Local Metal models are chat-only and never sent to the coding agent.
+    /// Phone-only chat providers are excluded; desktop Metal is allowed when
+    /// the hub id is (or was) listed from the paired server.
     func modelSelectionForSession() -> ModelSelection? {
         guard let model = selectedModel else { return nil }
         guard model.provider.supportsCodingAgent else { return nil }
+        // Metal coding only when the desktop has that model (or we previously
+        // selected it from the desktop list — still send hub id to the server).
+        if model.provider == .localMetal {
+            // Prefer explicit desktop inventory; still allow if the selection
+            // already carries the desktop display suffix from a prior fetch.
+            let onDesktop = isDesktopMetalModel(model)
+                || model.displayName.contains("· Desktop")
+            guard onDesktop else { return nil }
+        }
         let key = resolvedAPIKey(for: model.provider)
         guard !key.isEmpty else { return nil }
         let custom = customProvider(for: model.provider)

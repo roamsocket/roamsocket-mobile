@@ -73,11 +73,17 @@ struct Pill: View {
 /// the provider settings screen so they can paste a key. The component
 /// pulls reactive state from the environment so callers don't have to
 /// pass anything in besides the two actions.
+///
+/// For coding composers, set `requiresCodingAgent` so phone-only providers
+/// (local Metal, Apple Intelligence) are not treated as a usable selection —
+/// those run on-device for chat and may not match the desktop agent.
 struct ModelSelectorPill: View {
     @EnvironmentObject var state: AppState
     var modelDisplayName: String
     var onPick: () -> Void
     var onAddModel: () -> Void
+    /// When true, only cloud / desktop-agent providers count as usable.
+    var requiresCodingAgent: Bool = false
 
     var body: some View {
         Button {
@@ -115,8 +121,17 @@ struct ModelSelectorPill: View {
 
     /// A usable model needs an entry AND (for cloud providers) an API key.
     /// On-device chat providers (Metal, Apple Intelligence) need no key.
+    /// For coding, phone-only Metal does not count — only desktop-installed Metal
+    /// (or cloud providers the agent supports).
     var hasUsableModel: Bool {
         guard let model = state.selectedModel else { return false }
+        if requiresCodingAgent {
+            guard model.provider.supportsCodingAgent else { return false }
+            if model.provider == .localMetal {
+                return state.isDesktopMetalModel(model)
+                    || model.displayName.contains("· Desktop")
+            }
+        }
         if !model.provider.requiresAPIKey { return true }
         return !state.resolvedAPIKey(for: model.provider).isEmpty
     }
@@ -364,5 +379,30 @@ struct BetaBadge: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .background(Theme.surfaceElevated, in: Capsule())
+    }
+}
+
+/// Three bouncing dots used while the assistant is generating a reply.
+/// Driven by `TimelineView` so the wave keeps running through parent
+/// re-renders (streaming tokens, tool status updates).
+struct TypingDotsView: View {
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            HStack(spacing: 5) {
+                ForEach(0..<3, id: \.self) { index in
+                    let phase = t * 2.4 - Double(index) * 0.22
+                    // Smooth 0…1…0 wave per dot, staggered by index.
+                    let wave = (sin(phase * .pi * 2) + 1) / 2
+                    Circle()
+                        .fill(Theme.textSecondary)
+                        .frame(width: 7, height: 7)
+                        .opacity(0.28 + 0.72 * wave)
+                        .offset(y: -3.5 * wave)
+                }
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Assistant is typing")
     }
 }

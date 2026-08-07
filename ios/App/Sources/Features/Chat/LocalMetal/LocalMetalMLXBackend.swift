@@ -130,13 +130,13 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
 
     func downloadModel(
         modelID: String,
-        progress: @escaping @Sendable (Double) -> Void
+        progress: @escaping @Sendable (LocalMetalDownloadProgress) -> Void
     ) async throws {
         // Disk-only hub snapshot — do **not** load into MLX here. Loading via
         // `loadContainer` previously hid real byte progress (UI stuck ~2–4% while
         // large weights transferred, then jumped to 100% after load finished).
         if modelID.hasPrefix("local/") {
-            progress(1)
+            progress(LocalMetalDownloadProgress(fraction: 1, status: "Ready"))
             await LocalMetalModelStore.shared.markDownloaded(modelID: modelID)
             return
         }
@@ -145,7 +145,7 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
             throw ProviderError.transport("Invalid model id “\(modelID)”.")
         }
 
-        progress(0)
+        progress(LocalMetalDownloadProgress(fraction: 0, status: "Listing files…"))
 
         let repoDir = hubCache.repoDirectory(repo: repoID, kind: .model)
         let broker = DownloadProgressBroker(emit: progress)
@@ -153,12 +153,26 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
         // Expected size from the hub tree so we can report true byte progress even
         // when Foundation Progress freezes mid-file and while URLSession stages
         // multi‑GB weights in tmp/ before they land in the hub cache.
-        if let expected = try? await Self.expectedDownloadBytes(
-            hubClient: hubClient,
-            repoID: repoID,
-            patterns: Self.modelDownloadPatterns
-        ), expected > 0 {
-            await broker.setExpectedBytes(expected)
+        do {
+            let expected = try await Self.expectedDownloadBytes(
+                hubClient: hubClient,
+                repoID: repoID,
+                patterns: Self.modelDownloadPatterns
+            )
+            if expected > 0 {
+                await broker.setExpectedBytes(expected)
+                progress(LocalMetalDownloadProgress(
+                    fraction: 0,
+                    status: "Preparing download…",
+                    bytesDownloaded: 0,
+                    bytesTotal: expected
+                ))
+            } else {
+                progress(LocalMetalDownloadProgress(fraction: 0, status: "Preparing download…"))
+            }
+        } catch {
+            // Tree size is optional; continue with hub Progress alone.
+            progress(LocalMetalDownloadProgress(fraction: 0, status: "Preparing download…"))
         }
 
         // Baseline tmp occupancy so we only attribute *growth* to this download
@@ -169,7 +183,8 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
         // Seed UI from anything already cached (resume / retry).
         await broker.noteObservedBytes(
             cacheBytes: Self.directoryByteSize(at: repoDir),
-            tempBytes: tmpBaseline
+            tempBytes: tmpBaseline,
+            status: "Resuming…"
         )
 
         // Poll cache + large temp files + last hub Progress at ~10 Hz.
@@ -177,13 +192,18 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
             while !Task.isCancelled {
                 let cacheBytes = Self.directoryByteSize(at: repoDir)
                 let tempBytes = Self.largeTempFileBytes()
-                await broker.noteObservedBytes(cacheBytes: cacheBytes, tempBytes: tempBytes)
+                await broker.noteObservedBytes(
+                    cacheBytes: cacheBytes,
+                    tempBytes: tempBytes,
+                    status: "Downloading weights…"
+                )
                 await broker.rescanHubProgress()
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
         }
 
         do {
+            await broker.setStatus("Downloading weights…")
             // Same patterns mlx-swift-lm uses for chat weights + tokenizer.
             _ = try await hubClient.downloadSnapshot(
                 of: repoID,
@@ -558,7 +578,8 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
 
 // MARK: - Progress broker
 
-/// Merges Hugging Face `Progress` with on-disk + tmp staging growth into a monotonic 0…1.
+/// Merges Hugging Face `Progress` with on-disk + tmp staging growth into a monotonic 0…1
+/// plus human step status (mirrors desktop Metal download progress).
 ///
 /// URLSession downloads multi‑GB weights into a temp file first; the hub cache only
 /// grows when each file finishes. Foundation hierarchical `Progress` also freezes
@@ -567,15 +588,19 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
 ///   - hub cache size (blobs + incomplete + snapshots)
 ///   - growth of large files under the app temp directory
 private actor DownloadProgressBroker {
-    private let emit: @Sendable (Double) -> Void
+    private let emit: @Sendable (LocalMetalDownloadProgress) -> Void
     private var bestFraction: Double = 0
     private var expectedBytes: Int64 = 0
     private var lastEmitted: Double = -1
+    private var lastStatusKey = ""
     private var tempBaseline: Int64 = 0
+    private var status: String = "Downloading weights…"
+    private var currentFile: String?
+    private var bytesDownloaded: Int64 = 0
     /// Last Progress object from the hub client (sampled between handler callbacks).
     private var lastHubProgress: Progress?
 
-    init(emit: @escaping @Sendable (Double) -> Void) {
+    init(emit: @escaping @Sendable (LocalMetalDownloadProgress) -> Void) {
         self.emit = emit
     }
 
@@ -587,10 +612,29 @@ private actor DownloadProgressBroker {
         tempBaseline = max(0, bytes)
     }
 
+    func setStatus(_ text: String) {
+        status = text
+        publish(bestFraction, force: true)
+    }
+
     func noteHubProgress(_ progress: Progress) {
         lastHubProgress = progress
         if progress.totalUnitCount > 1_024 {
             expectedBytes = max(expectedBytes, progress.totalUnitCount)
+        }
+        // Prefer hub-provided step labels when present (file counts, names).
+        if let label = Self.statusLabel(from: progress) {
+            status = label
+        }
+        if let file = Self.fileLabel(from: progress) {
+            currentFile = file
+        }
+        if progress.totalUnitCount > 0, progress.completedUnitCount >= 0 {
+            // When unit counts look like bytes, surface them.
+            if progress.totalUnitCount > 1_024 * 1_024 {
+                bytesDownloaded = max(bytesDownloaded, progress.completedUnitCount)
+                expectedBytes = max(expectedBytes, progress.totalUnitCount)
+            }
         }
         raise(Self.fraction(from: progress))
     }
@@ -598,41 +642,79 @@ private actor DownloadProgressBroker {
     /// Re-read the last hub Progress (URLSession updates it off-thread).
     func rescanHubProgress() {
         guard let progress = lastHubProgress else { return }
+        if let label = Self.statusLabel(from: progress) {
+            status = label
+        }
+        if let file = Self.fileLabel(from: progress) {
+            currentFile = file
+        }
         raise(Self.fraction(from: progress))
     }
 
     /// Cache bytes + absolute temp occupancy (baseline subtracted inside).
-    func noteObservedBytes(cacheBytes: Int64, tempBytes: Int64) {
+    func noteObservedBytes(cacheBytes: Int64, tempBytes: Int64, status hint: String? = nil) {
         let staging = max(0, tempBytes - tempBaseline)
         let received = max(0, cacheBytes) + staging
+        bytesDownloaded = max(bytesDownloaded, received)
+        if let hint, currentFile == nil {
+            status = hint
+        }
         if expectedBytes > 1_024 {
             raise(min(0.99, Double(received) / Double(expectedBytes)))
         } else if received > 1_024 * 1_024 {
             // No tree size yet — soft estimate so the bar still moves.
+            status = "Downloading weights…"
             raise(min(0.5, Double(received) / 4_000_000_000))
         }
     }
 
     func finish() {
-        publish(1)
+        status = "Ready"
+        currentFile = nil
+        if expectedBytes > 0 {
+            bytesDownloaded = max(bytesDownloaded, expectedBytes)
+        }
+        publish(1, force: true)
     }
 
     private func raise(_ value: Double) {
         let clamped = min(0.99, max(0, value))
         guard clamped > bestFraction + 0.0005 || (clamped > 0 && bestFraction == 0) else {
             if clamped > bestFraction { bestFraction = clamped }
+            // Still push status/file changes even if fraction barely moved.
+            publish(bestFraction, force: false)
             return
         }
         bestFraction = clamped
-        publish(bestFraction)
+        publish(bestFraction, force: false)
     }
 
-    private func publish(_ raw: Double) {
+    private func publish(_ raw: Double, force: Bool) {
         let value = min(1, max(0, raw))
+        let statusKey = "\(status)|\(currentFile ?? "")|\(bytesDownloaded)|\(expectedBytes)"
         // ~0.1% steps so multi‑GB transfers feel alive without flooding SwiftUI.
-        guard value >= 1 || value >= lastEmitted + 0.001 || lastEmitted < 0 else { return }
+        let fractionMoved = value >= 1 || value >= lastEmitted + 0.001 || lastEmitted < 0
+        let statusMoved = statusKey != lastStatusKey
+        guard force || fractionMoved || statusMoved else { return }
         lastEmitted = value
-        emit(value)
+        lastStatusKey = statusKey
+
+        let step: String
+        if value >= 1 {
+            step = "Ready"
+        } else if let file = currentFile, !file.isEmpty {
+            step = "Downloading \(file)…"
+        } else {
+            step = status
+        }
+
+        emit(LocalMetalDownloadProgress(
+            fraction: value,
+            status: step,
+            bytesDownloaded: bytesDownloaded > 0 ? bytesDownloaded : nil,
+            bytesTotal: expectedBytes > 0 ? expectedBytes : nil,
+            file: currentFile
+        ))
     }
 
     static func fraction(from progress: Progress) -> Double {
@@ -651,6 +733,44 @@ private actor DownloadProgressBroker {
             return min(0.99, Double(progress.completedUnitCount) / 4_000_000_000)
         }
         return 0
+    }
+
+    /// Human step label from Foundation Progress (file counts / descriptions).
+    static func statusLabel(from progress: Progress) -> String? {
+        if progress.totalUnitCount > 0,
+           progress.totalUnitCount <= 10_000,
+           progress.completedUnitCount >= 0 {
+            // Small unit counts usually mean file counts, not bytes.
+            let done = progress.completedUnitCount
+            let total = progress.totalUnitCount
+            if total > 1 {
+                return "Downloading files… \(done)/\(total)"
+            }
+        }
+        if let extra = progress.localizedAdditionalDescription?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !extra.isEmpty {
+            return extra
+        }
+        if let desc = progress.localizedDescription?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !desc.isEmpty,
+           !desc.lowercased().contains("completed") {
+            return desc
+        }
+        return nil
+    }
+
+    static func fileLabel(from progress: Progress) -> String? {
+        if let url = progress.fileURL {
+            let name = url.lastPathComponent
+            if !name.isEmpty { return name }
+        }
+        if let url = progress.userInfo[ProgressUserInfoKey.fileURLKey] as? URL {
+            let name = url.lastPathComponent
+            if !name.isEmpty { return name }
+        }
+        return nil
     }
 }
 

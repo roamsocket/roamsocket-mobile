@@ -83,6 +83,9 @@ struct LocalMetalSettingsView: View {
         NavigationStack {
             List {
                 introSection
+                if !downloads.bannerTracks.isEmpty {
+                    downloadsBannerSection
+                }
                 if !onDeviceEntries.isEmpty {
                     onDeviceSection
                 }
@@ -213,6 +216,52 @@ struct LocalMetalSettingsView: View {
         }
     }
 
+    /// Multi-download banner — same information as desktop Manage models.
+    private var downloadsBannerSection: some View {
+        Section {
+            ForEach(downloads.bannerTracks) { track in
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(track.displayName)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(Theme.textPrimary)
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        Text(bannerPercent(track))
+                            .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                            .foregroundStyle(track.phase == .error ? Color.red.opacity(0.9) : Theme.textTertiary)
+                    }
+                    ProgressView(value: min(1, max(0, track.fraction)))
+                        .tint(track.phase == .error ? Color.red.opacity(0.85) : Theme.accent)
+                    Text(track.detailLine)
+                        .font(.caption)
+                        .foregroundStyle(track.phase == .error ? Color.red.opacity(0.9) : Theme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if track.phase == .error {
+                        Button("Retry") {
+                            startDownload(track.hubID)
+                        }
+                        .font(.system(size: 14, weight: .semibold))
+                    }
+                }
+                .padding(.vertical, 4)
+                .listRowBackground(Theme.surface)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(track.displayName), \(track.detailLine)")
+            }
+        } header: {
+            Text("Downloads")
+        }
+    }
+
+    private func bannerPercent(_ track: LocalMetalDownloadManager.Track) -> String {
+        switch track.phase {
+        case .done: return "100%"
+        case .error: return "Error"
+        case .active: return "\(track.percent)%"
+        }
+    }
+
     private var onDeviceSection: some View {
         Section {
             ForEach(onDeviceEntries) { entry in
@@ -339,12 +388,6 @@ struct LocalMetalSettingsView: View {
                     await reloadStatus()
                 }
             }
-            if downloads.isBusy, let id = downloads.activeModelID {
-                let fraction = downloads.progressByID[id] ?? 0
-                Text("Downloading in background… \(Self.percentLabel(fraction))")
-                    .font(.footnote)
-                    .foregroundStyle(Theme.accent)
-            }
             if !status.isEmpty {
                 Text(status)
                     .font(.footnote)
@@ -356,7 +399,7 @@ struct LocalMetalSettingsView: View {
                     .foregroundStyle(.red.opacity(0.9))
             }
         } footer: {
-            Text("Downloads continue if you leave this screen. Unload frees RAM but keeps weights. Delete removes weights from this device.")
+            Text("Downloads continue if you leave this screen — steps and byte progress stay in Downloads above. Unload frees RAM but keeps weights. Delete removes weights from this device.")
         }
     }
 
@@ -419,7 +462,7 @@ struct LocalMetalSettingsView: View {
             showFamily: showFamily,
             isDownloaded: downloaded.contains(entry.hubID),
             isLoaded: loadedInMemory.contains(entry.hubID),
-            progress: downloads.progress(for: entry.hubID),
+            track: downloads.track(for: entry.hubID),
             sizeLabel: sizeLabel(for: entry),
             runtimeReady: runtimeReady,
             busy: downloads.isBusy,
@@ -535,18 +578,13 @@ struct LocalMetalSettingsView: View {
 
     private func startDownload(_ modelID: String) {
         errorText = nil
-        status = "Downloading in the background…"
-        downloads.start(modelID: modelID, appState: state)
+        let name = entries.first(where: { $0.hubID == modelID })?.displayName
+            ?? LocalMetalCatalog.displayName(for: modelID)
+        status = "Starting download…"
+        downloads.start(modelID: modelID, appState: state, displayName: name)
         if let err = downloads.lastError {
             errorText = err
         }
-    }
-
-    private static func percentLabel(_ fraction: Double) -> String {
-        let pct = fraction * 100
-        if pct <= 0 { return "0%" }
-        if pct < 1 { return "<1%" }
-        return "\(Int(pct.rounded(.down)))%"
     }
 
     private func delete(_ modelID: String) async {
@@ -673,7 +711,7 @@ private struct ModelFamilyDetailView: View {
                         showFamily: false,
                         isDownloaded: downloaded.contains(entry.hubID),
                         isLoaded: loadedInMemory.contains(entry.hubID),
-                        progress: downloads.progress(for: entry.hubID),
+                        track: downloads.track(for: entry.hubID),
                         sizeLabel: sizeLabel(entry),
                         runtimeReady: runtimeReady,
                         busy: downloads.isBusy,
@@ -757,7 +795,7 @@ private struct ModelBucketListView: View {
                                 showFamily: false,
                                 isDownloaded: downloaded.contains(entry.hubID),
                                 isLoaded: loadedInMemory.contains(entry.hubID),
-                                progress: downloads.progress(for: entry.hubID),
+                                track: downloads.track(for: entry.hubID),
                                 sizeLabel: sizeLabel(entry),
                                 runtimeReady: runtimeReady,
                                 busy: downloads.isBusy,
@@ -831,7 +869,8 @@ private struct ModelDownloadRow: View {
     var showFamily: Bool
     let isDownloaded: Bool
     let isLoaded: Bool
-    let progress: Double?
+    /// Live download track (active / error / brief done), if any.
+    let track: LocalMetalDownloadManager.Track?
     let sizeLabel: String
     let runtimeReady: Bool
     let busy: Bool
@@ -839,6 +878,15 @@ private struct ModelDownloadRow: View {
     var onDelete: () -> Void
     var onUnload: () -> Void
     var onUse: () -> Void
+
+    private var isActiveDownload: Bool {
+        track?.phase == .active
+    }
+
+    private var showProgress: Bool {
+        guard let track else { return false }
+        return track.phase == .active || track.phase == .error
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -883,12 +931,13 @@ private struct ModelDownloadRow: View {
                 FlowTagMap(tags: entry.tags)
             }
 
-            if let progress {
-                ProgressView(value: min(1, max(0, progress)))
-                    .tint(Theme.accent)
-                Text("Downloading… \(percentLabel(progress))")
+            if showProgress, let track {
+                ProgressView(value: min(1, max(0, track.fraction)))
+                    .tint(track.phase == .error ? Color.red.opacity(0.85) : Theme.accent)
+                Text(track.detailLine)
                     .font(.caption2)
-                    .foregroundStyle(Theme.textSecondary)
+                    .foregroundStyle(track.phase == .error ? Color.red.opacity(0.9) : Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(.vertical, 6)
@@ -906,7 +955,7 @@ private struct ModelDownloadRow: View {
                 Button("Delete from device", systemImage: "trash", role: .destructive, action: onDelete)
             } else {
                 Button("Download", systemImage: "arrow.down.circle", action: onDownload)
-                    .disabled(busy || !runtimeReady || progress != nil)
+                    .disabled(busy || !runtimeReady || isActiveDownload)
                 Link(destination: entry.downloadURL) {
                     Label("Open on Hugging Face", systemImage: "safari")
                 }
@@ -938,7 +987,7 @@ private struct ModelDownloadRow: View {
             }
         } else {
             Button(action: onDownload) {
-                Text(progress != nil ? "…" : "Download")
+                Text(isActiveDownload ? "…" : (track?.phase == .error ? "Retry" : "Download"))
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Theme.textPrimary)
                     .padding(.horizontal, 14)
@@ -946,15 +995,8 @@ private struct ModelDownloadRow: View {
                     .background(Theme.surfaceElevated, in: Capsule())
             }
             .buttonStyle(.borderless)
-            .disabled(busy || !runtimeReady || progress != nil)
+            .disabled((busy && !isActiveDownload && track?.phase != .error) || !runtimeReady || isActiveDownload)
         }
-    }
-
-    private func percentLabel(_ fraction: Double) -> String {
-        let pct = fraction * 100
-        if pct <= 0 { return "0%" }
-        if pct < 1 { return "<1%" }
-        return "\(Int(pct.rounded(.down)))%"
     }
 }
 

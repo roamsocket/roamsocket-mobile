@@ -4,7 +4,13 @@ import AnyProvCore
 /// Heuristics for models that accept image inputs (Vision mode).
 enum VisionCapability {
     /// Whether this catalog model is likely to accept multimodal (image + text) turns.
-    static func supportsVision(_ model: AIModel) -> Bool {
+    ///
+    /// - Parameter providerMarkedVisionCapable: When true (custom provider toggle),
+    ///   every non-excluded model from that provider is treated as vision-capable.
+    static func supportsVision(
+        _ model: AIModel,
+        providerMarkedVisionCapable: Bool = false
+    ) -> Bool {
         // Google chat is not wired in the iOS client yet.
         if model.provider == .google { return false }
 
@@ -18,17 +24,14 @@ enum VisionCapability {
 
         let id = model.modelID.lowercased()
 
-        // Explicit non-vision families.
-        if id.contains("whisper")
-            || id.contains("embed")
-            || id.contains("tts")
-            || id.contains("moderation")
-            || id.contains("transcri")
-            || id.contains("dall-e")
-            || id.contains("tts-")
-            || id.contains("realtime")
-        {
+        // Explicit non-vision families (even when the provider is marked vision).
+        if isClearlyNonVisionModelID(id) {
             return false
+        }
+
+        // Custom providers the user marked as vision-capable (Ollama VLMs, proxies, …).
+        if providerMarkedVisionCapable {
+            return true
         }
 
         // Explicit vision / multimodal markers.
@@ -89,15 +92,39 @@ enum VisionCapability {
         return false
     }
 
+    /// Model ids that never accept images (embeddings, audio, image-gen, …).
+    static func isClearlyNonVisionModelID(_ id: String) -> Bool {
+        id.contains("whisper")
+            || id.contains("embed")
+            || id.contains("tts")
+            || id.contains("moderation")
+            || id.contains("transcri")
+            || id.contains("dall-e")
+            || id.contains("tts-")
+            || id.contains("realtime")
+            || id.contains("text-embedding")
+            || id.contains("rerank")
+    }
+
     /// Short chip label for list rows.
-    static func visionBadgeLabel(for model: AIModel) -> String? {
-        supportsVision(model) ? "Vision" : nil
+    static func visionBadgeLabel(
+        for model: AIModel,
+        providerMarkedVisionCapable: Bool = false
+    ) -> String? {
+        supportsVision(model, providerMarkedVisionCapable: providerMarkedVisionCapable)
+            ? "Vision"
+            : nil
     }
 
     /// Prefer a known vision model, else the first vision-capable entry, else nil.
-    static func preferredVisionModel(from models: [AIModel], current: AIModel?) -> AIModel? {
-        if let current, supportsVision(current) { return current }
-        let vision = models.filter(supportsVision)
+    /// - Parameter isVision: Override for custom-provider vision flags (defaults to name heuristics).
+    static func preferredVisionModel(
+        from models: [AIModel],
+        current: AIModel?,
+        isVision: (AIModel) -> Bool = { supportsVision($0) }
+    ) -> AIModel? {
+        if let current, isVision(current) { return current }
+        let vision = models.filter(isVision)
         let preferredIDs = [
             // On-device (phone-first)
             "gemma-4-e2b", "gemma-4-e4b", "gemma-4-12b",

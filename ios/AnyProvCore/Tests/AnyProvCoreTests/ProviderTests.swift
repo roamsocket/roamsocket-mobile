@@ -46,6 +46,50 @@ final class ProviderTests: XCTestCase {
         XCTAssertEqual(models[0].contextWindow, 2000000)
     }
 
+    func testGoogleChatGenerateContent() async throws {
+        final class CapturingHTTP: HTTPClient, @unchecked Sendable {
+            var lastURL: String?
+            var lastBody: Data?
+            func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+                lastURL = request.url?.absoluteString
+                lastBody = request.httpBody
+                let payload = #"""
+                {"candidates":[{"content":{"parts":[{"text":"Hello from Gemini"}]}}]}
+                """#
+                let resp = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: nil
+                )!
+                return (Data(payload.utf8), resp)
+            }
+        }
+        let http = CapturingHTTP()
+        let provider = GoogleProvider(http: http)
+        let reply = try await provider.chat(
+            model: "gemini-2.0-flash",
+            apiKey: "AIza-test",
+            messages: [
+                ProviderChatMessage(role: .system, content: "Be brief."),
+                ProviderChatMessage(role: .user, content: "Hi"),
+            ],
+            effort: nil
+        )
+        XCTAssertEqual(reply, "Hello from Gemini")
+        let url = try XCTUnwrap(http.lastURL)
+        XCTAssertTrue(url.contains("models/gemini-2.0-flash:generateContent"), url)
+        XCTAssertTrue(url.contains("key=AIza-test"), url)
+        let body = try XCTUnwrap(http.lastBody)
+        let json = try JSONSerialization.jsonObject(with: body) as! [String: Any]
+        let contents = json["contents"] as! [[String: Any]]
+        XCTAssertEqual(contents.count, 1)
+        XCTAssertEqual(contents[0]["role"] as? String, "user")
+        let sys = json["system_instruction"] as! [String: Any]
+        let sysParts = sys["parts"] as! [[String: Any]]
+        XCTAssertEqual(sysParts[0]["text"] as? String, "Be brief.")
+    }
+
     func testMissingKeyThrows() async {
         do {
             _ = try await AnthropicProvider(http: MockHTTPClient(routes: [])).listModels(apiKey: "")
@@ -102,6 +146,24 @@ final class ProviderTests: XCTestCase {
         XCTAssertEqual(decoded, .appleFoundation)
     }
 
+    func testLocalMetalSupportsCodingAgentAndWireAliases() throws {
+        let id = ProviderID.localMetal
+        XCTAssertEqual(id.rawValue, "local-metal")
+        XCTAssertEqual(ProviderID(rawValue: "localMetal"), .localMetal)
+        XCTAssertEqual(ProviderID(rawValue: "metal"), .localMetal)
+        XCTAssertFalse(id.requiresAPIKey)
+        // Desktop-installed Metal can drive coding; phone weights are filtered in UI.
+        XCTAssertTrue(id.supportsCodingAgent)
+    }
+
+    func testDesktopMetalModelMapsToAIModel() {
+        let m = DesktopMetalModel(hubID: "mlx-community/foo", displayName: "Foo", downloadedAt: 1)
+        let ai = m.asAIModel()
+        XCTAssertEqual(ai.provider, .localMetal)
+        XCTAssertEqual(ai.modelID, "mlx-community/foo")
+        XCTAssertTrue(ai.displayName.contains("Desktop"))
+    }
+
     func testCustomProviderIDDoesNotCollapseToOpenAI() throws {
         let id = ProviderID.custom("ollama")
         XCTAssertEqual(id.rawValue, "custom:ollama")
@@ -112,6 +174,24 @@ final class ProviderTests: XCTestCase {
         let decoded = try JSONDecoder().decode(ProviderID.self, from: data)
         XCTAssertEqual(decoded, .custom("ollama"))
         XCTAssertNotEqual(decoded, .openai)
+    }
+
+    func testCustomProviderSupportsVisionRoundTripAndDefault() throws {
+        let legacy = #"{"id":"ollama","label":"Ollama","baseURL":"http://localhost:11434/v1"}"#.data(using: .utf8)!
+        let decodedLegacy = try JSONDecoder().decode(CustomProvider.self, from: legacy)
+        XCTAssertFalse(decodedLegacy.supportsVision)
+
+        let withVision = CustomProvider(
+            id: "vlm-proxy",
+            label: "VLM Proxy",
+            baseURL: "https://example.com/v1",
+            style: .openAI,
+            supportsVision: true
+        )
+        let data = try JSONEncoder().encode(withVision)
+        let decoded = try JSONDecoder().decode(CustomProvider.self, from: data)
+        XCTAssertTrue(decoded.supportsVision)
+        XCTAssertEqual(decoded.id, "vlm-proxy")
     }
 
     func testCustomOpenAICompatibleListsAgainstBaseURL() async throws {

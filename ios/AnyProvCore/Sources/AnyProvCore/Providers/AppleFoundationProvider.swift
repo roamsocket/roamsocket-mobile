@@ -121,7 +121,7 @@ public struct AppleFoundationProvider: ModelProvider {
         }
 
         let defaultInstructions = """
-        You are a helpful assistant in AnyProv Code, a coding and chat app.
+        You are a helpful assistant in CodeSocket, a coding and chat app.
         Be clear and concise. Prefer practical answers for software tasks.
         """
         let instructions: String
