@@ -1,8 +1,60 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import path from "node:path";
-import { glob as globFs } from "node:fs/promises";
 import type { Tool, ToolContext, ToolResult } from "./types.js";
 import { truncate, resolveInside } from "./types.js";
+
+// Convert a simple glob (e.g. src/**/*.ts) to a RegExp.
+// Supports *, **, and ?. Avoids fs.promises.glob (Node 22+) so we run on
+// Node 20+ and Electron's bundled Node.
+function globToRegExp(pattern: string): RegExp {
+  const normalized = pattern.replace(/\\/g, "/").replace(/^\.\//, "");
+  let out = "^";
+  let i = 0;
+  while (i < normalized.length) {
+    const c = normalized[i]!;
+    if (c === "*") {
+      if (normalized[i + 1] === "*") {
+        if (normalized[i + 2] === "/") {
+          out += "(?:.*/)?";
+          i += 3;
+        } else {
+          out += ".*";
+          i += 2;
+        }
+      } else {
+        out += "[^/]*";
+        i += 1;
+      }
+    } else if (c === "?") {
+      out += "[^/]";
+      i += 1;
+    } else if ("+.^${}()|[]\\".includes(c)) {
+      out += "\\" + c;
+      i += 1;
+    } else {
+      out += c;
+      i += 1;
+    }
+  }
+  out += "$";
+  return new RegExp(out);
+}
+
+/** List files under `cwd` matching a glob pattern (max `limit` results). */
+async function matchGlob(cwd: string, pattern: string, limit = 500): Promise<string[]> {
+  const re = globToRegExp(pattern);
+  // String form returns relative paths on all supported Node/Electron versions.
+  const entries = await readdir(cwd, { recursive: true });
+  const matches: string[] = [];
+  for (const entry of entries) {
+    const rel = String(entry).replace(/\\/g, "/");
+    if (re.test(rel)) {
+      matches.push(rel);
+      if (matches.length >= limit) break;
+    }
+  }
+  return matches;
+}
 
 /** Read a file's contents. */
 export const readFileTool: Tool = {
@@ -121,11 +173,7 @@ export const globTool: Tool = {
   async execute(input, ctx: ToolContext): Promise<ToolResult> {
     try {
       const pattern = String(input.pattern ?? "**/*");
-      const matches: string[] = [];
-      for await (const entry of globFs(pattern, { cwd: ctx.workdir })) {
-        matches.push(typeof entry === "string" ? entry : String(entry));
-        if (matches.length >= 500) break;
-      }
+      const matches = await matchGlob(ctx.workdir, pattern, 500);
       return { ok: true, output: truncate(matches.sort().join("\n") || "(no matches)") };
     } catch (err) {
       return { ok: false, output: (err as Error).message };
