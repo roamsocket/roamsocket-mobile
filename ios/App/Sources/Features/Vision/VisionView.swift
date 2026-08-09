@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import AnyProvCore
 
 /// Full-screen Vision mode: live camera, edge glow, capture, minimizable analysis.
@@ -6,44 +7,175 @@ struct VisionView: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
     @StateObject private var viewModel = VisionViewModel()
+    @ObservedObject private var promptStore = VisionPromptStore.shared
 
     @State private var captureTrigger: UUID?
     @State private var cameraError: String?
     @State private var showProviderSettings = false
+    @State private var showSavePresetAlert = false
+    @State private var newPresetTitle = ""
+    @State private var keyboardHeight: CGFloat = 0
+    /// Bumps when a new still is frozen so pinch-zoom resets.
+    @State private var captureZoomResetID = UUID()
+    @FocusState private var promptFieldFocused: Bool
+
+    /// Retake + shutter row height (not including home-indicator inset). Used to
+    /// lift the collapsed pill above the capture button.
+    private let shutterStackClearance: CGFloat = 110
+
+    private var keyboardVisible: Bool { keyboardHeight > 20 }
 
     var body: some View {
-        ZStack {
-            // Camera (or frozen capture) fills the screen.
-            cameraLayer
-                .ignoresSafeArea()
-
-            VisionGlowOverlay(isThinking: viewModel.isThinking)
-
-            // Analysis popover sits above the white capture button, under chrome
-            // so Close / model picker stay tappable and never get clipped.
-            VisionAnalysisSheet(
-                viewModel: viewModel,
-                modelDisplayName: modelLabel
+        GeometryReader { geo in
+            let horizontalInset = max(16, min(20, geo.size.width * 0.045))
+            // With ignoresSafeArea on this reader, insets are the true system bands.
+            // Fall back so Dynamic Island / notch never clips Close / model pill
+            // (fullScreenCover can occasionally report 0 for a frame).
+            let bottomSafe = geo.safeAreaInsets.bottom
+            let topSafe = max(geo.safeAreaInsets.top, 54)
+            // Live: tall shutter stack. After capture: only Retake when the sheet
+            // is minimized (sheet chrome owns Retake in medium/full).
+            let chromeBlockHeight: CGFloat = {
+                let base: CGFloat = {
+                    if viewModel.capturedImage == nil { return shutterStackClearance }
+                    // Minimized: leave room for bottom Retake + pill.
+                    // Expanded/full: sheet has its own Retake — keep a small band only.
+                    switch viewModel.sheetMode {
+                    case .minimized: return 56
+                    case .expanded, .full: return 8
+                    case .hidden: return 52
+                    }
+                }()
+                return base + max(bottomSafe, 8)
+            }()
+            // Close (44) + padding under status bar — full sheet must stop below this.
+            let topChromeClearance = topSafe + 6 + 44 + 10
+            // Lift shutter + prompt above the software keyboard (we ignore safe area).
+            let bottomPad: CGFloat = {
+                if keyboardVisible, viewModel.capturedImage == nil {
+                    return max(keyboardHeight, bottomSafe) + 8
+                }
+                return max(bottomSafe, 8) + 10
+            }()
+            let sheetOccupied = estimatedSheetOccupiedHeight(
+                totalHeight: geo.size.height,
+                topChromeClearance: topChromeClearance,
+                chromeBlockHeight: chromeBlockHeight,
+                bottomSafe: bottomSafe
             )
-            .padding(.bottom, 110)
-            .zIndex(1)
+            // Leave a small gap so the card grabber isn’t covered by the still.
+            let imageBandHeight = max(
+                140,
+                geo.size.height - topChromeClearance - sheetOccupied - 10
+            )
 
-            // Chrome over the live feed + sheet. Spacer must not steal hits so
-            // the analysis sheet can still drag / scroll underneath.
-            VStack(spacing: 0) {
-                topBar
-                Spacer(minLength: 0)
-                    .allowsHitTesting(false)
-                bottomControls
+            ZStack {
+                Color.black
+                    .ignoresSafeArea()
+
+                // Live camera is full-bleed. After capture the still is staged in a
+                // band above the results card (see higher zIndex layer below).
+                if viewModel.capturedImage == nil {
+                    cameraLayer
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .clipped()
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            if promptFieldFocused {
+                                promptFieldFocused = false
+                            }
+                        }
+                }
+
+                // Glow only while the model is working (don’t wash out the still).
+                if viewModel.isThinking {
+                    VisionGlowOverlay(isThinking: true)
+                        .allowsHitTesting(false)
+                        .zIndex(0.5)
+                }
+
+                // Results card at the bottom (Google Lens–style overlay).
+                VisionAnalysisSheet(
+                    viewModel: viewModel,
+                    modelDisplayName: modelLabel,
+                    shutterClearance: chromeBlockHeight,
+                    bottomSafeInset: bottomSafe,
+                    topChromeClearance: topChromeClearance,
+                    onRetake: performRetake
+                )
+                .frame(width: geo.size.width, height: geo.size.height)
+                .zIndex(1)
+
+                // Photo sits *above* the sheet in hit-test order so pinch/pan work.
+                // Only the image band captures touches; the lower Spacer passes
+                // hits through to the analysis card.
+                if let image = viewModel.capturedImage {
+                    VStack(spacing: 0) {
+                        Color.clear
+                            .frame(height: topChromeClearance)
+                            .allowsHitTesting(false)
+                        VisionZoomableImageView(image: image, resetID: captureZoomResetID)
+                            .frame(width: geo.size.width, height: imageBandHeight)
+                            .animation(
+                                .interactiveSpring(response: 0.32, dampingFraction: 0.86),
+                                value: viewModel.sheetMode
+                            )
+                            .animation(
+                                .easeOut(duration: 0.2),
+                                value: viewModel.isThinking
+                            )
+                        Spacer(minLength: 0)
+                            .allowsHitTesting(false)
+                    }
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .zIndex(1.5)
+                }
+
+                // Chrome over the live feed + sheet. Spacer must not steal hits so
+                // the analysis sheet can still drag / scroll underneath.
+                VStack(spacing: 0) {
+                    topBar
+                    Spacer(minLength: 0)
+                        .allowsHitTesting(false)
+                    bottomControls
+                }
+                .padding(.horizontal, horizontalInset)
+                .padding(.top, topSafe + 6)
+                .padding(.bottom, bottomPad)
+                .frame(width: geo.size.width, height: geo.size.height)
+                .zIndex(2)
+                .animation(.easeOut(duration: 0.22), value: keyboardHeight)
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 8)
-            .padding(.bottom, 28)
-            .zIndex(2)
+            .frame(width: geo.size.width, height: geo.size.height)
         }
+        .ignoresSafeArea()
         .background(Color.black.ignoresSafeArea())
         .statusBarHidden(false)
         .preferredColorScheme(.dark)
+        // Capture-prompt keyboard accessory (must not be stolen by the analysis sheet).
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                if promptFieldFocused {
+                    Button("Done") {
+                        promptFieldFocused = false
+                    }
+                    Spacer()
+                    Button {
+                        fireShutter()
+                    } label: {
+                        Label("Take photo", systemImage: "camera.fill")
+                    }
+                    .fontWeight(.semibold)
+                    .disabled(!viewModel.canCapture || viewModel.isThinking)
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
+            updateKeyboardHeight(from: note)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            keyboardHeight = 0
+        }
         .onAppear {
             viewModel.bind(state: state)
             // Always re-list so a just-downloaded on-device Vision model appears
@@ -70,6 +202,23 @@ struct VisionView: View {
             AppSettingsView()
                 .environmentObject(state)
         }
+        .sheet(isPresented: $viewModel.showPromptLibrary) {
+            VisionPromptLibrarySheet(viewModel: viewModel, promptStore: promptStore)
+        }
+        .alert("Save prompt preset", isPresented: $showSavePresetAlert) {
+            TextField("Name", text: $newPresetTitle)
+            Button("Save") {
+                let title = newPresetTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !title.isEmpty else { return }
+                _ = viewModel.saveCapturePromptAsPreset(title: title)
+                newPresetTitle = ""
+            }
+            Button("Cancel", role: .cancel) {
+                newPresetTitle = ""
+            }
+        } message: {
+            Text("Save the current capture prompt so you can reuse it on later shots.")
+        }
         .alert("Camera", isPresented: Binding(
             get: { cameraError != nil },
             set: { if !$0 { cameraError = nil } }
@@ -82,29 +231,48 @@ struct VisionView: View {
 
     // MARK: - Layers
 
+    /// Live viewfinder only. Frozen stills use `VisionZoomableImageView` in the
+    /// band above the results card (Lens-style). Unmounting the session on
+    /// capture frees GPU/RAM for on-device VLMs.
     @ViewBuilder
     private var cameraLayer: some View {
-        ZStack {
-            if let image = viewModel.capturedImage {
-                // Frozen capture. The live camera and its AVCaptureSession are fully
-                // unmounted here — not just paused — so their buffers are released
-                // instead of competing with the on-device VLM for GPU + RAM. Leaving
-                // the camera hot during Metal inference is a common crash source.
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipped()
-            } else {
-                VisionCameraView(
-                    onCapture: { image in
-                        viewModel.analyze(image: image)
-                    },
-                    onError: { cameraError = $0 },
-                    captureTrigger: captureTrigger,
-                    isSessionActive: true
-                )
+        VisionCameraView(
+            onCapture: { image in
+                captureZoomResetID = UUID()
+                viewModel.analyze(image: image)
+            },
+            onError: { cameraError = $0 },
+            captureTrigger: captureTrigger,
+            isSessionActive: viewModel.capturedImage == nil
+        )
+    }
+
+    /// Approximate bottom card footprint so the photo can sit in the remaining band.
+    /// Mirrors `VisionAnalysisSheet` detent fractions (not pixel-perfect during drag).
+    private func estimatedSheetOccupiedHeight(
+        totalHeight: CGFloat,
+        topChromeClearance: CGFloat,
+        chromeBlockHeight: CGFloat,
+        bottomSafe: CGFloat
+    ) -> CGFloat {
+        switch viewModel.sheetMode {
+        case .hidden:
+            return 0
+        case .minimized:
+            // Pill + lift above Retake chrome.
+            return 76 + chromeBlockHeight + 14
+        case .expanded:
+            if viewModel.isThinking && !viewModel.isReplying {
+                return min(totalHeight * 0.46, 220) + bottomSafe * 0.5
             }
+            return min(max(260, totalHeight * 0.46), max(280, totalHeight - topChromeClearance))
+                + bottomSafe
+        case .full:
+            if viewModel.isThinking && !viewModel.isReplying {
+                return min(totalHeight * 0.88, 300) + bottomSafe
+            }
+            let maxByTop = max(280, totalHeight - topChromeClearance)
+            return min(max(300, totalHeight * 0.88), maxByTop)
         }
     }
 
@@ -147,66 +315,253 @@ struct VisionView: View {
     }
 
     private var bottomControls: some View {
-        // White shutter stays centered at the bottom; spinner while the model thinks.
-        VStack(spacing: 16) {
+        // Live: optional prompt + presets + shutter. After capture: Retake only.
+        VStack(spacing: 14) {
             if viewModel.visionModels(from: state).isEmpty {
                 emptyVisionModelsHint
             }
 
-            HStack(alignment: .center, spacing: 28) {
-                if viewModel.capturedImage != nil {
-                    Button {
-                        // Clear the trigger first: retake remounts a fresh camera
-                        // whose coordinator has no last-trigger, so a stale UUID here
-                        // would fire an immediate, unwanted re-capture.
-                        captureTrigger = nil
-                        viewModel.retake()
-                    } label: {
-                        Text("Retake")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .background(Color.black.opacity(0.45), in: Capsule())
+            if viewModel.capturedImage != nil {
+                // When the analysis card is open (medium/full), Retake lives on the
+                // sheet header. Keep a bottom Retake only for the minimized pill state
+                // so a second shot stays one tap away without fighting the card.
+                if viewModel.sheetMode == .minimized || viewModel.sheetMode == .hidden {
+                    HStack(alignment: .center, spacing: 16) {
+                        Button {
+                            performRetake()
+                        } label: {
+                            Label("Retake", systemImage: "camera.fill")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 12)
+                                .background(Color.black.opacity(0.5), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(viewModel.isThinking)
+                        .opacity(viewModel.isThinking ? 0.45 : 1)
+                        .accessibilityLabel("Retake photo")
+
+                        Spacer(minLength: 0)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(viewModel.isThinking)
-                    .opacity(viewModel.isThinking ? 0.45 : 1)
-                    .frame(width: 88, alignment: .leading)
-                } else {
-                    Color.clear.frame(width: 88, height: 1)
                 }
+            } else {
+                capturePromptPanel
 
-                captureButton
-
-                Color.clear.frame(width: 88, height: 1)
+                HStack(alignment: .center, spacing: 20) {
+                    // Keep shutter centered; side slots reserved for balance.
+                    Color.clear.frame(width: 72, height: 1)
+                    captureButton
+                    Color.clear.frame(width: 72, height: 1)
+                }
             }
         }
     }
 
-    private var captureButton: some View {
-        Button {
-            guard viewModel.canCapture else { return }
-            if viewModel.visionModels(from: state).isEmpty {
-                showProviderSettings = true
-                return
+    /// Optional task prompt + saved presets above the shutter (live camera only).
+    private var capturePromptPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // Free vertical space for the shutter while typing.
+            if !promptFieldFocused {
+                presetChipsRow
             }
-            // Keep the freeze-frame until a new photo arrives.
-            captureTrigger = UUID()
+
+            HStack(alignment: .bottom, spacing: 8) {
+                TextField(
+                    "Optional prompt for this shot…",
+                    text: $viewModel.capturePrompt,
+                    axis: .vertical
+                )
+                .lineLimit(1...3)
+                .font(.system(size: 15))
+                .foregroundStyle(.white)
+                .tint(Theme.accent)
+                .focused($promptFieldFocused)
+                .onChange(of: viewModel.capturePrompt) { _, _ in
+                    viewModel.capturePromptEdited()
+                }
+                // Multi-line fields ignore submit for Return — keyboard Done handles dismiss.
+
+                if promptFieldFocused {
+                    // Dismiss keyboard without capturing.
+                    Button {
+                        promptFieldFocused = false
+                    } label: {
+                        Image(systemName: "keyboard.chevron.compact.down")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.9))
+                            .frame(width: 36, height: 36)
+                            .background(Color.white.opacity(0.14), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Dismiss keyboard")
+
+                    // Primary action while typing: take the photo (keeps prompt).
+                    Button {
+                        fireShutter()
+                    } label: {
+                        Image(systemName: "camera.fill")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(Theme.background)
+                            .frame(width: 40, height: 40)
+                            .background(Theme.accent, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!viewModel.canCapture || viewModel.isThinking)
+                    .opacity(viewModel.canCapture && !viewModel.isThinking ? 1 : 0.45)
+                    .accessibilityLabel("Take photo")
+                } else {
+                    if viewModel.canSaveCapturePromptAsPreset {
+                        Button {
+                            newPresetTitle = suggestedPresetTitle
+                            showSavePresetAlert = true
+                        } label: {
+                            Image(systemName: "bookmark.fill")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(Theme.accent)
+                                .frame(width: 36, height: 36)
+                                .background(Color.white.opacity(0.12), in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Save prompt as preset")
+                    }
+
+                    if viewModel.hasCustomCapturePrompt {
+                        Button {
+                            viewModel.clearCapturePrompt()
+                            promptFieldFocused = false
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.85))
+                                .frame(width: 36, height: 36)
+                                .background(Color.white.opacity(0.12), in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Clear prompt")
+                    }
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(
+                        promptFieldFocused ? Theme.accent.opacity(0.55) : Color.white.opacity(0.12),
+                        lineWidth: 1
+                    )
+            }
+        }
+    }
+
+    private var presetChipsRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(promptStore.presets) { preset in
+                    presetChip(preset)
+                }
+
+                Button {
+                    viewModel.showPromptLibrary = true
+                } label: {
+                    Label("Manage", systemImage: "slider.horizontal.3")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.92))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Color.black.opacity(0.45), in: Capsule())
+                        .overlay {
+                            Capsule().stroke(Color.white.opacity(0.14), lineWidth: 1)
+                        }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Manage prompt presets")
+            }
+            // Extra inset so edge fades don’t crop the first/last chips.
+            .padding(.horizontal, 14)
+        }
+        // Soft transparent taper so chips dissolve into the camera at both ends.
+        .mask {
+            HStack(spacing: 0) {
+                LinearGradient(
+                    colors: [.clear, .black],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .frame(width: 22)
+                Rectangle().fill(.black)
+                LinearGradient(
+                    colors: [.black, .clear],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .frame(width: 22)
+            }
+        }
+    }
+
+    private func presetChip(_ preset: VisionPromptPreset) -> some View {
+        let selected = viewModel.selectedPresetID == preset.id
+        return Button {
+            viewModel.selectPreset(preset)
+            promptFieldFocused = false
+        } label: {
+            Text(preset.title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(selected ? Theme.background : .white)
+                .lineLimit(1)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(
+                    selected ? Theme.accent : Color.black.opacity(0.45),
+                    in: Capsule()
+                )
+                .overlay {
+                    Capsule()
+                        .stroke(
+                            selected ? Color.clear : Color.white.opacity(0.14),
+                            lineWidth: 1
+                        )
+                }
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityLabel("\(preset.title) prompt")
+    }
+
+    private var suggestedPresetTitle: String {
+        let text = viewModel.trimmedCapturePrompt
+        let firstLine = text.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? text
+        if firstLine.count <= 28 { return firstLine }
+        return String(firstLine.prefix(28)).trimmingCharacters(in: .whitespaces) + "…"
+    }
+
+    private var captureButton: some View {
+        let compact = promptFieldFocused && keyboardVisible
+        let outer: CGFloat = compact ? 64 : 78
+        let inner: CGFloat = compact ? 52 : 64
+        return Button {
+            fireShutter()
         } label: {
             ZStack {
                 Circle()
                     .strokeBorder(Color.white.opacity(0.95), lineWidth: 4)
-                    .frame(width: 78, height: 78)
+                    .frame(width: outer, height: outer)
                 Circle()
                     .fill(Color.white)
-                    .frame(width: 64, height: 64)
+                    .frame(width: inner, height: inner)
                     .overlay {
                         if viewModel.isThinking {
                             ProgressView()
                                 .progressViewStyle(.circular)
                                 .tint(Theme.inkOnAccent)
                                 .scaleEffect(1.15)
+                        } else if compact {
+                            // Make “this shoots the photo” obvious while typing.
+                            Image(systemName: "camera.fill")
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundStyle(Color.black.opacity(0.75))
                         }
                     }
             }
@@ -214,12 +569,34 @@ struct VisionView: View {
         }
         .buttonStyle(.plain)
         .disabled(!viewModel.canCapture || viewModel.isThinking)
-        .accessibilityLabel(viewModel.isThinking ? "Analyzing" : "Capture")
+        .accessibilityLabel(viewModel.isThinking ? "Analyzing" : "Take photo")
+    }
+
+    /// Capture still + dismiss prompt keyboard.
+    private func fireShutter() {
+        guard viewModel.canCapture else { return }
+        if viewModel.visionModels(from: state).isEmpty {
+            promptFieldFocused = false
+            viewModel.showModelPicker = true
+            return
+        }
+        promptFieldFocused = false
+        // Keep the freeze-frame until a new photo arrives.
+        captureTrigger = UUID()
+    }
+
+    private func updateKeyboardHeight(from note: Notification) {
+        guard
+            let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
+        else { return }
+        let screenH = UIScreen.main.bounds.height
+        keyboardHeight = max(0, screenH - frame.origin.y)
     }
 
     private var emptyVisionModelsHint: some View {
         Button {
-            showProviderSettings = true
+            // Opens the Vision model sheet, which has download + API key shortcuts.
+            viewModel.showModelPicker = true
         } label: {
             Text("Download a Vision model or add an API key")
                 .font(.system(size: 13, weight: .medium))
@@ -237,6 +614,16 @@ struct VisionView: View {
         }
         return "Select model"
     }
+
+    /// Shared retake path for bottom chrome and the analysis sheet.
+    private func performRetake() {
+        // Clear the trigger first: retake remounts a fresh camera whose
+        // coordinator has no last-trigger, so a stale UUID would re-fire.
+        captureTrigger = nil
+        promptFieldFocused = false
+        captureZoomResetID = UUID()
+        viewModel.retake()
+    }
 }
 
 // MARK: - Vision model picker
@@ -245,6 +632,9 @@ private struct VisionModelPickerSheet: View {
     @ObservedObject var viewModel: VisionViewModel
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
+
+    @State private var showLocalMetal = false
+    @State private var showProviderSettings = false
 
     private var models: [AIModel] {
         viewModel.visionModels(from: state)
@@ -260,13 +650,7 @@ private struct VisionModelPickerSheet: View {
     var body: some View {
         SheetScaffold(title: "Vision model", trailing: nil, onClose: { dismiss() }) {
             if models.isEmpty {
-                ContentUnavailableView(
-                    "No vision models",
-                    systemImage: "eye.slash",
-                    description: Text("Download an on-device Vision model (Settings → On-device), add an API key for OpenAI / Anthropic / OpenRouter / xAI, or mark a custom provider as Supports vision.")
-                )
-                .foregroundStyle(Theme.textSecondary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                emptyVisionModels
             } else {
                 List {
                     ForEach(grouped, id: \.0) { provider, list in
@@ -309,11 +693,309 @@ private struct VisionModelPickerSheet: View {
                                 .foregroundStyle(Theme.textSecondary)
                         }
                     }
+
+                    Section {
+                        downloadModelsRow
+                        addAPIKeyRow
+                    } footer: {
+                        Text("Need another model? Download an on-device VLM or add a cloud API key.")
+                            .foregroundStyle(Theme.textTertiary)
+                    }
                 }
                 .listStyle(.insetGrouped)
                 .scrollContentBackground(.hidden)
             }
         }
         .background(Theme.background)
+        .sheet(isPresented: $showLocalMetal, onDismiss: {
+            Task {
+                await state.refreshModels()
+                viewModel.bind(state: state)
+            }
+        }) {
+            LocalMetalSettingsView()
+                .environmentObject(state)
+        }
+        .sheet(isPresented: $showProviderSettings, onDismiss: {
+            Task {
+                await state.refreshModels()
+                viewModel.bind(state: state)
+            }
+        }) {
+            AppSettingsView()
+                .environmentObject(state)
+        }
+        .onChange(of: state.allModels.map(\.id)) { _, _ in
+            viewModel.bind(state: state)
+        }
+    }
+
+    private var emptyVisionModels: some View {
+        VStack(spacing: 20) {
+            Spacer(minLength: 12)
+
+            Image(systemName: "eye.slash")
+                .font(.system(size: 40, weight: .medium))
+                .foregroundStyle(Theme.textTertiary)
+                .symbolRenderingMode(.hierarchical)
+
+            VStack(spacing: 8) {
+                Text("No vision models")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                Text("Download an on-device Vision model, or add an API key for OpenAI, Anthropic, OpenRouter, or xAI. Custom providers can be marked Supports vision in Settings.")
+                    .font(.system(size: 15))
+                    .foregroundStyle(Theme.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 8)
+
+            VStack(spacing: 12) {
+                Button {
+                    showLocalMetal = true
+                } label: {
+                    Label("Download on-device models", systemImage: "arrow.down.circle.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .foregroundStyle(Theme.background)
+                        .background(Theme.accent, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Opens on-device Metal model downloads")
+
+                Button {
+                    showProviderSettings = true
+                } label: {
+                    Label("Add API key in Settings", systemImage: "key.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .foregroundStyle(Theme.textPrimary)
+                        .background(Theme.surfaceElevated, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .stroke(Theme.separator.opacity(0.8), lineWidth: 1)
+                        }
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.top, 4)
+
+            Spacer(minLength: 12)
+        }
+        .padding(.horizontal, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var downloadModelsRow: some View {
+        Button {
+            showLocalMetal = true
+        } label: {
+            Label("Download on-device models", systemImage: "arrow.down.circle")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(Theme.accent)
+        }
+        .listRowBackground(Theme.surface)
+    }
+
+    private var addAPIKeyRow: some View {
+        Button {
+            showProviderSettings = true
+        } label: {
+            Label("Add API key…", systemImage: "key")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(Theme.textPrimary)
+        }
+        .listRowBackground(Theme.surface)
+    }
+}
+
+// MARK: - Prompt library
+
+private struct VisionPromptLibrarySheet: View {
+    @ObservedObject var viewModel: VisionViewModel
+    @ObservedObject var promptStore: VisionPromptStore
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var editing: VisionPromptPreset?
+    @State private var draftTitle = ""
+    @State private var draftPrompt = ""
+    @State private var showEditor = false
+    @State private var isCreating = false
+
+    var body: some View {
+        SheetScaffold(
+            title: "Prompt presets",
+            trailing: AnyView(
+                Button {
+                    isCreating = true
+                    draftTitle = ""
+                    draftPrompt = viewModel.trimmedCapturePrompt
+                    editing = nil
+                    showEditor = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("New preset")
+            ),
+            onClose: { dismiss() }
+        ) {
+            List {
+                Section {
+                    ForEach(promptStore.presets) { preset in
+                        Button {
+                            viewModel.selectPreset(preset)
+                            dismiss()
+                        } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 8) {
+                                    Text(preset.title)
+                                        .font(.system(size: 16, weight: .semibold))
+                                        .foregroundStyle(Theme.textPrimary)
+                                    if preset.isBuiltIn {
+                                        Text("Built-in")
+                                            .font(.system(size: 11, weight: .semibold))
+                                            .foregroundStyle(Theme.textTertiary)
+                                            .padding(.horizontal, 7)
+                                            .padding(.vertical, 3)
+                                            .background(Theme.surfaceElevated, in: Capsule())
+                                    }
+                                    if viewModel.selectedPresetID == preset.id {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(Theme.accent)
+                                    }
+                                    Spacer(minLength: 0)
+                                }
+                                Text(presetPreview(preset))
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(Theme.textSecondary)
+                                    .lineLimit(2)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        .listRowBackground(Theme.surface)
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            Button {
+                                isCreating = false
+                                editing = preset
+                                draftTitle = preset.title
+                                draftPrompt = preset.prompt
+                                showEditor = true
+                            } label: {
+                                Label("Edit", systemImage: "pencil")
+                            }
+                            .tint(Theme.accent)
+
+                            if !preset.isBuiltIn || preset.id != VisionPromptStore.defaultPresetID {
+                                Button(role: .destructive) {
+                                    viewModel.deletePreset(id: preset.id)
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Tap to use · swipe to edit")
+                        .foregroundStyle(Theme.textSecondary)
+                } footer: {
+                    Text("Empty prompt uses a general photo analysis. Saved presets stay on this device.")
+                        .foregroundStyle(Theme.textTertiary)
+                }
+
+                Section {
+                    Button {
+                        promptStore.restoreBuiltIns()
+                    } label: {
+                        Label("Restore built-in presets", systemImage: "arrow.counterclockwise")
+                            .foregroundStyle(Theme.accent)
+                    }
+                    .listRowBackground(Theme.surface)
+                }
+            }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+        }
+        .background(Theme.background)
+        .sheet(isPresented: $showEditor) {
+            VisionPromptEditorSheet(
+                title: isCreating ? "New preset" : "Edit preset",
+                draftTitle: $draftTitle,
+                draftPrompt: $draftPrompt,
+                onCancel: { showEditor = false },
+                onSave: {
+                    let name = draftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let body = draftPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !name.isEmpty else { return }
+                    if isCreating {
+                        let created = promptStore.add(title: name, prompt: body)
+                        viewModel.selectPreset(created)
+                    } else if var preset = editing {
+                        preset.title = name
+                        preset.prompt = body
+                        viewModel.updatePreset(preset)
+                    }
+                    showEditor = false
+                }
+            )
+            .presentationDetents([.medium, .large])
+        }
+    }
+
+    private func presetPreview(_ preset: VisionPromptPreset) -> String {
+        let p = preset.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if p.isEmpty { return "Default general analysis" }
+        return p.replacingOccurrences(of: "\n", with: " ")
+    }
+}
+
+private struct VisionPromptEditorSheet: View {
+    var title: String
+    @Binding var draftTitle: String
+    @Binding var draftPrompt: String
+    var onCancel: () -> Void
+    var onSave: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Name") {
+                    TextField("e.g. Receipt scan", text: $draftTitle)
+                }
+                Section("Prompt") {
+                    TextField(
+                        "Instructions for the vision model…",
+                        text: $draftPrompt,
+                        axis: .vertical
+                    )
+                    .lineLimit(4...12)
+                }
+                Section {
+                    Text("Leave the prompt empty for the built-in general analysis.")
+                        .font(.footnote)
+                        .foregroundStyle(Theme.textSecondary)
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(Theme.background)
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save", action: onSave)
+                        .disabled(draftTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
     }
 }
