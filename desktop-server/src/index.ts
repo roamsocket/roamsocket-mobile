@@ -38,9 +38,10 @@ import {
   ensureAccessTunnel,
   stopAccessTunnel,
 } from "./workspace/access-tunnel.js";
-import { promises as fs } from "node:fs";
+import { promises as fs, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { advertiseServer, lanIPv4Addresses } from "./discovery.js";
 import {
   loadDesktopPrefs,
@@ -93,7 +94,26 @@ const DEFAULT_PORT = 4319;
 /** Listen on all interfaces so LAN phones can pair (override with APC_HOST). */
 const DEFAULT_HOST = "0.0.0.0";
 const DEFAULT_NAME = process.env.APC_NAME ?? "RoamSocket desktop";
-const DEFAULT_VERSION = "0.2.0";
+
+/**
+ * Package version from package.json (keeps /health + banners in sync with npm).
+ * Resolves from compiled `dist/src/` or source `src/` when run via tsx.
+ */
+function readPackageVersion(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  for (const rel of ["../../package.json", "../package.json"] as const) {
+    try {
+      const raw = readFileSync(path.join(here, rel), "utf8");
+      const v = (JSON.parse(raw) as { version?: string }).version;
+      if (typeof v === "string" && v.length > 0) return v;
+    } catch {
+      // try next candidate
+    }
+  }
+  return "0.0.0";
+}
+
+const DEFAULT_VERSION = readPackageVersion();
 
 /** Configured skills/MCP repos. Read once at startup. The desktop is the
  * git operator; both repos are user-configured in the desktop UI / env. */

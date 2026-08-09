@@ -5,14 +5,14 @@
   "description": "RoamSocket desktop companion: headless WebSocket coding server that pairs with the iOS app, clones repos, runs the agent loop, and opens PRs.",
   "license": "MIT",
   "author": "roamsocket",
-  "homepage": "https://github.com/kind365/code-mobile-ai#readme",
+  "homepage": "https://github.com/roamsocket/roamsocket-mobile#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kind365/code-mobile-ai.git",
+    "url": "git+https://github.com/roamsocket/roamsocket-mobile.git",
     "directory": "desktop-server"
   },
   "bugs": {
-    "url": "https://github.com/kind365/code-mobile-ai/issues"
+    "url": "https://github.com/roamsocket/roamsocket-mobile/issues"
   },
   "keywords": [
     "roamsocket",
@@ -44,7 +44,8 @@
   "files": [
     "bin",
     "dist/src",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "dev": "tsx watch src/index.ts",
