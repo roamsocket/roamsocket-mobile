@@ -176,9 +176,31 @@ final class SessionViewModel: ObservableObject {
 
     /// Updates local `isRunning` and the persisted session flag used by archive.
     private func setAgentRunning(_ active: Bool) {
+        let wasRunning = isRunning
         isRunning = active
+        if active, !wasRunning {
+            AIThinkingActivityManager.shared.thinkingDidStart(
+                kind: .code,
+                prompt: lastUserPromptPreview()
+            )
+        } else if !active, wasRunning {
+            AIThinkingActivityManager.shared.thinkingDidEnd()
+        }
         guard let localId = config.localSessionId else { return }
         state?.codeSessionStore.setAgentActive(localId, active)
+    }
+
+    /// Best-effort prompt line for the Code Live Activity.
+    private func lastUserPromptPreview() -> String {
+        for item in items.reversed() {
+            if case let .user(_, text) = item {
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { return trimmed }
+            }
+        }
+        let queued = queuedMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !queued.isEmpty { return queued }
+        return "Coding session"
     }
 
     /// User-initiated reconnect after a failed or dropped session socket.
@@ -708,6 +730,8 @@ final class SessionViewModel: ObservableObject {
         case let .toolCall(_, callId, tool, summary):
             setAgentRunning(true)
             items.append(.tool(id: callId, tool: tool, summary: summary, ok: nil, output: nil))
+            let toolStatus = summary.isEmpty ? "Running \(tool)…" : summary
+            AIThinkingActivityManager.shared.thinkingDidUpdate(status: toolStatus)
             scheduleTranscriptSave()
 
         case let .toolResult(_, callId, ok, output):

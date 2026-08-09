@@ -194,6 +194,26 @@ final class ChatViewModel: ObservableObject {
 
     // MARK: - Message Handling
 
+    /// Voice-mode entry: set the composer text and send, returning the assistant
+    /// reply body for TTS (or nil on failure / empty).
+    @discardableResult
+    func sendVoiceMessage(_ text: String) async -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        inputText = trimmed
+        await sendMessage()
+        // Prefer the latest non-empty assistant turn (the one we just finished).
+        if let last = messages.last(where: {
+            $0.role == .assistant
+                && !$0.isStreaming
+                && !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }) {
+            // Surface soft API errors as spoken text too so the user hears them.
+            return last.content
+        }
+        return nil
+    }
+
     /// Send a user message and stream the assistant reply from the
     /// currently selected provider/model.
     func sendMessage() async {
@@ -249,7 +269,12 @@ final class ChatViewModel: ObservableObject {
         schedulePersist()
         inputText = ""
         isProcessing = true
-        defer { isProcessing = false }
+        // Live Activity after a short delay (skips fast replies / small prompts).
+        AIThinkingActivityManager.shared.thinkingDidStart(kind: .chat, prompt: text)
+        defer {
+            isProcessing = false
+            AIThinkingActivityManager.shared.thinkingDidEnd()
+        }
 
         // Placeholder assistant bubble so web-search / research steps stream
         // in as grey status text before the model reply arrives.
@@ -312,6 +337,11 @@ final class ChatViewModel: ObservableObject {
                 let bundle = try await webSearchService.search(userMessage: text, mode: mode) {
                     [weak self] step in
                     await self?.applyWebSearchStep(step, toAssistant: assistantID)
+                    await MainActor.run {
+                        AIThinkingActivityManager.shared.thinkingDidUpdate(
+                            status: step.summary.isEmpty ? "Searching…" : step.summary
+                        )
+                    }
                 }
                 toolCalls = bundle.steps.map { ToolCall(from: $0) }
                 if let idx = messages.firstIndex(where: { $0.id == assistantID }) {

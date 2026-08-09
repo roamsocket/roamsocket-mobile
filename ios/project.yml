@@ -31,6 +31,8 @@ targets:
     platform: iOS
     sources:
       - path: App/Sources
+      - path: App/Assets.xcassets
+      - path: Shared
     dependencies:
       - package: AnyProvCore
       - package: MarkdownUI
@@ -49,6 +51,8 @@ targets:
         product: HuggingFace
       - package: swift-transformers
         product: Tokenizers
+      - target: RoamSocketWidgets
+        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.roamsocket.app
@@ -56,6 +60,7 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "5.9"
         TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # Persist across xcodegen regenerate (otherwise Signing & Capabilities clears).
         DEVELOPMENT_TEAM: 4JBMBNGPK7
         CODE_SIGN_IDENTITY: "iPhone Developer"
@@ -99,3 +104,41 @@ targets:
         NSHealthShareUsageDescription: "RoamSocket reads your Apple Health data when you turn on Health in chat, so the assistant can answer questions about steps, sleep, workouts, and other stats you choose to share."
         NSHealthUpdateUsageDescription: "RoamSocket does not write to Apple Health. This permission is required by the system HealthKit entitlement."
         NSLocationWhenInUseUsageDescription: "RoamSocket uses your location when you turn on Location in chat, so the assistant can answer with local context such as nearby places, weather, and time zone."
+        NSMicrophoneUsageDescription: "RoamSocket uses the microphone for live voice chat so you can talk to the model with dictation."
+        NSSpeechRecognitionUsageDescription: "RoamSocket uses on-device speech recognition to turn your speech into chat messages during voice conversations."
+        # Deep links for App Intents / Control Center / Action Button.
+        CFBundleURLTypes:
+          - CFBundleURLName: app.roamsocket.open
+            CFBundleTypeRole: Editor
+            CFBundleURLSchemes:
+              - roamsocket
+        # Live Activity while Chat / Code / Vision is waiting on a model.
+        NSSupportsLiveActivities: true
+        NSSupportsLiveActivitiesFrequentUpdates: false
+
+  RoamSocketWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Widgets
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.roamsocket.app.widgets
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        DEVELOPMENT_TEAM: 4JBMBNGPK7
+        CODE_SIGN_IDENTITY: "iPhone Developer"
+        SKIP_INSTALL: YES
+        LD_RUNPATH_SEARCH_PATHS: ["$(inherited)", "@executable_path/Frameworks", "@executable_path/../../Frameworks"]
+        # Widget extension can use iOS 17 APIs; Control Widgets gate on iOS 18+.
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    info:
+      path: Widgets/Info.plist
+      properties:
+        CFBundleDisplayName: "RoamSocket"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+        NSSupportsLiveActivities: true

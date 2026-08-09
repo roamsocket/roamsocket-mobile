@@ -18,6 +18,19 @@
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
 	<string>1.0</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>app.roamsocket.open</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>roamsocket</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>NSAppTransportSecurity</key>
@@ -30,7 +43,6 @@
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_roamsocket._tcp</string>
-		<!-- LEGACY Bonjour type for older desktop builds only -->
 		<string>_codesocket._tcp</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
@@ -43,6 +55,14 @@
 	<string>Connect to your desktop coding server on the local network.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>RoamSocket uses your location when you turn on Location in chat, so the assistant can answer with local context such as nearby places, weather, and time zone.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>RoamSocket uses the microphone for live voice chat so you can talk to the model with dictation.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>RoamSocket uses on-device speech recognition to turn your speech into chat messages during voice conversations.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
+	<key>NSSupportsLiveActivitiesFrequentUpdates</key>
+	<false/>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

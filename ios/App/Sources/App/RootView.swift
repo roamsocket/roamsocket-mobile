@@ -127,6 +127,24 @@ struct RootView: View {
             guard newPath.isEmpty, !oldPath.isEmpty else { return }
             chatResumeToken = UUID()
         }
+        .onOpenURL { url in
+            if let link = AppDeepLink.parse(url) {
+                applyDeepLink(link)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: DeepLinkBridge.didRequestNotification)) { note in
+            if let raw = note.userInfo?["destination"] as? String,
+               let link = AppDeepLink(rawValue: raw)
+            {
+                applyDeepLink(link)
+            }
+        }
+        .onAppear {
+            // Cold-start from Control Center / Action Button / Shortcuts.
+            if let link = DeepLinkBridge.consume() {
+                applyDeepLink(link)
+            }
+        }
     }
 
     // MARK: - Sidebar
@@ -242,6 +260,29 @@ struct RootView: View {
             history.discardActiveIfBlank()
             path = [.projectDetail(project)]
             setSidebarOpen(false)
+        }
+    }
+
+    /// Open Chat / Code / Vision from App Intents, Control Center, Lock Screen,
+    /// Action Button, or a `roamsocket://` URL.
+    private func applyDeepLink(_ link: AppDeepLink) {
+        // Consume any queued bridge payload so onAppear does not double-apply.
+        _ = DeepLinkBridge.consume()
+        showSettings = false
+        setSidebarOpen(false)
+
+        switch link {
+        case .chat:
+            showVision = false
+            path = []
+        case .code:
+            showVision = false
+            history.discardActiveIfBlank()
+            path = [.code]
+        case .vision:
+            history.discardActiveIfBlank()
+            // Leave path as-is under the cover; Vision is a full-screen flow.
+            showVision = true
         }
     }
 }
