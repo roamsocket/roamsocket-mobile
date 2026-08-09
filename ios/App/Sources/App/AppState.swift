@@ -1257,6 +1257,17 @@ final class AppState: ObservableObject {
         secrets.set(key.isEmpty ? nil : key, for: SecretKey.providerAPIKey(provider))
     }
 
+    // MARK: Voice-only API keys (TTS providers that are not chat hosts)
+
+    /// Key for a voice-only provider (e.g. `elevenlabs`). Stored separately from chat keys.
+    func voiceAPIKey(for id: String) -> String {
+        secrets.get(SecretKey.voiceAPIKey(id)) ?? ""
+    }
+
+    func setVoiceAPIKey(_ key: String, for id: String) {
+        secrets.set(key.isEmpty ? nil : key, for: SecretKey.voiceAPIKey(id))
+    }
+
     var githubToken: String? {
         get { secrets.get(SecretKey.githubToken) }
         set { secrets.set(newValue, for: SecretKey.githubToken) }

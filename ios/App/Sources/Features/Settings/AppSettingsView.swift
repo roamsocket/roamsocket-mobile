@@ -17,6 +17,7 @@ struct AppSettingsView: View {
     @State private var showProviderKeys = false
     @State private var showLocalMetal = false
     @State private var showLightweightTasks = false
+    @State private var showVoiceSettings = false
     @State private var syncInFlight = false
     @State private var syncMessage: String?
     @State private var syncError: String?
@@ -51,6 +52,7 @@ struct AppSettingsView: View {
                         chatSection
                         effortSection
                         codingSection
+                        shortcutsSection
                         settingsBackupSection
                         marketplaceSection
                         skillsSection
@@ -111,6 +113,10 @@ struct AppSettingsView: View {
         }
         .sheet(isPresented: $showLightweightTasks) {
             LightweightTasksSettingsView()
+        }
+        .sheet(isPresented: $showVoiceSettings) {
+            VoiceSettingsView()
+                .environmentObject(state)
         }
     }
 
@@ -280,6 +286,95 @@ struct AppSettingsView: View {
         return "Not paired"
     }
 
+    // MARK: - Shortcuts & system controls
+
+    /// Documents how to pin Chat / Code / Vision to Action Button, Control
+    /// Center, Lock Screen, and Shortcuts. The intents themselves are registered
+    /// via `RoamSocketShortcutsProvider`.
+    private var shortcutsSection: some View {
+        settingsCard(header: "Shortcuts") {
+            VStack(alignment: .leading, spacing: 12) {
+                shortcutRow(
+                    systemImage: "bubble.left.and.bubble.right.fill",
+                    title: "Chat",
+                    subtitle: "Open the chat composer"
+                )
+                Divider().background(Theme.separator)
+                shortcutRow(
+                    systemImage: "chevron.left.forwardslash.chevron.right",
+                    title: "Code",
+                    subtitle: "Open coding sessions"
+                )
+                Divider().background(Theme.separator)
+                shortcutRow(
+                    systemImage: "eye.fill",
+                    title: "Vision",
+                    subtitle: "Open camera analysis"
+                )
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("How to use")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                    shortcutHowTo(
+                        "Action Button",
+                        "Settings → Action Button → Shortcut → pick Chat, Code, or Vision."
+                    )
+                    shortcutHowTo(
+                        "Control Center",
+                        "Open Control Center → Edit Controls → add Chat, Code, or Vision."
+                    )
+                    shortcutHowTo(
+                        "Lock Screen",
+                        "Long-press Lock Screen → Customize → add a control → pick RoamSocket."
+                    )
+                    shortcutHowTo(
+                        "Shortcuts app",
+                        "Search RoamSocket to run Chat, Code, or Vision from automations."
+                    )
+                    Text("While a long reply is in progress, a Live Activity shows on the Lock Screen and Dynamic Island.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 2)
+                }
+                .padding(.top, 4)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+        }
+    }
+
+    private func shortcutRow(systemImage: String, title: String, subtitle: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: systemImage)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+                .frame(width: 28, height: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(Theme.textPrimary)
+                Text(subtitle)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.textTertiary)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func shortcutHowTo(_ title: String, _ body: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.textSecondary)
+            Text(body)
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     // MARK: - Appearance
 
     private var appearanceSection: some View {
@@ -319,7 +414,29 @@ struct AppSettingsView: View {
                 iconColor: Theme.accent,
                 isOn: $state.alwaysExpandThinking
             )
+
+            Divider().background(Theme.separator)
+
+            Button {
+                showVoiceSettings = true
+            } label: {
+                row(
+                    systemImage: "waveform",
+                    title: "Voice chat",
+                    trailing: voiceSettingsTrailing
+                )
+            }
+            .buttonStyle(.plain)
         }
+    }
+
+    private var voiceSettingsTrailing: String {
+        let store = VoiceSettingsStore.shared
+        let credentials = VoiceTTSCredentials(
+            openAIKey: state.apiKey(for: .openai),
+            elevenLabsKey: state.voiceAPIKey(for: VoiceSettingsStore.elevenLabsVoiceKeyID)
+        )
+        return store.statusLabel(credentials: credentials)
     }
 
     // MARK: - Effort (Claude-style explanations)
@@ -700,10 +817,49 @@ private struct ProviderKeysView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Provider API keys") {
+                Section {
                     ForEach(ProviderID.allCases.filter(\.requiresAPIKey)) { provider in
                         ProviderKeyRow(provider: provider)
                     }
+                } header: {
+                    Text("Chat & coding providers")
+                } footer: {
+                    Text("Tap Edit to paste a key. The arrow button opens that provider’s API key page in Safari.")
+                }
+
+                Section {
+                    // OpenAI is reused for neural TTS — call that out so users know one key covers both.
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "waveform")
+                            .foregroundStyle(Theme.accent)
+                            .frame(width: 22)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("OpenAI TTS")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundStyle(Theme.textPrimary)
+                            Text(state.apiKey(for: .openai).isEmpty
+                                 ? "Uses your OpenAI chat key above (not set yet)."
+                                 : "Uses your OpenAI chat key above for neural spoken replies.")
+                                .font(.system(size: 13))
+                                .foregroundStyle(Theme.textSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 8)
+                        if let url = ProviderAPIKeyLinks.url(for: .openai) {
+                            GetAPIKeyButton(url: url)
+                        }
+                    }
+
+                    VoiceProviderKeyRow(
+                        title: "ElevenLabs",
+                        voiceKeyID: VoiceSettingsStore.elevenLabsVoiceKeyID,
+                        placeholder: "xi-…",
+                        subtitle: "Natural neural voices. Free tier ≈ 10k characters/month."
+                    )
+                } header: {
+                    Text("Voice models")
+                } footer: {
+                    Text("Spoken replies in voice chat. OpenAI reuses the chat key; ElevenLabs is optional (free plan ≈ 10 minutes of audio/month). Without either key, the app uses built-in free neural voices (Microsoft Edge) — still much better than Apple system TTS.")
                 }
 
                 Section {
@@ -738,7 +894,7 @@ private struct ProviderKeysView: View {
                 }
 
                 Section {
-                    Text("Keys are stored in the iOS Keychain. Tap a row to edit.")
+                    Text("Keys are stored in the iOS Keychain.")
                         .font(.footnote)
                         .foregroundStyle(Theme.textTertiary)
                 }
@@ -1040,29 +1196,111 @@ private struct ProviderKeyRow: View {
     @State private var editing = false
 
     var body: some View {
-        HStack {
-            Text(provider.displayName)
-            Spacer()
-            if editing {
-                SecureField("API key", text: $key)
-                    .multilineTextAlignment(.trailing)
-                    .textInputAutocapitalization(.never)
-                    .onSubmit(save)
-                Button("Save", action: save)
-            } else {
-                Text(state.apiKey(for: provider).isEmpty ? "Not set" : "••••••")
-                    .foregroundStyle(Theme.textSecondary)
-                Button("Edit") {
-                    key = state.apiKey(for: provider)
-                    editing = true
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Text(provider.displayName)
+                    .foregroundStyle(Theme.textPrimary)
+                Spacer(minLength: 8)
+                if editing {
+                    SecureField("API key", text: $key)
+                        .multilineTextAlignment(.trailing)
+                        .textInputAutocapitalization(.never)
+                        .onSubmit(save)
+                    Button("Save", action: save)
+                        .fontWeight(.semibold)
+                } else {
+                    Text(state.apiKey(for: provider).isEmpty ? "Not set" : "••••••")
+                        .foregroundStyle(Theme.textSecondary)
+                    Button("Edit") {
+                        key = state.apiKey(for: provider)
+                        editing = true
+                    }
+                }
+                if let url = ProviderAPIKeyLinks.url(for: provider) {
+                    GetAPIKeyButton(url: url)
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private func save() {
+        state.setAPIKey(key, for: provider)
+        editing = false
+    }
+}
+
+/// Key row for voice-only providers (ElevenLabs, etc.) stored under `SecretKey.voiceAPIKey`.
+private struct VoiceProviderKeyRow: View {
+    @EnvironmentObject var state: AppState
+    let title: String
+    let voiceKeyID: String
+    var placeholder: String = "API key"
+    var subtitle: String? = nil
+
+    @State private var key = ""
+    @State private var editing = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .foregroundStyle(Theme.textPrimary)
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.textTertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: 8)
+                if editing {
+                    SecureField(placeholder, text: $key)
+                        .multilineTextAlignment(.trailing)
+                        .textInputAutocapitalization(.never)
+                        .onSubmit(save)
+                    Button("Save", action: save)
+                        .fontWeight(.semibold)
+                } else {
+                    Text(state.voiceAPIKey(for: voiceKeyID).isEmpty ? "Not set" : "••••••")
+                        .foregroundStyle(Theme.textSecondary)
+                    Button("Edit") {
+                        key = state.voiceAPIKey(for: voiceKeyID)
+                        editing = true
+                    }
+                }
+                if let url = ProviderAPIKeyLinks.voiceProviderURL(id: voiceKeyID) {
+                    GetAPIKeyButton(url: url)
                 }
             }
         }
     }
 
     private func save() {
-        state.setAPIKey(key, for: provider)
+        state.setVoiceAPIKey(key, for: voiceKeyID)
         editing = false
+    }
+}
+
+/// Opens the provider’s API key management page in the browser.
+private struct GetAPIKeyButton: View {
+    @Environment(\.openURL) private var openURL
+    let url: URL
+
+    var body: some View {
+        Button {
+            openURL(url)
+        } label: {
+            Image(systemName: "arrow.up.right.square")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(Theme.accent)
+                .frame(width: 32, height: 32)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Get API key")
+        .accessibilityHint("Opens the provider’s API key page in Safari")
     }
 }
 

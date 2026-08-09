@@ -10,6 +10,8 @@ public protocol SecretStore: Sendable {
 /// Well-known secret keys.
 public enum SecretKey {
     public static func providerAPIKey(_ id: ProviderID) -> String { "provider.\(id.rawValue).apiKey" }
+    /// Voice-only providers (e.g. ElevenLabs) that are not chat model hosts.
+    public static func voiceAPIKey(_ id: String) -> String { "voice.\(id).apiKey" }
     public static let githubToken = "github.token"
     public static func serverToken(_ host: String) -> String { "server.\(host).token" }
 }

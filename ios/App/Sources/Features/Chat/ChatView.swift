@@ -37,6 +37,9 @@ struct ChatView: View {
     /// settings screen.
     @State private var showProviderSettings = false
 
+    /// Full-screen live voice chat (Siri dictation + spoken replies).
+    @State private var showVoiceChat = false
+
     var body: some View {
         ZStack {
             Theme.background.ignoresSafeArea()
@@ -122,6 +125,16 @@ struct ChatView: View {
             NavigationStack {
                 SessionView(config: config)
             }
+            .environmentObject(state)
+        }
+        .fullScreenCover(isPresented: $showVoiceChat) {
+            VoiceChatView(
+                chatViewModel: viewModel,
+                onOpenSidebar: {
+                    showVoiceChat = false
+                    onOpenSidebar()
+                }
+            )
             .environmentObject(state)
         }
     }
@@ -504,17 +517,33 @@ struct ChatView: View {
 
                 Spacer(minLength: 0)
 
-                // Send — only enabled when there is real input (no decorative mic / waveform).
-                Button(action: sendTapped) {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(hasText ? Color.white : Theme.textSecondary)
-                        .frame(width: 36, height: 36)
-                        .background(sendBackground, in: Circle())
+                if hasText {
+                    // Send — only when there is real input.
+                    Button(action: sendTapped) {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(Color.white)
+                            .frame(width: 36, height: 36)
+                            .background(sendBackground, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(viewModel.isLoadingChat || viewModel.isProcessing)
+                    .accessibilityLabel("Send")
+                } else {
+                    // Empty composer: open live voice chat (Siri dictation + TTS).
+                    Button {
+                        showVoiceChat = true
+                    } label: {
+                        Image(systemName: "mic.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(Theme.textPrimary)
+                            .frame(width: 36, height: 36)
+                            .background(Theme.surfaceElevated, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(viewModel.isLoadingChat || viewModel.isProcessing)
+                    .accessibilityLabel("Voice chat")
                 }
-                .buttonStyle(.plain)
-                .disabled(!hasText || viewModel.isLoadingChat || viewModel.isProcessing)
-                .accessibilityLabel("Send")
             }
         }
         .padding(.horizontal, 12)
