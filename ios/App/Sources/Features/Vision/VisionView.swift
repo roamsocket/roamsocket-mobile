@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 import AnyProvCore
 
-/// Full-screen Vision mode: live camera, edge glow, capture, minimizable analysis.
+/// Full-screen Vision mode: live camera, capture, minimizable analysis.
 struct VisionView: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
@@ -63,36 +63,16 @@ struct VisionView: View {
                 chromeBlockHeight: chromeBlockHeight,
                 bottomSafe: bottomSafe
             )
-            // Leave a small gap so the card grabber isn’t covered by the still.
+            // Leave a permanent photo peek above the card (must match sheet detents
+            // so the grabber and first answer lines are never covered).
             let imageBandHeight = max(
-                140,
-                geo.size.height - topChromeClearance - sheetOccupied - 10
+                VisionAnalysisSheet.minImageBandHeight,
+                geo.size.height - topChromeClearance - sheetOccupied - VisionAnalysisSheet.imageSheetGap
             )
 
             ZStack {
                 Color.black
                     .ignoresSafeArea()
-
-                // Live camera is full-bleed. After capture the still is staged in a
-                // band above the results card (see higher zIndex layer below).
-                if viewModel.capturedImage == nil {
-                    cameraLayer
-                        .frame(width: geo.size.width, height: geo.size.height)
-                        .clipped()
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            if promptFieldFocused {
-                                promptFieldFocused = false
-                            }
-                        }
-                }
-
-                // Glow only while the model is working (don’t wash out the still).
-                if viewModel.isThinking {
-                    VisionGlowOverlay(isThinking: true)
-                        .allowsHitTesting(false)
-                        .zIndex(0.5)
-                }
 
                 // Results card at the bottom (Google Lens–style overlay).
                 VisionAnalysisSheet(
@@ -106,24 +86,36 @@ struct VisionView: View {
                 .frame(width: geo.size.width, height: geo.size.height)
                 .zIndex(1)
 
-                // Photo sits *above* the sheet in hit-test order so pinch/pan work.
-                // Only the image band captures touches; the lower Spacer passes
-                // hits through to the analysis card.
+                // Freeze-frame after capture: staged in the band above the results card.
+                // Pinch/pan zoom + corner crop (what the model analyzes).
                 if let image = viewModel.capturedImage {
                     VStack(spacing: 0) {
                         Color.clear
                             .frame(height: topChromeClearance)
                             .allowsHitTesting(false)
-                        VisionZoomableImageView(image: image, resetID: captureZoomResetID)
-                            .frame(width: geo.size.width, height: imageBandHeight)
-                            .animation(
-                                .interactiveSpring(response: 0.32, dampingFraction: 0.86),
-                                value: viewModel.sheetMode
-                            )
-                            .animation(
-                                .easeOut(duration: 0.2),
-                                value: viewModel.isThinking
-                            )
+                        VisionZoomableImageView(
+                            image: image,
+                            resetID: captureZoomResetID,
+                            onSingleTap: {
+                                // Tap the photo → smallest card so the still is front and center.
+                                guard viewModel.sheetMode != .minimized,
+                                      viewModel.sheetMode != .hidden
+                                else { return }
+                                viewModel.setSheetMinimized()
+                            },
+                            onCropCommitted: { rect in
+                                viewModel.applyCropAndReanalyze(normalizedRect: rect)
+                            }
+                        )
+                        .frame(width: geo.size.width, height: imageBandHeight)
+                        .animation(
+                            .interactiveSpring(response: 0.32, dampingFraction: 0.86),
+                            value: viewModel.sheetMode
+                        )
+                        .animation(
+                            .easeOut(duration: 0.2),
+                            value: viewModel.isThinking
+                        )
                         Spacer(minLength: 0)
                             .allowsHitTesting(false)
                     }
@@ -131,15 +123,35 @@ struct VisionView: View {
                     .zIndex(1.5)
                 }
 
-                // Chrome over the live feed + sheet. Spacer must not steal hits so
-                // the analysis sheet can still drag / scroll underneath.
+                // Chrome + live camera. Camera fills only the middle band so it
+                // never draws under Close/model or the prompt/shutter stack.
                 VStack(spacing: 0) {
                     topBar
-                    Spacer(minLength: 0)
-                        .allowsHitTesting(false)
+                        .padding(.horizontal, horizontalInset)
+
+                    if viewModel.capturedImage == nil {
+                        cameraLayer
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .clipped()
+                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .padding(.horizontal, 10)
+                            .padding(.top, 8)
+                            .padding(.bottom, 10)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                if promptFieldFocused {
+                                    promptFieldFocused = false
+                                }
+                            }
+                            .accessibilityLabel("Camera preview")
+                    } else {
+                        Spacer(minLength: 0)
+                            .allowsHitTesting(false)
+                    }
+
                     bottomControls
+                        .padding(.horizontal, horizontalInset)
                 }
-                .padding(.horizontal, horizontalInset)
                 .padding(.top, topSafe + 6)
                 .padding(.bottom, bottomPad)
                 .frame(width: geo.size.width, height: geo.size.height)
@@ -255,40 +267,53 @@ struct VisionView: View {
         chromeBlockHeight: CGFloat,
         bottomSafe: CGFloat
     ) -> CGFloat {
+        // Same photo-band reservation as `VisionAnalysisSheet.detentHeights`.
+        let maxByPhoto = max(
+            280,
+            totalHeight
+                - topChromeClearance
+                - VisionAnalysisSheet.minImageBandHeight
+                - VisionAnalysisSheet.imageSheetGap
+        )
         switch viewModel.sheetMode {
         case .hidden:
             return 0
         case .minimized:
             // Pill + lift above Retake chrome.
-            return 76 + chromeBlockHeight + 14
+            return VisionAnalysisSheet.minimizedCardHeight + chromeBlockHeight + 14
         case .expanded:
             if viewModel.isThinking && !viewModel.isReplying {
-                return min(totalHeight * 0.46, 220) + bottomSafe * 0.5
+                return min(min(totalHeight * 0.46, 220) + bottomSafe * 0.5, maxByPhoto)
             }
-            return min(max(260, totalHeight * 0.46), max(280, totalHeight - topChromeClearance))
-                + bottomSafe
+            return min(max(260, totalHeight * 0.46) + bottomSafe, maxByPhoto)
         case .full:
             if viewModel.isThinking && !viewModel.isReplying {
-                return min(totalHeight * 0.88, 300) + bottomSafe
+                return min(min(totalHeight * 0.88, 300) + bottomSafe, maxByPhoto)
             }
-            let maxByTop = max(280, totalHeight - topChromeClearance)
-            return min(max(300, totalHeight * 0.88), maxByTop)
+            return min(max(300, totalHeight * 0.88), maxByPhoto)
         }
     }
 
     private var topBar: some View {
         HStack(spacing: 12) {
             Button {
-                dismiss()
+                // After a capture, back returns to the live camera — not text chat.
+                if viewModel.capturedImage != nil {
+                    performRetake()
+                } else {
+                    dismiss()
+                }
             } label: {
-                Image(systemName: "xmark")
+                Image(systemName: viewModel.capturedImage != nil ? "chevron.left" : "xmark")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(.white)
                     .frame(width: 44, height: 44)
                     .background(Color.black.opacity(0.45), in: Circle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Close Vision")
+            .accessibilityLabel(
+                viewModel.capturedImage != nil ? "Back to camera" : "Close Vision"
+            )
 
             Spacer(minLength: 0)
 
@@ -653,6 +678,54 @@ private struct VisionModelPickerSheet: View {
                 emptyVisionModels
             } else {
                 List {
+                    if viewModel.supportsWebTools {
+                        Section {
+                            Toggle(isOn: webSearchBinding) {
+                                Label {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Web search")
+                                            .font(.system(size: 16, weight: .medium))
+                                            .foregroundStyle(Theme.textPrimary)
+                                        Text(webSearchFooter)
+                                            .font(.system(size: 12))
+                                            .foregroundStyle(Theme.textTertiary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                } icon: {
+                                    Image(systemName: "globe")
+                                        .foregroundStyle(Theme.accent)
+                                }
+                            }
+                            .tint(Theme.selection)
+                            .listRowBackground(Theme.surface)
+
+                            Toggle(isOn: researchBinding) {
+                                Label {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Research")
+                                            .font(.system(size: 16, weight: .medium))
+                                            .foregroundStyle(Theme.textPrimary)
+                                        Text(researchFooter)
+                                            .font(.system(size: 12))
+                                            .foregroundStyle(Theme.textTertiary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                } icon: {
+                                    Image(systemName: "magnifyingglass")
+                                        .foregroundStyle(Theme.accent)
+                                }
+                            }
+                            .tint(Theme.selection)
+                            .listRowBackground(Theme.surface)
+                        } header: {
+                            Text("Tools")
+                                .foregroundStyle(Theme.textSecondary)
+                        } footer: {
+                            Text("Client-side web tools work with any vision model. Web search is on by default in Vision.")
+                                .foregroundStyle(Theme.textTertiary)
+                        }
+                    }
+
                     ForEach(grouped, id: \.0) { provider, list in
                         Section {
                             ForEach(list) { model in
@@ -787,6 +860,37 @@ private struct VisionModelPickerSheet: View {
         }
         .padding(.horizontal, 24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var webSearchBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.webSearchEnabled || viewModel.researchEnabled },
+            set: { viewModel.setWebSearchEnabled($0) }
+        )
+    }
+
+    private var researchBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.researchEnabled },
+            set: { viewModel.setResearchEnabled($0) }
+        )
+    }
+
+    private var webSearchFooter: String {
+        if viewModel.researchEnabled {
+            return "On — required for Research"
+        }
+        if viewModel.webSearchEnabled {
+            return "On — used for capture prompts and follow-ups"
+        }
+        return "Off — model answers from the photo only"
+    }
+
+    private var researchFooter: String {
+        if viewModel.researchEnabled {
+            return "On — multi-query search + Wikipedia"
+        }
+        return "Deeper multi-query search with Wikipedia extracts"
     }
 
     private var downloadModelsRow: some View {

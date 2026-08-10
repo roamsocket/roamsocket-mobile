@@ -1,12 +1,20 @@
 import Foundation
 import Combine
 import AnyProvCore
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// Process-wide Metal model downloads with desktop-style step progress.
 ///
 /// Owns the download `Task` so transfers keep running when the Manage models
 /// sheet is dismissed. Progress (fraction + status + bytes) is published for
 /// any reopened UI to observe.
+///
+/// **Background:** downloads continue after leaving Settings (in-process
+/// detached task) and request a short system background budget when the app
+/// is suspended. Multi‑GB hub transfers still need the app to stay alive for
+/// the long haul — iOS will eventually pause non–background-URLSession work.
 @MainActor
 final class LocalMetalDownloadManager: ObservableObject {
     static let shared = LocalMetalDownloadManager()
@@ -40,10 +48,25 @@ final class LocalMetalDownloadManager: ObservableObject {
     @Published private(set) var lastStatus: String = ""
 
     private var tasks: [String: Task<Void, Never>] = [:]
+    #if canImport(UIKit)
+    /// Extends runtime briefly when the user leaves the app mid-download.
+    private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
+    #endif
 
-    private init() {}
+    /// Persisted hub ids that should resume after relaunch (process kill).
+    private static let pendingKey = "localMetal.pendingDownloads.v1"
+
+    private init() {
+        // Reconnect the system background session as early as possible.
+        LocalMetalBackgroundURLSession.shared.ensureSession()
+    }
 
     var isBusy: Bool { activeModelID != nil }
+
+    /// Hub ids still marked incomplete after a previous session (for auto-resume).
+    var pendingDownloadIDs: [String] {
+        UserDefaults.standard.stringArray(forKey: Self.pendingKey) ?? []
+    }
 
     /// Active + recent tracks for the banner (same filter as desktop).
     var bannerTracks: [Track] {
@@ -108,8 +131,12 @@ final class LocalMetalDownloadManager: ObservableObject {
             file: nil,
             updatedAt: Date()
         )
+        rememberPending(modelID)
+        LocalMetalBackgroundURLSession.shared.ensureSession()
+        beginBackgroundExecutionIfNeeded()
 
         // Detached: not a child of the sheet/button task, so dismiss cannot cancel it.
+        // Weight bytes use a background URLSession so transfers continue while suspended.
         let task = Task.detached(priority: .utility) {
             await LocalMetalDownloadManager.runDownload(
                 modelID: modelID,
@@ -117,6 +144,25 @@ final class LocalMetalDownloadManager: ObservableObject {
             )
         }
         tasks[modelID] = task
+    }
+
+    /// After a cold launch, resume any incomplete hub downloads (Range-resumes blobs).
+    /// Safe to call multiple times; no-ops when already busy or nothing pending.
+    func resumePendingDownloadsIfNeeded(appState: AppState) {
+        guard activeModelID == nil, tasks.isEmpty else { return }
+        let pending = pendingDownloadIDs
+        guard let first = pending.first else { return }
+        // Only resume if weights are not already usable on disk.
+        Task { @MainActor in
+            if await LocalMetalModelStore.shared.isDownloaded(modelID: first) {
+                forgetPending(first)
+                // Try the next pending id if any.
+                resumePendingDownloadsIfNeeded(appState: appState)
+                return
+            }
+            lastStatus = "Resuming background download…"
+            start(modelID: first, appState: appState)
+        }
     }
 
     private nonisolated static func runDownload(modelID: String, appState: AppState) async {
@@ -149,6 +195,29 @@ final class LocalMetalDownloadManager: ObservableObject {
         }
     }
 
+    // MARK: - System background budget
+
+    /// Ask iOS for extra time when the app is backgrounded so multi‑GB hub
+    /// transfers can keep moving for a short window (not unlimited).
+    private func beginBackgroundExecutionIfNeeded() {
+        #if canImport(UIKit)
+        guard backgroundTaskID == .invalid else { return }
+        backgroundTaskID = UIApplication.shared.beginBackgroundTask(withName: "LocalMetalModelDownload") { [weak self] in
+            Task { @MainActor in
+                self?.endBackgroundExecution()
+            }
+        }
+        #endif
+    }
+
+    private func endBackgroundExecution() {
+        #if canImport(UIKit)
+        guard backgroundTaskID != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundTaskID)
+        backgroundTaskID = .invalid
+        #endif
+    }
+
     private func noteProgress(modelID: String, update: LocalMetalDownloadProgress) {
         guard var cur = tracks[modelID], cur.phase == .active else { return }
         let nextFraction = max(cur.fraction, min(1, update.fraction))
@@ -173,6 +242,7 @@ final class LocalMetalDownloadManager: ObservableObject {
             cur.updatedAt = Date()
             tracks[modelID] = cur
         }
+        forgetPending(modelID)
         await appState.refreshModels()
         if appState.selectedModel?.provider == .localMetal,
            appState.selectedModel?.modelID == modelID {
@@ -192,12 +262,15 @@ final class LocalMetalDownloadManager: ObservableObject {
             if tracks[modelID]?.phase == .done {
                 tracks[modelID] = nil
             }
+            // Chain the next pending model (one-at-a-time on phone).
+            resumePendingDownloadsIfNeeded(appState: appState)
         }
     }
 
     private func fail(modelID: String, message: String, clearStatus: Bool = false) {
         lastError = message
         if clearStatus { lastStatus = "" }
+        // Keep pending so the user (or next launch) can retry / resume.
         if var cur = tracks[modelID] {
             cur.phase = .error
             cur.status = "Failed"
@@ -213,21 +286,43 @@ final class LocalMetalDownloadManager: ObservableObject {
         if activeModelID == modelID {
             activeModelID = nil
         }
+        // Release the system background budget once nothing is in flight.
+        if tasks.isEmpty {
+            endBackgroundExecution()
+        }
+    }
+
+    private func rememberPending(_ modelID: String) {
+        var ids = pendingDownloadIDs
+        if !ids.contains(modelID) {
+            ids.append(modelID)
+            UserDefaults.standard.set(ids, forKey: Self.pendingKey)
+        }
+    }
+
+    private func forgetPending(_ modelID: String) {
+        var ids = pendingDownloadIDs
+        ids.removeAll { $0 == modelID }
+        if ids.isEmpty {
+            UserDefaults.standard.removeObject(forKey: Self.pendingKey)
+        } else {
+            UserDefaults.standard.set(ids, forKey: Self.pendingKey)
+        }
     }
 
     nonisolated static func formatStatus(_ track: Track) -> String {
         var parts: [String] = [track.status]
-        if let down = track.bytesDownloaded, let total = track.bytesTotal, total > 0 {
-            parts.append("(\(byteLabel(down)) / \(byteLabel(total)))")
-        } else if track.fraction > 0, track.phase == .active {
-            parts.append("\(track.percent)%")
+        if let progress = track.mbProgressLabel {
+            parts.append("(\(progress))")
         }
         return parts.joined(separator: " ")
     }
 
-    /// Pure formatting — safe off the main actor (used from `Track.detailLine`).
+    /// Whole-megabyte label so progress UI does not thrash on every byte tick.
+    /// (e.g. `412 MB` instead of `431,204,112 bytes` / `411.8 MB` / `412.1 MB`).
     nonisolated static func byteLabel(_ bytes: Int64) -> String {
-        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        let mb = max(0, bytes / 1_048_576)
+        return "\(mb) MB"
     }
 }
 
@@ -236,16 +331,25 @@ extension LocalMetalDownloadManager.Track {
         Int((min(1, max(0, fraction)) * 100).rounded(.down))
     }
 
+    /// Stable `downloaded / total` in whole MB, or nil when size is unknown.
+    var mbProgressLabel: String? {
+        if let down = bytesDownloaded, let total = bytesTotal, total > 0 {
+            return "\(LocalMetalDownloadManager.byteLabel(down)) / \(LocalMetalDownloadManager.byteLabel(total))"
+        }
+        if let down = bytesDownloaded, down > 0 {
+            return LocalMetalDownloadManager.byteLabel(down)
+        }
+        return nil
+    }
+
     var detailLine: String {
         if phase == .error {
             return error ?? "Download failed"
         }
-        if let down = bytesDownloaded, let total = bytesTotal, total > 0 {
-            return "\(status) · \(LocalMetalDownloadManager.byteLabel(down)) / \(LocalMetalDownloadManager.byteLabel(total))"
+        if let progress = mbProgressLabel {
+            return "\(status) · \(progress)"
         }
-        if phase == .active {
-            return "\(status) · \(percent)%"
-        }
+        // No byte totals yet (listing files / connecting) — avoid a ticking %.
         return status
     }
 }

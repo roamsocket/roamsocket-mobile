@@ -33,9 +33,12 @@ struct RoamSocketShortcutsProvider: AppShortcutsProvider {
                 "Open \(.applicationName) Vision",
                 "Vision in \(.applicationName)",
                 "Analyze with \(.applicationName)",
+                "Open camera in \(.applicationName)",
+                "Camera in \(.applicationName)",
+                "Take a photo with \(.applicationName)",
             ],
             shortTitle: "Vision",
-            systemImageName: "eye.fill"
+            systemImageName: "camera.fill"
         )
     }
 }

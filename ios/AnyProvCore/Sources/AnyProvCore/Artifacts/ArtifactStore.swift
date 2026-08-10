@@ -75,6 +75,42 @@ public final class ArtifactStore: ObservableObject, @unchecked Sendable {
         let lines = content.split(separator: "\n", omittingEmptySubsequences: false).count
         let containsCodeBlock = content.contains("```")
         guard lines >= 10 || containsCodeBlock else { return nil }
+        return upsert(
+            chatId: chatId,
+            messageId: messageId,
+            content: content,
+            title: title,
+            lineCount: lines
+        )
+    }
+
+    /// Always save non-empty content (user-initiated “Save as artifact”).
+    @discardableResult
+    public func save(
+        chatId: UUID? = nil,
+        messageId: UUID? = nil,
+        content: String,
+        title: String? = nil
+    ) -> Artifact? {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let lines = content.split(separator: "\n", omittingEmptySubsequences: false).count
+        return upsert(
+            chatId: chatId,
+            messageId: messageId,
+            content: content,
+            title: title,
+            lineCount: max(1, lines)
+        )
+    }
+
+    private func upsert(
+        chatId: UUID?,
+        messageId: UUID?,
+        content: String,
+        title: String?,
+        lineCount: Int
+    ) -> Artifact? {
         let resolvedTitle = {
             let t = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             return t.isEmpty ? Self.deriveTitle(from: content) : t
@@ -91,21 +127,21 @@ public final class ArtifactStore: ObservableObject, @unchecked Sendable {
             } else if updated.title == "Artifact" || updated.title.isEmpty {
                 updated.title = resolvedTitle
             }
-            updated.lineCount = lines
+            updated.lineCount = lineCount
             artifacts[idx] = updated
             save()
             return updated
         }
         // De-dupe identical artifacts from the same chat.
         if artifacts.contains(where: { $0.chatId == chatId && $0.content == content }) {
-            return nil
+            return artifacts.first(where: { $0.chatId == chatId && $0.content == content })
         }
         let artifact = Artifact(
             chatId: chatId,
             messageId: messageId,
             title: resolvedTitle,
             content: content,
-            lineCount: lines
+            lineCount: lineCount
         )
         artifacts.insert(artifact, at: 0)
         save()

@@ -740,7 +740,9 @@ final class ChatHistoryStore: ObservableObject {
                 return (id, value)
             }
         )
-        activeChatID = snap.activeChatID
+        // Always open on a fresh chat — do not resume the previous session's
+        // active conversation. Sidebar still lists recents for manual reopen.
+        activeChatID = nil
         // Cold-start cleanup: drop leftover blank drafts from previous sessions.
         pruneBlankDraftsSilently()
     }

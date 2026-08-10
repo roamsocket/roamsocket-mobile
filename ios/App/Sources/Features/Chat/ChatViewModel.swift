@@ -416,6 +416,7 @@ final class ChatViewModel: ObservableObject {
                 )
                 return
             }
+            AIThinkingActivityManager.shared.thinkingDidUpdate(status: "Thinking…")
             let reply = try await catalog.provider(
                 liveModel.provider,
                 customBaseURL: baseURL,

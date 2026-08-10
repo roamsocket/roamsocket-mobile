@@ -13,8 +13,9 @@ running in the background.
 ## Install (global CLI)
 
 ```bash
-npm install -g roamsocket
+npm install -g @roamsocket/server
 roamsocket
+# or: npx @roamsocket/server
 ```
 
 Legacy CLI aliases (install continuity only, same entrypoint): `codesocket`,

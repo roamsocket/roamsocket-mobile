@@ -4,11 +4,14 @@ import UIKit
 /// Draggable analysis popover with three detents:
 /// - **minimized** — compact pill above the shutter (with Retake)
 /// - **expanded** — medium card
-/// - **full** — tall card that stops *below* the top chrome (no overlap)
+/// - **full** — tall card that stops *below* the photo band + top chrome
 ///
 /// Drag uses live height (no spring during gesture) and snaps to the nearest detent.
+/// Sheet height is resized from the **grabber / title bar only** so the analysis
+/// thread can scroll freely (including scrolling back up) without collapsing.
 struct VisionAnalysisSheet: View {
     @ObservedObject var viewModel: VisionViewModel
+    @EnvironmentObject private var state: AppState
     var modelDisplayName: String
     /// Height of Retake + shutter + bottom chrome padding (for lifting the pill).
     var shutterClearance: CGFloat = 118
@@ -26,8 +29,17 @@ struct VisionAnalysisSheet: View {
     @State private var dragStartHeight: CGFloat = 0
     /// Full capture/system prompt is shown in a popover, never inline in the thread.
     @State private var showCapturePromptDetail = false
+    /// Brief confirmation after copy / save artifact.
+    @State private var actionToast: String?
 
-    private let minimizedHeight: CGFloat = 76
+
+    /// Keep in sync with `VisionView.estimatedSheetOccupiedHeight`.
+    /// Tall enough that a portrait still can show more than a postage-stamp crop.
+    static let minImageBandHeight: CGFloat = 200
+    static let imageSheetGap: CGFloat = 12
+    /// Grabber (20) + vertical pad (10) + thumbnail row (40) + vertical pad (10).
+    static let minimizedCardHeight: CGFloat = 80
+
     private let minimizedShutterGap: CGFloat = 14
     private let expandedFraction: CGFloat = 0.46
     private let fullFraction: CGFloat = 0.88
@@ -166,21 +178,27 @@ struct VisionAnalysisSheet: View {
     }
 
     private func detentHeights(totalHeight: CGFloat) -> Detents {
-        // Never cover the Close / model chrome at the top.
-        let maxByTop = max(280, totalHeight - topChromeClearance)
-        let maxExpanded = min(max(260, totalHeight * expandedFraction), maxByTop)
-        let maxFull = min(max(maxExpanded + 40, totalHeight * fullFraction), maxByTop)
+        // Leave a permanent photo peek above the card. Growing the sheet into that
+        // band used to cover the grabber (and the first lines of the answer) so
+        // full-height mode could not be dragged closed.
+        let maxByPhoto = max(
+            280,
+            totalHeight - topChromeClearance - Self.minImageBandHeight - Self.imageSheetGap
+        )
+        let maxExpanded = min(max(260, totalHeight * expandedFraction), maxByPhoto)
+        let maxFull = min(max(maxExpanded + 40, totalHeight * fullFraction), maxByPhoto)
 
         let expanded: CGFloat = {
             if viewModel.isThinking && !viewModel.isReplying {
-                return min(maxExpanded, thinkingHeight) + bottomSafeInset * 0.5
+                return min(min(maxExpanded, thinkingHeight) + bottomSafeInset * 0.5, maxByPhoto)
             }
-            return maxExpanded + bottomSafeInset
+            // Cap after safe-area padding so the card never grows over the photo.
+            return min(maxExpanded + bottomSafeInset, maxByPhoto)
         }()
 
         let full: CGFloat = {
             if viewModel.isThinking && !viewModel.isReplying {
-                return min(maxFull, thinkingHeight + 80) + bottomSafeInset
+                return min(min(maxFull, thinkingHeight + 80) + bottomSafeInset, maxByPhoto)
             }
             // Keyboard path sets height from remaining band in `body`; keep a
             // sensible full target for snaps when the keyboard is down.
@@ -188,7 +206,7 @@ struct VisionAnalysisSheet: View {
         }()
 
         return Detents(
-            minimized: minimizedHeight,
+            minimized: Self.minimizedCardHeight,
             expanded: expanded,
             full: full
         )
@@ -208,9 +226,8 @@ struct VisionAnalysisSheet: View {
             if isMinimized {
                 minimizedBar(detents: detents)
                     .padding(.horizontal, contentHorizontalPadding)
-                    .padding(.bottom, 12)
             } else {
-                expandedBody
+                expandedBody(detents: detents)
                     .padding(.horizontal, contentHorizontalPadding)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
@@ -243,11 +260,14 @@ struct VisionAnalysisSheet: View {
     }
 
     private func resizeHeader(detents: Detents) -> some View {
-        VStack(spacing: 0) {
+        let isMinimized = viewModel.sheetMode == .minimized
+        // Tighter grabber when collapsed so top/bottom padding of the pill matches.
+        let grabberHit: CGFloat = isMinimized ? 20 : 28
+        return VStack(spacing: 0) {
             // Drag only on the grabber — not on title buttons (Retake / chevron).
             ZStack {
                 Color.clear
-                    .frame(height: 32)
+                    .frame(height: grabberHit)
                 Capsule()
                     .fill(Theme.textTertiary.opacity(0.65))
                     .frame(width: 44, height: 5)
@@ -258,9 +278,11 @@ struct VisionAnalysisSheet: View {
             .accessibilityLabel("Resize analysis")
             .accessibilityHint("Drag up or down to change height")
 
-            if viewModel.sheetMode != .minimized {
+            if !isMinimized {
                 expandedTitleBar
                     .padding(.bottom, 10)
+                    // Title row is also a drag surface (buttons keep their own hits).
+                    .simultaneousGesture(dragGesture(detents: detents))
             }
         }
         .frame(maxWidth: .infinity)
@@ -337,6 +359,9 @@ struct VisionAnalysisSheet: View {
             .accessibilityLabel("Retake photo")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        // Match the 10pt top gap under the grabber so the pill reads evenly.
+        .padding(.top, 10)
+        .padding(.bottom, 10)
     }
 
     private var minimizedSubtitle: String {
@@ -378,6 +403,22 @@ struct VisionAnalysisSheet: View {
             }
 
             Spacer(minLength: 4)
+
+            // Copy analysis + save artifact (icons only).
+            if viewModel.canExportAnalysis {
+                analysisActionButton(
+                    systemImage: "doc.on.doc",
+                    label: "Copy analysis"
+                ) {
+                    copyAnalysis()
+                }
+                analysisActionButton(
+                    systemImage: "square.stack.3d.up",
+                    label: "Save as artifact"
+                ) {
+                    saveAnalysisAsArtifact()
+                }
+            }
 
             // Retake lives on the sheet so full/medium states don’t trap the user
             // under the top chrome or behind a tall card.
@@ -427,6 +468,85 @@ struct VisionAnalysisSheet: View {
             .accessibilityLabel(viewModel.sheetMode == .full ? "Medium analysis size" : "Minimize analysis")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .bottom) {
+            if let actionToast {
+                Text(actionToast)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Theme.surfaceElevated.opacity(0.96), in: Capsule())
+                    .overlay {
+                        Capsule().stroke(Theme.separator.opacity(0.7), lineWidth: 1)
+                    }
+                    .offset(y: 22)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .allowsHitTesting(false)
+            }
+        }
+        .animation(.easeOut(duration: 0.18), value: actionToast)
+    }
+
+    private func analysisActionButton(
+        systemImage: String,
+        label: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.textSecondary)
+                .frame(width: 32, height: 32)
+                .background(Theme.surfaceElevated, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!viewModel.canExportAnalysis)
+        .opacity(viewModel.canExportAnalysis ? 1 : 0.45)
+        .accessibilityLabel(label)
+    }
+
+    private func copyAnalysis() {
+        let text = viewModel.exportableAnalysisText
+        guard !text.isEmpty else { return }
+        UIPasteboard.general.string = text
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        flashActionToast("Copied")
+    }
+
+    private func saveAnalysisAsArtifact() {
+        let text = viewModel.exportableAnalysisText
+        guard !text.isEmpty else { return }
+        let seedTitle: String = {
+            if let preset = viewModel.lastUsedPresetTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !preset.isEmpty {
+                return "Vision · \(preset)"
+            }
+            return "Vision analysis"
+        }()
+        guard let artifact = state.artifactStore.save(
+            chatId: nil,
+            messageId: viewModel.turns.last(where: { $0.role == .assistant })?.id,
+            content: text,
+            title: seedTitle
+        ) else { return }
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        flashActionToast("Saved")
+        Task { @MainActor in
+            let named = await ArtifactTitleGenerator.suggestTitle(for: text)
+            if named != artifact.title {
+                state.artifactStore.updateTitle(id: artifact.id, title: named)
+            }
+        }
+    }
+
+    private func flashActionToast(_ message: String) {
+        actionToast = message
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            if actionToast == message {
+                actionToast = nil
+            }
+        }
     }
 
     private var hasCapturePromptSummary: Bool {
@@ -503,9 +623,9 @@ struct VisionAnalysisSheet: View {
         return "Analysis"
     }
 
-    private var expandedBody: some View {
+    private func expandedBody(detents: Detents) -> some View {
         VStack(spacing: 0) {
-            threadScroll
+            threadScroll()
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
             if viewModel.canChat || viewModel.isReplying {
@@ -524,7 +644,7 @@ struct VisionAnalysisSheet: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    private var threadScroll: some View {
+    private func threadScroll() -> some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
@@ -556,11 +676,16 @@ struct VisionAnalysisSheet: View {
                         .frame(height: 1)
                         .id("vision-thread-bottom")
                 }
+                .padding(.top, 2)
                 .padding(.bottom, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .scrollIndicators(.visible)
             .scrollDismissesKeyboard(.interactively)
+            .scrollBounceBehavior(.automatic, axes: .vertical)
+            // No drag-to-resize on the thread — it was stealing pans and collapsing
+            // the sheet so users could not scroll (or scroll back up). Resize lives
+            // on the grabber / title bar only.
             .onTapGesture {
                 if composerFocused {
                     composerFocused = false
@@ -643,7 +768,10 @@ struct VisionAnalysisSheet: View {
             .accessibilityLabel("You said: \(turn.text)")
 
         case .assistant:
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 8) {
+                if let tools = turn.toolCalls, !tools.isEmpty {
+                    visionToolStatusLines(tools)
+                }
                 if turn.isError {
                     Text(turn.text)
                         .font(.system(size: 15))
@@ -666,14 +794,47 @@ struct VisionAnalysisSheet: View {
         }
     }
 
+    @ViewBuilder
+    private func visionToolStatusLines(_ tools: [ToolCall]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(tools) { call in
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: visionToolIcon(call))
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.textTertiary)
+                        .frame(width: 14, alignment: .center)
+                    Text(call.summary)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func visionToolIcon(_ call: ToolCall) -> String {
+        switch call.name {
+        case "web_search", "research": return "globe"
+        case "wikipedia": return "book"
+        default: return "wrench.and.screwdriver"
+        }
+    }
+
     private var followUpThinking: some View {
-        HStack(spacing: 10) {
-            ProgressView()
-                .tint(Theme.accent)
-            Text("Thinking…")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(Theme.textSecondary)
-            Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: 8) {
+            if !viewModel.activeToolCalls.isEmpty {
+                visionToolStatusLines(viewModel.activeToolCalls)
+            }
+            HStack(spacing: 10) {
+                ProgressView()
+                    .tint(Theme.accent)
+                Text(viewModel.activeToolCalls.isEmpty ? "Thinking…" : "Answering…")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(Theme.textSecondary)
+                Spacer(minLength: 0)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -782,13 +943,20 @@ struct VisionAnalysisSheet: View {
 
     private var thinkingBlock: some View {
         VStack(alignment: .leading, spacing: 14) {
+            if !viewModel.activeToolCalls.isEmpty {
+                visionToolStatusLines(viewModel.activeToolCalls)
+            }
             HStack(spacing: 10) {
                 ProgressView()
                     .tint(Theme.accent)
-                Text("Looking at the photo…")
+                Text(
+                    viewModel.activeToolCalls.isEmpty
+                        ? "Looking at the photo…"
+                        : "Looking at the photo with web results…"
+                )
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(Theme.textSecondary)
-                    .lineLimit(1)
+                    .lineLimit(2)
                     .minimumScaleFactor(0.85)
             }
             ThinkingShimmerLines()
@@ -810,44 +978,55 @@ struct VisionAnalysisSheet: View {
 
     // MARK: - Drag
 
+    /// Grabber / minimized-pill drag — always owns the gesture.
     private func dragGesture(detents: Detents) -> some Gesture {
         DragGesture(minimumDistance: 6, coordinateSpace: .global)
             .onChanged { value in
-                if composerFocused || keyboardVisible { return }
-                if dragLiveHeight == nil {
-                    dragStartHeight = detents.height(for: viewModel.sheetMode)
-                }
-                // Pull down → smaller sheet; pull up → taller.
-                let next = dragStartHeight - value.translation.height
-                let lo = detents.minimized * 0.92
-                let hi = detents.full * 1.02
-                dragLiveHeight = min(hi, max(lo, next))
+                applySheetDrag(translationY: value.translation.height, detents: detents)
             }
             .onEnded { value in
-                defer { dragLiveHeight = nil }
-                if composerFocused || keyboardVisible { return }
-
-                let start = dragStartHeight > 0
-                    ? dragStartHeight
-                    : detents.height(for: viewModel.sheetMode)
-                let dy = value.translation.height
-                let predicted = value.predictedEndTranslation.height
-                // Weight velocity so a short flick still lands cleanly.
-                let projected = dy * 0.25 + predicted * 0.75
-                let projectedHeight = start - projected
-
-                let velocity = value.velocity.height
-                // Strong flick: step one detent in that direction instead of
-                // overshooting across all three.
-                if abs(velocity) > 900 {
-                    stepDetent(direction: velocity > 0 ? .down : .up)
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    return
-                }
-
-                snapToNearestDetent(projectedHeight: projectedHeight, detents: detents)
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                endSheetDrag(value: value, detents: detents)
             }
+    }
+
+    private func applySheetDrag(translationY: CGFloat, detents: Detents) {
+        if composerFocused || keyboardVisible { return }
+        if dragLiveHeight == nil {
+            dragStartHeight = detents.height(for: viewModel.sheetMode)
+        }
+        // Pull down → smaller sheet; pull up → taller.
+        let next = dragStartHeight - translationY
+        let lo = detents.minimized * 0.92
+        let hi = detents.full * 1.02
+        dragLiveHeight = min(hi, max(lo, next))
+    }
+
+    private func endSheetDrag(value: DragGesture.Value, detents: Detents) {
+        defer {
+            dragLiveHeight = nil
+        }
+        if composerFocused || keyboardVisible { return }
+
+        let start = dragStartHeight > 0
+            ? dragStartHeight
+            : detents.height(for: viewModel.sheetMode)
+        let dy = value.translation.height
+        let predicted = value.predictedEndTranslation.height
+        // Weight velocity so a short flick still lands cleanly.
+        let projected = dy * 0.25 + predicted * 0.75
+        let projectedHeight = start - projected
+
+        let velocity = value.velocity.height
+        // Strong flick: step one detent in that direction instead of
+        // overshooting across all three.
+        if abs(velocity) > 900 {
+            stepDetent(direction: velocity > 0 ? .down : .up)
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            return
+        }
+
+        snapToNearestDetent(projectedHeight: projectedHeight, detents: detents)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 
     private enum DetentStep { case up, down }

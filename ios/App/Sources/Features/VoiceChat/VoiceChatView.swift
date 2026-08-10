@@ -22,9 +22,10 @@ struct VoiceChatView: View {
                 Theme.background.ignoresSafeArea()
 
                 VStack(spacing: 0) {
-                    topBar
-                        .padding(.horizontal, 20)
-                        .padding(.top, topSafe + 8)
+                    // Clearance for overlaid top chrome (close / settings).
+                    Color.clear
+                        .frame(height: topSafe + 8 + 44)
+                        .allowsHitTesting(false)
 
                     Spacer(minLength: 0)
 
@@ -41,6 +42,12 @@ struct VoiceChatView: View {
                         .padding(.bottom, max(bottomSafe, 12) + 8)
                 }
                 .frame(width: geo.size.width, height: geo.size.height)
+            }
+            // Close / settings sit above content; only the bar receives hits.
+            .overlay(alignment: .top) {
+                topBar
+                    .padding(.horizontal, 20)
+                    .padding(.top, topSafe + 8)
             }
         }
         .ignoresSafeArea()
@@ -70,30 +77,42 @@ struct VoiceChatView: View {
     // MARK: - Chrome
 
     private var topBar: some View {
-        HStack {
+        // Hit-test only the controls — not the full-width strip — so the rest
+        // of the screen stays free for mic / model / bottom close.
+        HStack(spacing: 12) {
             Button {
-                viewModel.stopAll()
-                if let onOpenSidebar {
+                exitVoiceChat()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Theme.background)
+                    .frame(width: 44, height: 44)
+                    .background(Theme.textPrimary, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close voice chat")
+
+            Spacer(minLength: 0)
+
+            if onOpenSidebar != nil {
+                Button {
+                    viewModel.stopAll()
                     dismiss()
                     // Let the cover finish dismissing before opening the drawer.
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                        onOpenSidebar()
+                        onOpenSidebar?()
                     }
+                } label: {
+                    Image(systemName: "line.3.horizontal")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                        .frame(width: 44, height: 44)
+                        .background(Theme.surfaceElevated.opacity(0.9), in: Circle())
+                        .overlay(Circle().stroke(Theme.separator, lineWidth: 1))
                 }
-            } label: {
-                Image(systemName: "line.3.horizontal")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Theme.textPrimary)
-                    .frame(width: 44, height: 44)
-                    .background(Theme.surfaceElevated.opacity(0.9), in: Circle())
-                    .overlay(Circle().stroke(Theme.separator, lineWidth: 1))
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open sidebar")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Open sidebar")
-            .opacity(onOpenSidebar == nil ? 0 : 1)
-            .disabled(onOpenSidebar == nil)
-
-            Spacer()
 
             Button {
                 viewModel.showSettings = true
@@ -108,6 +127,11 @@ struct VoiceChatView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Voice settings")
         }
+    }
+
+    private func exitVoiceChat() {
+        viewModel.stopAll()
+        dismiss()
     }
 
     private var centerStatus: some View {
@@ -235,20 +259,10 @@ struct VoiceChatView: View {
                 onAddModel: { viewModel.showProviderSettings = true }
             )
 
-            Spacer(minLength: 8)
-
-            Button {
-                viewModel.stopAll()
-                dismiss()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Theme.background)
-                    .frame(width: 44, height: 44)
-                    .background(Theme.textPrimary, in: Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Close voice chat")
+            // Close lives in the top bar so it is never covered by bottom chrome.
+            Color.clear
+                .frame(width: 44, height: 44)
+                .accessibilityHidden(true)
         }
         .sheet(isPresented: $chatViewModel.showAddToChatSheet) {
             AddToChatSheet(viewModel: chatViewModel) { _ in

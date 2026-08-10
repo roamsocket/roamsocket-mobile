@@ -32,7 +32,11 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
     private let cache = ContainerCache()
 
     private let hubCache: HubCache
+    /// Foreground session — metadata, listing, load-time fetches while the app is open.
     private let hubClient: HubClient
+    /// Background-configured session — multi‑GB weight snapshots keep transferring
+    /// when the app is suspended (system may relaunch for completion events).
+    private let downloadHubClient: HubClient
 
     init() {
         // Must match LocalMetalModelStore / LocalMetalPaths so downloads appear
@@ -44,6 +48,12 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
         let hubCache = HubCache(cacheDirectory: dir)
         self.hubCache = hubCache
         self.hubClient = HubClient(cache: hubCache)
+        // Ensure the background session is created before hub downloads start.
+        LocalMetalBackgroundURLSession.shared.ensureSession()
+        self.downloadHubClient = HubClient(
+            session: LocalMetalBackgroundURLSession.shared.session,
+            cache: hubCache
+        )
     }
 
     // MARK: LocalMetalGenerating
@@ -167,6 +177,7 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
         // Expected size from the hub tree so we can report true byte progress even
         // when Foundation Progress freezes mid-file and while URLSession stages
         // multi‑GB weights in tmp/ before they land in the hub cache.
+        // Use the *foreground* client for listing (background sessions defer data tasks).
         do {
             let expected = try await Self.expectedDownloadBytes(
                 hubClient: hubClient,
@@ -209,7 +220,7 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
                 await broker.noteObservedBytes(
                     cacheBytes: cacheBytes,
                     tempBytes: tempBytes,
-                    status: "Downloading weights…"
+                    status: "Downloading in background…"
                 )
                 await broker.rescanHubProgress()
                 try? await Task.sleep(nanoseconds: 100_000_000)
@@ -218,11 +229,14 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
 
         do {
             await broker.setStatus("Downloading weights…")
-            // Same patterns mlx-swift-lm uses for chat weights + tokenizer.
-            _ = try await hubClient.downloadSnapshot(
+            // Background URLSession: weight files keep transferring while suspended.
+            // Incomplete hub blobs support Range resume if the process is killed.
+            _ = try await downloadHubClient.downloadSnapshot(
                 of: repoID,
                 revision: "main",
                 matching: Self.modelDownloadPatterns,
+                // Fewer parallel files is more reliable on background sessions.
+                maxConcurrentDownloads: 2,
                 progressHandler: { @MainActor p in
                     // Fire-and-forget onto the broker actor; sampling is ~10 Hz.
                     Task(priority: .userInitiated) {

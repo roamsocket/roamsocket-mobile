@@ -13,12 +13,21 @@ struct VisionChatTurn: Identifiable, Equatable {
     let role: Role
     var text: String
     var isError: Bool
+    /// Grey tool-status lines (web search / research) for this assistant turn.
+    var toolCalls: [ToolCall]?
 
-    init(id: UUID = UUID(), role: Role, text: String, isError: Bool = false) {
+    init(
+        id: UUID = UUID(),
+        role: Role,
+        text: String,
+        isError: Bool = false,
+        toolCalls: [ToolCall]? = nil
+    ) {
         self.id = id
         self.role = role
         self.text = text
         self.isError = isError
+        self.toolCalls = toolCalls
     }
 }
 
@@ -58,6 +67,15 @@ final class VisionViewModel: ObservableObject {
     /// Follow-up reply in flight (after the first analysis).
     @Published private(set) var isReplying: Bool = false
 
+    // MARK: Tools (client-side; same stack as Chat)
+
+    /// DuckDuckGo web search injected as system context. On by default for Vision.
+    @Published var webSearchEnabled: Bool = true
+    /// Multi-query research + Wikipedia. Implies web search when enabled.
+    @Published var researchEnabled: Bool = false
+    /// Live tool status while search runs (also mirrored onto the assistant turn).
+    @Published private(set) var activeToolCalls: [ToolCall] = []
+
     // MARK: Capture prompt (optional, before shutter)
 
     /// Freeform / preset text used for the next capture. Empty → default analysis.
@@ -71,6 +89,7 @@ final class VisionViewModel: ObservableObject {
     let promptStore: VisionPromptStore
 
     private let catalog: ModelCatalog
+    private let webSearchService = WebSearchService()
     private weak var state: AppState?
     private var analysisTask: Task<Void, Never>?
 
@@ -78,6 +97,15 @@ final class VisionViewModel: ObservableObject {
     private var providerMessages: [ProviderChatMessage] = []
     /// JPEG kept for the session so retakes clear memory and follow-ups stay grounded.
     private var sessionImageAttachment: ProviderChatMessage.ImageAttachment?
+    /// Full-frame source used for crop → re-analyze (display-scale, orientation-normalized).
+    private var analysisSourceImage: UIImage?
+    /// Last crop applied for the model payload (normalized image space). Full frame = unit rect.
+    private var lastCropNormalized: CGRect = CGRect(x: 0, y: 0, width: 1, height: 1)
+    /// Prompt snapshot for the current frozen photo (reused when re-cropping).
+    private var lastProviderPrompt: String = ""
+
+    /// Web search / research are client-side and work for any chat-capable vision model.
+    var supportsWebTools: Bool { true }
 
     /// Built-in fallback when the user leaves the capture prompt empty.
     /// Lead with the takeaway so the user sees the useful result without scrolling.
@@ -102,6 +130,22 @@ final class VisionViewModel: ObservableObject {
 
     var trimmedCapturePrompt: String {
         capturePrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Full analysis text for copy / artifact export (all successful assistant turns).
+    var exportableAnalysisText: String {
+        let answers = turns
+            .filter { $0.role == .assistant && !$0.isError }
+            .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        if !answers.isEmpty {
+            return answers.joined(separator: "\n\n---\n\n")
+        }
+        return analysisText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var canExportAnalysis: Bool {
+        !exportableAnalysisText.isEmpty && !isThinking
     }
 
     /// True when the user typed or picked a non-empty task prompt.
@@ -234,7 +278,8 @@ final class VisionViewModel: ObservableObject {
         // Downscale immediately so the full sensor buffer is not retained
         // alongside the VLM weights for the whole generation.
         let forDisplay = Self.displayImage(from: image)
-        let forModel = Self.scaledImage(image, maxDimension: 1024)
+        analysisSourceImage = forDisplay
+        lastCropNormalized = CGRect(x: 0, y: 0, width: 1, height: 1)
         capturedImage = forDisplay
         analysisText = ""
         errorMessage = nil
@@ -242,6 +287,7 @@ final class VisionViewModel: ObservableObject {
         draftText = ""
         providerMessages = []
         sessionImageAttachment = nil
+        activeToolCalls = []
         isReplying = false
         phase = .analyzing
         sheetMode = .expanded
@@ -249,6 +295,7 @@ final class VisionViewModel: ObservableObject {
         // Snapshot the prompt at shutter time so editing the field mid-flight
         // does not change what this analysis was asked to do.
         let promptSnapshot = resolvedProviderPrompt()
+        lastProviderPrompt = promptSnapshot
         let displayPrompt = trimmedCapturePrompt
         let presetTitle = selectedPresetID.flatMap { id in
             promptStore.presets.first(where: { $0.id == id })?.title
@@ -256,40 +303,48 @@ final class VisionViewModel: ObservableObject {
         lastUsedPrompt = displayPrompt.isEmpty ? "" : displayPrompt
         lastUsedPresetTitle = displayPrompt.isEmpty ? nil : presetTitle
 
-        let livePreview = displayPrompt.isEmpty ? "Analyzing image" : displayPrompt
-        AIThinkingActivityManager.shared.thinkingDidStart(kind: .vision, prompt: livePreview)
+        startAnalysisTask(
+            image: Self.scaledImage(forDisplay, maxDimension: 1024),
+            providerPrompt: promptSnapshot,
+            searchQuery: searchQueryForCapture(displayPrompt: displayPrompt),
+            livePreview: displayPrompt.isEmpty ? "Analyzing image" : displayPrompt
+        )
+    }
 
-        analysisTask = Task { [weak self] in
-            guard let self else { return }
-            defer { AIThinkingActivityManager.shared.thinkingDidEnd() }
-            do {
-                let reply = try await self.runInitialAnalysis(
-                    image: forModel,
-                    providerPrompt: promptSnapshot
-                )
-                guard !Task.isCancelled else { return }
-                self.analysisText = reply
-                // Initial capture/system prompt is a compact header chip (popover
-                // for full text) — never a thread bubble — so the answer leads.
-                self.turns = [VisionChatTurn(role: .assistant, text: reply)]
-                self.phase = .result
-                if self.sheetMode == .hidden {
-                    self.sheetMode = .expanded
-                }
-            } catch is CancellationError {
-                // Retake / dismiss — leave UI as-is for the new state.
-            } catch {
-                guard !Task.isCancelled else { return }
-                let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                self.errorMessage = msg
-                self.analysisText = ""
-                self.turns = []
-                self.providerMessages = []
-                self.sessionImageAttachment = nil
-                self.phase = .failed(msg)
-                self.sheetMode = .expanded
-            }
+    /// User finished resizing the Lens-style crop; re-run analysis on that region.
+    /// No-op when the crop is effectively unchanged (avoids thrashing on tiny tweaks).
+    func applyCropAndReanalyze(normalizedRect: CGRect) {
+        guard let source = analysisSourceImage ?? capturedImage else { return }
+        let next = Self.clampedNormalizedCrop(normalizedRect)
+        // Skip if crop barely moved (corner handle release without real change).
+        if Self.cropsApproximatelyEqual(lastCropNormalized, next) { return }
+        lastCropNormalized = next
+
+        let cropped = Self.croppedImage(source, normalized: next)
+        let forModel = Self.scaledImage(cropped, maxDimension: 1024)
+        let prompt = lastProviderPrompt.isEmpty ? resolvedProviderPrompt() : lastProviderPrompt
+
+        analysisTask?.cancel()
+        analysisText = ""
+        errorMessage = nil
+        turns = []
+        draftText = ""
+        providerMessages = []
+        sessionImageAttachment = nil
+        activeToolCalls = []
+        isReplying = false
+        phase = .analyzing
+        if sheetMode == .hidden || sheetMode == .minimized {
+            sheetMode = .expanded
         }
+
+        let livePreview = lastUsedPrompt.isEmpty ? "Analyzing selection" : lastUsedPrompt
+        startAnalysisTask(
+            image: forModel,
+            providerPrompt: prompt,
+            searchQuery: searchQueryForCapture(displayPrompt: lastUsedPrompt),
+            livePreview: livePreview
+        )
     }
 
     /// Ask a follow-up about the frozen photo and prior analysis.
@@ -301,8 +356,9 @@ final class VisionViewModel: ObservableObject {
         draftText = ""
         let userTurn = VisionChatTurn(role: .user, text: text)
         turns.append(userTurn)
-        providerMessages.append(ProviderChatMessage(role: .user, content: text))
+        // User turn is appended after optional search context is injected.
         isReplying = true
+        activeToolCalls = []
         // Give the thread room while the model answers.
         if sheetMode == .minimized || sheetMode == .expanded {
             sheetMode = .full
@@ -316,13 +372,24 @@ final class VisionViewModel: ObservableObject {
             guard let self else { return }
             defer {
                 self.isReplying = false
+                self.activeToolCalls = []
                 AIThinkingActivityManager.shared.thinkingDidEnd()
             }
             do {
-                let reply = try await self.runChat(messages: self.providerMessages)
+                var messages = self.providerMessages
+                let tools = try await self.runOptionalWebTools(query: text)
+                if let context = tools.promptBlock, !context.isEmpty {
+                    messages.append(ProviderChatMessage(role: .system, content: context))
+                }
+                messages.append(ProviderChatMessage(role: .user, content: text))
+                self.providerMessages = messages
+
+                let reply = try await self.runChat(messages: messages)
                 guard !Task.isCancelled else { return }
                 self.providerMessages.append(ProviderChatMessage(role: .assistant, content: reply))
-                self.turns.append(VisionChatTurn(role: .assistant, text: reply))
+                self.turns.append(
+                    VisionChatTurn(role: .assistant, text: reply, toolCalls: tools.calls.isEmpty ? nil : tools.calls)
+                )
                 self.analysisText = reply
                 self.phase = .result
             } catch is CancellationError {
@@ -332,6 +399,10 @@ final class VisionViewModel: ObservableObject {
                 let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 // Drop the failed user turn from the provider history so a retry can resend.
                 if self.providerMessages.last?.role == .user {
+                    self.providerMessages.removeLast()
+                }
+                // Also drop a trailing system search block if we injected one.
+                if self.providerMessages.last?.role == .system {
                     self.providerMessages.removeLast()
                 }
                 self.turns.append(VisionChatTurn(role: .assistant, text: msg, isError: true))
@@ -346,6 +417,9 @@ final class VisionViewModel: ObservableObject {
         analysisTask = nil
         AIThinkingActivityManager.shared.thinkingDidEnd()
         capturedImage = nil
+        analysisSourceImage = nil
+        lastCropNormalized = CGRect(x: 0, y: 0, width: 1, height: 1)
+        lastProviderPrompt = ""
         analysisText = ""
         errorMessage = nil
         turns = []
@@ -354,10 +428,22 @@ final class VisionViewModel: ObservableObject {
         lastUsedPresetTitle = nil
         providerMessages = []
         sessionImageAttachment = nil
+        activeToolCalls = []
         isReplying = false
         phase = .live
         sheetMode = .hidden
-        // Keep capturePrompt / selectedPreset so the same task can re-run.
+        // Keep capturePrompt / selectedPreset / web tool toggles so the same task can re-run.
+    }
+
+    /// Research on implies web search (matches Chat Add-to-chat behavior).
+    func setResearchEnabled(_ on: Bool) {
+        researchEnabled = on
+        if on { webSearchEnabled = true }
+    }
+
+    func setWebSearchEnabled(_ on: Bool) {
+        webSearchEnabled = on
+        if !on { researchEnabled = false }
     }
 
     /// Prompt string sent to the model for the next capture.
@@ -401,16 +487,135 @@ final class VisionViewModel: ObservableObject {
 
     // MARK: - Private
 
-    private func runInitialAnalysis(image: UIImage, providerPrompt: String) async throws -> String {
+    private func startAnalysisTask(
+        image: UIImage,
+        providerPrompt: String,
+        searchQuery: String?,
+        livePreview: String
+    ) {
+        AIThinkingActivityManager.shared.thinkingDidStart(kind: .vision, prompt: livePreview)
+
+        analysisTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                self.activeToolCalls = []
+                AIThinkingActivityManager.shared.thinkingDidEnd()
+            }
+            do {
+                let tools = try await self.runOptionalWebTools(query: searchQuery)
+                let reply = try await self.runInitialAnalysis(
+                    image: image,
+                    providerPrompt: providerPrompt,
+                    searchContext: tools.promptBlock
+                )
+                guard !Task.isCancelled else { return }
+                self.analysisText = reply
+                // Initial capture/system prompt is a compact header chip (popover
+                // for full text) — never a thread bubble — so the answer leads.
+                self.turns = [
+                    VisionChatTurn(
+                        role: .assistant,
+                        text: reply,
+                        toolCalls: tools.calls.isEmpty ? nil : tools.calls
+                    ),
+                ]
+                self.phase = .result
+                if self.sheetMode == .hidden {
+                    self.sheetMode = .expanded
+                }
+            } catch is CancellationError {
+                // Retake / dismiss / re-crop — leave UI as-is for the new state.
+            } catch {
+                guard !Task.isCancelled else { return }
+                let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                self.errorMessage = msg
+                self.analysisText = ""
+                self.turns = []
+                self.providerMessages = []
+                self.sessionImageAttachment = nil
+                self.phase = .failed(msg)
+                self.sheetMode = .expanded
+            }
+        }
+    }
+
+    /// Query used for capture-time search. Empty custom prompt → skip SERP
+    /// (toggle still applies to follow-ups).
+    private func searchQueryForCapture(displayPrompt: String) -> String? {
+        let q = displayPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        return q.isEmpty ? nil : q
+    }
+
+    private struct WebToolsResult {
+        var calls: [ToolCall]
+        var promptBlock: String?
+    }
+
+    private func runOptionalWebTools(query: String?) async throws -> WebToolsResult {
+        guard supportsWebTools, researchEnabled || webSearchEnabled else {
+            return WebToolsResult(calls: [], promptBlock: nil)
+        }
+        let q = (query ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else {
+            return WebToolsResult(calls: [], promptBlock: nil)
+        }
+
+        let mode: WebSearchService.Mode = researchEnabled ? .research : .webSearch
+        do {
+            let bundle = try await webSearchService.search(userMessage: q, mode: mode) {
+                [weak self] step in
+                await MainActor.run {
+                    guard let self else { return }
+                    var calls = self.activeToolCalls
+                    if let idx = calls.firstIndex(where: { $0.id == step.id }) {
+                        calls[idx] = ToolCall(from: step)
+                    } else {
+                        calls.append(ToolCall(from: step))
+                    }
+                    self.activeToolCalls = calls
+                    AIThinkingActivityManager.shared.thinkingDidUpdate(
+                        status: step.summary.isEmpty ? "Searching…" : step.summary
+                    )
+                }
+            }
+            let calls = bundle.steps.map { ToolCall(from: $0) }
+            activeToolCalls = calls
+            return WebToolsResult(
+                calls: calls,
+                promptBlock: bundle.promptBlock.isEmpty ? nil : bundle.promptBlock
+            )
+        } catch {
+            let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            let failed = ToolCall(
+                name: researchEnabled ? "research" : "web_search",
+                summary: researchEnabled ? "Research unavailable" : "Web search unavailable",
+                detail: msg,
+                status: .failed(msg)
+            )
+            activeToolCalls = [failed]
+            // Soft-fail: continue analysis without web context.
+            return WebToolsResult(calls: [failed], promptBlock: nil)
+        }
+    }
+
+    private func runInitialAnalysis(
+        image: UIImage,
+        providerPrompt: String,
+        searchContext: String?
+    ) async throws -> String {
         let model = try await resolveModel()
         let attachment = try makeAttachment(from: image, model: model)
         sessionImageAttachment = attachment
 
-        let turns: [ProviderChatMessage] = [
-            ProviderChatMessage(role: .user, content: providerPrompt, images: [attachment]),
-        ]
+        var turns: [ProviderChatMessage] = []
+        if let searchContext, !searchContext.isEmpty {
+            turns.append(ProviderChatMessage(role: .system, content: searchContext))
+        }
+        turns.append(
+            ProviderChatMessage(role: .user, content: providerPrompt, images: [attachment])
+        )
         let reply = try await runChat(messages: turns)
-        // Seed multi-turn history: image+prompt, then assistant analysis.
+        // Seed multi-turn history: optional search context, image+prompt, then assistant.
         providerMessages = turns + [ProviderChatMessage(role: .assistant, content: reply)]
         return reply
     }
@@ -550,5 +755,46 @@ final class VisionViewModel: ObservableObject {
         return renderer.image { _ in
             image.draw(in: CGRect(origin: .zero, size: newSize))
         }
+    }
+
+    /// Crop in image pixel space from a normalized rect (origin top-leading, 0…1).
+    private static func croppedImage(_ image: UIImage, normalized: CGRect) -> UIImage {
+        let n = clampedNormalizedCrop(normalized)
+        // Nearly full frame — skip a redundant raster.
+        if n.minX <= 0.002, n.minY <= 0.002, n.maxX >= 0.998, n.maxY >= 0.998 {
+            return image
+        }
+        guard let cg = image.cgImage else { return image }
+        let w = CGFloat(cg.width)
+        let h = CGFloat(cg.height)
+        let pixelRect = CGRect(
+            x: floor(n.minX * w),
+            y: floor(n.minY * h),
+            width: floor(n.width * w),
+            height: floor(n.height * h)
+        )
+        guard pixelRect.width >= 2, pixelRect.height >= 2,
+              let cropped = cg.cropping(to: pixelRect)
+        else { return image }
+        return UIImage(cgImage: cropped, scale: image.scale, orientation: .up)
+    }
+
+    private static func clampedNormalizedCrop(_ rect: CGRect) -> CGRect {
+        let minSide: CGFloat = 0.05
+        var r = rect.standardized
+        if r.width < minSide { r.size.width = minSide }
+        if r.height < minSide { r.size.height = minSide }
+        r.origin.x = min(max(r.origin.x, 0), 1 - r.size.width)
+        r.origin.y = min(max(r.origin.y, 0), 1 - r.size.height)
+        r.size.width = min(r.size.width, 1 - r.origin.x)
+        r.size.height = min(r.size.height, 1 - r.origin.y)
+        return r
+    }
+
+    private static func cropsApproximatelyEqual(_ a: CGRect, _ b: CGRect, epsilon: CGFloat = 0.008) -> Bool {
+        abs(a.minX - b.minX) < epsilon
+            && abs(a.minY - b.minY) < epsilon
+            && abs(a.width - b.width) < epsilon
+            && abs(a.height - b.height) < epsilon
     }
 }

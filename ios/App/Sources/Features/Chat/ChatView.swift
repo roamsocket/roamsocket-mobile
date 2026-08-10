@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import AnyProvCore
 
 /// Main chat view:
@@ -40,6 +41,13 @@ struct ChatView: View {
     /// Full-screen live voice chat (Siri dictation + spoken replies).
     @State private var showVoiceChat = false
 
+    /// Extra bottom lift so the composer sits above the software keyboard.
+    /// System keyboard avoidance is unreliable here (full-bleed background +
+    /// sibling composer VStack), so we track the keyboard frame ourselves.
+    @State private var keyboardLift: CGFloat = 0
+
+    private var keyboardVisible: Bool { keyboardLift > 10 }
+
     var body: some View {
         ZStack {
             Theme.background.ignoresSafeArea()
@@ -63,6 +71,9 @@ struct ChatView: View {
                 composer
                     .layoutPriority(1)
             }
+            // Lift the whole column (transcript shrinks; composer rides up).
+            .padding(.bottom, keyboardLift)
+            .animation(.easeOut(duration: 0.25), value: keyboardLift)
         }
         .onAppear {
             bindAndLoad()
@@ -83,6 +94,13 @@ struct ChatView: View {
             // Project chat pop, or any full teardown of this chat screen.
             persistAndAutoTitleOnLeave()
             discardBlankDraftIfNeeded()
+            keyboardLift = 0
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
+            updateKeyboardLift(from: note)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            keyboardLift = 0
         }
         // Keep the bar compact — large-title mode reserves a tall blank band
         // under the chrome and makes the empty home look top-padded.
@@ -139,6 +157,37 @@ struct ChatView: View {
         }
     }
 
+    // MARK: - Keyboard
+
+    /// Lift amount for content that already sits above the home indicator.
+    /// Full keyboard height minus the bottom safe area (already accounted for).
+    private func updateKeyboardLift(from note: Notification) {
+        guard
+            let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
+        else { return }
+
+        let window = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first(where: \.isKeyWindow)
+
+        let overlap: CGFloat
+        let bottomSafe: CGFloat
+        if let window {
+            let converted = window.convert(frame, from: nil)
+            overlap = max(0, window.bounds.maxY - converted.minY)
+            bottomSafe = window.safeAreaInsets.bottom
+        } else {
+            let screenH = UIScreen.main.bounds.height
+            overlap = max(0, screenH - frame.origin.y)
+            bottomSafe = 0
+        }
+
+        // Keyboard dismissed / off-screen: end frame sits at or below the bottom.
+        let lift = max(0, overlap - bottomSafe)
+        keyboardLift = lift > 10 ? lift : 0
+    }
+
     private var chatTitle: String {
         if let id = viewModel.activeChatID,
            let item = history?.recents.first(where: { $0.id == id }),
@@ -161,11 +210,10 @@ struct ChatView: View {
             viewModel.loadProjectChat(project: project, chat: chat, from: history)
         } else if let active = history.activeChatID,
                   history.recents.contains(where: { $0.id == active }) {
+            // Explicit open: New chat, sidebar recent, or Chats home — not cold launch.
             viewModel.loadChat(id: active, from: history)
-        } else if let first = history.activeRecents.first {
-            // Resume last real chat on cold launch (skip blank drafts).
-            viewModel.loadChat(id: first.id, from: history)
         } else {
+            // App open / no active chat → always a blank new chat page.
             viewModel.beginNewChat(in: history)
         }
     }
@@ -470,11 +518,19 @@ struct ChatView: View {
             composerSurface
         }
         .padding(.horizontal, 16)
-        .padding(.bottom, 12)
+        // Home-indicator gap when keyboard is down; tight gap when sitting on keys.
+        .padding(.bottom, keyboardVisible ? 6 : 12)
         .padding(.top, 8)
         .animation(.easeInOut(duration: 0.2), value: state.isLoadingLocalMetal)
-        // Extend fill under the home indicator so list content doesn't peek through.
-        .background(Theme.background.ignoresSafeArea(edges: .bottom))
+        // Extend fill under the home indicator only when the keyboard is down
+        // (with the keyboard up, the composer already sits on the key plane).
+        .background {
+            if keyboardVisible {
+                Theme.background
+            } else {
+                Theme.background.ignoresSafeArea(edges: .bottom)
+            }
+        }
     }
 
     private var composerSurface: some View {
@@ -516,6 +572,22 @@ struct ChatView: View {
                 )
 
                 Spacer(minLength: 0)
+
+                // Vision camera — always one tap from chat (hardware Camera Control
+                // / volume shutter also fire once Vision is open).
+                Button {
+                    DeepLinkBridge.request(.vision)
+                } label: {
+                    Image(systemName: "camera.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                        .frame(width: 36, height: 36)
+                        .background(Theme.surfaceElevated, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(viewModel.isLoadingChat || viewModel.isProcessing)
+                .accessibilityLabel("Open Vision camera")
+                .accessibilityHint("Analyze the camera or a photo with a vision model")
 
                 if hasText {
                     // Send — only when there is real input.

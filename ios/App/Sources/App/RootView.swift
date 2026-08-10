@@ -274,6 +274,8 @@ struct RootView: View {
         switch link {
         case .chat:
             showVision = false
+            history.startNewChat(selectedModel: state.selectedModel)
+            chatResumeToken = UUID()
             path = []
         case .code:
             showVision = false

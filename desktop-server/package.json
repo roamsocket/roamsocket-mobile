@@ -1,5 +1,5 @@
 {
-  "name": "roamsocket",
+  "name": "@roamsocket/server",
   "version": "0.2.0",
   "type": "module",
   "description": "RoamSocket desktop companion: headless WebSocket coding server that pairs with the iOS app, clones repos, runs the agent loop, and opens PRs.",
@@ -47,6 +47,9 @@
     "README.md",
     "LICENSE"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "node dist/src/index.js",

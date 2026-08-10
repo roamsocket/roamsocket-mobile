@@ -83,9 +83,6 @@ struct LocalMetalSettingsView: View {
         NavigationStack {
             List {
                 introSection
-                if !downloads.bannerTracks.isEmpty {
-                    downloadsBannerSection
-                }
                 if !onDeviceEntries.isEmpty {
                     onDeviceSection
                 }
@@ -104,6 +101,10 @@ struct LocalMetalSettingsView: View {
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
             .background(Theme.background)
+            // Sticky multi-model progress at the top of Manage models.
+            .safeAreaInset(edge: .top, spacing: 0) {
+                LocalMetalDownloadsPinnedBar(onRetry: { startDownload($0) })
+            }
             .navigationTitle("Manage models")
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $search, prompt: "Search models")
@@ -148,6 +149,7 @@ struct LocalMetalSettingsView: View {
             .task {
                 LocalMetalBootstrap.ensureRegistered()
                 runtimeReady = LocalMetalRuntime.isReady
+                LocalMetalDownloadManager.shared.resumePendingDownloadsIfNeeded(appState: state)
                 await refreshCatalog(force: false)
                 await reloadStatus()
             }
@@ -213,52 +215,6 @@ struct LocalMetalSettingsView: View {
                 }
             }
             .listRowBackground(Theme.surface)
-        }
-    }
-
-    /// Multi-download banner — same information as desktop Manage models.
-    private var downloadsBannerSection: some View {
-        Section {
-            ForEach(downloads.bannerTracks) { track in
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(track.displayName)
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(Theme.textPrimary)
-                            .lineLimit(1)
-                        Spacer(minLength: 8)
-                        Text(bannerPercent(track))
-                            .font(.system(size: 13, weight: .semibold).monospacedDigit())
-                            .foregroundStyle(track.phase == .error ? Color.red.opacity(0.9) : Theme.textTertiary)
-                    }
-                    ProgressView(value: min(1, max(0, track.fraction)))
-                        .tint(track.phase == .error ? Color.red.opacity(0.85) : Theme.accent)
-                    Text(track.detailLine)
-                        .font(.caption)
-                        .foregroundStyle(track.phase == .error ? Color.red.opacity(0.9) : Theme.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if track.phase == .error {
-                        Button("Retry") {
-                            startDownload(track.hubID)
-                        }
-                        .font(.system(size: 14, weight: .semibold))
-                    }
-                }
-                .padding(.vertical, 4)
-                .listRowBackground(Theme.surface)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("\(track.displayName), \(track.detailLine)")
-            }
-        } header: {
-            Text("Downloads")
-        }
-    }
-
-    private func bannerPercent(_ track: LocalMetalDownloadManager.Track) -> String {
-        switch track.phase {
-        case .done: return "100%"
-        case .error: return "Error"
-        case .active: return "\(track.percent)%"
         }
     }
 
@@ -399,7 +355,7 @@ struct LocalMetalSettingsView: View {
                     .foregroundStyle(.red.opacity(0.9))
             }
         } footer: {
-            Text("Downloads continue if you leave this screen — steps and byte progress stay in Downloads above. Unload frees RAM but keeps weights. Delete removes weights from this device.")
+            Text("Downloads keep going if you leave this screen (progress stays pinned at the top). Weight files use a system background transfer — they can continue after you switch apps, and incomplete downloads resume automatically when you reopen RoamSocket. Unload frees RAM but keeps weights. Delete removes weights from this device.")
         }
     }
 
@@ -733,6 +689,9 @@ private struct ModelFamilyDetailView: View {
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .background(Theme.background)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            LocalMetalDownloadsPinnedBar(onRetry: onDownload)
+        }
         .navigationTitle(family.name)
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -819,6 +778,9 @@ private struct ModelBucketListView: View {
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .background(Theme.background)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            LocalMetalDownloadsPinnedBar(onRetry: onDownload)
+        }
         .navigationTitle(bucket.title)
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -829,6 +791,111 @@ private struct ModelBucketListView: View {
         }
         if !entry.approxSize.isEmpty { return entry.approxSize }
         return "From Hugging Face"
+    }
+}
+
+// MARK: - Pinned multi-download progress
+
+/// Sticky top bar listing each active (or recent) model download with a progress bar.
+private struct LocalMetalDownloadsPinnedBar: View {
+    var onRetry: (String) -> Void
+    @ObservedObject private var downloads = LocalMetalDownloadManager.shared
+
+    var body: some View {
+        let tracks = downloads.bannerTracks
+        if tracks.isEmpty {
+            EmptyView()
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                    Text(tracks.contains(where: { $0.phase == .active }) ? "Downloading" : "Downloads")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.textSecondary)
+                    Spacer(minLength: 0)
+                    if tracks.contains(where: { $0.phase == .active }) {
+                        Text("Background transfer on")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(Theme.textTertiary)
+                            .lineLimit(1)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+                .padding(.bottom, 8)
+
+                VStack(spacing: 10) {
+                    ForEach(tracks) { track in
+                        downloadTrackRow(track)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 12)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                Rectangle()
+                    .fill(Theme.surface.opacity(0.98))
+                    .shadow(color: .black.opacity(0.28), radius: 10, y: 4)
+                    .ignoresSafeArea(edges: .top)
+            }
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(Theme.separator.opacity(0.55))
+                    .frame(height: 1)
+            }
+            .animation(.easeOut(duration: 0.2), value: tracks.map(\.id))
+            .accessibilityElement(children: .contain)
+        }
+    }
+
+    @ViewBuilder
+    private func downloadTrackRow(_ track: LocalMetalDownloadManager.Track) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(track.displayName)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Text(trailingLabel(track))
+                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(track.phase == .error ? Color.red.opacity(0.9) : Theme.textTertiary)
+            }
+            ProgressView(value: min(1, max(0, track.fraction)))
+                .tint(track.phase == .error ? Color.red.opacity(0.85) : Theme.accent)
+            HStack(alignment: .center, spacing: 8) {
+                Text(track.detailLine)
+                    .font(.system(size: 11))
+                    .foregroundStyle(track.phase == .error ? Color.red.opacity(0.9) : Theme.textSecondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                if track.phase == .error {
+                    Button("Retry") {
+                        onRetry(track.hubID)
+                    }
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(track.displayName), \(track.detailLine)")
+    }
+
+    private func trailingLabel(_ track: LocalMetalDownloadManager.Track) -> String {
+        switch track.phase {
+        case .done:
+            return track.mbProgressLabel ?? "Done"
+        case .error:
+            return "Error"
+        case .active:
+            return track.mbProgressLabel ?? "…"
+        }
     }
 }
 

@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import AVKit
 import UIKit
 
 /// Full-screen live camera preview with still capture (photo output).
@@ -50,16 +51,20 @@ final class VisionCameraController: UIViewController, AVCapturePhotoCaptureDeleg
     private let photoOutput = AVCapturePhotoOutput()
     private var isConfigured = false
     private var wantsRunning = true
+    /// Hardware Camera Control / volume-button shutter (iOS 17.2+).
+    private var captureEventInteraction: AnyObject?
 
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .black
+        installHardwareCaptureButtons()
         requestAndConfigure()
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         preview?.frame = view.bounds
+        applyPreviewOrientation()
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -97,6 +102,33 @@ final class VisionCameraController: UIViewController, AVCapturePhotoCaptureDeleg
             settings.flashMode = .off
             self.photoOutput.capturePhoto(with: settings, delegate: self)
         }
+    }
+
+    // MARK: - Hardware shutter (Camera Control / volume)
+
+    /// iPhone 16 Camera Control + volume buttons fire capture while Vision is open.
+    private func installHardwareCaptureButtons() {
+        if #available(iOS 17.2, *) {
+            let interaction = AVCaptureEventInteraction(
+                primary: { [weak self] event in
+                    self?.handleHardwareCaptureEvent(event)
+                },
+                secondary: { [weak self] event in
+                    self?.handleHardwareCaptureEvent(event)
+                }
+            )
+            interaction.isEnabled = true
+            view.addInteraction(interaction)
+            captureEventInteraction = interaction
+        }
+    }
+
+    @available(iOS 17.2, *)
+    private func handleHardwareCaptureEvent(_ event: AVCaptureEvent) {
+        // Fire once on press end so light-press / hold doesn’t multi-shoot.
+        guard event.phase == .ended else { return }
+        guard wantsRunning else { return }
+        capturePhoto()
     }
 
     // MARK: - Setup
@@ -141,6 +173,19 @@ final class VisionCameraController: UIViewController, AVCapturePhotoCaptureDeleg
             }
             self.session.addInput(input)
 
+            // Stay at true 1× wide FOV — dual/triple cameras sometimes report a
+            // virtual zoom > 1 as the default, which reads as “zoomed in”.
+            do {
+                try device.lockForConfiguration()
+                let minZoom = device.minAvailableVideoZoomFactor
+                if device.videoZoomFactor != minZoom {
+                    device.videoZoomFactor = minZoom
+                }
+                device.unlockForConfiguration()
+            } catch {
+                // Non-fatal — continue with the system default.
+            }
+
             guard self.session.canAddOutput(self.photoOutput) else {
                 self.session.commitConfiguration()
                 DispatchQueue.main.async {
@@ -162,15 +207,30 @@ final class VisionCameraController: UIViewController, AVCapturePhotoCaptureDeleg
 
             DispatchQueue.main.async {
                 let layer = AVCaptureVideoPreviewLayer(session: self.session)
+                // Preview is laid out in a dedicated band between chrome (not
+                // full-screen), so aspect-fill covers that band without drawing
+                // under Close / prompt / shutter. Zoom is still locked to 1×.
                 layer.videoGravity = .resizeAspectFill
                 layer.frame = self.view.bounds
+                layer.masksToBounds = true
                 self.view.layer.insertSublayer(layer, at: 0)
                 self.preview = layer
+                self.applyPreviewOrientation()
             }
 
             if self.wantsRunning {
                 self.session.startRunning()
             }
+        }
+    }
+
+    /// Keep the preview upright in portrait (matches photo output).
+    private func applyPreviewOrientation() {
+        guard let connection = preview?.connection else { return }
+        let portraitAngle: CGFloat = 90
+        if connection.isVideoRotationAngleSupported(portraitAngle),
+           connection.videoRotationAngle != portraitAngle {
+            connection.videoRotationAngle = portraitAngle
         }
     }
 
