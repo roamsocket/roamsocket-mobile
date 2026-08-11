@@ -60,6 +60,10 @@ final class SessionViewModel: ObservableObject {
     @Published var webPreviewURL: URL?
     /// Agent working checklist from `task_list` / `update_tasks`.
     @Published private(set) var agentTasks: [ServerMessage.AgentTaskPayload] = []
+    /// Active `/goal` condition for this coding session (banner + status).
+    @Published private(set) var goalStatus: ServerMessage.GoalStatusPayload?
+    /// Live local-model loading state for this coding session (banner + status).
+    @Published private(set) var modelStatus: ServerMessage.ModelStatusPayload?
 
     /// Composer accepts text once the desktop session exists.
     /// Soft notices (skills sync, project env warnings) must not block input.
@@ -725,6 +729,7 @@ final class SessionViewModel: ObservableObject {
         case let .assistantDelta(_, text):
             setAgentRunning(true)
             connectionStatusLine = nil
+            modelStatus = nil
             appendAssistant(text)
 
         case let .toolCall(_, callId, tool, summary):
@@ -750,6 +755,7 @@ final class SessionViewModel: ObservableObject {
 
         case .sessionDone:
             setAgentRunning(false)
+            modelStatus = nil
             flushPendingOutgoing()
             scheduleTranscriptSave()
             // Archived with "keep running": drop the phone socket once the turn ends.
@@ -818,6 +824,39 @@ final class SessionViewModel: ObservableObject {
         case let .taskList(_, tasks):
             agentTasks = tasks
 
+        case let .goalStatus(_, status, condition, reason, turnsEvaluated, startedAt, elapsedMs, message):
+            let payload = ServerMessage.GoalStatusPayload(
+                status: status,
+                condition: condition,
+                reason: reason,
+                turnsEvaluated: turnsEvaluated,
+                startedAt: startedAt,
+                elapsedMs: elapsedMs,
+                message: message
+            )
+            if status == "active" {
+                goalStatus = payload
+            } else if status == "achieved" {
+                goalStatus = payload
+            } else {
+                // cleared / none — drop the live banner after showing notice
+                goalStatus = nil
+            }
+            if !message.isEmpty {
+                appendNotice(message)
+            }
+
+        case let .modelStatus(_, status, hubID, message):
+            if status == "done" {
+                modelStatus = nil
+            } else {
+                modelStatus = ServerMessage.ModelStatusPayload(
+                    status: status,
+                    hubID: hubID,
+                    message: message
+                )
+            }
+
         case .terminalData, .terminalControl, .fileListResult, .fileReadResult, .fileWriteResult, .portListResult, .tunnelStatus:
             // Handled by the dedicated tools views via their own connection.
             break
@@ -833,6 +872,14 @@ final class SessionViewModel: ObservableObject {
     }
 
     var hasAgentTasks: Bool { !agentTasks.isEmpty }
+
+    var hasActiveGoal: Bool { goalStatus?.isActive == true }
+
+    /// Show the goal strip for an in-flight or just-achieved condition.
+    var showsGoalBanner: Bool {
+        guard let status = goalStatus?.status else { return false }
+        return status == "active" || status == "achieved"
+    }
 
     private static func isFatalSessionError(_ message: String) -> Bool {
         let m = message.lowercased()

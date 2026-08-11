@@ -121,8 +121,8 @@ final class VoiceSettingsStore: ObservableObject {
            let eng = VoiceSpeechEngine(rawValue: raw) {
             self.engine = eng
         } else {
-            // Upgrade: former preferPersonalVoice-only installs → auto neural.
-            self.engine = .auto
+            // Default to free Edge neural voices (no API key required).
+            self.engine = .freeNeural
         }
         self.voiceIdentifier = defaults.string(forKey: Keys.voiceIdentifier) ?? ""
         let storedRate = defaults.object(forKey: Keys.speechRate) as? Double

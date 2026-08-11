@@ -29,7 +29,7 @@ const SUPERVISOR_RE =
  * instance cleanup still finds older installs during transition.
  */
 const APC_SERVER_RE =
-  /(?:roamsocket-server|codesocket-server|anyprov-code-server|code-mobile-ai-server|(?:^|[\\/\s])tsx(?:\s+watch)?\s+.*(?:src[\\/])?index\.ts|node\s+.*desktop-server[\\/].*dist[\\/](?:src[\\/])?index\.js|desktop-server[\\/](?:src[\\/]index\.ts|dist[\\/](?:src[\\/])?index\.js)|RoamSocket\.app[\\/]Contents[\\/]MacOS[\\/](?:roamsocket|codesocket|anyprov-code)|Code Mobile AI\.app[\\/]Contents[\\/]MacOS[\\/]code-mobile-ai|(?:^|[\\/\s])(?:roamsocket|codesocket|anyprov-code|code-mobile-ai)(?:\.exe)?(?:\s|$))/i;
+  /(?:roamsocket-server|roamsocket-server|anyprov-code-server|code-mobile-ai-server|(?:^|[\\/\s])tsx(?:\s+watch)?\s+.*(?:src[\\/])?index\.ts|node\s+.*desktop-server[\\/].*dist[\\/](?:src[\\/])?index\.js|desktop-server[\\/](?:src[\\/]index\.ts|dist[\\/](?:src[\\/])?index\.js)|RoamSocket\.app[\\/]Contents[\\/]MacOS[\\/](?:roamsocket|roamsocket|anyprov-code)|Code Mobile AI\.app[\\/]Contents[\\/]MacOS[\\/]code-mobile-ai|(?:^|[\\/\s])(?:roamsocket|roamsocket|anyprov-code|code-mobile-ai)(?:\.exe)?(?:\s|$))/i;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -142,7 +142,7 @@ async function listApcServerProcesses(): Promise<ConflictingProcess[]> {
           "-Command",
           // LEGACY name fragments included so older installs are still cleaned up.
           `Get-CimInstance Win32_Process | Where-Object {
-            $_.CommandLine -match 'roamsocket|codesocket|anyprov-code|code-mobile-ai|desktop-server.*(index\\.(ts|js)|RoamSocket|Code Mobile AI)'
+            $_.CommandLine -match 'roamsocket|roamsocket|anyprov-code|code-mobile-ai|desktop-server.*(index\\.(ts|js)|RoamSocket|Code Mobile AI)'
           } | Select-Object ProcessId, CommandLine | ConvertTo-Csv -NoTypeInformation`,
         ],
         { maxBuffer: 4 * 1024 * 1024, windowsHide: true },

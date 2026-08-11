@@ -44,38 +44,57 @@ struct ChatMessageView: View {
     // MARK: - User Message
 
     private var userMessageBubble: some View {
-        Text(message.content)
-            .font(.system(size: 17))
-            .foregroundStyle(Theme.textPrimary)
-            .padding(.horizontal, 18)
-            .padding(.vertical, 12)
-            .background(Theme.surfaceElevated, in: RoundedRectangle(cornerRadius: 20))
-            // Stretch to the right edge with a tiny margin so it doesn't float.
-            // Cap width to keep longer messages readable.
-            .frame(maxWidth: 320, alignment: .trailing)
-            .frame(maxWidth: .infinity, alignment: .trailing)
-            .overlay(alignment: .top) {
-                if showCopiedToast {
-                    Text("Copied")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Theme.accent)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(Theme.surface, in: Capsule())
-                        .offset(y: -28)
-                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+        VStack(alignment: .trailing, spacing: 6) {
+            if let imageAttachments = message.attachments?.filter({ $0.type == .image }),
+               !imageAttachments.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(imageAttachments) { attachment in
+                        if let data = attachment.thumbnailData, let uiImage = UIImage(data: data) {
+                            Image(uiImage: uiImage)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 132, height: 132)
+                                .clipShape(RoundedRectangle(cornerRadius: 14))
+                        }
+                    }
                 }
             }
-            .contentShape(RoundedRectangle(cornerRadius: 20))
-            .onLongPressGesture(minimumDuration: 0.4, perform: copyOutgoingMessage)
-            .contextMenu {
-                Button {
-                    copyOutgoingMessage()
-                } label: {
-                    Label("Copy", systemImage: "doc.on.doc")
-                }
+            if !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text(message.content)
+                    .font(.system(size: 17))
+                    .foregroundStyle(Theme.textPrimary)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 12)
+                    .background(Theme.surfaceElevated, in: RoundedRectangle(cornerRadius: 20))
+                    .contentShape(RoundedRectangle(cornerRadius: 20))
             }
-            .accessibilityAction(named: "Copy") { copyOutgoingMessage() }
+        }
+        // Stretch to the right edge with a tiny margin so it doesn't float.
+        // Cap width to keep longer messages readable.
+        .frame(maxWidth: 320, alignment: .trailing)
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .overlay(alignment: .top) {
+            if showCopiedToast {
+                Text("Copied")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(Theme.surface, in: Capsule())
+                    .offset(y: -28)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 20))
+        .onLongPressGesture(minimumDuration: 0.4, perform: copyOutgoingMessage)
+        .contextMenu {
+            Button {
+                copyOutgoingMessage()
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
+        }
+        .accessibilityAction(named: "Copy") { copyOutgoingMessage() }
     }
 
     private func copyOutgoingMessage() {

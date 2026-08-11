@@ -10,11 +10,11 @@ export const MARKETPLACE_SCHEMA_VERSION = 1;
  * Host path is the external GitHub location (not product branding).
  */
 export const DEFAULT_MARKETPLACE_URL =
-  "https://raw.githubusercontent.com/codesocket-ai/codesocket-marketplace/main/catalog.json";
+  "https://raw.githubusercontent.com/roamsocket-ai/roamsocket-marketplace/main/catalog.json";
 
 export const DEFAULT_MARKETPLACE_SOURCE_ID = "roamsocket-official";
 /** LEGACY default source ids — remapped on load so users keep one official entry. */
-export const LEGACY_MARKETPLACE_SOURCE_IDS = ["codesocket-official"] as const;
+export const LEGACY_MARKETPLACE_SOURCE_IDS = ["roamsocket-official"] as const;
 
 export type MetalTag =
   | "recommended"

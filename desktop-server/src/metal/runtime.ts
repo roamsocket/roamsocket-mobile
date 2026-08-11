@@ -42,6 +42,15 @@ export interface MetalGenerateResult {
   modelPath: string;
 }
 
+/** Progress while weights load / tokens generate (desktop chat + agent UI). */
+export type MetalGeneratePhase = "loading" | "generating";
+
+export interface MetalGenerateProgress {
+  phase: MetalGeneratePhase;
+  message?: string;
+  hubID: string;
+}
+
 const MLX_PROBE = `
 import json, sys
 try:
@@ -57,6 +66,10 @@ const MLX_GENERATE = `
 import json, sys
 from pathlib import Path
 
+def progress(phase, message=""):
+    # Progress on stderr so stdout stays a single final JSON result.
+    print(json.dumps({"phase": phase, "message": message}), file=sys.stderr, flush=True)
+
 payload = json.loads(sys.stdin.read())
 model_path = payload["modelPath"]
 messages = payload["messages"]
@@ -65,6 +78,7 @@ max_tokens = int(payload.get("maxTokens") or 512)
 from mlx_lm import load, generate
 from mlx_lm.sample_utils import make_sampler
 
+progress("loading", "Loading model weights into memory…")
 model, tokenizer = load(model_path)
 
 # Prefer chat template when available
@@ -79,6 +93,7 @@ else:
     parts.append("ASSISTANT:")
     prompt = "\\n".join(parts)
 
+progress("generating", "Generating…")
 sampler = make_sampler(temp=0.7)
 text = generate(model, tokenizer, prompt=prompt, max_tokens=max_tokens, sampler=sampler)
 # Strip the prompt if the backend echoes it
@@ -219,8 +234,12 @@ export async function getMetalRuntimeStatus(): Promise<MetalRuntimeStatus> {
 /**
  * Run a chat completion on a downloaded Metal model.
  * Throws with a clear message when runtime or weights are missing.
+ * Optional `onProgress` reports loading vs generating (Python stderr phases).
  */
-export async function metalGenerate(req: MetalGenerateRequest): Promise<MetalGenerateResult> {
+export async function metalGenerate(
+  req: MetalGenerateRequest,
+  onProgress?: (p: MetalGenerateProgress) => void,
+): Promise<MetalGenerateResult> {
   const status = await getMetalRuntimeStatus();
   if (!status.supported) {
     throw new Error(status.detail);
@@ -249,14 +268,18 @@ export async function metalGenerate(req: MetalGenerateRequest): Promise<MetalGen
     maxTokens: req.maxTokens ?? 512,
   });
 
+  // Immediate UI signal before the Python process even starts.
+  onProgress?.({
+    phase: "loading",
+    message: "Starting Metal runtime…",
+    hubID: req.hubID,
+  });
+
   // Write script to temp file for reliability with longer code
   const tmp = mkdtempSync(path.join(os.tmpdir(), "apc-metal-"));
   const scriptPath = path.join(tmp, "generate.py");
   try {
-    writeFileSync(
-      scriptPath,
-      MLX_GENERATE.replace("payload = json.loads(sys.stdin.read())", "payload = json.loads(sys.stdin.read())"),
-    );
+    writeFileSync(scriptPath, MLX_GENERATE);
     const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>(
       (resolve) => {
         const child = spawn(status.pythonPath!, [scriptPath], {
@@ -265,12 +288,34 @@ export async function metalGenerate(req: MetalGenerateRequest): Promise<MetalGen
         });
         let stdout = "";
         let stderr = "";
+        let stderrBuf = "";
         const timer = setTimeout(() => child.kill("SIGKILL"), 300_000);
         child.stdout.on("data", (d) => {
           stdout += String(d);
         });
         child.stderr.on("data", (d) => {
-          stderr += String(d);
+          const chunk = String(d);
+          stderr += chunk;
+          stderrBuf += chunk;
+          // Parse NDJSON phase lines as they arrive
+          const lines = stderrBuf.split("\n");
+          stderrBuf = lines.pop() ?? "";
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith("{")) continue;
+            try {
+              const j = JSON.parse(trimmed) as { phase?: string; message?: string };
+              if (j.phase === "loading" || j.phase === "generating") {
+                onProgress?.({
+                  phase: j.phase,
+                  message: typeof j.message === "string" ? j.message : undefined,
+                  hubID: req.hubID,
+                });
+              }
+            } catch {
+              /* non-JSON stderr (mlx logs) — ignore */
+            }
+          }
         });
         child.on("error", (err) => {
           clearTimeout(timer);

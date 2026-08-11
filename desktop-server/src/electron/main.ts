@@ -757,6 +757,8 @@ function registerIpc(): void {
   });
 
   // --- On-device Metal ----------------------------------------------------
+  const metalDownloadControllers = new Map<string, AbortController>();
+
   ipcMain.handle("metal:status", async () => getMetalRuntimeStatus());
   ipcMain.handle("metal:catalog", async () => getMetalStore().catalogWithStatus());
   ipcMain.handle("metal:storage", async () => ({
@@ -768,9 +770,24 @@ function registerIpc(): void {
     if (typeof hubID !== "string" || !hubID.includes("/")) {
       throw new Error("Invalid model hub id");
     }
-    return getMetalStore().download(hubID, (p) => {
-      event.sender.send("metal:downloadProgress", p);
-    });
+    const controller = new AbortController();
+    metalDownloadControllers.set(hubID, controller);
+    try {
+      return await getMetalStore().download(hubID, (p) => {
+        event.sender.send("metal:downloadProgress", p);
+      }, controller.signal);
+    } finally {
+      metalDownloadControllers.delete(hubID);
+    }
+  });
+  ipcMain.handle("metal:cancel", async (_e, hubID: string) => {
+    const controller = metalDownloadControllers.get(hubID);
+    if (controller) {
+      controller.abort();
+      metalDownloadControllers.delete(hubID);
+      return { ok: true as const, cancelled: true };
+    }
+    return { ok: true as const, cancelled: false };
   });
   ipcMain.handle("metal:delete", async (_e, hubID: string) => {
     getMetalStore().delete(hubID);

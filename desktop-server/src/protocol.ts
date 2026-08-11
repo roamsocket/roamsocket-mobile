@@ -588,6 +588,48 @@ export const TaskListMsg = z.object({
 });
 export type TaskListMsg = z.infer<typeof TaskListMsg>;
 
+/**
+ * `/goal` status for the coding session. Emitted when the user sets, clears,
+ * checks, or achieves a completion condition; also replayed on reattach.
+ * Clients show `message` in the transcript and drive a live banner from fields.
+ */
+export const GoalStatusMsg = z.object({
+  type: z.literal("goal_status"),
+  sessionId: z.string(),
+  /** active | achieved | cleared | none */
+  status: z.enum(["active", "achieved", "cleared", "none"]),
+  /** Completion condition text when known. */
+  condition: z.string().optional(),
+  /** Latest evaluator reason (after a turn). */
+  reason: z.string().optional(),
+  /** How many post-turn evaluations have run for the active/achieved goal. */
+  turnsEvaluated: z.number().int().nonnegative().optional(),
+  /** Unix ms when the goal was set. */
+  startedAt: z.number().optional(),
+  /** Elapsed ms since start (active) or total duration (achieved). */
+  elapsedMs: z.number().nonnegative().optional(),
+  /** Human-readable line for the transcript / notice bubble. */
+  message: z.string(),
+});
+export type GoalStatusMsg = z.infer<typeof GoalStatusMsg>;
+
+/**
+ * Live status while a local (desktop Metal / MLX) model loads weights or
+ * generates. Emitted by the agent loop when the Metal provider reports
+ * progress; clients show a loading indicator and hide it on `done`.
+ */
+export const ModelStatusMsg = z.object({
+  type: z.literal("model_status"),
+  sessionId: z.string(),
+  /** loading | generating | done */
+  status: z.enum(["loading", "generating", "done"]),
+  /** Hub id of the local model, when known. */
+  hubID: z.string().optional(),
+  /** Human-readable progress detail (e.g. "Loading model weights into memory…"). */
+  message: z.string().optional(),
+});
+export type ModelStatusMsg = z.infer<typeof ModelStatusMsg>;
+
 export const ServerMessage = z.discriminatedUnion("type", [
   SessionCreatedMsg,
   AssistantDeltaMsg,
@@ -610,6 +652,8 @@ export const ServerMessage = z.discriminatedUnion("type", [
   TunnelStatusMsg,
   RemoteEndpointMsg,
   TaskListMsg,
+  GoalStatusMsg,
+  ModelStatusMsg,
 ]);
 export type ServerMessage = z.infer<typeof ServerMessage>;
 

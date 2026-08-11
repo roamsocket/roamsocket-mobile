@@ -135,16 +135,116 @@ public struct AIModel: Codable, Hashable, Sendable, Identifiable {
     public let modelID: String
     public let displayName: String
     public let contextWindow: Int?
+    /// Vendor / organization the model belongs to (OpenRouter), e.g. "OpenAI".
+    public let organization: String?
+    /// True when the model is free to use (OpenRouter `is_free` / zero pricing).
+    public let isFree: Bool?
 
-    public init(provider: ProviderID, modelID: String, displayName: String, contextWindow: Int? = nil) {
+    public init(
+        provider: ProviderID,
+        modelID: String,
+        displayName: String,
+        contextWindow: Int? = nil,
+        organization: String? = nil,
+        isFree: Bool? = nil
+    ) {
         self.provider = provider
         self.modelID = modelID
         self.displayName = displayName
         self.contextWindow = contextWindow
+        self.organization = organization
+        self.isFree = isFree
     }
 
     /// Stable identity across providers ("anthropic/…", "openai/…").
     public var id: String { "\(provider.rawValue)/\(modelID)" }
+}
+
+// MARK: - Display name prettification
+
+extension AIModel {
+    /// Common brand / model-family names that need a specific capitalization
+    /// ("deepseek" → "DeepSeek", not "Deepseek"). Keys are lowercased tokens.
+    private static let brandOverrides: [String: String] = [
+        "deepseek": "DeepSeek",
+        "openai": "OpenAI",
+        "xai": "xAI",
+        "moonshot": "Moonshot",
+        "minimax": "MiniMax",
+        "qwen": "Qwen",
+        "gemma": "Gemma",
+        "phi": "Phi",
+        "glm": "GLM",
+        "grok": "Grok",
+        "mistral": "Mistral",
+        "ministral": "Ministral",
+        "llama": "Llama",
+        "claude": "Claude",
+        "gemini": "Gemini",
+        "nemo": "NeMo",
+        "olmo": "OLMo",
+        "kimi": "Kimi",
+        "yi": "Yi",
+        "dbrx": "DBRX",
+        "falcon": "Falcon",
+        "command": "Command",
+        "jamba": "Jamba",
+        "granite": "Granite",
+        "nemotron": "Nemotron",
+        "tulu": "Tulu",
+        "hermes": "Hermes",
+        "zephyr": "Zephyr",
+        "openchat": "OpenChat",
+        "t5": "T5",
+        "mpt": "MPT",
+        "codegeex": "CodeGeeX",
+        "codestral": "Codestral",
+        "devstral": "Devstral",
+        "palm": "PaLM",
+        "baichuan": "Baichuan",
+        "internlm": "InternLM",
+        "zhipu": "Zhipu",
+        "vllm": "vLLM",
+        "gpt": "GPT",
+    ]
+
+    /// Prettified display name for a raw provider model id.
+    /// - Drops the org prefix on OpenRouter-style `org/slug` ids (the org is
+    ///   shown separately as a submenu header).
+    /// - Strips "~", replaces `-` / `_` / `/` with spaces.
+    /// - Title-cases each word, honoring `brandOverrides`
+    ///   ("deepseek-r1" → "DeepSeek R1", "gpt-4o-mini" → "GPT 4o Mini").
+    public static func prettifiedDisplayName(for raw: String, provider: ProviderID? = nil) -> String {
+        var id = raw
+        if provider == .openrouter, let slash = id.firstIndex(of: "/") {
+            id = String(id[id.index(after: slash)...])
+        }
+        let tokens = id
+            .replacingOccurrences(of: "~", with: " ")
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "/", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+            .split(whereSeparator: \.isWhitespace)
+        guard !tokens.isEmpty else { return raw }
+        return tokens.map { prettifiedToken(String($0)) }.joined(separator: " ")
+    }
+
+    private static func prettifiedToken(_ token: String) -> String {
+        if let brand = brandOverrides[token.lowercased()] { return brand }
+        // "4o" keeps its omni suffix ("GPT-4o" style).
+        if token.range(of: #"^\d+o$"#, options: .regularExpression) != nil {
+            return token
+        }
+        // "70b" → "70B", "3.1" → "3.1", "2024" → "2024".
+        if token.range(of: #"^\d+(\.\d+)?[bBmMkK]?$"#, options: .regularExpression) != nil {
+            return token.uppercased()
+        }
+        // Short lowercase tokens read better uppercase ("gpt" → "GPT").
+        if token.count <= 3, token == token.lowercased() {
+            return token.uppercased()
+        }
+        return token.prefix(1).uppercased() + token.dropFirst()
+    }
 }
 
 /// Reasoning/effort level shown in the model picker's Effort row.

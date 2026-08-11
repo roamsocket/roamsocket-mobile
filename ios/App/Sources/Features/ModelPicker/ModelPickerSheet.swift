@@ -22,6 +22,8 @@ struct ModelPickerSheet: View {
     @State private var renameTarget: AIModel?
     @State private var loadedMetalIDs: Set<String> = []
     @State private var statusMessage = ""
+    @State private var expandedProviders: Set<ProviderID> = []
+    @State private var expandedOpenRouterOrgs: Set<String> = []
 
     private var catalogResults: [ModelCatalog.ProviderResult] {
         if codingOnly {
@@ -153,6 +155,15 @@ struct ModelPickerSheet: View {
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
             .task {
+                if let selected = state.selectedModel {
+                    expandedProviders.insert(selected.provider)
+                    if selected.provider == .openrouter {
+                        let org = selected.organization
+                            ?? selected.modelID.split(separator: "/", maxSplits: 1).first.map(String.init)
+                            ?? "Other"
+                        expandedOpenRouterOrgs.insert(org)
+                    }
+                }
                 if !codingOnly {
                     LocalMetalBootstrap.ensureRegistered()
                 }
@@ -175,71 +186,148 @@ struct ModelPickerSheet: View {
     private func providerSection(result: ModelCatalog.ProviderResult) -> some View {
         let models = state.visibleModels(in: result)
         Section {
-            ForEach(models) { model in
-                ModelRow(
-                    model: model,
-                    isSelected: state.selectedModel?.id == model.id,
-                    providerDisplayName: providerDisplayName(for: result),
-                    isLoadedInMemory: !codingOnly
-                        && model.provider == .localMetal
-                        && loadedMetalIDs.contains(model.modelID),
-                    onSelect: {
-                        // Selection triggers AppState local-Metal load/unload policy
-                        // only for phone weights; desktop Metal runs on the server.
-                        state.selectedModel = model
-                        dismiss()
-                    },
-                    onUnload: (!codingOnly && model.provider == .localMetal)
-                        ? { Task { await unload(model.modelID) } }
-                        : nil
-                )
-                .listRowBackground(Theme.surface)
-                .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                    Button(role: .destructive) {
-                        Task { await deleteModel(model) }
-                    } label: {
-                        Label("Delete", systemImage: "trash")
-                    }
-                    Button {
-                        renameTarget = model
-                    } label: {
-                        Label("Edit", systemImage: "pencil")
-                    }
-                    .tint(Theme.accent)
-                }
-                .contextMenu {
-                    Button {
-                        renameTarget = model
-                    } label: {
-                        Label("Edit", systemImage: "pencil")
-                    }
-                    if !codingOnly,
-                       model.provider == .localMetal,
-                       loadedMetalIDs.contains(model.modelID) {
-                        Button {
-                            Task { await unload(model.modelID) }
+            DisclosureGroup(isExpanded: providerBinding(for: result.provider)) {
+                if result.provider == .openrouter {
+                    // OpenRouter's catalog is huge — nest it as submenus, one
+                    // per vendor / organization tag (e.g. OpenAI, Anthropic).
+                    ForEach(Self.openRouterModelGroups(models)) { group in
+                        DisclosureGroup(isExpanded: expandedBinding(for: group.id)) {
+                            ForEach(group.models) { model in
+                                modelRow(model, result: result)
+                            }
                         } label: {
-                            Label("Unload from memory", systemImage: "memorychip")
+                            openRouterSubmenuLabel(
+                                title: group.organization,
+                                detail: "\(group.models.count)"
+                            )
                         }
+                        .tint(Theme.textSecondary)
+                        .listRowBackground(Theme.surface)
                     }
-                    Button(role: .destructive) {
-                        Task { await deleteModel(model) }
-                    } label: {
-                        Label(
-                            !codingOnly && model.provider == .localMetal
-                                ? "Delete from disk"
-                                : "Remove from list",
-                            systemImage: "trash"
-                        )
+                } else {
+                    ForEach(models) { model in
+                        modelRow(model, result: result)
                     }
+                }
+            } label: {
+                openRouterSubmenuLabel(
+                    title: providerTitle(for: result),
+                    detail: "\(models.count) model\(models.count == 1 ? "" : "s")"
+                )
+            }
+            .tint(Theme.textSecondary)
+            .listRowBackground(Theme.surface)
+        }
+    }
+
+    private func providerBinding(for provider: ProviderID) -> Binding<Bool> {
+        Binding(
+            get: { expandedProviders.contains(provider) },
+            set: { expanded in
+                if expanded { expandedProviders.insert(provider) }
+                else { expandedProviders.remove(provider) }
+            }
+        )
+    }
+
+    private func openRouterSubmenuLabel(title: String, detail: String) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Theme.textPrimary)
+            Text(detail)
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.textTertiary)
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func expandedBinding(for org: String) -> Binding<Bool> {
+        Binding(
+            get: { expandedOpenRouterOrgs.contains(org) },
+            set: { expanded in
+                if expanded { expandedOpenRouterOrgs.insert(org) }
+                else { expandedOpenRouterOrgs.remove(org) }
+            }
+        )
+    }
+
+    /// Group OpenRouter models by their organization tag; fall back to the
+    /// vendor prefix of the model id ("anthropic/claude…" → "anthropic").
+    fileprivate static func openRouterModelGroups(_ models: [AIModel]) -> [OpenRouterModelGroup] {
+        let groups = Dictionary(grouping: models) { model in
+            model.organization
+                ?? model.modelID.split(separator: "/", maxSplits: 1).first.map(String.init)
+                ?? "Other"
+        }
+        return groups
+            .map { OpenRouterModelGroup(organization: $0.key, models: $0.value) }
+            .sorted {
+                $0.organization.localizedCaseInsensitiveCompare($1.organization) == .orderedAscending
+            }
+    }
+
+    private func modelRow(
+        _ model: AIModel,
+        result: ModelCatalog.ProviderResult
+    ) -> some View {
+        ModelRow(
+            model: model,
+            isSelected: state.selectedModel?.id == model.id,
+            providerDisplayName: providerDisplayName(for: result),
+            isLoadedInMemory: !codingOnly
+                && model.provider == .localMetal
+                && loadedMetalIDs.contains(model.modelID),
+            onSelect: {
+                // Selection triggers AppState local-Metal load/unload policy
+                // only for phone weights; desktop Metal runs on the server.
+                state.selectedModel = model
+                dismiss()
+            },
+            onUnload: (!codingOnly && model.provider == .localMetal)
+                ? { Task { await unload(model.modelID) } }
+                : nil
+        )
+        .listRowBackground(Theme.surface)
+        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            Button(role: .destructive) {
+                Task { await deleteModel(model) }
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+            Button {
+                renameTarget = model
+            } label: {
+                Label("Edit", systemImage: "pencil")
+            }
+            .tint(Theme.accent)
+        }
+        .contextMenu {
+            Button {
+                renameTarget = model
+            } label: {
+                Label("Edit", systemImage: "pencil")
+            }
+            if !codingOnly,
+               model.provider == .localMetal,
+               loadedMetalIDs.contains(model.modelID) {
+                Button {
+                    Task { await unload(model.modelID) }
+                } label: {
+                    Label("Unload from memory", systemImage: "memorychip")
                 }
             }
-        } header: {
-            Text(providerTitle(for: result))
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Theme.textSecondary)
-                .textCase(.uppercase)
+            Button(role: .destructive) {
+                Task { await deleteModel(model) }
+            } label: {
+                Label(
+                    !codingOnly && model.provider == .localMetal
+                        ? "Delete from disk"
+                        : "Remove from list",
+                    systemImage: "trash"
+                )
+            }
         }
     }
 
@@ -364,6 +452,13 @@ struct ModelPickerSheet: View {
 
 // MARK: - Row
 
+/// A vendor subfolder inside the OpenRouter section of the model picker.
+private struct OpenRouterModelGroup: Identifiable {
+    let organization: String
+    let models: [AIModel]
+    var id: String { organization }
+}
+
 private struct ModelRow: View {
     @EnvironmentObject var state: AppState
     let model: AIModel
@@ -398,6 +493,14 @@ private struct ModelRow: View {
                         .font(.system(size: 17, weight: .medium))
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(1)
+                    if model.isFree == true {
+                        Text("Free")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Color.green)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Color.green.opacity(0.15), in: Capsule())
+                    }
                     if supportsVision {
                         Text("Vision")
                             .font(.system(size: 11, weight: .semibold))

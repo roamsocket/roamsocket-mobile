@@ -196,6 +196,10 @@ final class LocalMetalNamingTests: XCTestCase {
 
         try "{}".write(to: rev.appendingPathComponent("config.json"), atomically: true, encoding: .utf8)
         try Data([0x00]).write(to: rev.appendingPathComponent("model.safetensors"))
+
+        // Snapshot layouts now require the verified sentinel.
+        XCTAssertFalse(LocalMetalModelStore.hasUsableModelCache(at: root))
+        LocalMetalModelStore.touchVerifiedSentinel(at: root)
         XCTAssertTrue(LocalMetalModelStore.hasUsableModelCache(at: root))
     }
 }

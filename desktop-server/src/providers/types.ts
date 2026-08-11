@@ -29,6 +29,8 @@ export interface CompletionRequest {
 export type ProviderEvent =
   | { kind: "text"; text: string }
   | { kind: "tool_call"; call: NormalizedToolCall }
+  /** Local (Metal/MLX) model loading or generating progress. */
+  | { kind: "model_status"; status: "loading" | "generating" | "done"; hubID?: string; message?: string }
   | { kind: "done"; stopReason: string };
 
 export interface ProviderAdapter {

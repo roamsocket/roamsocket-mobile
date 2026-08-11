@@ -14,13 +14,18 @@
     "forceConsistentCasingInFileNames": true,
     "declaration": true,
     "sourceMap": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "react"
   },
   "include": [
     "src/index.ts",
     "src/pairing.ts",
     "src/protocol.ts",
     "src/sessions.ts",
+    "src/product.ts",
+    "src/desktop-config.ts",
+    "src/discovery.ts",
     "src/agent/**/*.ts",
     "src/git/**/*.ts",
     "src/providers/**/*.ts",
@@ -28,6 +33,14 @@
     "src/client/**/*.ts",
     "src/metal/**/*.ts",
     "src/marketplace/**/*.ts",
+    "src/cli/**/*.ts",
+    "src/cli/**/*.tsx",
+    "src/project/**/*.ts",
+    "src/workspace/**/*.ts",
+    "src/terminal/**/*.ts",
+    "src/skills/**/*.ts",
+    "src/mcp/**/*.ts",
+    "src/lightweight/**/*.ts",
     "scripts/**/*.ts"
   ],
   "exclude": [

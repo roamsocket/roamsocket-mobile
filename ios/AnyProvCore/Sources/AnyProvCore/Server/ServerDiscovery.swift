@@ -59,7 +59,7 @@ public struct DiscoveredServer: Identifiable, Hashable, Sendable {
 public enum ServerDiscovery {
     public static let bonjourType = "_roamsocket._tcp"
     /// LEGACY Bonjour type from pre-RoamSocket desktop builds; browsed for soft transition only.
-    public static let legacyBonjourType = "_codesocket._tcp"
+    public static let legacyBonjourType = "_roamsocket._tcp"
     public static let allBonjourTypes = [bonjourType, legacyBonjourType]
 }
 

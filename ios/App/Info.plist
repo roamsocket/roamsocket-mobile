@@ -43,7 +43,7 @@
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_roamsocket._tcp</string>
-		<string>_codesocket._tcp</string>
+		<string>_roamsocket._tcp</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>Scan pairing QR codes and capture photos for Vision analysis.</string>

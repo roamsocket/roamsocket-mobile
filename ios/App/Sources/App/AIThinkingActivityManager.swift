@@ -20,6 +20,20 @@ final class AIThinkingActivityManager {
 
     // MARK: - Public API
 
+    /// Dismiss Live Activities orphaned by a previous app run. ActivityKit
+    /// activities survive process termination, so killing the app mid-
+    /// generation leaves the "thinking" banner on the Lock Screen forever.
+    /// Safe to call on every foreground: activities this manager still owns
+    /// are left untouched.
+    func reconcileStaleActivities() {
+        for stale in Activity<AIThinkingAttributes>.activities
+        where stale.id != activity?.id {
+            Task {
+                await stale.end(nil, dismissalPolicy: .immediate)
+            }
+        }
+    }
+
     /// Call when Chat / Code / Vision begins waiting on a model response.
     func thinkingDidStart(kind: AIThinkingAttributes.Kind, prompt: String) {
         generation += 1
@@ -66,7 +80,14 @@ final class AIThinkingActivityManager {
     private func startActivity(kind: AIThinkingAttributes.Kind, preview: String) async {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
 
-        // Replace any leftover activity from a previous turn.
+        // Replace any activity already on screen: our own leftover from a
+        // previous turn, or an orphan from a previous app run.
+        for stale in Activity<AIThinkingAttributes>.activities
+        where stale.id != activity?.id {
+            Task {
+                await stale.end(nil, dismissalPolicy: .immediate)
+            }
+        }
         if activity != nil {
             endActivity()
         }

@@ -76,8 +76,8 @@ Default port: **4319**.
 
 ### Marketplace (owner + user catalogs)
 
-- **Official repo (separate external host):** [codesocket-ai/codesocket-marketplace](https://github.com/codesocket-ai/codesocket-marketplace)
-- **Default catalog URL:** `https://raw.githubusercontent.com/codesocket-ai/codesocket-marketplace/main/catalog.json` (host path is external; product name is RoamSocket)
+- **Official repo (separate external host):** [roamsocket-ai/roamsocket-marketplace](https://github.com/roamsocket-ai/roamsocket-marketplace)
+- **Default catalog URL:** `https://raw.githubusercontent.com/roamsocket-ai/roamsocket-marketplace/main/catalog.json` (host path is external; product name is RoamSocket)
 - **Authoring guide:** that repo’s README (“How to make your own marketplace”).
 - **Desktop:** Settings → Marketplace; applies to composer connectors/plugins + Metal list.
 - **iOS:** Settings → Marketplace; same sources feed connectors, skill browse, Metal recommended.
@@ -116,12 +116,14 @@ Default port: **4319**.
 ```bash
 cd desktop-server
 npm install
-npm run dev              # watch (tsx)
+npm run dev              # coding agent TUI + server (tsx)
 npm start                # needs prior build
 npm run typecheck        # server + electron
 npm run typecheck:server
+npm run test:cli         # CLI parser, TUI reducer, mock local session
 npm run smoke            # offline e2e: pair → session → tools → PR (APC_MOCK)
-APC_MOCK=1 npm start    # mock agent, no API key
+APC_MOCK=1 npm run dev   # mock agent TUI, no API key
+roamsocket --serve-only  # headless pairing server only
 ```
 
 Electron:

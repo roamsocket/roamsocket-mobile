@@ -14,43 +14,29 @@ struct VoiceChatView: View {
     var onOpenSidebar: (() -> Void)?
 
     var body: some View {
-        GeometryReader { geo in
-            let bottomSafe = geo.safeAreaInsets.bottom
-            let topSafe = geo.safeAreaInsets.top
+        ZStack {
+            Theme.background.ignoresSafeArea()
 
-            ZStack {
-                Theme.background.ignoresSafeArea()
-
-                VStack(spacing: 0) {
-                    // Clearance for overlaid top chrome (close / settings).
-                    Color.clear
-                        .frame(height: topSafe + 8 + 44)
-                        .allowsHitTesting(false)
-
-                    Spacer(minLength: 0)
-
-                    centerStatus
-                        .padding(.horizontal, 28)
-
-                    Spacer(minLength: 0)
-
-                    micButton
-                        .padding(.bottom, 28)
-
-                    bottomChrome
-                        .padding(.horizontal, 20)
-                        .padding(.bottom, max(bottomSafe, 12) + 8)
-                }
-                .frame(width: geo.size.width, height: geo.size.height)
-            }
-            // Close / settings sit above content; only the bar receives hits.
-            .overlay(alignment: .top) {
+            VStack(spacing: 0) {
                 topBar
                     .padding(.horizontal, 20)
-                    .padding(.top, topSafe + 8)
+                    .padding(.top, 12)
+
+                Spacer(minLength: 0)
+
+                centerStatus
+                    .padding(.horizontal, 28)
+
+                Spacer(minLength: 0)
+
+                micButton
+                    .padding(.bottom, 28)
+
+                bottomChrome
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 12)
             }
         }
-        .ignoresSafeArea()
         .preferredColorScheme(state.appearance.colorScheme)
         .onAppear {
             viewModel.bind(chat: chatViewModel, state: state)

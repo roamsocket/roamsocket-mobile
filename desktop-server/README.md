@@ -18,8 +18,14 @@ roamsocket
 # or: npx @roamsocket/server
 ```
 
-Legacy CLI aliases (install continuity only, same entrypoint): `codesocket`,
-`codesocket-server`, `anyprov-code-server`. Prefer `roamsocket`.
+On a **TTY**, `roamsocket` starts the companion server **and** an interactive
+coding-agent TUI (Ink) that works in the current directory — Claude Code–style
+tool use, streaming text, permissions, slash commands — while the iPhone can
+still pair with the same process. Use `--serve-only` for the legacy headless
+pairing server alone.
+
+Legacy CLI aliases (install continuity only, same entrypoint): `roamsocket`,
+`roamsocket-server`, `anyprov-code-server`. Prefer `roamsocket`.
 
 Requires **Node.js 20+**. The first install may compile native deps (`node-pty`);
 you need a working C/C++ toolchain (Xcode CLT on macOS, build-essential on Linux).
@@ -28,13 +34,35 @@ Env vars below still apply. Default port is **4319**.
 
 ## Run (from this repo)
 
-### Headless server (CLI)
+### Coding agent TUI + server (default)
 
 ```bash
 npm install
-npm run dev          # watch mode (tsx)
-npm start            # from a prior `npm run build`
+npm run dev              # tsx src/cli/main.ts
+# or after build:
+npm start
 # or: node bin/roamsocket.js
+```
+
+```bash
+APC_MOCK=1 npm run dev   # offline mock agent (no API key)
+roamsocket --cwd ~/my-repo --provider anthropic
+```
+
+The TUI status bar shows model, permission mode, listen port, and the **pairing
+code** for the iOS app. Sessions are independent: the terminal agent edits
+**cwd**; the phone still creates cloned GitHub sessions over WebSocket.
+
+Slash commands: `/help` `/clear` `/model` `/permission` `/keys` `/pair`
+`/server` `/quit` (plus agent-native `/goal …`). Esc interrupts an in-flight
+turn. Keys: env (`ANTHROPIC_API_KEY`, …) or `/keys <provider> <key>` →
+`~/.roamsocket/cli-secrets.json` (mode 0600).
+
+### Headless server only
+
+```bash
+roamsocket --serve-only
+# or non-TTY (CI / pipes): defaults to serve-only
 ```
 
 On start it prints a **large pairing code** and an **ASCII QR** (JSON payload
@@ -75,19 +103,20 @@ To really quit: tray menu → *Quit RoamSocket*, or `Cmd-Q` on macOS.
 | `APC_NAME` | `RoamSocket desktop` | shown when pairing / Bonjour |
 | `APC_ADVERTISE` | on | set `0` to disable Bonjour/mDNS LAN broadcast |
 | `APC_AUTO_TUNNEL` | on | set `0` to disable auto public tunnel after phone pair |
-| `APC_CLI_SETTINGS` | on (TTY) | set `0` to skip the interactive settings prompt |
+| `APC_CLI_SETTINGS` | on (TTY, serve-only) | set `0` to skip the interactive settings prompt |
 | `APC_MOCK` | unset | `1` runs a deterministic offline agent (no API key) |
 
-Shared connection prefs live under `~/.roamsocket/` (or legacy `~/.codesocket/` / `~/.anyprov-code/` if already present) as `desktop-prefs.json` (Electron
+Shared connection prefs live under `~/.roamsocket/` (or legacy `~/.roamsocket/` / `~/.anyprov-code/` if already present) as `desktop-prefs.json` (Electron
 settings UI and the CLI menu edit the same file).
 
 ## Verify
 
 ```bash
 npm run typecheck           # both server and electron tsconfigs
-npm run typecheck:server    # headless server only
+npm run typecheck:server    # server + CLI/TUI
 npm run typecheck:electron  # main/preload/renderer only
 npm run build               # tsc to dist/
+npm run test:cli            # command parser, TUI reducer, mock local session
 npm run smoke               # full pair → session → tool → diff → PR, all offline
 ```
 
@@ -100,6 +129,9 @@ mock agent, and asserts the whole protocol flow end-to-end.
 src/
   index.ts              HTTP (/health, /pair) + WebSocket (/session) bootstrap
                         Exports `startServer()` reused by Electron main.
+  cli/main.ts           Default CLI: server + Ink coding agent TUI
+  cli/local-session.ts  AgentSession on cwd (no GitHub clone)
+  cli/tui/              Ink App, state reducer, theme
   pairing.ts            pairing code → bearer token
   protocol.ts           zod message schemas (canonical; mirrored in Swift)
   sessions.ts           per-session workdir, agent, permissions, PR creation
@@ -119,6 +151,7 @@ src/
     main.ts             Hash-routed SPA: chat, code sessions, projects, artifacts, settings.
     chat-stream.ts      BYOK provider streaming for chat mode.
 scripts/smoke.ts        offline end-to-end protocol test
+scripts/cli-unit.ts     CLI parser / TUI state / mock local session
 scripts/client-unit.ts  pure client module tests
 scripts/metal-check.ts  Metal catalog + runtime error-path checks
 forge.config.ts         Electron Forge + Vite plugin config

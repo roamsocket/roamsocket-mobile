@@ -37,7 +37,7 @@ struct VisionView: View {
             // is minimized (sheet chrome owns Retake in medium/full).
             let chromeBlockHeight: CGFloat = {
                 let base: CGFloat = {
-                    if viewModel.capturedImage == nil { return shutterStackClearance }
+                    if !viewModel.hasFrozenCapture { return shutterStackClearance }
                     // Minimized: leave room for bottom Retake + pill.
                     // Expanded/full: sheet has its own Retake — keep a small band only.
                     switch viewModel.sheetMode {
@@ -52,7 +52,7 @@ struct VisionView: View {
             let topChromeClearance = topSafe + 6 + 44 + 10
             // Lift shutter + prompt above the software keyboard (we ignore safe area).
             let bottomPad: CGFloat = {
-                if keyboardVisible, viewModel.capturedImage == nil {
+                if keyboardVisible, !viewModel.hasFrozenCapture {
                     return max(keyboardHeight, bottomSafe) + 8
                 }
                 return max(bottomSafe, 8) + 10
@@ -86,9 +86,10 @@ struct VisionView: View {
                 .frame(width: geo.size.width, height: geo.size.height)
                 .zIndex(1)
 
-                // Freeze-frame after capture: staged in the band above the results card.
-                // Pinch/pan zoom + corner crop (what the model analyzes).
-                if let image = viewModel.capturedImage {
+                // Still after the sensor photo lands (analyzing / result). While the
+                // still is still developing we keep the live layer mounted and freeze
+                // its last frame instead — so capture does not tear down the session.
+                if let image = viewModel.capturedImage, !viewModel.showsCameraSession {
                     VStack(spacing: 0) {
                         Color.clear
                             .frame(height: topChromeClearance)
@@ -129,7 +130,7 @@ struct VisionView: View {
                     topBar
                         .padding(.horizontal, horizontalInset)
 
-                    if viewModel.capturedImage == nil {
+                    if viewModel.showsCameraSession {
                         cameraLayer
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .clipped()
@@ -143,7 +144,11 @@ struct VisionView: View {
                                     promptFieldFocused = false
                                 }
                             }
-                            .accessibilityLabel("Camera preview")
+                            .accessibilityLabel(
+                                viewModel.freezesCameraPreview
+                                    ? "Frozen photo preview"
+                                    : "Camera preview"
+                            )
                     } else {
                         Spacer(minLength: 0)
                             .allowsHitTesting(false)
@@ -217,6 +222,9 @@ struct VisionView: View {
         .sheet(isPresented: $viewModel.showPromptLibrary) {
             VisionPromptLibrarySheet(viewModel: viewModel, promptStore: promptStore)
         }
+        .sheet(isPresented: $viewModel.showReanalyzePrompt) {
+            VisionReanalyzePromptSheet(viewModel: viewModel, promptStore: promptStore)
+        }
         .alert("Save prompt preset", isPresented: $showSavePresetAlert) {
             TextField("Name", text: $newPresetTitle)
             Button("Save") {
@@ -243,9 +251,10 @@ struct VisionView: View {
 
     // MARK: - Layers
 
-    /// Live viewfinder only. Frozen stills use `VisionZoomableImageView` in the
-    /// band above the results card (Lens-style). Unmounting the session on
-    /// capture frees GPU/RAM for on-device VLMs.
+    /// Live viewfinder (and briefly frozen preview while the still develops).
+    /// Final stills use `VisionZoomableImageView` in the band above the results
+    /// card (Lens-style). Unmounting the session once the still lands frees
+    /// GPU/RAM for on-device VLMs.
     @ViewBuilder
     private var cameraLayer: some View {
         VisionCameraView(
@@ -253,9 +262,19 @@ struct VisionView: View {
                 captureZoomResetID = UUID()
                 viewModel.analyze(image: image)
             },
-            onError: { cameraError = $0 },
+            onError: { message in
+                if viewModel.phase == .capturing {
+                    viewModel.abortCapture(message: message)
+                }
+                cameraError = message
+            },
+            onShutter: {
+                // Hardware shutter / capture accepted — freeze + analyzing card now.
+                viewModel.beginCapture()
+            },
             captureTrigger: captureTrigger,
-            isSessionActive: viewModel.capturedImage == nil
+            isSessionActive: viewModel.showsCameraSession,
+            isPreviewFrozen: viewModel.freezesCameraPreview
         )
     }
 
@@ -298,13 +317,13 @@ struct VisionView: View {
         HStack(spacing: 12) {
             Button {
                 // After a capture, back returns to the live camera — not text chat.
-                if viewModel.capturedImage != nil {
+                if viewModel.hasFrozenCapture {
                     performRetake()
                 } else {
                     dismiss()
                 }
             } label: {
-                Image(systemName: viewModel.capturedImage != nil ? "chevron.left" : "xmark")
+                Image(systemName: viewModel.hasFrozenCapture ? "chevron.left" : "xmark")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(.white)
                     .frame(width: 44, height: 44)
@@ -312,7 +331,7 @@ struct VisionView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(
-                viewModel.capturedImage != nil ? "Back to camera" : "Close Vision"
+                viewModel.hasFrozenCapture ? "Back to camera" : "Close Vision"
             )
 
             Spacer(minLength: 0)
@@ -346,7 +365,7 @@ struct VisionView: View {
                 emptyVisionModelsHint
             }
 
-            if viewModel.capturedImage != nil {
+            if viewModel.hasFrozenCapture {
                 // When the analysis card is open (medium/full), Retake lives on the
                 // sheet header. Keep a bottom Retake only for the minimized pill state
                 // so a second shot stays one tap away without fighting the card.
@@ -606,7 +625,9 @@ struct VisionView: View {
             return
         }
         promptFieldFocused = false
-        // Keep the freeze-frame until a new photo arrives.
+        // Freeze preview + open analyzing UI on the same tap — do not wait for
+        // the processed still (that lands in onCapture → analyze).
+        viewModel.beginCapture()
         captureTrigger = UUID()
     }
 
@@ -660,6 +681,8 @@ private struct VisionModelPickerSheet: View {
 
     @State private var showLocalMetal = false
     @State private var showProviderSettings = false
+    @State private var expandedVisionProviders: Set<ProviderID> = []
+    @State private var expandedVisionOrgs: Set<String> = []
 
     private var models: [AIModel] {
         viewModel.visionModels(from: state)
@@ -670,6 +693,101 @@ private struct VisionModelPickerSheet: View {
         return map.keys.sorted { $0.rawValue < $1.rawValue }.map { id in
             (id, map[id] ?? [])
         }
+    }
+
+    private func visionOrg(_ model: AIModel) -> String {
+        model.organization
+            ?? model.modelID.split(separator: "/", maxSplits: 1).first.map(String.init)
+            ?? "Other"
+    }
+
+    /// OpenRouter's vision catalog is huge — nest it as submenus, one per
+    /// vendor / organization tag (e.g. OpenAI, Anthropic, Meta).
+    @ViewBuilder
+    private func openRouterSection(models: [AIModel]) -> some View {
+        let groups = Dictionary(grouping: models, by: visionOrg)
+            .map { (org: $0.key, models: $0.value) }
+            .sorted { $0.org.localizedCaseInsensitiveCompare($1.org) == .orderedAscending }
+        ForEach(groups, id: \.org) { group in
+            DisclosureGroup(isExpanded: visionExpandedBinding(for: group.org)) {
+                ForEach(group.models) { model in
+                    visionModelRow(model)
+                }
+            } label: {
+                openRouterSubmenuLabel(
+                    title: group.org,
+                    detail: "\(group.models.count)"
+                )
+            }
+            .tint(Theme.textSecondary)
+            .listRowBackground(Theme.surface)
+        }
+    }
+
+    private func openRouterSubmenuLabel(title: String, detail: String) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Theme.textPrimary)
+            Text(detail)
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.textTertiary)
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func visionProviderBinding(for provider: ProviderID) -> Binding<Bool> {
+        Binding(
+            get: { expandedVisionProviders.contains(provider) },
+            set: { expanded in
+                if expanded { expandedVisionProviders.insert(provider) }
+                else { expandedVisionProviders.remove(provider) }
+            }
+        )
+    }
+
+    private func visionExpandedBinding(for org: String) -> Binding<Bool> {
+        Binding(
+            get: { expandedVisionOrgs.contains(org) },
+            set: { expanded in
+                if expanded { expandedVisionOrgs.insert(org) }
+                else { expandedVisionOrgs.remove(org) }
+            }
+        )
+    }
+
+    private func visionModelRow(_ model: AIModel) -> some View {
+        Button {
+            viewModel.selectedModel = model
+            dismiss()
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 8) {
+                        Text(state.displayName(for: model))
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(Theme.textPrimary)
+                            .lineLimit(1)
+                        Text("Vision")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Color.yellow)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Color.yellow.opacity(0.18), in: Capsule())
+                    }
+                    Text(model.modelID)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textSecondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                if viewModel.selectedModel?.id == model.id {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(Theme.accent)
+                }
+            }
+        }
+        .listRowBackground(Theme.surface)
     }
 
     var body: some View {
@@ -721,49 +839,29 @@ private struct VisionModelPickerSheet: View {
                             Text("Tools")
                                 .foregroundStyle(Theme.textSecondary)
                         } footer: {
-                            Text("Client-side web tools work with any vision model. Web search is on by default in Vision.")
+                            Text("Client-side web tools work with any vision model. On capture, search uses terms from the photo — never the system prompt. Follow-ups search the question text.")
                                 .foregroundStyle(Theme.textTertiary)
                         }
                     }
 
                     ForEach(grouped, id: \.0) { provider, list in
                         Section {
-                            ForEach(list) { model in
-                                Button {
-                                    viewModel.selectedModel = model
-                                    dismiss()
-                                } label: {
-                                    HStack {
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            HStack(spacing: 8) {
-                                                Text(state.displayName(for: model))
-                                                    .font(.system(size: 16, weight: .medium))
-                                                    .foregroundStyle(Theme.textPrimary)
-                                                    .lineLimit(1)
-                                                Text("Vision")
-                                                    .font(.system(size: 11, weight: .semibold))
-                                                    .foregroundStyle(Color.yellow)
-                                                    .padding(.horizontal, 7)
-                                                    .padding(.vertical, 3)
-                                                    .background(Color.yellow.opacity(0.18), in: Capsule())
-                                            }
-                                            Text(model.modelID)
-                                                .font(.system(size: 12))
-                                                .foregroundStyle(Theme.textSecondary)
-                                                .lineLimit(1)
-                                        }
-                                        Spacer()
-                                        if viewModel.selectedModel?.id == model.id {
-                                            Image(systemName: "checkmark.circle.fill")
-                                                .foregroundStyle(Theme.accent)
-                                        }
+                            DisclosureGroup(isExpanded: visionProviderBinding(for: provider)) {
+                                if provider == .openrouter {
+                                    openRouterSection(models: list)
+                                } else {
+                                    ForEach(list) { model in
+                                        visionModelRow(model)
                                     }
                                 }
-                                .listRowBackground(Theme.surface)
+                            } label: {
+                                openRouterSubmenuLabel(
+                                    title: provider.displayName,
+                                    detail: "\(list.count) model\(list.count == 1 ? "" : "s")"
+                                )
                             }
-                        } header: {
-                            Text(provider.displayName)
-                                .foregroundStyle(Theme.textSecondary)
+                            .tint(Theme.textSecondary)
+                            .listRowBackground(Theme.surface)
                         }
                     }
 
@@ -800,6 +898,14 @@ private struct VisionModelPickerSheet: View {
         }
         .onChange(of: state.allModels.map(\.id)) { _, _ in
             viewModel.bind(state: state)
+        }
+        .task {
+            if let selected = viewModel.selectedModel {
+                expandedVisionProviders.insert(selected.provider)
+                if selected.provider == .openrouter {
+                    expandedVisionOrgs.insert(visionOrg(selected))
+                }
+            }
         }
     }
 
@@ -881,7 +987,7 @@ private struct VisionModelPickerSheet: View {
             return "On — required for Research"
         }
         if viewModel.webSearchEnabled {
-            return "On — used for capture prompts and follow-ups"
+            return "On — searches photo content + follow-ups (not the system prompt)"
         }
         return "Off — model answers from the photo only"
     }
@@ -913,6 +1019,127 @@ private struct VisionModelPickerSheet: View {
                 .foregroundStyle(Theme.textPrimary)
         }
         .listRowBackground(Theme.surface)
+    }
+}
+
+// MARK: - Re-analyze with a different prompt
+
+/// Change the task/system prompt and re-run analysis on the frozen still
+/// (optional crop is preserved). Web search still keys off photo content.
+private struct VisionReanalyzePromptSheet: View {
+    @ObservedObject var viewModel: VisionViewModel
+    @ObservedObject var promptStore: VisionPromptStore
+    @Environment(\.dismiss) private var dismiss
+    @FocusState private var promptFocused: Bool
+
+    var body: some View {
+        SheetScaffold(
+            title: "Re-analyze",
+            trailing: AnyView(
+                Button {
+                    viewModel.reanalyzeWithCurrentPrompt()
+                } label: {
+                    Text("Run")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                        .frame(height: 44)
+                }
+                .buttonStyle(.plain)
+                .disabled(!viewModel.canReanalyze)
+                .accessibilityLabel("Re-analyze with this prompt")
+            ),
+            onClose: { dismiss() }
+        ) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Same photo, new instructions. Web search still uses terms from the image — not this prompt.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Task prompt")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Theme.textSecondary)
+                        TextField(
+                            "Empty = general analysis",
+                            text: $viewModel.capturePrompt,
+                            axis: .vertical
+                        )
+                        .lineLimit(3...10)
+                        .font(.system(size: 15))
+                        .foregroundStyle(Theme.textPrimary)
+                        .tint(Theme.accent)
+                        .focused($promptFocused)
+                        .padding(12)
+                        .background(Theme.surfaceElevated, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .onChange(of: viewModel.capturePrompt) { _, _ in
+                            viewModel.capturePromptEdited()
+                        }
+                    }
+
+                    if !promptStore.presets.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Presets")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(Theme.textSecondary)
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
+                                    ForEach(promptStore.presets) { preset in
+                                        Button {
+                                            viewModel.selectPreset(preset)
+                                        } label: {
+                                            Text(preset.title)
+                                                .font(.system(size: 13, weight: .medium))
+                                                .foregroundStyle(
+                                                    viewModel.selectedPresetID == preset.id
+                                                        ? Theme.background
+                                                        : Theme.textPrimary
+                                                )
+                                                .padding(.horizontal, 12)
+                                                .padding(.vertical, 8)
+                                                .background(
+                                                    viewModel.selectedPresetID == preset.id
+                                                        ? Theme.accent
+                                                        : Theme.surfaceElevated,
+                                                    in: Capsule()
+                                                )
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Button {
+                        promptFocused = false
+                        viewModel.reanalyzeWithCurrentPrompt()
+                    } label: {
+                        Text("Re-analyze photo")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(Theme.background)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .background(Theme.accent, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!viewModel.canReanalyze)
+                    .opacity(viewModel.canReanalyze ? 1 : 0.45)
+                    .padding(.top, 4)
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 24)
+            }
+        }
+        .background(Theme.background)
+        .presentationDetents([.medium, .large])
+        .onAppear {
+            // Small delay so the sheet presentation finishes before focus.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                promptFocused = true
+            }
+        }
     }
 }
 

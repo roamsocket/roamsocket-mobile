@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 /**
  * Primary global CLI entry for `roamsocket`.
- * Legacy install aliases (codesocket / codesocket-server / anyprov-code-server)
- * re-export this same entry for continuity only.
+ * Default (TTY): companion server + coding agent TUI.
+ * Use --serve-only for headless pairing server only.
+ * Legacy install aliases re-export this same entry.
  */
-import { startServer } from "../dist/src/index.js";
+import { main } from "../dist/src/cli/main.js";
 
-startServer().catch((err) => {
-  console.error("Failed to start server:", err);
+main().catch((err) => {
+  console.error("Failed to start RoamSocket:", err);
   process.exit(1);
 });

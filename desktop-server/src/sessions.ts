@@ -57,6 +57,8 @@ export class SessionManager {
       });
       // Replay checklist so the phone checklist recovers after reconnect.
       existing.agent.emitTaskList();
+      // Replay active / last achieved /goal status.
+      existing.agent.emitGoalStatusReplay();
       return;
     }
 
@@ -83,18 +85,20 @@ export class SessionManager {
     const abort = new AbortController();
     const pendingPermissions = new Map<string, (d: "allow" | "deny") => void>();
 
-    // Read per-project config and merge into the session:
-    // AGENTS.md / project skills get injected into the agent system
-    // prompt; project MCP servers are surfaced for the upcoming tool
-    // registration pass; env vars are warned about (no shell injection
-    // today — they need to be set in the desktop's environment).
+    // Read Claude Code–compatible config (global ~/.claude, workspace
+    // CLAUDE.md / .claude/, folder hierarchy) and merge into the session.
+    // Instructions + skills inject into the agent system prompt; project
+    // MCP is surfaced for upcoming tool registration; env vars are warned
+    // about (not injected into the process today).
     const project = await readProjectConfig(workdir);
     const mergedSkills = [
       ...msg.skills,
       ...project.skills.map((s) => s.content),
     ];
     if (project.instructionsMd) {
-      mergedSkills.unshift(`# Project instructions\n\n${project.instructionsMd}`);
+      mergedSkills.unshift(
+        `# Agent instructions (global / workspace / folder)\n\n${project.instructionsMd}`,
+      );
     }
     if (Object.keys(project.env).length > 0) {
       this.emit({

@@ -10,10 +10,30 @@ public enum ProviderError: Error, LocalizedError, Equatable {
     public var errorDescription: String? {
         switch self {
         case .missingKey: return "No API key configured for this provider."
-        case let .http(status, body): return "HTTP \(status): \(body)"
+        case let .http(status, body):
+            return "HTTP \(status): \(Self.readableMessage(from: body) ?? body)"
         case let .decoding(msg): return "Failed to decode response: \(msg)"
         case let .transport(msg): return "Network error: \(msg)"
         }
+    }
+
+    /// Pull the human-readable message out of a provider error body. Most
+    /// APIs (OpenAI, OpenRouter, Groq, xAI, Mistral, MiniMax, Anthropic,
+    /// Gemini) return `{"error":{"message":"…"}}` — or the legacy
+    /// `{"error":"…"}` — on failures. Returns nil for non-JSON bodies so the
+    /// raw response is shown as a fallback.
+    static func readableMessage(from body: String) -> String? {
+        guard let data = body.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        if let error = object["error"] as? [String: Any],
+           let message = error["message"] as? String {
+            return message
+        }
+        if let message = object["error"] as? String {
+            return message
+        }
+        return nil
     }
 }
 
@@ -50,6 +70,29 @@ public protocol ModelProvider: Sendable {
     /// Send a single-turn chat completion. Returns the assistant's reply text.
     /// Throws `ProviderError`.
     func chat(model: String, apiKey: String, messages: [ProviderChatMessage], effort: Effort?) async throws -> String
+    /// Send a single-turn chat completion with an optional live web-search
+    /// query. Providers with a native web-search API (OpenRouter) use it;
+    /// every other provider ignores the query and behaves like `chat`.
+    func chat(
+        model: String,
+        apiKey: String,
+        messages: [ProviderChatMessage],
+        effort: Effort?,
+        webSearchQuery: String?
+    ) async throws -> String
+}
+
+extension ModelProvider {
+    /// Default: no native web search — behave exactly like `chat`.
+    public func chat(
+        model: String,
+        apiKey: String,
+        messages: [ProviderChatMessage],
+        effort: Effort?,
+        webSearchQuery: String?
+    ) async throws -> String {
+        try await chat(model: model, apiKey: apiKey, messages: messages, effort: effort)
+    }
 }
 
 /// A single message in a chat turn, scoped to provider APIs.

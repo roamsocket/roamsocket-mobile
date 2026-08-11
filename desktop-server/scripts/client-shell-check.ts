@@ -104,6 +104,15 @@ assert.ok(css.includes("skill-slash-chip"), "skill chip styles");
 assert.ok(css.includes("skill-detail-modal") || css.includes("skill-detail"), "skill detail styles");
 console.log("skills: slash chips, hover preview, detail/edit modals");
 
+// /goal slash command (coding session)
+assert.ok(main.includes("goal_status") || main.includes("paintGoalBanner"), "goal status handler");
+assert.ok(main.includes("paintGoalBanner") || main.includes("code-goal-bar"), "goal banner");
+assert.ok(main.includes("CODE_SLASH_COMMANDS") || main.includes("/goal"), "slash menu commands");
+assert.ok(css.includes("code-goal-bar"), "goal bar styles");
+assert.ok(css.includes("code-slash-menu"), "slash menu styles");
+assert.ok(existsSync(path.join(root, "src/agent/goal.ts")), "goal module");
+console.log("goal: /goal slash command + banner + slash menu");
+
 // Marketplace (connectors / skills / plugins / metal catalogs)
 assert.ok(main.includes("fillSettingsMarketplace") || main.includes("marketplace"), "marketplace settings");
 assert.ok(main.includes("applyMarketplaceStatusToRenderer"), "marketplace applied to renderer");

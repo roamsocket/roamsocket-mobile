@@ -147,7 +147,7 @@ final class ScannerViewController: UIViewController, AVCaptureMetadataOutputObje
     }
 
     func setTorch(_ on: Bool) {
-        sessionQueue.async { [weak self] in
+        sessionQueue.async {
             guard let device = AVCaptureDevice.default(for: .video),
                   device.hasTorch else { return }
             do {

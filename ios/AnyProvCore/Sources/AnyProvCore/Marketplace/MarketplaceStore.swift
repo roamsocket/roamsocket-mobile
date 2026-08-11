@@ -11,10 +11,10 @@ public final class MarketplaceStore: ObservableObject {
     private let perSourceKey = "roamsocket.marketplace.perSource.v1"
     private let lastMergedKey = "roamsocket.marketplace.lastMerged.v1"
     /// Pre-rename UserDefaults keys (migrate once on load).
-    private let legacySourcesKey = "codesocket.marketplace.sources.v1"
-    private let legacyCacheKey = "codesocket.marketplace.cache.v1"
-    private let legacyPerSourceKey = "codesocket.marketplace.perSource.v1"
-    private let legacyLastMergedKey = "codesocket.marketplace.lastMerged.v1"
+    private let legacySourcesKey = "roamsocket.marketplace.sources.v1"
+    private let legacyCacheKey = "roamsocket.marketplace.cache.v1"
+    private let legacyPerSourceKey = "roamsocket.marketplace.perSource.v1"
+    private let legacyLastMergedKey = "roamsocket.marketplace.lastMerged.v1"
 
     @Published public private(set) var sources: [MarketplaceSource] = []
     @Published public private(set) var catalog: MarketplaceCatalog = .empty

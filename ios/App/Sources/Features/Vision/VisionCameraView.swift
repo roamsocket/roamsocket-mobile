@@ -7,20 +7,26 @@ import UIKit
 struct VisionCameraView: UIViewControllerRepresentable {
     var onCapture: (UIImage) -> Void
     var onError: (String) -> Void
+    /// Fired when the shutter is accepted (before the still finishes developing).
+    var onShutter: (() -> Void)? = nil
     /// Bumps when the SwiftUI host wants a still (capture button).
     var captureTrigger: UUID?
     var isSessionActive: Bool = true
+    /// Pause the preview connection so the last live frame freezes in place.
+    var isPreviewFrozen: Bool = false
 
     func makeUIViewController(context: Context) -> VisionCameraController {
         let vc = VisionCameraController()
         vc.onCapture = onCapture
         vc.onError = onError
+        vc.onShutter = onShutter
         return vc
     }
 
     func updateUIViewController(_ uiViewController: VisionCameraController, context: Context) {
         uiViewController.onCapture = onCapture
         uiViewController.onError = onError
+        uiViewController.onShutter = onShutter
         if captureTrigger != context.coordinator.lastTrigger {
             context.coordinator.lastTrigger = captureTrigger
             if captureTrigger != nil {
@@ -28,6 +34,7 @@ struct VisionCameraView: UIViewControllerRepresentable {
             }
         }
         uiViewController.setSessionRunning(isSessionActive)
+        uiViewController.setPreviewFrozen(isPreviewFrozen)
     }
 
     func makeCoordinator() -> Coordinator {
@@ -44,6 +51,7 @@ struct VisionCameraView: UIViewControllerRepresentable {
 final class VisionCameraController: UIViewController, AVCapturePhotoCaptureDelegate {
     var onCapture: ((UIImage) -> Void)?
     var onError: ((String) -> Void)?
+    var onShutter: (() -> Void)?
 
     private let session = AVCaptureSession()
     private let sessionQueue = DispatchQueue(label: "com.anyprovcode.vision.camera")
@@ -51,6 +59,9 @@ final class VisionCameraController: UIViewController, AVCapturePhotoCaptureDeleg
     private let photoOutput = AVCapturePhotoOutput()
     private var isConfigured = false
     private var wantsRunning = true
+    private var wantsPreviewFrozen = false
+    /// True while a still is in flight (blocks double-shutter).
+    private var isCapturingPhoto = false
     /// Hardware Camera Control / volume-button shutter (iOS 17.2+).
     private var captureEventInteraction: AnyObject?
 
@@ -89,14 +100,47 @@ final class VisionCameraController: UIViewController, AVCapturePhotoCaptureDeleg
         }
     }
 
+    /// Freezes the last live frame by disabling the preview connection.
+    func setPreviewFrozen(_ frozen: Bool) {
+        let wasFrozen = wantsPreviewFrozen
+        wantsPreviewFrozen = frozen
+        applyPreviewFrozen()
+        // Retake unfreezes while a prior still may still be developing — clear the
+        // in-flight lock so the next shutter is not stuck waiting on that JPEG.
+        if wasFrozen && !frozen {
+            sessionQueue.async { [weak self] in
+                self?.isCapturingPhoto = false
+            }
+        }
+    }
+
+    private func applyPreviewFrozen() {
+        // Disabling the preview connection holds the last composited frame.
+        preview?.connection?.isEnabled = !wantsPreviewFrozen
+    }
+
     func capturePhoto() {
         sessionQueue.async { [weak self] in
             guard let self else { return }
+            guard !self.isCapturingPhoto else {
+                // Host may already have opened the analyzing card — surface the
+                // failure so it can abort instead of hanging on "Analyzing…".
+                DispatchQueue.main.async {
+                    self.onError?("Capture already in progress.")
+                }
+                return
+            }
             guard self.isConfigured, self.session.isRunning else {
                 DispatchQueue.main.async {
                     self.onError?("Camera is not ready yet.")
                 }
                 return
+            }
+            self.isCapturingPhoto = true
+            // Notify host on main *before* the still finishes developing so
+            // freeze + analyzing UI can appear on shutter, not on JPEG ready.
+            DispatchQueue.main.async {
+                self.onShutter?()
             }
             let settings = AVCapturePhotoSettings()
             settings.flashMode = .off
@@ -127,7 +171,7 @@ final class VisionCameraController: UIViewController, AVCapturePhotoCaptureDeleg
     private func handleHardwareCaptureEvent(_ event: AVCaptureEvent) {
         // Fire once on press end so light-press / hold doesn’t multi-shoot.
         guard event.phase == .ended else { return }
-        guard wantsRunning else { return }
+        guard wantsRunning, !wantsPreviewFrozen, !isCapturingPhoto else { return }
         capturePhoto()
     }
 
@@ -216,6 +260,7 @@ final class VisionCameraController: UIViewController, AVCapturePhotoCaptureDeleg
                 self.view.layer.insertSublayer(layer, at: 0)
                 self.preview = layer
                 self.applyPreviewOrientation()
+                self.applyPreviewFrozen()
             }
 
             if self.wantsRunning {
@@ -232,9 +277,25 @@ final class VisionCameraController: UIViewController, AVCapturePhotoCaptureDeleg
            connection.videoRotationAngle != portraitAngle {
             connection.videoRotationAngle = portraitAngle
         }
+        applyPreviewFrozen()
     }
 
     // MARK: - AVCapturePhotoCaptureDelegate
+
+    func photoOutput(
+        _ output: AVCapturePhotoOutput,
+        willCapturePhotoFor resolvedSettings: AVCaptureResolvedPhotoSettings
+    ) {
+        // System shutter moment — ensure preview stays frozen if the host already
+        // asked for it (or freeze here as a fallback for hardware paths).
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if !self.wantsPreviewFrozen {
+                self.wantsPreviewFrozen = true
+                self.applyPreviewFrozen()
+            }
+        }
+    }
 
     func photoOutput(
         _ output: AVCapturePhotoOutput,
@@ -243,22 +304,58 @@ final class VisionCameraController: UIViewController, AVCapturePhotoCaptureDeleg
     ) {
         if let error {
             DispatchQueue.main.async {
+                self.isCapturingPhoto = false
                 self.onError?(error.localizedDescription)
             }
             return
         }
-        guard let data = photo.fileDataRepresentation(),
-              let image = UIImage(data: data)
-        else {
+        guard let data = photo.fileDataRepresentation() else {
             DispatchQueue.main.async {
+                self.isCapturingPhoto = false
                 self.onError?("Could not read the captured photo.")
             }
             return
         }
-        let fixed = image.fixedOrientation()
-        DispatchQueue.main.async {
-            self.onCapture?(fixed)
+        // Decode straight to the display resolution with ImageIO — never hold a
+        // full 12 MP bitmap. On-device VLMs (Gemma, Qwen-VL, …) already keep
+        // multi-GB weights in Metal, so a full-size decode + orientation redraw
+        // on shutter is what tips the app over the memory ceiling (jetsam kill).
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            let image = Self.downsampledImage(from: data, maxDimension: 1440)
+                ?? Self.decodedFallback(data)
+            DispatchQueue.main.async {
+                self.isCapturingPhoto = false
+                guard let image else {
+                    self.onError?("Could not read the captured photo.")
+                    return
+                }
+                self.onCapture?(image)
+            }
         }
+    }
+
+    /// Downsample photo data straight to the target pixel size. ImageIO decodes
+    /// the file once at the target resolution and bakes EXIF orientation in, so
+    /// the result is already `.up` and needs no redraw.
+    private static func downsampledImage(from data: Data, maxDimension: CGFloat) -> UIImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: max(Int(maxDimension), 1),
+            kCGImageSourceShouldCacheImmediately: true,
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return nil
+        }
+        return UIImage(cgImage: cgImage, scale: 1, orientation: .up)
+    }
+
+    /// Last-resort decode when ImageIO thumbnailing fails (exotic formats).
+    private static func decodedFallback(_ data: Data) -> UIImage? {
+        guard let image = UIImage(data: data) else { return nil }
+        return image.fixedOrientation()
     }
 }
 

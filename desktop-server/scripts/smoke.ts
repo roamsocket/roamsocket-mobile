@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { WebSocket } from "ws";
 
-const PORT = 4571;
+const PORT = Number(process.env.PORT) || 4571;
 const BASE = `http://localhost:${PORT}`;
 
 function git(cwd: string, ...args: string[]): void {
@@ -67,6 +67,9 @@ function assert(cond: unknown, msg: string): void {
 
 async function main(): Promise<void> {
   const origin = await makeOriginRepo();
+  // Isolate the server from the developer's real ~/.claude so global settings
+  // env vars / skills don't leak into the throwaway smoke repo.
+  const smokeHome = await mkdtemp(path.join(tmpdir(), "apc-smoke-home-"));
 
   const server = spawn("npx", ["tsx", "src/index.ts"], {
     cwd: process.cwd(),
@@ -77,6 +80,7 @@ async function main(): Promise<void> {
       APC_ADVERTISE: "0",
       APC_AUTO_TUNNEL: "0",
       APC_CLI_SETTINGS: "0",
+      HOME: smokeHome,
     },
   });
 
@@ -89,6 +93,8 @@ async function main(): Promise<void> {
     const seen: string[] = [];
     let diffForNotes = false;
     let prUrl = "";
+    let goalAchieved = false;
+    let goalActive = false;
 
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error(`timeout; saw: ${seen.join(", ")}`)), 30000);
@@ -109,7 +115,15 @@ async function main(): Promise<void> {
         const msg = JSON.parse(data.toString());
         seen.push(msg.type);
         if (msg.type === "session_created") {
-          ws.send(JSON.stringify({ type: "user_message", sessionId: "smoke", text: "add a notes file" }));
+          // Exercise /goal: mock agent writes NOTES.md; heuristic evaluator marks met.
+          ws.send(JSON.stringify({
+            type: "user_message",
+            sessionId: "smoke",
+            text: "/goal NOTES.md exists",
+          }));
+        } else if (msg.type === "goal_status") {
+          if (msg.status === "active") goalActive = true;
+          if (msg.status === "achieved") goalAchieved = true;
         } else if (msg.type === "diff" && msg.path === "NOTES.md") {
           diffForNotes = true;
         } else if (msg.type === "session_done") {
@@ -137,6 +151,9 @@ async function main(): Promise<void> {
     ws.close();
 
     assert(seen.includes("session_created"), "session_created received");
+    assert(seen.includes("goal_status"), "goal_status received (/goal)");
+    assert(goalActive, "goal_status active emitted when goal set");
+    assert(goalAchieved, "goal_status achieved after NOTES.md");
     assert(seen.includes("task_list"), "task_list received (agent checklist)");
     assert(seen.includes("tool_call"), "tool_call received");
     assert(seen.includes("tool_result"), "tool_result received");

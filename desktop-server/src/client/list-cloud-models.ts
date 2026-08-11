@@ -11,6 +11,10 @@ import type { CustomApiStyle } from "./custom-providers.js";
 export interface ListedCloudModel {
   id: string;
   displayName: string;
+  /** OpenRouter: vendor / organization (e.g. "OpenAI", "Anthropic"). */
+  organization?: string;
+  /** OpenRouter: true when prompt + completion tokens are free. */
+  isFree?: boolean;
 }
 
 const OPENAI_BASE: Record<string, string> = {
@@ -89,7 +93,7 @@ export async function listCloudModels(
     }
     const base = OPENAI_BASE[provider];
     if (!base) return [];
-    return await listOpenAICompatible(base, key, fetchImpl, abort);
+    return await listOpenAICompatible(base, key, fetchImpl, abort, provider);
   } catch {
     return [];
   }
@@ -124,18 +128,42 @@ async function listOpenAICompatible(
   apiKey: string,
   fetchImpl: FetchLike,
   signal?: AbortSignal,
+  provider?: string,
 ): Promise<ListedCloudModel[]> {
   const res = await fetchImpl(`${base.replace(/\/+$/, "")}/models`, {
     headers: { authorization: `Bearer ${apiKey}` },
     signal,
   });
   if (!res.ok) return [];
-  const json = (await res.json()) as { data?: Array<{ id?: string }> };
+  const json = (await res.json()) as {
+    data?: Array<{
+      id?: string;
+      organization?: string;
+      is_free?: boolean;
+      pricing?: { prompt?: string; completion?: string };
+    }>;
+  };
   const rows = Array.isArray(json.data) ? json.data : [];
-  return rows
+  // OpenRouter returns the full catalog in one shot — keep it all so the
+  // picker can group by organization. Other providers stay capped.
+  const isOpenRouter = provider === "openrouter" || base.includes("openrouter.ai");
+  const listed = rows
     .filter((r) => typeof r.id === "string" && r.id.length > 0)
-    .map((r) => ({ id: r.id!, displayName: r.id! }))
-    .slice(0, 80);
+    .map((r) => {
+      const isFree =
+        r.is_free === true ||
+        (r.pricing?.prompt === "0" && r.pricing?.completion === "0");
+      return {
+        id: r.id!,
+        displayName: r.id!,
+        organization:
+          typeof r.organization === "string" && r.organization.length > 0
+            ? r.organization
+            : undefined,
+        isFree: isFree ? true : undefined,
+      };
+    });
+  return isOpenRouter ? listed : listed.slice(0, 80);
 }
 
 async function listGoogle(

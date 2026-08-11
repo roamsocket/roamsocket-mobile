@@ -128,25 +128,75 @@ export const metalAgentAdapter: ProviderAdapter = {
     }
     const system = `${req.system}\n\n${buildToolInstructions(req)}`;
     const messages = toMetalMessages(system, req.messages);
-    const result = await metalGenerate({
-      hubID: req.model,
-      messages,
-      maxTokens: maxTokensForEffort(req.effort),
-    });
-    if (signal?.aborted) {
-      yield { kind: "done", stopReason: "aborted" };
-      return;
-    }
-    const { prose, calls } = parseToolCalls(result.text);
-    if (prose) {
-      yield { kind: "text", text: prose };
-    }
-    for (const call of calls) {
-      yield { kind: "tool_call", call };
-    }
-    yield {
-      kind: "done",
-      stopReason: calls.length > 0 ? "tool_use" : "end_turn",
+
+    // Bridge metalGenerate's onProgress callback into the async generator via
+    // a tiny queue so loading/generating status streams to the agent loop.
+    const queue: ProviderEvent[] = [];
+    let resolvers: Array<() => void> = [];
+    let producerDone = false;
+    const push = (ev: ProviderEvent) => {
+      queue.push(ev);
+      for (const r of resolvers) r();
+      resolvers = [];
     };
+
+    const run = (async () => {
+      try {
+        const result = await metalGenerate(
+          {
+            hubID: req.model,
+            messages,
+            maxTokens: maxTokensForEffort(req.effort),
+          },
+          (p) => {
+            push({
+              kind: "model_status",
+              status: p.phase,
+              hubID: p.hubID,
+              message: p.message,
+            });
+          },
+        );
+        if (signal?.aborted) {
+          push({ kind: "done", stopReason: "aborted" });
+          return;
+        }
+        const { prose, calls } = parseToolCalls(result.text);
+        if (prose) {
+          push({ kind: "text", text: prose });
+        }
+        for (const call of calls) {
+          push({ kind: "tool_call", call });
+        }
+        push({ kind: "model_status", status: "done" });
+        push({
+          kind: "done",
+          stopReason: calls.length > 0 ? "tool_use" : "end_turn",
+        });
+      } catch (err) {
+        push({ kind: "model_status", status: "done" });
+        throw err;
+      } finally {
+        producerDone = true;
+        for (const r of resolvers) r();
+        resolvers = [];
+      }
+    })();
+
+    while (true) {
+      const ev = queue.shift();
+      if (ev) {
+        yield ev;
+        if (ev.kind === "done") return;
+        continue;
+      }
+      if (producerDone) {
+        await run;
+        return;
+      }
+      await new Promise<void>((resolve) => {
+        resolvers.push(resolve);
+      });
+    }
   },
 };

@@ -103,7 +103,10 @@ struct LocalMetalSettingsView: View {
             .background(Theme.background)
             // Sticky multi-model progress at the top of Manage models.
             .safeAreaInset(edge: .top, spacing: 0) {
-                LocalMetalDownloadsPinnedBar(onRetry: { startDownload($0) })
+                LocalMetalDownloadsPinnedBar(
+                    onRetry: { startDownload($0) },
+                    onCancel: { LocalMetalDownloadManager.shared.cancel(modelID: $0) }
+                )
             }
             .navigationTitle("Manage models")
             .navigationBarTitleDisplayMode(.inline)
@@ -173,6 +176,7 @@ struct LocalMetalSettingsView: View {
                     sizes: $sizes,
                     runtimeReady: runtimeReady,
                     onDownload: { startDownload($0) },
+                    onRedownload: { redownloadFromScratch($0) },
                     onDelete: { await delete($0) },
                     onUnload: { await unload($0) },
                     onUse: { await useInChat($0) }
@@ -187,6 +191,7 @@ struct LocalMetalSettingsView: View {
                     sizes: $sizes,
                     runtimeReady: runtimeReady,
                     onDownload: { startDownload($0) },
+                    onRedownload: { redownloadFromScratch($0) },
                     onDelete: { await delete($0) },
                     onUnload: { await unload($0) },
                     onUse: { await useInChat($0) }
@@ -355,7 +360,7 @@ struct LocalMetalSettingsView: View {
                     .foregroundStyle(.red.opacity(0.9))
             }
         } footer: {
-            Text("Downloads keep going if you leave this screen (progress stays pinned at the top). Weight files use a system background transfer — they can continue after you switch apps, and incomplete downloads resume automatically when you reopen RoamSocket. Unload frees RAM but keeps weights. Delete removes weights from this device.")
+            Text("Downloads keep going if you leave this screen (progress stays pinned at the top and in the sidebar). Tap Cancel at any time to fully stop a download. Retry a failed download to resume from where it stopped. Long-press a row to redownload from scratch. Unload frees RAM but keeps weights. Delete removes weights from this device.")
         }
     }
 
@@ -423,9 +428,11 @@ struct LocalMetalSettingsView: View {
             runtimeReady: runtimeReady,
             busy: downloads.isBusy,
             onDownload: { startDownload(entry.hubID) },
+            onRedownload: { redownloadFromScratch(entry.hubID) },
             onDelete: { Task { await delete(entry.hubID) } },
             onUnload: { Task { await unload(entry.hubID) } },
-            onUse: { Task { await useInChat(entry.hubID) } }
+            onUse: { Task { await useInChat(entry.hubID) } },
+            onCancel: { LocalMetalDownloadManager.shared.cancel(modelID: entry.hubID) }
         )
         .listRowBackground(Theme.surface)
         .modifier(DownloadedModelSwipeActions(
@@ -515,10 +522,9 @@ struct LocalMetalSettingsView: View {
         }
 
         // Scan any hub folders not in catalog.
-        if let listed = try? await LocalMetalModelStore.shared.listModels() {
-            for model in listed where model.provider == .localMetal {
-                nextDownloaded.insert(model.modelID)
-            }
+        let listed = await LocalMetalModelStore.shared.listModels()
+        for model in listed where model.provider == .localMetal {
+            nextDownloaded.insert(model.modelID)
         }
 
         downloaded = nextDownloaded
@@ -536,8 +542,25 @@ struct LocalMetalSettingsView: View {
         errorText = nil
         let name = entries.first(where: { $0.hubID == modelID })?.displayName
             ?? LocalMetalCatalog.displayName(for: modelID)
-        status = "Starting download…"
-        downloads.start(modelID: modelID, appState: state, displayName: name)
+        if downloads.track(for: modelID)?.phase == .error {
+            // Resume tries Range-resume on any partial hub blobs first.
+            status = "Resuming download…"
+            downloads.retry(modelID: modelID, appState: state, displayName: name)
+        } else {
+            status = "Starting download…"
+            downloads.start(modelID: modelID, appState: state, displayName: name)
+        }
+        if let err = downloads.lastError {
+            errorText = err
+        }
+    }
+
+    private func redownloadFromScratch(_ modelID: String) {
+        errorText = nil
+        let name = entries.first(where: { $0.hubID == modelID })?.displayName
+            ?? LocalMetalCatalog.displayName(for: modelID)
+        status = "Redownloading from scratch…"
+        downloads.redownloadFromScratch(modelID: modelID, appState: state, displayName: name)
         if let err = downloads.lastError {
             errorText = err
         }
@@ -645,6 +668,7 @@ private struct ModelFamilyDetailView: View {
     @Binding var sizes: [String: Int64]
     let runtimeReady: Bool
     var onDownload: (String) -> Void
+    var onRedownload: (String) -> Void
     var onDelete: (String) async -> Void
     var onUnload: (String) async -> Void
     var onUse: (String) async -> Void
@@ -672,9 +696,11 @@ private struct ModelFamilyDetailView: View {
                         runtimeReady: runtimeReady,
                         busy: downloads.isBusy,
                         onDownload: { onDownload(entry.hubID) },
+                        onRedownload: { onRedownload(entry.hubID) },
                         onDelete: { Task { await onDelete(entry.hubID) } },
                         onUnload: { Task { await onUnload(entry.hubID) } },
-                        onUse: { Task { await onUse(entry.hubID) } }
+                        onUse: { Task { await onUse(entry.hubID) } },
+                        onCancel: { LocalMetalDownloadManager.shared.cancel(modelID: entry.hubID) }
                     )
                     .listRowBackground(Theme.surface)
                     .modifier(DownloadedModelSwipeActions(
@@ -690,7 +716,10 @@ private struct ModelFamilyDetailView: View {
         .scrollContentBackground(.hidden)
         .background(Theme.background)
         .safeAreaInset(edge: .top, spacing: 0) {
-            LocalMetalDownloadsPinnedBar(onRetry: onDownload)
+            LocalMetalDownloadsPinnedBar(
+                onRetry: onDownload,
+                onCancel: { LocalMetalDownloadManager.shared.cancel(modelID: $0) }
+            )
         }
         .navigationTitle(family.name)
         .navigationBarTitleDisplayMode(.inline)
@@ -715,6 +744,7 @@ private struct ModelBucketListView: View {
     @Binding var sizes: [String: Int64]
     let runtimeReady: Bool
     var onDownload: (String) -> Void
+    var onRedownload: (String) -> Void
     var onDelete: (String) async -> Void
     var onUnload: (String) async -> Void
     var onUse: (String) async -> Void
@@ -759,9 +789,11 @@ private struct ModelBucketListView: View {
                                 runtimeReady: runtimeReady,
                                 busy: downloads.isBusy,
                                 onDownload: { onDownload(entry.hubID) },
+                                onRedownload: { onRedownload(entry.hubID) },
                                 onDelete: { Task { await onDelete(entry.hubID) } },
                                 onUnload: { Task { await onUnload(entry.hubID) } },
-                                onUse: { Task { await onUse(entry.hubID) } }
+                                onUse: { Task { await onUse(entry.hubID) } },
+                                onCancel: { LocalMetalDownloadManager.shared.cancel(modelID: entry.hubID) }
                             )
                             .listRowBackground(Theme.surface)
                             .modifier(DownloadedModelSwipeActions(
@@ -779,7 +811,10 @@ private struct ModelBucketListView: View {
         .scrollContentBackground(.hidden)
         .background(Theme.background)
         .safeAreaInset(edge: .top, spacing: 0) {
-            LocalMetalDownloadsPinnedBar(onRetry: onDownload)
+            LocalMetalDownloadsPinnedBar(
+                onRetry: onDownload,
+                onCancel: { LocalMetalDownloadManager.shared.cancel(modelID: $0) }
+            )
         }
         .navigationTitle(bucket.title)
         .navigationBarTitleDisplayMode(.inline)
@@ -799,6 +834,7 @@ private struct ModelBucketListView: View {
 /// Sticky top bar listing each active (or recent) model download with a progress bar.
 private struct LocalMetalDownloadsPinnedBar: View {
     var onRetry: (String) -> Void
+    var onCancel: (String) -> Void
     @ObservedObject private var downloads = LocalMetalDownloadManager.shared
 
     var body: some View {
@@ -873,7 +909,14 @@ private struct LocalMetalDownloadsPinnedBar: View {
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
-                if track.phase == .error {
+                if track.phase == .active {
+                    Button("Cancel") {
+                        onCancel(track.hubID)
+                    }
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                    .buttonStyle(.plain)
+                } else if track.phase == .error {
                     Button("Retry") {
                         onRetry(track.hubID)
                     }
@@ -890,11 +933,11 @@ private struct LocalMetalDownloadsPinnedBar: View {
     private func trailingLabel(_ track: LocalMetalDownloadManager.Track) -> String {
         switch track.phase {
         case .done:
-            return track.mbProgressLabel ?? "Done"
+            return "Done"
         case .error:
             return "Error"
         case .active:
-            return track.mbProgressLabel ?? "…"
+            return track.trailingLabel
         }
     }
 }
@@ -932,6 +975,7 @@ private struct DownloadedModelSwipeActions: ViewModifier {
 // MARK: - Download row
 
 private struct ModelDownloadRow: View {
+    @EnvironmentObject var state: AppState
     let entry: LocalMetalCatalogEntry
     var showFamily: Bool
     let isDownloaded: Bool
@@ -942,12 +986,18 @@ private struct ModelDownloadRow: View {
     let runtimeReady: Bool
     let busy: Bool
     var onDownload: () -> Void
+    var onRedownload: () -> Void
     var onDelete: () -> Void
     var onUnload: () -> Void
     var onUse: () -> Void
+    var onCancel: () -> Void
 
     private var isActiveDownload: Bool {
         track?.phase == .active
+    }
+
+    private var isSelected: Bool {
+        state.selectedModel?.provider == .localMetal && state.selectedModel?.modelID == entry.hubID
     }
 
     private var showProgress: Bool {
@@ -1011,7 +1061,9 @@ private struct ModelDownloadRow: View {
         // Long-press for secondary actions (ellipsis menu was unreliable in List rows).
         .contextMenu {
             if isDownloaded {
-                Button("Use in chat", systemImage: "bubble.left.and.bubble.right", action: onUse)
+                if !isSelected {
+                    Button("Use in chat", systemImage: "bubble.left.and.bubble.right", action: onUse)
+                }
                 if isLoaded {
                     Button("Unload from memory", systemImage: "memorychip", action: onUnload)
                 }
@@ -1020,13 +1072,20 @@ private struct ModelDownloadRow: View {
                 }
                 Divider()
                 Button("Delete from device", systemImage: "trash", role: .destructive, action: onDelete)
+        } else {
+            if isActiveDownload {
+                Button("Cancel download", systemImage: "xmark.circle", role: .destructive, action: onCancel)
             } else {
                 Button("Download", systemImage: "arrow.down.circle", action: onDownload)
-                    .disabled(busy || !runtimeReady || isActiveDownload)
-                Link(destination: entry.downloadURL) {
-                    Label("Open on Hugging Face", systemImage: "safari")
-                }
+                    .disabled(busy || !runtimeReady)
             }
+            if track?.phase == .error {
+                Button("Redownload from scratch", systemImage: "arrow.counterclockwise.circle", role: .destructive, action: onRedownload)
+            }
+            Link(destination: entry.downloadURL) {
+                Label("Open on Hugging Face", systemImage: "safari")
+            }
+        }
         }
     }
 
@@ -1039,22 +1098,24 @@ private struct ModelDownloadRow: View {
                     .font(.system(size: 22))
                     .foregroundStyle(.green)
                     .accessibilityLabel("Downloaded")
-                Button(action: onUse) {
-                    Text("Use")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Theme.textPrimary)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(Theme.surfaceElevated, in: Capsule())
+                if !isSelected {
+                    Button(action: onUse) {
+                        Text("Use")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Theme.textPrimary)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(Theme.surfaceElevated, in: Capsule())
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(busy)
+                    .accessibilityLabel("Use \(entry.displayName) in chat")
+                    .accessibilityHint("Swipe left to delete from this device")
                 }
-                .buttonStyle(.borderless)
-                .disabled(busy)
-                .accessibilityLabel("Use \(entry.displayName) in chat")
-                .accessibilityHint("Swipe left to delete from this device")
             }
         } else {
-            Button(action: onDownload) {
-                Text(isActiveDownload ? "…" : (track?.phase == .error ? "Retry" : "Download"))
+            Button(action: isActiveDownload ? onCancel : onDownload) {
+                Text(isActiveDownload ? "Cancel" : (track?.phase == .error ? "Resume" : "Download"))
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Theme.textPrimary)
                     .padding(.horizontal, 14)
@@ -1062,7 +1123,7 @@ private struct ModelDownloadRow: View {
                     .background(Theme.surfaceElevated, in: Capsule())
             }
             .buttonStyle(.borderless)
-            .disabled((busy && !isActiveDownload && track?.phase != .error) || !runtimeReady || isActiveDownload)
+            .disabled((busy && !isActiveDownload && track?.phase != .error) || !runtimeReady || false)
         }
     }
 }

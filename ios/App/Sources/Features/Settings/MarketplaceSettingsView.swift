@@ -120,7 +120,7 @@ struct MarketplaceSettingsView: View {
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.textSecondary)
                         .listRowBackground(Theme.surface)
-                    Link(destination: URL(string: "https://github.com/codesocket-ai/codesocket-marketplace")!) {
+                    Link(destination: URL(string: "https://github.com/roamsocket-ai/roamsocket-marketplace")!) {
                         Label("Marketplace repo on GitHub", systemImage: "book")
                     }
                     .listRowBackground(Theme.surface)

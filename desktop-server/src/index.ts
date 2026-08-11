@@ -764,16 +764,15 @@ async function pushInitialSync(
   }
 }
 
-// Headless CLI mode: when this file is invoked directly (`node dist/src/index.js`
-// or `tsx src/index.ts`).
+// Direct invocation of this module starts the headless server only.
+// Prefer `bin/roamsocket.js` / `src/cli/main.ts` for the full TUI + server.
 const isDirectInvocation =
-  // ESM equivalent of `require.main === module`
   import.meta.url === `file://${process.argv[1]}` ||
   process.argv[1]?.endsWith("index.js") ||
   process.argv[1]?.endsWith("index.ts");
 
 if (isDirectInvocation) {
-  startServer().catch((err) => {
+  startServer({ cliSettings: true }).catch((err) => {
     console.error("Failed to start server:", err);
     process.exit(1);
   });

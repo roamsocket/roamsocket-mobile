@@ -8,11 +8,11 @@ public let marketplaceSchemaVersion = 1
 
 /// Default official catalog (product owner). Users can add more sources in Settings.
 public let defaultMarketplaceURL =
-    "https://raw.githubusercontent.com/codesocket-ai/codesocket-marketplace/main/catalog.json"
+    "https://raw.githubusercontent.com/roamsocket/roamsocket-marketplace/main/catalog.json"
 
 public let defaultMarketplaceSourceID = "roamsocket-official"
 /// Previous default source ids remapped on load so users keep one official entry.
-public let legacyMarketplaceSourceIDs: Set<String> = ["codesocket-official"]
+public let legacyMarketplaceSourceIDs: Set<String> = ["roamsocket-official"]
 
 public struct MarketplaceConnector: Codable, Identifiable, Hashable, Sendable {
     public let id: String

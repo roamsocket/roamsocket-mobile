@@ -43,6 +43,50 @@ const CLOUD_ALIASES: Array<{ match: RegExp; label: string }> = [
   { match: /minimax-m2/i, label: "MiniMax M2" },
 ];
 
+/** Common brand / model-family capitalization (keys are lowercased tokens). */
+const BRAND_CAPS: Record<string, string> = {
+  deepseek: "DeepSeek",
+  openai: "OpenAI",
+  xai: "xAI",
+  moonshot: "Moonshot",
+  minimax: "MiniMax",
+  qwen: "Qwen",
+  gemma: "Gemma",
+  phi: "Phi",
+  glm: "GLM",
+  grok: "Grok",
+  mistral: "Mistral",
+  ministral: "Ministral",
+  llama: "Llama",
+  claude: "Claude",
+  gemini: "Gemini",
+  nemo: "NeMo",
+  olmo: "OLMo",
+  kimi: "Kimi",
+  yi: "Yi",
+  dbrx: "DBRX",
+  falcon: "Falcon",
+  command: "Command",
+  jamba: "Jamba",
+  granite: "Granite",
+  nemotron: "Nemotron",
+  tulu: "Tulu",
+  hermes: "Hermes",
+  zephyr: "Zephyr",
+  openchat: "OpenChat",
+  t5: "T5",
+  mpt: "MPT",
+  codegeex: "CodeGeeX",
+  codestral: "Codestral",
+  devstral: "Devstral",
+  palm: "PaLM",
+  baichuan: "Baichuan",
+  internlm: "InternLM",
+  zhipu: "Zhipu",
+  vllm: "vLLM",
+  gpt: "GPT",
+};
+
 /**
  * Friendly display name for a provider + model id.
  * Metal / hub ids use the Metal catalog + pretty-name rules.
@@ -51,12 +95,11 @@ export function friendlyModelLabel(provider: string, modelId: string): string {
   const raw = (modelId || "").trim();
   if (!raw) return "";
 
-  if (
+  const isMetal =
     provider === "localMetal" ||
     provider === "local-metal" ||
-    raw.includes("/") ||
-    /mlx/i.test(raw)
-  ) {
+    (/mlx/i.test(raw) && provider !== "openrouter");
+  if (isMetal) {
     // Prefer catalog hand names; otherwise humanize the hub leaf.
     const fromCatalog = displayNameForHub(raw.includes("/") ? raw : tryExpandMetalHub(raw));
     if (fromCatalog && fromCatalog !== raw && !fromCatalog.includes("/")) {
@@ -69,22 +112,37 @@ export function friendlyModelLabel(provider: string, modelId: string): string {
     if (a.match.test(raw)) return a.label;
   }
 
-  // Generic: strip date suffixes, turn separators into spaces, title-case.
-  let s = raw
+  // OpenRouter: the org is shown separately as a submenu header — prettify
+  // only the slug. Other providers have no org prefix to strip.
+  const slug = raw.includes("/") ? raw.split("/").slice(1).join(" ") : raw;
+  return prettifyCloudId(slug);
+}
+
+/**
+ * Prettify a cloud model slug: strip "~", turn separators into spaces and
+ * title-case each word with common brand capitalization
+ * ("deepseek-r1" → "DeepSeek R1", "gpt-4o-mini" → "GPT 4o Mini").
+ */
+function prettifyCloudId(raw: string): string {
+  const tokens = raw
+    .replace(/~\s*/g, "")
     .replace(/-\d{8}$/g, "")
-    .replace(/[_/]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^\-+|\-+$/g, "");
-  s = s
-    .split("-")
-    .filter(Boolean)
-    .map((tok) => {
-      if (/^\d+(\.\d+)?[bBmMkK]?$/.test(tok)) return tok.toUpperCase().replace(/B$/, "B");
-      if (tok.length <= 3 && tok === tok.toLowerCase()) return tok.toUpperCase();
-      return tok.charAt(0).toUpperCase() + tok.slice(1);
-    })
-    .join(" ");
-  return s || raw;
+    .replace(/[-_/]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  const out = tokens.map((tok) => {
+    const brand = BRAND_CAPS[tok.toLowerCase()];
+    if (brand) return brand;
+    // "4o" keeps its omni suffix ("GPT-4o" style).
+    if (/^\d+o$/i.test(tok)) return tok;
+    // "70b" → "70B", "3.1" → "3.1", "2024" → "2024".
+    if (/^\d+(\.\d+)?[bBmMkK]?$/.test(tok)) return tok.toUpperCase();
+    // Short lowercase tokens read better uppercase ("gpt" → "GPT").
+    if (tok.length <= 3 && tok === tok.toLowerCase()) return tok.toUpperCase();
+    return tok.charAt(0).toUpperCase() + tok.slice(1);
+  });
+  return out.join(" ") || raw;
 }
 
 /** If we only stored the leaf hub id, map common leaves to full hub ids in catalog. */

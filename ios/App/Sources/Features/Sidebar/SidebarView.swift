@@ -7,6 +7,7 @@ enum SidebarDestination: Hashable {
     case projects
     case artifacts
     case code
+    case models
     case chat(ChatHistoryItem)
     case project(ProjectItem)
 }
@@ -17,6 +18,8 @@ struct SidebarView: View {
     var onSelect: (SidebarDestination) -> Void
     var onNewChat: () -> Void
     var onShowSettings: () -> Void
+    var onRetryDownload: (String) -> Void
+    var onCancelDownload: (String) -> Void
 
     @State private var renameTarget: ChatHistoryItem?
     @State private var addToProjectTarget: ChatHistoryItem?
@@ -27,6 +30,7 @@ struct SidebarView: View {
             navList
             recents
                 .frame(maxHeight: .infinity, alignment: .top)
+            downloadBar
             bottomBar
         }
         .padding(.horizontal, 16)
@@ -164,6 +168,16 @@ struct SidebarView: View {
         }
     }
 
+    // MARK: - Downloads (pinned above the footer)
+
+    private var downloadBar: some View {
+        SidebarDownloadBar(
+            onOpenModels: { onSelect(.models) },
+            onRetry: onRetryDownload,
+            onCancel: onCancelDownload
+        )
+    }
+
     // MARK: - Bottom bar (profile + new chat, pinned to edge)
 
     private var bottomBar: some View {
@@ -207,6 +221,126 @@ struct SidebarView: View {
 }
 
 // MARK: - Subviews
+
+/// Compact download progress pinned above the sidebar footer. Tapping the
+/// header opens the Manage models screen; Retry / Cancel act on the shown track.
+private struct SidebarDownloadBar: View {
+    @ObservedObject private var downloads = LocalMetalDownloadManager.shared
+    var onOpenModels: () -> Void
+    var onRetry: (String) -> Void
+    var onCancel: (String) -> Void
+
+    private var tracks: [LocalMetalDownloadManager.Track] {
+        Array(downloads.bannerTracks.prefix(2))
+    }
+
+    private var hasActive: Bool {
+        tracks.contains { $0.phase == .active }
+    }
+
+    var body: some View {
+        if tracks.isEmpty {
+            EmptyView()
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                Button(action: onOpenModels) {
+                    HStack(spacing: 8) {
+                        Image(systemName: hasActive ? "arrow.down.circle.fill" : "exclamationmark.triangle.fill")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(hasActive ? Theme.accent : Color.orange)
+                        Text(hasActive ? "Downloading" : "Downloads")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Theme.textPrimary)
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Theme.textTertiary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(hasActive ? "Downloads in progress — open Manage models" : "Failed downloads — open Manage models")
+
+                ForEach(tracks) { track in
+                    trackRow(track)
+                }
+                if downloads.bannerTracks.count > tracks.count {
+                    Text("+\(downloads.bannerTracks.count - tracks.count) more")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Theme.textTertiary)
+                }
+            }
+            .padding(12)
+            .background(
+                Theme.surface,
+                in: RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+                    .stroke(Theme.separator.opacity(0.55), lineWidth: 1)
+            )
+            .padding(.top, 12)
+            .animation(.easeOut(duration: 0.2), value: tracks.map(\.id))
+            .accessibilityElement(children: .contain)
+        }
+    }
+
+    @ViewBuilder
+    private func trackRow(_ track: LocalMetalDownloadManager.Track) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(track.displayName)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                if track.phase == .active {
+                    Text(track.trailingLabel)
+                        .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(Theme.textTertiary)
+                        .lineLimit(1)
+                } else if track.phase == .done {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.green)
+                } else if track.phase == .error {
+                    Text("Failed")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color.red.opacity(0.9))
+                }
+            }
+            if track.phase == .active {
+                ProgressView(value: min(1, max(0, track.fraction)))
+                    .tint(Theme.accent)
+                    .animation(.linear(duration: 0.2), value: track.fraction)
+            }
+            if track.phase == .error, let error = track.error {
+                Text(error)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.red.opacity(0.9))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if track.phase == .active {
+                Button("Cancel") {
+                    onCancel(track.hubID)
+                }
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+                .buttonStyle(.plain)
+            } else if track.phase == .error {
+                Button("Retry") {
+                    onRetry(track.hubID)
+                }
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+                .buttonStyle(.plain)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(track.displayName), \(track.detailLine)")
+    }
+}
 
 private struct SidebarRow: View {
     let systemImage: String

@@ -5,9 +5,9 @@ The host path below is the current external GitHub location (not the product nam
 
 | | |
 |--|--|
-| **Repository (external host)** | [codesocket-ai/codesocket-marketplace](https://github.com/codesocket-ai/codesocket-marketplace) |
-| **Catalog URL** | `https://raw.githubusercontent.com/codesocket-ai/codesocket-marketplace/main/catalog.json` |
-| **Authoring docs** | In that repo’s [README](https://github.com/codesocket-ai/codesocket-marketplace#how-to-make-your-own-marketplace) |
+| **Repository (external host)** | [roamsocket-ai/roamsocket-marketplace](https://github.com/roamsocket-ai/roamsocket-marketplace) |
+| **Catalog URL** | `https://raw.githubusercontent.com/roamsocket-ai/roamsocket-marketplace/main/catalog.json` |
+| **Authoring docs** | In that repo’s [README](https://github.com/roamsocket-ai/roamsocket-marketplace#how-to-make-your-own-marketplace) |
 
 ## Why separate?
 
@@ -24,7 +24,7 @@ in the app binaries if the fetch fails.
 ## Editing the official catalog
 
 ```bash
-git clone https://github.com/codesocket-ai/codesocket-marketplace.git
+git clone https://github.com/roamsocket-ai/roamsocket-marketplace.git
 # edit catalog.json
 git commit -am "chore: update marketplace catalog"
 git push

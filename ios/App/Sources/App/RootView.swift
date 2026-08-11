@@ -1,4 +1,5 @@
 import SwiftUI
+import AnyProvCore
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -15,11 +16,16 @@ struct RootView: View {
     @State private var sidebarOpen: Bool = false
     @State private var showSettings: Bool = false
     @State private var showVision: Bool = false
+    @State private var showLocalMetal: Bool = false
     @State private var path: [RootRoute] = []
     /// Bumps when the user picks a recent chat so ChatView reloads messages.
     @State private var chatResumeToken = UUID()
     @State private var showWalkthrough =
         !LightweightTasksSettings.load().walkthroughCompleted
+    /// Crash reports recorded by the on-device Metal engine, presented one at a
+    /// time on launch (each offers copy-logs / delete-model / dismiss).
+    @State private var pendingCrashReports: [LocalMetalCrashRecord] = []
+    @State private var shownCrashReport: LocalMetalCrashRecord?
 
     var body: some View {
         ZStack {
@@ -61,6 +67,7 @@ struct RootView: View {
             .allowsHitTesting(!sidebarOpen)
             .task {
                 if state.allModels.isEmpty { await state.refreshModels() }
+                await checkForCrashedModels()
             }
 
             // Full-height edge drawer (not a floating card)
@@ -87,6 +94,12 @@ struct RootView: View {
                         onShowSettings: {
                             setSidebarOpen(false)
                             showSettings = true
+                        },
+                        onRetryDownload: { modelID in
+                            LocalMetalDownloadManager.shared.retry(modelID: modelID, appState: state)
+                        },
+                        onCancelDownload: { modelID in
+                            LocalMetalDownloadManager.shared.cancel(modelID: modelID)
                         }
                     )
                     .frame(width: 300)
@@ -109,6 +122,16 @@ struct RootView: View {
         }
         .sheet(isPresented: $showSettings) {
             AppSettingsView()
+        }
+        .sheet(isPresented: $showLocalMetal) {
+            LocalMetalSettingsView()
+        }
+        .sheet(
+            item: $shownCrashReport,
+            onDismiss: { resolveCurrentCrashReport() }
+        ) { record in
+            ModelCrashReportView(record: record)
+                .environmentObject(state)
         }
         .fullScreenCover(isPresented: $showWalkthrough) {
             OnboardingWalkthroughView {
@@ -144,6 +167,35 @@ struct RootView: View {
             if let link = DeepLinkBridge.consume() {
                 applyDeepLink(link)
             }
+        }
+    }
+
+    // MARK: - Crash reports
+
+    /// On cold launch, surface any "model crashed" reports recorded during a
+    /// previous session — one sheet per report.
+    @MainActor
+    private func checkForCrashedModels() async {
+        guard pendingCrashReports.isEmpty, shownCrashReport == nil else { return }
+        let pending = await LocalMetalCrashStore.shared.pendingRecords()
+        guard !pending.isEmpty else { return }
+        pendingCrashReports = pending
+        shownCrashReport = pending.first
+    }
+
+    /// The dismissed report has been seen / handled: drop it from the store
+    /// and present the next pending one (if any) after the dismissal settles.
+    private func resolveCurrentCrashReport() {
+        guard let record = pendingCrashReports.first else { return }
+        Task { @MainActor in
+            await LocalMetalCrashStore.shared.remove(id: record.id)
+            pendingCrashReports.removeFirst()
+            guard let next = pendingCrashReports.first else { return }
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard shownCrashReport == nil,
+                  pendingCrashReports.first?.id == next.id
+            else { return }
+            shownCrashReport = next
         }
     }
 
@@ -251,6 +303,10 @@ struct RootView: View {
             history.discardActiveIfBlank()
             path = [.code]
             setSidebarOpen(false)
+        case .models:
+            history.discardActiveIfBlank()
+            setSidebarOpen(false)
+            showLocalMetal = true
         case .chat(let item):
             history.openChat(item)
             chatResumeToken = UUID()

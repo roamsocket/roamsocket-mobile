@@ -97,10 +97,10 @@ targets:
         NSLocalNetworkUsageDescription: "Connect to your desktop coding server on the local network."
         NSCameraUsageDescription: "Scan pairing QR codes and capture photos for Vision analysis."
         # Required for NWBrowser to discover `_roamsocket._tcp` (desktop Bonjour).
-        # LEGACY: `_codesocket._tcp` only so older desktops still advertising that type are found.
+        # LEGACY: `_roamsocket._tcp` only so older desktops still advertising that type are found.
         NSBonjourServices:
           - "_roamsocket._tcp"
-          - "_codesocket._tcp"
+          - "_roamsocket._tcp"
         NSHealthShareUsageDescription: "RoamSocket reads your Apple Health data when you turn on Health in chat, so the assistant can answer questions about steps, sleep, workouts, and other stats you choose to share."
         NSHealthUpdateUsageDescription: "RoamSocket does not write to Apple Health. This permission is required by the system HealthKit entitlement."
         NSLocationWhenInUseUsageDescription: "RoamSocket uses your location when you turn on Location in chat, so the assistant can answer with local context such as nearby places, weather, and time zone."

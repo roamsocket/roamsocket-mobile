@@ -14,7 +14,9 @@ import UIKit
 /// **Background:** downloads continue after leaving Settings (in-process
 /// detached task) and request a short system background budget when the app
 /// is suspended. Multi‑GB hub transfers still need the app to stay alive for
-/// the long haul — iOS will eventually pause non–background-URLSession work.
+/// the long haul — iOS will eventually pause work without a running process.
+/// (Hub downloads use a foreground session: `HubClient` relies on
+/// completion-handler based async APIs that background URLSessions reject.)
 @MainActor
 final class LocalMetalDownloadManager: ObservableObject {
     static let shared = LocalMetalDownloadManager()
@@ -38,6 +40,8 @@ final class LocalMetalDownloadManager: ObservableObject {
         var bytesTotal: Int64?
         var file: String?
         var updatedAt: Date
+        /// When the transfer started — used to compute download rate + ETA.
+        var startedAt: Date?
     }
 
     /// Hub id currently downloading (one at a time on phone).
@@ -48,6 +52,11 @@ final class LocalMetalDownloadManager: ObservableObject {
     @Published private(set) var lastStatus: String = ""
 
     private var tasks: [String: Task<Void, Never>] = [:]
+    /// Always-current track state; `@Published tracks` is a throttled mirror for UI.
+    private var workingTracks: [String: Track] = [:]
+    /// Throttle SwiftUI publishes — multi‑GB hub ticks can arrive faster than frames.
+    private var lastUIPublishAt: [String: Date] = [:]
+    private var lastPublishedMB: [String: Int64] = [:]
     #if canImport(UIKit)
     /// Extends runtime briefly when the user leaves the app mid-download.
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
@@ -57,8 +66,7 @@ final class LocalMetalDownloadManager: ObservableObject {
     private static let pendingKey = "localMetal.pendingDownloads.v1"
 
     private init() {
-        // Reconnect the system background session as early as possible.
-        LocalMetalBackgroundURLSession.shared.ensureSession()
+        // Nothing to warm at init; downloads run on the foreground session.
     }
 
     var isBusy: Bool { activeModelID != nil }
@@ -118,32 +126,113 @@ final class LocalMetalDownloadManager: ObservableObject {
 
         lastError = nil
         lastStatus = "Listing files…"
+        lastUIPublishAt[modelID] = Date()
+        lastPublishedMB[modelID] = 0
+        // Seed total from catalog so Gemma E4B (~5.2 GB) etc. show a real
+        // denominator before hub listing finishes.
+        let catalogTotal = Self.catalogApproxBytes(for: modelID)
         activeModelID = modelID
-        tracks[modelID] = Track(
+        let track = Track(
             hubID: modelID,
             displayName: name,
             fraction: 0,
             status: "Listing files…",
             error: nil,
             phase: .active,
-            bytesDownloaded: nil,
-            bytesTotal: nil,
+            bytesDownloaded: 0,
+            bytesTotal: catalogTotal,
             file: nil,
-            updatedAt: Date()
+            updatedAt: Date(),
+            startedAt: Date()
         )
+        workingTracks[modelID] = track
+        tracks[modelID] = track
         rememberPending(modelID)
-        LocalMetalBackgroundURLSession.shared.ensureSession()
+        updateIdleTimer()
         beginBackgroundExecutionIfNeeded()
 
         // Detached: not a child of the sheet/button task, so dismiss cannot cancel it.
-        // Weight bytes use a background URLSession so transfers continue while suspended.
+        // Weight bytes use a foreground session (background URLSessions reject
+        // HubClient's completion-handler based APIs). Slight defer so the progress
+        // banner paints before hub I/O starts.
         let task = Task.detached(priority: .utility) {
+            await Task.yield()
             await LocalMetalDownloadManager.runDownload(
                 modelID: modelID,
                 appState: appState
             )
         }
         tasks[modelID] = task
+    }
+
+    /// Fully cancel an active download: the transfer stops, the banner row and
+    /// pending marker disappear immediately, and it will not auto-resume. The
+    /// partial hub cache stays on disk so a later manual "Download" can resume
+    /// from where it stopped.
+    func cancel(modelID: String) {
+        guard tasks[modelID] != nil else { return }
+        tasks[modelID]?.cancel()
+        // Drop the track + pending marker now. The cancelled task's `fail`
+        // path then finds no track to repopulate and only clears the task slot.
+        tracks[modelID] = nil
+        workingTracks[modelID] = nil
+        forgetPending(modelID)
+    }
+
+    /// Retry a failed download by **resuming** the in-place hub transfer
+    /// (Range-resumes any partial blobs the HF cache already has on disk).
+    /// This is the expected behavior when a connection drops mid-download —
+    /// throwing away multi‑GB of partial weights and starting over is wasteful
+    /// and often not what the user means by "Retry". If a task is somehow
+    /// still in flight it is cancelled and drained before the new one starts.
+    ///
+    /// Callers that really want a clean redownload (e.g. corruption) should
+    /// call `redownloadFromScratch(modelID:appState:displayName:)` instead.
+    func retry(modelID: String, appState: AppState, displayName: String? = nil) {
+        lastError = nil
+        Task { @MainActor in
+            tasks[modelID]?.cancel()
+            var waitCount = 0
+            while tasks[modelID] != nil, waitCount < 50 {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                waitCount += 1
+            }
+            tracks[modelID] = nil
+            workingTracks[modelID] = nil
+            // Keep the hub cache on disk so HubClient can Range-resume any
+            // partial blobs. Only drop the verified-sentinel so a previous
+            // (now-stale) "complete" flag is not honored.
+            LocalMetalBootstrap.ensureRegistered()
+            if let engine = LocalMetalRuntime.engine {
+                try? await engine.invalidateVerifiedSentinel(modelID: modelID)
+            }
+            start(modelID: modelID, appState: appState, displayName: displayName)
+        }
+    }
+
+    /// Nuke the partial hub cache and re-download the model from zero. Use
+    /// when a resume won't make progress (e.g. corrupted blob, repeated
+    /// verification failures). Exposed as a separate flow from `retry` so
+    /// the default "Retry" button is the cheap, user-friendly option.
+    func redownloadFromScratch(modelID: String, appState: AppState, displayName: String? = nil) {
+        lastError = nil
+        Task { @MainActor in
+            tasks[modelID]?.cancel()
+            var waitCount = 0
+            while tasks[modelID] != nil, waitCount < 50 {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                waitCount += 1
+            }
+            tracks[modelID] = nil
+            workingTracks[modelID] = nil
+            forgetPending(modelID)
+            LocalMetalBootstrap.ensureRegistered()
+            if let engine = LocalMetalRuntime.engine {
+                try? await engine.deleteModel(modelID: modelID)
+            }
+            await LocalMetalModelStore.shared.markDeleted(modelID: modelID)
+            start(modelID: modelID, appState: appState, displayName: displayName)
+        }
     }
 
     /// After a cold launch, resume any incomplete hub downloads (Range-resumes blobs).
@@ -184,10 +273,13 @@ final class LocalMetalDownloadManager: ObservableObject {
             await LocalMetalModelStore.shared.markDownloaded(modelID: modelID)
             await LocalMetalDownloadManager.shared.succeed(modelID: modelID, appState: appState)
         } catch is CancellationError {
+            // User-initiated or app-suspension cancellation: do not auto-resume.
+            await LocalMetalModelStore.shared.markDeleted(modelID: modelID)
             await LocalMetalDownloadManager.shared.fail(
                 modelID: modelID,
                 message: "Download was cancelled.",
-                clearStatus: true
+                clearStatus: true,
+                forgetPending: true
             )
         } catch {
             let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
@@ -196,6 +288,14 @@ final class LocalMetalDownloadManager: ObservableObject {
     }
 
     // MARK: - System background budget
+
+    /// Keep the screen awake while any model download is in flight so multi‑GB
+    /// transfers are not interrupted by the auto-lock idle timer.
+    private func updateIdleTimer() {
+        #if canImport(UIKit)
+        UIApplication.shared.isIdleTimerDisabled = isBusy
+        #endif
+    }
 
     /// Ask iOS for extra time when the app is backgrounded so multi‑GB hub
     /// transfers can keep moving for a short window (not unlimited).
@@ -219,27 +319,79 @@ final class LocalMetalDownloadManager: ObservableObject {
     }
 
     private func noteProgress(modelID: String, update: LocalMetalDownloadProgress) {
-        guard var cur = tracks[modelID], cur.phase == .active else { return }
+        guard var cur = workingTracks[modelID] ?? tracks[modelID], cur.phase == .active else { return }
+        let prevFraction = cur.fraction
+        let prevStatus = cur.status
+        let prevFile = cur.file
+
         let nextFraction = max(cur.fraction, min(1, update.fraction))
+        let nextDown = update.bytesDownloaded ?? cur.bytesDownloaded
+        let nextTotal = update.bytesTotal ?? cur.bytesTotal
+        let nextStatus = update.status
+        let nextFile = update.file ?? cur.file
+
         cur.fraction = nextFraction
-        cur.status = update.status
-        cur.bytesDownloaded = update.bytesDownloaded ?? cur.bytesDownloaded
-        cur.bytesTotal = update.bytesTotal ?? cur.bytesTotal
-        cur.file = update.file ?? cur.file
+        cur.status = nextStatus
+        cur.bytesDownloaded = nextDown
+        cur.bytesTotal = nextTotal
+        cur.file = nextFile
         cur.updatedAt = Date()
+        // Always keep working state current (even when UI publish is skipped).
+        workingTracks[modelID] = cur
+
+        let mb = (nextDown ?? 0) / 1_048_576
+        let prevMB = lastPublishedMB[modelID] ?? -1
+        let now = Date()
+        let lastAt = lastUIPublishAt[modelID] ?? .distantPast
+        let statusChanged = nextStatus != prevStatus || nextFile != prevFile
+        let fractionJumped = nextFraction >= 1 || nextFraction - prevFraction >= 0.005
+        let mbMoved = mb != prevMB
+        let timedOut = now.timeIntervalSince(lastAt) >= 0.25
+        guard statusChanged || fractionJumped || mbMoved || timedOut || nextFraction >= 1 else {
+            return
+        }
         tracks[modelID] = cur
+        lastUIPublishAt[modelID] = now
+        lastPublishedMB[modelID] = mb
         if activeModelID == modelID {
             lastStatus = Self.formatStatus(cur)
         }
     }
 
+    /// Catalog `~5.2 GB` hints so the progress bar has a total before hub listing.
+    nonisolated private static func catalogApproxBytes(for modelID: String) -> Int64? {
+        let lower = modelID.lowercased()
+        let hit = LocalMetalCatalog.recommended.first {
+            $0.hubID == modelID || $0.hubID.lowercased() == lower
+        } ?? LocalMetalCatalog.registry.first {
+            $0.hubID == modelID || $0.hubID.lowercased() == lower
+        }
+        guard var s = hit?.approxSize.trimmingCharacters(in: .whitespacesAndNewlines),
+              !s.isEmpty
+        else { return nil }
+        if s.hasPrefix("~") { s = String(s.dropFirst()) }
+        s = s.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let numberPart = s.prefix(while: { $0.isNumber || $0 == "." || $0 == "," })
+        let unitPart = s.dropFirst(numberPart.count).trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = numberPart.replacingOccurrences(of: ",", with: ".")
+        guard let value = Double(normalized), value > 0 else { return nil }
+        if unitPart.hasPrefix("GB") || unitPart.hasPrefix("G") {
+            return Int64(value * 1_000_000_000)
+        }
+        if unitPart.hasPrefix("MB") || unitPart.hasPrefix("M") {
+            return Int64(value * 1_000_000)
+        }
+        return nil
+    }
+
     private func succeed(modelID: String, appState: AppState) async {
-        if var cur = tracks[modelID] {
+        if var cur = workingTracks[modelID] ?? tracks[modelID] {
             cur.fraction = 1
             cur.status = "Ready"
             cur.phase = .done
             cur.error = nil
             cur.updatedAt = Date()
+            workingTracks[modelID] = cur
             tracks[modelID] = cur
         }
         forgetPending(modelID)
@@ -267,15 +419,19 @@ final class LocalMetalDownloadManager: ObservableObject {
         }
     }
 
-    private func fail(modelID: String, message: String, clearStatus: Bool = false) {
+    private func fail(modelID: String, message: String, clearStatus: Bool = false, forgetPending: Bool = false) {
         lastError = message
         if clearStatus { lastStatus = "" }
+        if forgetPending {
+            self.forgetPending(modelID)
+        }
         // Keep pending so the user (or next launch) can retry / resume.
-        if var cur = tracks[modelID] {
+        if var cur = workingTracks[modelID] ?? tracks[modelID] {
             cur.phase = .error
             cur.status = "Failed"
             cur.error = message
             cur.updatedAt = Date()
+            workingTracks[modelID] = cur
             tracks[modelID] = cur
         }
         clearTask(modelID: modelID)
@@ -283,9 +439,16 @@ final class LocalMetalDownloadManager: ObservableObject {
 
     private func clearTask(modelID: String) {
         tasks[modelID] = nil
+        lastUIPublishAt[modelID] = nil
+        lastPublishedMB[modelID] = nil
+        // Keep error/done tracks in `tracks` for the banner; drop working buffer.
+        if let phase = tracks[modelID]?.phase, phase != .active {
+            workingTracks[modelID] = nil
+        }
         if activeModelID == modelID {
             activeModelID = nil
         }
+        updateIdleTimer()
         // Release the system background budget once nothing is in flight.
         if tasks.isEmpty {
             endBackgroundExecution()
@@ -311,11 +474,7 @@ final class LocalMetalDownloadManager: ObservableObject {
     }
 
     nonisolated static func formatStatus(_ track: Track) -> String {
-        var parts: [String] = [track.status]
-        if let progress = track.mbProgressLabel {
-            parts.append("(\(progress))")
-        }
-        return parts.joined(separator: " ")
+        "Downloading… \(track.percent)%"
     }
 
     /// Whole-megabyte label so progress UI does not thrash on every byte tick.
@@ -342,14 +501,52 @@ extension LocalMetalDownloadManager.Track {
         return nil
     }
 
+    /// Downloaded bytes as MB rounded to the nearest tenth (e.g. `456.7 MB`).
+    var mbTenthsLabel: String {
+        let mb = max(0, Double(bytesDownloaded ?? 0) / 1_048_576)
+        return String(format: "%.1f MB", mb)
+    }
+
+    /// Estimated time remaining, rounded to the nearest second (e.g. `2m 15s`).
+    /// Falls back to nil when bytes/size are unknown or not enough time has elapsed.
+    var etaSeconds: Int? {
+        guard let startedAt,
+              let downloaded = bytesDownloaded, downloaded > 0,
+              let total = bytesTotal, total > downloaded
+        else { return nil }
+        let elapsed = Date().timeIntervalSince(startedAt)
+        guard elapsed >= 1 else { return nil }
+        let rate = Double(downloaded) / elapsed
+        guard rate > 0 else { return nil }
+        return Int((Double(total - downloaded) / rate).rounded())
+    }
+
+    var etaLabel: String? {
+        guard let seconds = etaSeconds else { return nil }
+        if seconds < 60 {
+            return "\(seconds)s"
+        }
+        if seconds < 3600 {
+            return "\(seconds / 60)m \(seconds % 60)s"
+        }
+        return "\(seconds / 3600)h \((seconds % 3600) / 60)m"
+    }
+
+    /// Right-edge label for an active download: time remaining + MB to the tenth.
+    var trailingLabel: String {
+        if let eta = etaLabel {
+            return "\(eta) · \(mbTenthsLabel)"
+        }
+        return mbTenthsLabel
+    }
+
     var detailLine: String {
         if phase == .error {
             return error ?? "Download failed"
         }
-        if let progress = mbProgressLabel {
-            return "\(status) · \(progress)"
+        if phase == .done {
+            return "Ready"
         }
-        // No byte totals yet (listing files / connecting) — avoid a ticking %.
-        return status
+        return "Downloading… \(percent)%"
     }
 }

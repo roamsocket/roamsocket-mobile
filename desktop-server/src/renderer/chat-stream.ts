@@ -27,6 +27,8 @@ export interface StreamChatOptions {
   baseUrl?: string;
   /** Wire format when baseUrl is set (or custom: provider). Defaults to openai. */
   apiStyle?: CustomApiStyle;
+  /** Live web search via the provider-native API (OpenRouter `web` plugin). */
+  webSearch?: boolean;
 }
 
 export async function streamChat(opts: StreamChatOptions): Promise<string> {
@@ -121,6 +123,8 @@ async function streamAnthropic(opts: StreamChatOptions, url: string): Promise<st
 }
 
 async function streamOpenAICompatible(opts: StreamChatOptions, url: string): Promise<string> {
+  // OpenRouter runs web search server-side via its `web` plugin.
+  const nativeWebSearch = opts.provider === "openrouter" && opts.webSearch === true;
   const res = await fetch(url, {
     method: "POST",
     headers: {
@@ -131,6 +135,7 @@ async function streamOpenAICompatible(opts: StreamChatOptions, url: string): Pro
       model: opts.model,
       messages: opts.messages.map((m) => ({ role: m.role, content: m.content })),
       stream: true,
+      ...(nativeWebSearch ? { plugins: [{ id: "web", max_results: 5 }] } : {}),
     }),
     signal: opts.signal,
   });

@@ -1,7 +1,23 @@
 import Foundation
 import Combine
 import UIKit
+import ImageIO
 import AnyProvCore
+
+/// A camera photo staged in the composer. Keeps only the compact JPEG payload
+/// (sent to the model) and a small thumbnail (preview + transcript bubble) so
+/// a 12 MP frame never lives in the view model.
+struct ChatImageAttachment: Identifiable {
+    let id: UUID
+    let jpegData: Data
+    let thumbnailData: Data
+
+    init(id: UUID = UUID(), jpegData: Data, thumbnailData: Data) {
+        self.id = id
+        self.jpegData = jpegData
+        self.thumbnailData = thumbnailData
+    }
+}
 
 /// ViewModel for the Chat feature. Drives the messages, the model picker,
 /// and the toggles in the Add-to-Chat sheet. Backed by real provider API
@@ -52,6 +68,9 @@ final class ChatViewModel: ObservableObject {
     @Published var currentProject: String?
     @Published var attachedFileURLs: [URL] = []
     @Published var showFilePicker: Bool = false
+    /// Photos captured from the camera, staged in the composer until Send.
+    @Published var attachedImages: [ChatImageAttachment] = []
+    @Published var showCamera: Bool = false
 
     /// Connectors surfaced by the desktop server. Empty until the server
     /// reports its catalog of available connectors.
@@ -85,6 +104,9 @@ final class ChatViewModel: ObservableObject {
     private var persistTask: Task<Void, Never>?
     /// In-flight history hydrate (cancelled when switching chats quickly).
     private var loadChatTask: Task<Void, Never>?
+    /// Full-quality image payloads keyed by user message ID, so Regenerate can
+    /// restore the exact photos that were sent (attachments aren't persisted).
+    private var imagePayloadsByMessageID: [UUID: [ChatImageAttachment]] = [:]
 
     // MARK: - Tool Access
 
@@ -92,6 +114,49 @@ final class ChatViewModel: ObservableObject {
         case auto = "Auto"
         case manual = "Manual"
         case disabled = "Disabled"
+    }
+
+    // MARK: - Attached Photos
+
+    /// Attach a camera photo to the composer. The raw JPEG data is downsampled
+    /// via ImageIO off the main thread so a full 12 MP bitmap is never decoded
+    /// (critical when a Metal VLM is resident in memory).
+    func attachCameraImage(_ data: Data) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let jpeg = Self.downsampledJPEG(from: data, maxDimension: 1600, quality: 0.8),
+                  let thumb = Self.downsampledJPEG(from: data, maxDimension: 320, quality: 0.6)
+            else { return }
+            let attachment = ChatImageAttachment(jpegData: jpeg, thumbnailData: thumb)
+            DispatchQueue.main.async {
+                self?.attachedImages.append(attachment)
+            }
+        }
+    }
+
+    func removeAttachedImage(_ id: ChatImageAttachment.ID) {
+        attachedImages.removeAll { $0.id == id }
+    }
+
+    /// Downsample JPEG data straight to the target pixel size with ImageIO, then
+    /// re-encode at the given quality. Decodes once at the target resolution
+    /// (never a full-size bitmap) and bakes EXIF orientation in.
+    private static func downsampledJPEG(
+        from data: Data,
+        maxDimension: CGFloat,
+        quality: CGFloat
+    ) -> Data? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: max(Int(maxDimension), 1),
+            kCGImageSourceShouldCacheImmediately: true,
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return nil
+        }
+        let image = UIImage(cgImage: cgImage, scale: 1, orientation: .up)
+        return image.jpegData(compressionQuality: quality)
     }
 
     // MARK: - Init
@@ -218,7 +283,7 @@ final class ChatViewModel: ObservableObject {
     /// currently selected provider/model.
     func sendMessage() async {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        guard !text.isEmpty || !attachedImages.isEmpty else { return }
         // Don't send while a large transcript is still hydrating — the load
         // would replace `messages` and drop the just-sent turn.
         guard !isLoadingChat else { return }
@@ -265,9 +330,32 @@ final class ChatViewModel: ObservableObject {
         // Remember which model this chat is using so reopen restores it.
         persistSelectedModel(model)
 
-        messages.append(ChatMessage(role: .user, content: text))
+        // Snapshot the staged photos onto this exact user turn before clearing
+        // the composer. Payload rides the wire; thumbnails render the bubble.
+        let stagedImages = attachedImages
+        let imagePayload: [ProviderChatMessage.ImageAttachment] = stagedImages.map {
+            ProviderChatMessage.ImageAttachment(
+                mimeType: "image/jpeg",
+                base64Data: $0.jpegData.base64EncodedString()
+            )
+        }
+        let displayAttachments: [Attachment] = stagedImages.map {
+            Attachment(name: "Camera photo", type: .image, thumbnailData: $0.thumbnailData)
+        }
+        let userMessageID = UUID()
+        messages.append(ChatMessage(
+            id: userMessageID,
+            role: .user,
+            content: text,
+            attachments: displayAttachments.isEmpty ? nil : displayAttachments
+        ))
+        // Cache the full-quality payloads so Regenerate can restore them.
+        if !stagedImages.isEmpty {
+            imagePayloadsByMessageID[userMessageID] = stagedImages
+        }
         schedulePersist()
         inputText = ""
+        attachedImages = []
         isProcessing = true
         // Live Activity after a short delay (skips fast replies / small prompts).
         AIThinkingActivityManager.shared.thinkingDidStart(kind: .chat, prompt: text)
@@ -292,8 +380,9 @@ final class ChatViewModel: ObservableObject {
         var turns: [ProviderChatMessage] = messages.compactMap { msg in
             if msg.id == assistantID { return nil }
             let body = msg.content.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !body.isEmpty else { return nil }
-            return ProviderChatMessage(role: mapRole(msg.role), content: msg.content)
+            guard !body.isEmpty || msg.id == userMessageID else { return nil }
+            let images = msg.id == userMessageID ? imagePayload : []
+            return ProviderChatMessage(role: mapRole(msg.role), content: msg.content, images: images)
         }
 
         // Optional context snapshots — injected as system turns so Anthropic
@@ -329,42 +418,59 @@ final class ChatViewModel: ObservableObject {
         }
 
         // Web search / Research — live SERP + optional Wikipedia, shown as
-        // grey tool lines on the assistant bubble.
+        // grey tool lines on the assistant bubble. OpenRouter models use the
+        // provider-native web search API instead of client-side scraping.
         var toolCalls: [ToolCall] = []
+        let nativeWebSearch = model.provider == .openrouter && (researchEnabled || webSearchEnabled)
         if researchEnabled || webSearchEnabled {
-            let mode: WebSearchService.Mode = researchEnabled ? .research : .webSearch
-            do {
-                let bundle = try await webSearchService.search(userMessage: text, mode: mode) {
-                    [weak self] step in
-                    await self?.applyWebSearchStep(step, toAssistant: assistantID)
-                    await MainActor.run {
-                        AIThinkingActivityManager.shared.thinkingDidUpdate(
-                            status: step.summary.isEmpty ? "Searching…" : step.summary
-                        )
-                    }
-                }
-                toolCalls = bundle.steps.map { ToolCall(from: $0) }
-                if let idx = messages.firstIndex(where: { $0.id == assistantID }) {
-                    messages[idx].toolCalls = toolCalls
-                }
-                if !bundle.promptBlock.isEmpty {
-                    systemContext.append(bundle.promptBlock)
-                }
-            } catch {
-                let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                let failed = ToolCall(
+            if nativeWebSearch {
+                let step = WebSearchService.Step(
                     name: researchEnabled ? "research" : "web_search",
                     summary: researchEnabled
-                        ? "Research unavailable"
-                        : "Web search unavailable",
-                    detail: msg,
-                    status: .failed(msg)
+                        ? "Researching with OpenRouter web search…"
+                        : "Searching the web with OpenRouter…",
+                    detail: "Native OpenRouter web search API",
+                    status: .completed
                 )
-                toolCalls = [failed]
+                toolCalls = [ToolCall(from: step)]
                 if let idx = messages.firstIndex(where: { $0.id == assistantID }) {
                     messages[idx].toolCalls = toolCalls
                 }
-                presentError(msg)
+            } else {
+                let mode: WebSearchService.Mode = researchEnabled ? .research : .webSearch
+                do {
+                    let bundle = try await webSearchService.search(userMessage: text, mode: mode) {
+                        [weak self] step in
+                        await self?.applyWebSearchStep(step, toAssistant: assistantID)
+                        await MainActor.run {
+                            AIThinkingActivityManager.shared.thinkingDidUpdate(
+                                status: step.summary.isEmpty ? "Searching…" : step.summary
+                            )
+                        }
+                    }
+                    toolCalls = bundle.steps.map { ToolCall(from: $0) }
+                    if let idx = messages.firstIndex(where: { $0.id == assistantID }) {
+                        messages[idx].toolCalls = toolCalls
+                    }
+                    if !bundle.promptBlock.isEmpty {
+                        systemContext.append(bundle.promptBlock)
+                    }
+                } catch {
+                    let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    let failed = ToolCall(
+                        name: researchEnabled ? "research" : "web_search",
+                        summary: researchEnabled
+                            ? "Research unavailable"
+                            : "Web search unavailable",
+                        detail: msg,
+                        status: .failed(msg)
+                    )
+                    toolCalls = [failed]
+                    if let idx = messages.firstIndex(where: { $0.id == assistantID }) {
+                        messages[idx].toolCalls = toolCalls
+                    }
+                    presentError(msg)
+                }
             }
         }
 
@@ -425,7 +531,11 @@ final class ChatViewModel: ObservableObject {
                 model: liveModel.modelID,
                 apiKey: liveKey,
                 messages: turns,
-                effort: state.effort
+                effort: state.effort,
+                webSearchQuery: (liveModel.provider == .openrouter
+                    && (researchEnabled || webSearchEnabled))
+                    ? text
+                    : nil
             )
             let parsed = ThinkingExtractor.extract(from: reply)
             // Persist reasoning only when there is a body; empty open tags are a live UI concern.
@@ -544,6 +654,8 @@ final class ChatViewModel: ObservableObject {
         activeProjectID = nil
         currentProject = nil
         inputText = ""
+        attachedImages = []
+        imagePayloadsByMessageID.removeAll()
         clearError()
 
         // Prefer the store row (fresh messages) over a stale sidebar snapshot.
@@ -600,6 +712,8 @@ final class ChatViewModel: ObservableObject {
         activeProjectID = project.id
         currentProject = project.name
         inputText = ""
+        attachedImages = []
+        imagePayloadsByMessageID.removeAll()
         clearError()
 
         // Prefer the store snapshot over the navigation value (which can be stale).
@@ -655,6 +769,8 @@ final class ChatViewModel: ObservableObject {
         messages = []
         isLoadingChat = false
         inputText = ""
+        attachedImages = []
+        imagePayloadsByMessageID.removeAll()
         clearError()
     }
 
@@ -749,6 +865,7 @@ final class ChatViewModel: ObservableObject {
     /// Delete a message from the conversation.
     func deleteMessage(_ message: ChatMessage) {
         messages.removeAll { $0.id == message.id }
+        imagePayloadsByMessageID.removeValue(forKey: message.id)
         schedulePersist()
     }
 
@@ -758,6 +875,9 @@ final class ChatViewModel: ObservableObject {
         messages.removeAll { $0.id == message.id }
         guard let lastUser = messages.last(where: { $0.role == .user }) else { return }
         inputText = lastUser.content
+        // Restore the original photos so regeneration sends the same image
+        // payload instead of silently dropping the image.
+        attachedImages = imagePayloadsByMessageID[lastUser.id] ?? []
         messages.removeAll { $0.id == lastUser.id }
         await sendMessage()
     }
@@ -765,6 +885,7 @@ final class ChatViewModel: ObservableObject {
     /// Clear all messages and start fresh.
     func clearChat() {
         messages.removeAll()
+        imagePayloadsByMessageID.removeAll()
         schedulePersist()
     }
 

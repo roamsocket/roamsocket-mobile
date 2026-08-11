@@ -249,6 +249,37 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(items.count, 2)
         XCTAssertEqual(items[0].content, "Plan")
         XCTAssertEqual(items[1].status, "in_progress")
+
+        let goal = try decoder.decode(ServerMessage.self, from: json(
+            #"{"type":"goal_status","sessionId":"s1","status":"active","condition":"tests pass","reason":"not yet","turnsEvaluated":2,"startedAt":1710000000000,"elapsedMs":12000,"message":"◎ /goal active"}"#))
+        guard case let .goalStatus(_, status, condition, reason, turns, started, elapsed, message) = goal else {
+            return XCTFail("wrong case")
+        }
+        XCTAssertEqual(status, "active")
+        XCTAssertEqual(condition, "tests pass")
+        XCTAssertEqual(reason, "not yet")
+        XCTAssertEqual(turns, 2)
+        XCTAssertEqual(started, 1_710_000_000_000)
+        XCTAssertEqual(elapsed, 12_000)
+        XCTAssertEqual(message, "◎ /goal active")
+
+        let modelLoading = try decoder.decode(ServerMessage.self, from: json(
+            #"{"type":"model_status","sessionId":"s1","status":"loading","hubID":"mlx-community/gemma-3-4b","message":"Loading model weights into memory…"}"#))
+        guard case let .modelStatus(_, mStatus, hubID, mMessage) = modelLoading else {
+            return XCTFail("wrong case")
+        }
+        XCTAssertEqual(mStatus, "loading")
+        XCTAssertEqual(hubID, "mlx-community/gemma-3-4b")
+        XCTAssertEqual(mMessage, "Loading model weights into memory…")
+
+        let modelDone = try decoder.decode(ServerMessage.self, from: json(
+            #"{"type":"model_status","sessionId":"s1","status":"done"}"#))
+        guard case let .modelStatus(_, dStatus, dHubID, dMessage) = modelDone else {
+            return XCTFail("wrong case")
+        }
+        XCTAssertEqual(dStatus, "done")
+        XCTAssertNil(dHubID)
+        XCTAssertNil(dMessage)
     }
 
     func testEnvParsing() {

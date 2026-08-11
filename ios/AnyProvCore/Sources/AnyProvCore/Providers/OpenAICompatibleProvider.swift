@@ -45,6 +45,13 @@ public struct OpenAICompatibleProvider: ModelProvider {
             let id: String
             let context_length: Int?      // OpenRouter
             let context_window: Int?      // some providers
+            let organization: String?     // OpenRouter vendor, e.g. "OpenAI"
+            let is_free: Bool?            // OpenRouter free flag
+            let pricing: Pricing?         // OpenRouter pricing
+            struct Pricing: Decodable {
+                let prompt: String?
+                let completion: String?
+            }
         }
         let data: [Model]
     }
@@ -63,8 +70,10 @@ public struct OpenAICompatibleProvider: ModelProvider {
                 AIModel(
                     provider: id,
                     modelID: $0.id,
-                    displayName: $0.id,
-                    contextWindow: $0.context_length ?? $0.context_window
+                    displayName: AIModel.prettifiedDisplayName(for: $0.id, provider: id),
+                    contextWindow: $0.context_length ?? $0.context_window,
+                    organization: $0.organization,
+                    isFree: Self.freeFlag(for: $0)
                 )
             }
         } catch {
@@ -72,9 +81,33 @@ public struct OpenAICompatibleProvider: ModelProvider {
         }
     }
 
+    /// OpenRouter free tier: `is_free` when present, else zero prompt + completion pricing.
+    private static func freeFlag(for model: ModelList.Model) -> Bool? {
+        if let flag = model.is_free { return flag }
+        guard let pricing = model.pricing,
+              let prompt = pricing.prompt,
+              let completion = pricing.completion,
+              Self.isZeroPrice(prompt),
+              Self.isZeroPrice(completion)
+        else { return nil }
+        return true
+    }
+
+    private static func isZeroPrice(_ value: String) -> Bool {
+        ["0", "0.0", "0.00", "0.000"].contains(value)
+    }
+
     private struct ChatRequest: Encodable {
         let model: String
         let messages: [Msg]
+        let plugins: [Plugin]?
+
+        /// OpenRouter plugin shape (e.g. the `web` search plugin).
+        struct Plugin: Encodable {
+            let id: String
+            let max_results: Int?
+            let search_prompt: String?
+        }
     }
 
     /// OpenAI chat message: `content` is either a plain string or a multimodal
@@ -156,9 +189,40 @@ public struct OpenAICompatibleProvider: ModelProvider {
     }
 
     public func chat(model: String, apiKey: String, messages: [ProviderChatMessage], effort: Effort?) async throws -> String {
+        try await chat(
+            model: model,
+            apiKey: apiKey,
+            messages: messages,
+            effort: effort,
+            webSearchQuery: nil
+        )
+    }
+
+    public func chat(
+        model: String,
+        apiKey: String,
+        messages: [ProviderChatMessage],
+        effort: Effort?,
+        webSearchQuery: String?
+    ) async throws -> String {
         guard !apiKey.isEmpty else { throw ProviderError.missingKey }
         let turns = messages.map { Msg(from: $0) }
-        let body = ChatRequest(model: model, messages: turns)
+        // OpenRouter supports native web search via the `web` plugin. The model
+        // host runs the search server-side and injects fresh results into the
+        // request context — no client-side SERP scraping needed.
+        let plugins: [ChatRequest.Plugin]?
+        if id == .openrouter, let webSearchQuery, !webSearchQuery.isEmpty {
+            plugins = [
+                ChatRequest.Plugin(
+                    id: "web",
+                    max_results: 5,
+                    search_prompt: webSearchQuery
+                )
+            ]
+        } else {
+            plugins = nil
+        }
+        let body = ChatRequest(model: model, messages: turns, plugins: plugins)
         let req = ProviderHTTP.post(
             baseURL.appendingPathComponent("chat/completions"),
             headers: [

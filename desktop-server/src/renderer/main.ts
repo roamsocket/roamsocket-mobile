@@ -64,6 +64,7 @@ import {
   mergeProviderCatalog,
   type CustomProvider,
   type CustomApiStyle,
+  type ListedCloudModel,
 } from "../client/index.js";
 import { streamChat } from "./chat-stream.js";
 import {
@@ -228,7 +229,7 @@ async function lightweightComplete(opts: {
         ],
         baseUrl: ep?.baseUrl,
         apiStyle: ep?.apiStyle,
-        onDelta: () => {},
+        onDelta: () => { },
       });
       const trimmed = text.trim();
       return trimmed || null;
@@ -1140,6 +1141,37 @@ function openModelPicker() {
   });
 }
 
+/**
+ * A collapsible "submenu" row for the model picker. `target` is shown/hidden
+ * when the row is clicked and the caret rotates to indicate state.
+ * Colors match section headers (`settings-hint`) and model rows (`modal-option`).
+ */
+function makeSubmenuToggle(
+  title: string,
+  detail: string,
+  target: HTMLElement,
+  opts: { open?: boolean; level?: "provider" | "org" } = {},
+): HTMLElement {
+  const open = opts.open ?? false;
+  const level = opts.level ?? "org";
+  target.hidden = !open;
+  const toggle = el("button", {
+    class: `model-picker-toggle level-${level}`,
+    type: "button",
+  });
+  const caret = el("span", { class: "model-picker-caret" }, ["▸"]);
+  const label = el("span", { class: "model-picker-toggle-label" }, [title]);
+  const count = el("span", { class: "model-picker-toggle-count" }, [detail]);
+  toggle.append(caret, label, count);
+  if (open) caret.classList.add("open");
+  toggle.addEventListener("click", () => {
+    const willOpen = target.hidden;
+    target.hidden = !willOpen;
+    caret.classList.toggle("open", willOpen);
+  });
+  return toggle;
+}
+
 async function populateModelPickerList(
   listHost: HTMLElement,
   onPicked: () => void,
@@ -1159,13 +1191,16 @@ async function populateModelPickerList(
     if (custom && !ep) continue;
 
     const section = el("div", { class: "model-picker-section" });
-    section.append(
-      el("div", { class: "settings-hint", style: "margin:10px 0 4px" }, [
-        custom ? `${p.label} (custom)` : p.label,
-      ]),
+    const body = el("div", { class: "model-picker-submenu" });
+    const toggle = makeSubmenuToggle(
+      custom ? `${p.label} (custom)` : p.label,
+      "",
+      body,
+      { open: state.provider === p.id, level: "provider" },
     );
     const loading = el("div", { class: "settings-hint" }, ["Loading models…"]);
-    section.append(loading);
+    body.append(loading);
+    section.append(toggle, body);
     listHost.append(section);
 
     try {
@@ -1175,6 +1210,9 @@ async function populateModelPickerList(
         apiStyle: ep?.apiStyle,
       });
       loading.remove();
+      const countEl = toggle.querySelector(
+        ".model-picker-toggle-count",
+      ) as HTMLElement | null;
       if (models.length === 0) {
         // Custom endpoints may not expose /models — offer default / freeform.
         if (custom) {
@@ -1206,22 +1244,30 @@ async function populateModelPickerList(
               onPicked();
             })();
           });
-          section.append(opt);
+          body.append(opt);
+          if (countEl) countEl.textContent = "1";
           anyModel = true;
         } else {
-          section.append(
+          body.append(
             el("div", { class: "settings-hint" }, [
               "No models returned for this key. Check the key in Settings.",
             ]),
           );
+          if (countEl) countEl.textContent = "0";
         }
         continue;
       }
       anyModel = true;
-      for (const m of models) {
+      if (countEl) {
+        countEl.textContent = `${models.length} model${models.length === 1 ? "" : "s"}`;
+      }
+      const row = (m: ListedCloudModel, host: HTMLElement) => {
         const opt = el("button", { class: "modal-option", type: "button" });
         const left = el("div", {});
-        left.append(el("div", {}, [friendlyModelLabel(p.id, m.id) || m.displayName]));
+        const title = el("div", {});
+        title.append(el("span", {}, [friendlyModelLabel(p.id, m.id) || m.displayName]));
+        if (m.isFree) title.append(el("span", { class: "pill free" }, ["Free"]));
+        left.append(title);
         left.append(el("div", { class: "sub" }, [m.id]));
         opt.append(left);
         if (state.provider === p.id && state.model === m.id) {
@@ -1235,7 +1281,44 @@ async function populateModelPickerList(
           }
           onPicked();
         });
-        section.append(opt);
+        host.append(opt);
+      };
+
+      if (p.id === "openrouter") {
+        // OpenRouter's catalog is huge — nest it as submenus: one per
+        // vendor / organization tag (e.g. OpenAI, Anthropic, Meta).
+        const groups = new Map<string, ListedCloudModel[]>();
+        for (const m of models) {
+          const org = m.organization ?? m.id.split("/")[0] ?? "Other";
+          if (!groups.has(org)) groups.set(org, []);
+          groups.get(org)!.push(m);
+        }
+        const sorted = [...groups.entries()].sort((a, b) =>
+          a[0].localeCompare(b[0]),
+        );
+        if (countEl) {
+          countEl.textContent = `${sorted.length} vendor${sorted.length === 1 ? "" : "s"}`;
+        }
+        const selectedIsOpenRouter = state.provider === p.id;
+        const selectedOrg = selectedIsOpenRouter
+          ? state.model.split("/")[0] || ""
+          : "";
+        for (const [org, orgModels] of sorted) {
+          const orgBody = el("div", { class: "model-picker-submenu nested" });
+          const orgToggle = makeSubmenuToggle(
+            org,
+            `${orgModels.length}`,
+            orgBody,
+            {
+              open: selectedIsOpenRouter && org === selectedOrg,
+              level: "org",
+            },
+          );
+          for (const m of orgModels) row(m, orgBody);
+          body.append(orgToggle, orgBody);
+        }
+      } else {
+        for (const m of models) row(m, body);
       }
     } catch {
       loading.textContent = "Could not list models for this provider.";
@@ -1450,6 +1533,7 @@ async function onChatSend(ta: HTMLTextAreaElement) {
         messages: turns,
         baseUrl: ep?.baseUrl,
         apiStyle: ep?.apiStyle,
+        webSearch: composerTools.webSearch,
         onDelta: (chunk) => {
           full += chunk;
           history.updateLastAssistant(thread.id, full);
@@ -2111,9 +2195,26 @@ function handleServerMessage(raw: unknown): void {
     );
     return;
   }
+  if (msg.type === "goal_status") {
+    body.querySelector(".empty-session")?.remove();
+    paintGoalBanner(msg);
+    appendCodeBubble(body, "assistant", "goal", msg.message || msg.status);
+    if (state.codeSessionLocalId && msg.status === "active") {
+      codeSessions.update(state.codeSessionLocalId, {
+        status: "working",
+        detail: msg.condition ? `Goal: ${msg.condition}` : "Goal active",
+      });
+    }
+    return;
+  }
   if (msg.type === "session_done") {
     appendCodeBubble(body, "assistant", "session done", msg.stopReason ?? "");
     state.codeBusy = false;
+    if (msg.stopReason === "goal_achieved") {
+      // Keep achieved banner until cleared / next goal.
+    } else if (msg.stopReason === "goal_cleared" || msg.stopReason === "goal_status") {
+      // status-only commands
+    }
     if (state.codeSessionLocalId) {
       codeSessions.update(state.codeSessionLocalId, {
         status: "ready_for_review",
@@ -2170,6 +2271,86 @@ function appendCodeBubble(parent: HTMLElement, kind: string, meta: string, body:
   if (body) bubble.append(el("pre", {}, [body]));
   parent.append(bubble);
   parent.scrollTop = parent.scrollHeight;
+}
+
+/** Live `/goal` strip above the coding session transcript. */
+function paintGoalBanner(msg: {
+  status?: string;
+  condition?: string;
+  reason?: string;
+  message?: string;
+}): void {
+  const host = document.getElementById("code-goal-bar");
+  if (!host) return;
+  const status = msg.status ?? "none";
+  if (status === "cleared" || status === "none") {
+    host.classList.add("hidden");
+    host.innerHTML = "";
+    return;
+  }
+  host.classList.remove("hidden");
+  host.className = `code-goal-bar${status === "achieved" ? " is-achieved" : ""}`;
+  host.innerHTML = "";
+  const title =
+    status === "achieved" ? "Goal achieved" : "◎ /goal active";
+  const head = el("div", { class: "code-goal-head" });
+  head.append(el("span", { class: "code-goal-title" }, [title]));
+  if (status === "active") {
+    const clear = el("button", { class: "ghost-btn sm", type: "button" }, ["Clear"]);
+    clear.addEventListener("click", () => {
+      const ta = document.getElementById("code-input") as HTMLTextAreaElement | null;
+      if (ta) {
+        ta.value = "/goal clear";
+        void onCodeSend(ta);
+      }
+    });
+    head.append(clear);
+  }
+  host.append(head);
+  if (msg.condition) {
+    host.append(el("div", { class: "code-goal-condition" }, [msg.condition]));
+  }
+  if (msg.reason) {
+    host.append(el("div", { class: "code-goal-reason" }, [msg.reason]));
+  } else if (msg.message && !msg.condition) {
+    host.append(el("div", { class: "code-goal-reason" }, [msg.message]));
+  }
+}
+
+const CODE_SLASH_COMMANDS: Array<{ token: string; detail: string }> = [
+  { token: "/goal ", detail: "Keep working until a condition is met" },
+  { token: "/goal", detail: "Show current goal status" },
+  { token: "/goal clear", detail: "Clear the active goal" },
+];
+
+function filterCodeSlashCommands(raw: string): Array<{ token: string; detail: string }> {
+  const t = raw.trim();
+  if (!t.startsWith("/") || raw.includes("\n")) return [];
+  const q = t.toLowerCase();
+  return CODE_SLASH_COMMANDS.filter(
+    (c) => c.token.toLowerCase().startsWith(q) || (q.startsWith("/g") && c.token.startsWith("/goal")),
+  );
+}
+
+function paintCodeSlashMenu(ta: HTMLTextAreaElement, host: HTMLElement): void {
+  const hits = filterCodeSlashCommands(ta.value);
+  host.innerHTML = "";
+  if (hits.length === 0) {
+    host.classList.add("hidden");
+    return;
+  }
+  host.classList.remove("hidden");
+  for (const item of hits) {
+    const row = el("button", { class: "code-slash-item", type: "button" });
+    row.append(el("span", { class: "code-slash-token" }, [item.token.trimEnd()]));
+    row.append(el("span", { class: "code-slash-detail" }, [item.detail]));
+    row.addEventListener("click", () => {
+      ta.value = item.token.endsWith(" ") ? item.token : `${item.token} `;
+      ta.focus();
+      paintCodeSlashMenu(ta, host);
+    });
+    host.append(row);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2625,6 +2806,12 @@ function renderCodeSession(view: HTMLElement, preserved: Node[]) {
     queueMicrotask(() => paintPrBarFromSession(rec));
   }
 
+  const goalBar = el("div", {
+    class: "code-goal-bar hidden",
+    id: "code-goal-bar",
+  });
+  shell.append(goalBar);
+
   const session = el("div", { class: "session code-session-panel" });
   const body = el("div", { class: "session-body", id: "session-body" });
   if (preserved.length) {
@@ -2632,31 +2819,43 @@ function renderCodeSession(view: HTMLElement, preserved: Node[]) {
   } else {
     body.append(
       el("div", { class: "empty-session" }, [
-        "Agent output streams here — tools, diffs, and replies from the local coding server.",
+        "Agent output streams here — tools, diffs, and replies from the local coding server. Type /goal to set a completion condition.",
       ]),
     );
   }
   session.append(body);
   shell.append(session);
 
+  const composerWrap = el("div", { class: "code-composer-wrap" });
+  const slashMenu = el("div", {
+    class: "code-slash-menu hidden",
+    id: "code-slash-menu",
+    role: "listbox",
+  });
   const composer = el("div", { class: "code-composer" });
   const ta = el("textarea", {
     id: "code-input",
-    placeholder: "Type / for commands, or continue the task…",
+    placeholder: "Type / for commands (e.g. /goal), or continue the task…",
     rows: "2",
   }) as HTMLTextAreaElement;
+  ta.addEventListener("input", () => paintCodeSlashMenu(ta, slashMenu));
   ta.addEventListener("keydown", (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
       e.preventDefault();
+      slashMenu.classList.add("hidden");
       void onCodeSend(ta);
     }
   });
   const sendBtn = el("button", { class: "primary-btn", id: "code-send", type: "button" }, [
     "Send",
   ]);
-  sendBtn.addEventListener("click", () => void onCodeSend(ta));
+  sendBtn.addEventListener("click", () => {
+    slashMenu.classList.add("hidden");
+    void onCodeSend(ta);
+  });
   composer.append(ta, sendBtn);
-  shell.append(composer);
+  composerWrap.append(slashMenu, composer);
+  shell.append(composerWrap);
 
   view.append(shell);
 
@@ -3376,7 +3575,7 @@ async function fillSettingsLightweight(panel: HTMLElement): Promise<void> {
     saveLightweightPrefs(window.localStorage, lightweightPrefs);
     const ok = el("div", { class: "notice ok" }, [
       `Saved · ${lightweightModeLabel(lightweightPrefs.mode)}` +
-        (lightweightPrefs.linkedModel ? ` · ${lightweightPrefs.linkedModel}` : ""),
+      (lightweightPrefs.linkedModel ? ` · ${lightweightPrefs.linkedModel}` : ""),
     ]);
     panel.append(ok);
   });
@@ -4075,7 +4274,7 @@ async function fillSettingsMarketplace(panel: HTMLElement): Promise<void> {
   });
   const docs = el("button", { class: "ghost-btn", type: "button" }, ["How to make one"]);
   docs.addEventListener("click", () => {
-    void window.apc.shell.open("https://github.com/codesocket-ai/codesocket-marketplace");
+    void window.apc.shell.open("https://github.com/roamsocket-ai/roamsocket-marketplace");
   });
   actions.append(refresh, add, docs);
   sec.append(actions);
@@ -4260,11 +4459,15 @@ interface MetalDownloadTrack {
   fraction: number;
   status: string;
   error?: string;
-  phase: "active" | "done" | "error";
+  phase: "active" | "done" | "error" | "cancelled";
   updatedAt: number;
+  bytesDownloaded?: number;
+  bytesTotal?: number;
+  startedAt?: number;
 }
 
 const metalDownloads = new Map<string, MetalDownloadTrack>();
+const metalDownloadControllers = new Map<string, AbortController>();
 let metalProgressListening = false;
 
 function ensureMetalProgressListener(): void {
@@ -4284,6 +4487,8 @@ function ensureMetalProgressListener(): void {
       if (!cur || cur.phase !== "active") return;
       cur.fraction = Math.max(cur.fraction, Math.min(1, p.fraction || 0));
       cur.status = p.status;
+      cur.bytesDownloaded = p.bytesDownloaded ?? cur.bytesDownloaded;
+      cur.bytesTotal = p.bytesTotal ?? cur.bytesTotal;
       cur.updatedAt = Date.now();
       paintMetalProgressBanner();
       paintMetalRowProgress(p.hubID);
@@ -4296,6 +4501,8 @@ function startMetalDownload(hubID: string, displayName: string): void {
   const existing = metalDownloads.get(hubID);
   if (existing?.phase === "active") return;
 
+  const controller = new AbortController();
+  metalDownloadControllers.set(hubID, controller);
   metalDownloads.set(hubID, {
     hubID,
     displayName,
@@ -4303,6 +4510,7 @@ function startMetalDownload(hubID: string, displayName: string): void {
     status: "Starting…",
     phase: "active",
     updatedAt: Date.now(),
+    startedAt: Date.now(),
   });
   paintMetalProgressBanner();
   paintMetalRowProgress(hubID);
@@ -4318,6 +4526,7 @@ function startMetalDownload(hubID: string, displayName: string): void {
         cur.error = undefined;
         cur.updatedAt = Date.now();
       }
+      metalDownloadControllers.delete(hubID);
       paintMetalProgressBanner();
       // Refresh catalog so Download → Delete / Use in chat.
       if (parseHash().view === "metal") {
@@ -4336,18 +4545,66 @@ function startMetalDownload(hubID: string, displayName: string): void {
       const cur = metalDownloads.get(hubID);
       const message = String((err as Error)?.message ?? err);
       if (cur) {
-        cur.phase = "error";
-        cur.status = "Failed";
+        cur.phase = controller.signal.aborted || message.includes("cancelled") ? "cancelled" : "error";
+        cur.status = cur.phase === "cancelled" ? "Cancelled" : "Failed";
         cur.error = message;
         cur.updatedAt = Date.now();
       }
+      metalDownloadControllers.delete(hubID);
       paintMetalProgressBanner();
       paintMetalRowProgress(hubID);
     });
 }
 
+function cancelMetalDownload(hubID: string): void {
+  const controller = metalDownloadControllers.get(hubID);
+  if (controller) {
+    controller.abort();
+    metalDownloadControllers.delete(hubID);
+  }
+  void window.apc.metal.cancel(hubID);
+  const cur = metalDownloads.get(hubID);
+  if (cur && cur.phase === "active") {
+    cur.phase = "cancelled";
+    cur.status = "Cancelled";
+    cur.error = "Download cancelled";
+    cur.updatedAt = Date.now();
+  }
+  paintMetalProgressBanner();
+  paintMetalRowProgress(hubID);
+}
+
 function activeMetalDownloads(): MetalDownloadTrack[] {
   return [...metalDownloads.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+/** Estimated seconds remaining for an active download, or null when unknown. */
+function metalEtaSeconds(t: MetalDownloadTrack): number | null {
+  if (!t.startedAt || !t.bytesDownloaded || t.bytesDownloaded <= 0) return null;
+  if (!t.bytesTotal || t.bytesTotal <= t.bytesDownloaded) return null;
+  const elapsed = (Date.now() - t.startedAt) / 1000;
+  if (elapsed < 1) return null;
+  const rate = t.bytesDownloaded / elapsed;
+  if (rate <= 0) return null;
+  return Math.round((t.bytesTotal - t.bytesDownloaded) / rate);
+}
+
+function formatMetalEta(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+}
+
+/** MB rounded to the nearest tenth (e.g. `456.7 MB`). */
+function formatMetalMB(bytes: number): string {
+  return `${(Math.max(0, bytes) / 1_048_576).toFixed(1)} MB`;
+}
+
+/** Right-edge label for an active download: time remaining + MB to the tenth. */
+function metalTrailingLabel(t: MetalDownloadTrack): string {
+  const mb = formatMetalMB(t.bytesDownloaded ?? 0);
+  const eta = metalEtaSeconds(t);
+  return eta == null ? mb : `${formatMetalEta(eta)} · ${mb}`;
 }
 
 function paintMetalProgressBanner(): void {
@@ -4355,7 +4612,7 @@ function paintMetalProgressBanner(): void {
   if (!host) return;
   host.innerHTML = "";
   const tracks = activeMetalDownloads().filter(
-    (t) => t.phase === "active" || t.phase === "error" || (t.phase === "done" && Date.now() - t.updatedAt < 5000),
+    (t) => t.phase === "active" || t.phase === "error" || t.phase === "cancelled" || (t.phase === "done" && Date.now() - t.updatedAt < 5000),
   );
   if (tracks.length === 0) {
     host.classList.add("hidden");
@@ -4368,7 +4625,7 @@ function paintMetalProgressBanner(): void {
     const head = el("div", { class: "metal-progress-item-head" });
     head.append(el("span", { class: "metal-progress-name" }, [t.displayName]));
     const pct =
-      t.phase === "done" ? "100%" : t.phase === "error" ? "Error" : `${Math.round(t.fraction * 100)}%`;
+      t.phase === "done" ? "100%" : t.phase === "error" ? "Error" : t.phase === "cancelled" ? "Cancelled" : metalTrailingLabel(t);
     head.append(el("span", { class: "metal-progress-pct" }, [pct]));
     row.append(head);
     const bar = el("div", { class: "metal-progress-bar" });
@@ -4379,7 +4636,11 @@ function paintMetalProgressBanner(): void {
     row.append(
       el("div", { class: "metal-progress-status" }, [t.error ? t.error : t.status]),
     );
-    if (t.phase === "error") {
+    if (t.phase === "active") {
+      const cancel = el("button", { class: "ghost-btn sm", type: "button" }, ["Cancel"]);
+      cancel.addEventListener("click", () => cancelMetalDownload(t.hubID));
+      row.append(cancel);
+    } else if (t.phase === "error" || t.phase === "cancelled") {
       const retry = el("button", { class: "ghost-btn sm", type: "button" }, ["Retry"]);
       retry.addEventListener("click", () => startMetalDownload(t.hubID, t.displayName));
       row.append(retry);
@@ -4407,11 +4668,14 @@ function paintMetalRowProgress(hubID: string): void {
   if (t.phase === "error") {
     node.textContent = t.error || "Download failed";
     node.classList.add("metal-row-progress-error");
+  } else if (t.phase === "cancelled") {
+    node.textContent = "Cancelled";
+    node.classList.remove("metal-row-progress-error");
   } else if (t.phase === "done") {
     node.textContent = "Ready";
     node.classList.remove("metal-row-progress-error");
   } else {
-    node.textContent = `${t.status} (${Math.round(t.fraction * 100)}%)`;
+    node.textContent = `${t.status} (${metalTrailingLabel(t)})`;
     node.classList.remove("metal-row-progress-error");
   }
 }
@@ -4841,13 +5105,18 @@ function metalVariantRow(e: MetalEntry, showFamily: boolean): HTMLElement {
     });
     actions.append(use, del);
   } else if (track?.phase === "active") {
-    const busy = el("button", { class: "primary-btn sm", type: "button" }, ["Downloading…"]);
-    busy.disabled = true;
+    const busy = el("button", { class: "ghost-btn sm", type: "button" }, ["Cancel"]);
+    busy.addEventListener("click", () => cancelMetalDownload(e.hubID));
     actions.append(busy);
+    paintMetalRowProgress(e.hubID);
+  } else if (track?.phase === "error" || track?.phase === "cancelled") {
+    const retry = el("button", { class: "primary-btn sm", type: "button" }, ["Retry"]);
+    retry.addEventListener("click", () => startMetalDownload(e.hubID, e.displayName));
+    actions.append(retry);
     paintMetalRowProgress(e.hubID);
   } else {
     const dl = el("button", { class: "primary-btn sm", type: "button" }, [
-      track?.phase === "error" ? "Retry" : "Download",
+      "Download",
     ]);
     dl.addEventListener("click", () => {
       dl.disabled = true;
@@ -4855,9 +5124,6 @@ function metalVariantRow(e: MetalEntry, showFamily: boolean): HTMLElement {
       startMetalDownload(e.hubID, e.displayName);
     });
     actions.append(dl);
-    if (track?.phase === "error") {
-      paintMetalRowProgress(e.hubID);
-    }
   }
   row.append(actions);
   return row;
@@ -5228,8 +5494,8 @@ function showWalkthrough(): void {
       body.append(
         el("p", {}, [
           `Lightweight Tasks → ${lightweightModeLabel(draft.mode)}` +
-            (draft.linkedModel ? ` · ${draft.linkedModel}` : "") +
-            ". Add API keys under Settings → Providers when you’re ready to chat.",
+          (draft.linkedModel ? ` · ${draft.linkedModel}` : "") +
+          ". Add API keys under Settings → Providers when you’re ready to chat.",
         ]),
       );
       body.append(

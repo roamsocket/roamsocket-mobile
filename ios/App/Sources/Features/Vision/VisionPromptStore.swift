@@ -85,21 +85,30 @@ final class VisionPromptStore: ObservableObject {
                 id: UUID(uuidString: "D4E5F6A7-B8C9-0123-DEF0-234567890123")!,
                 title: "Quiz / homework",
                 prompt: """
-                This photo shows a question, worksheet, or homework problem.
+                This photo shows a quiz, worksheet, test, or homework (true/false, multiple choice, short answer, or mixed).
 
-                Structure your reply exactly like this:
+                Break down every visible question. Structure your reply exactly like this:
 
-                ## Final answer
-                Put the final answer(s) first — clear, boxed-style if useful. If multiple questions, list each answer first.
+                1. **One-line intro** (no heading): e.g. “Here are the answers to the four true/false questions on your screen.” Name the question type and count when clear.
 
-                ## Question(s)
-                Briefly restate or extract the question(s) from the image.
+                2. **Then for each question**, use this per-item layout (repeat for Q1, Q2, …):
 
-                ## Reasoning
-                Show steps and reasoning below the fold (after the final answer). Keep it concise.
+                ## Question N
 
-                If the image is incomplete, still give the best answer you can and say what is missing after the answer.
-                Do not open with a description of the photo.
+                - **Text:** Restate the full question (and options if multiple choice).
+                - **Answer:** The correct choice, True/False, number, or short phrase — bold the key answer.
+                - **Reason:** One or two concise sentences explaining why (definition, concept, or quick calculation). Not a lecture.
+
+                Separate questions with a horizontal rule (`---`).
+
+                **Multiple choice tip:** In **Answer**, put the letter/label and the option text (e.g. **B — Online retail**). You may also bold the chosen phrase inside **Text** if that reads cleaner.
+
+                Rules:
+                - Answer every fully visible question. If the crop cuts something off, still answer what is visible and note what is missing at the end.
+                - Do not open with a photo description (“This image shows…”, “I can see a worksheet…”).
+                - Prefer scannable bullets over long paragraphs. Keep reasons short.
+                - If only one question is visible, still use the Question / Text / Answer / Reason layout.
+                - End with a brief optional line only if helpful (e.g. “Take another clear photo for the next section.”).
                 """,
                 isBuiltIn: true,
                 sortOrder: 3

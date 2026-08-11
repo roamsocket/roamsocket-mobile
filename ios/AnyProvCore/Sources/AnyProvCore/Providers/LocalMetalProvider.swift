@@ -92,6 +92,11 @@ public protocol LocalMetalGenerating: Sendable {
     /// Remove cached weights for a model id (frees disk). No-op if not present.
     func deleteModel(modelID: String) async throws
 
+    /// Drop the "verified complete" sentinel for a model without touching the
+    /// hub cache on disk. Use when retrying / resuming a download so a stale
+    /// flag from a prior session does not let a partial cache look usable.
+    func invalidateVerifiedSentinel(modelID: String) async
+
     /// Drop a loaded model from RAM (keeps disk weights). Call when free memory.
     func unloadFromMemory(modelID: String) async
 
@@ -246,6 +251,12 @@ public actor LocalMetalModelStore {
 
     /// Whether a hub model id has a usable snapshot on disk (config + weights).
     public func isDownloaded(modelID: String) async -> Bool {
+        // Migrate known-complete pre-sentinel downloads before the stricter
+        // disk check removes them.
+        if knownDownloadedIDs().contains(modelID) {
+            Self.migrateVerifiedSentinelIfNeeded(for: modelID)
+        }
+
         let onDisk = isDownloadedOnDisk(modelID: modelID)
 
         // Persisted success only counts when the cache still looks complete.
@@ -423,18 +434,6 @@ public actor LocalMetalModelStore {
         return roots
     }
 
-    /// Possible HF repo directories for a hub id (canonical + legacy caches).
-    private func repoDirectories(for modelID: String) -> [URL] {
-        let folderName = LocalMetalPaths.hubRepoFolderName(for: modelID)
-        return LocalMetalPaths.hubCacheRootsToScan().map {
-            $0.appendingPathComponent(folderName, isDirectory: true)
-        }
-    }
-
-    private func repoDirectory(for modelID: String) -> URL? {
-        repoDirectories(for: modelID).first
-    }
-
     // MARK: - Detection
 
     /// `models--org--name` → `org/name` (only first `--` is the org separator).
@@ -448,21 +447,49 @@ public actor LocalMetalModelStore {
         return "\(org)/\(repo)"
     }
 
+    /// Sentinel written after a successful verified download of a hub model.
+    /// Prevents interrupted downloads (which may already have config + partial
+    /// weights) from being treated as complete.
+    public static let verifiedSentinelName = ".roamsocket-verified"
+
+    public static func hasVerifiedSentinel(at root: URL) -> Bool {
+        FileManager.default.fileExists(atPath: root.appendingPathComponent(verifiedSentinelName).path)
+    }
+
+    public static func touchVerifiedSentinel(at root: URL) {
+        let url = root.appendingPathComponent(verifiedSentinelName)
+        try? Data().write(to: url, options: .atomic)
+    }
+
+    public static func removeVerifiedSentinel(at root: URL) {
+        let url = root.appendingPathComponent(verifiedSentinelName)
+        try? FileManager.default.removeItem(at: url)
+    }
+
     /// True when a HF hub repo folder (or flat model dir) looks download-complete.
     ///
     /// Requires config **and** at least one real weight file name (not index-only,
     /// not “blobs exist” alone). Handles the Python-compatible layout:
     /// `blobs/` + `snapshots/<rev>/` named symlinks.
+    ///
+    /// For HF hub layouts we also require the `verifiedSentinelName` sentinel,
+    /// because interrupted downloads can leave config + partial weights looking
+    /// complete by filename alone.
     public static func hasUsableModelCache(at root: URL) -> Bool {
         let fm = FileManager.default
         guard fm.fileExists(atPath: root.path) else { return false }
+
+        // HF hub layout is identified by a `snapshots/` directory. Require a
+        // verified sentinel so interrupted downloads are not treated as complete.
+        let snapshots = root.appendingPathComponent("snapshots", isDirectory: true)
+        let isHubLayout = fm.fileExists(atPath: snapshots.path)
+        if isHubLayout, !hasVerifiedSentinel(at: root) { return false }
 
         // Flat / local trees: config + weight files at any depth.
         if hasConfigAndWeightNames(at: root) { return true }
 
         // HF hub layout: named files live under snapshots/<rev>/ (often symlinks → blobs/).
-        let snapshots = root.appendingPathComponent("snapshots", isDirectory: true)
-        guard fm.fileExists(atPath: snapshots.path),
+        guard isHubLayout,
               let revs = try? fm.contentsOfDirectory(
                 at: snapshots,
                 includingPropertiesForKeys: [.isDirectoryKey],
@@ -507,6 +534,26 @@ public actor LocalMetalModelStore {
             if hasConfig && hasWeights { return true }
         }
         return false
+    }
+
+    /// One-time migration: pre-sentinel hub downloads that are known-complete
+    /// get the sentinel so they remain usable after the stricter check.
+    private static func migrateVerifiedSentinelIfNeeded(for modelID: String) {
+        for repoDir in Self.repoDirectoriesStatic(for: modelID) {
+            guard hasConfigAndWeightNames(at: repoDir) else { continue }
+            touchVerifiedSentinel(at: repoDir)
+        }
+    }
+
+    private func repoDirectories(for modelID: String) -> [URL] {
+        Self.repoDirectoriesStatic(for: modelID)
+    }
+
+    private static func repoDirectoriesStatic(for modelID: String) -> [URL] {
+        let folderName = LocalMetalPaths.hubRepoFolderName(for: modelID)
+        return LocalMetalPaths.hubCacheRootsToScan().map {
+            $0.appendingPathComponent(folderName, isDirectory: true)
+        }
     }
 
     private func directoryByteSize(_ url: URL) -> Int64 {

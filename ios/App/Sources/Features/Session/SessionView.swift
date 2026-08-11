@@ -27,6 +27,31 @@ struct SessionView: View {
     @State private var browserBusy = false
     @State private var showTasksSheet = false
 
+    /// Slash-command suggestions when the composer starts with `/`.
+    private static let slashCommands: [(token: String, detail: String)] = [
+        ("/goal ", "Keep working until a condition is met"),
+        ("/goal", "Show current goal status"),
+        ("/goal clear", "Clear the active goal"),
+    ]
+
+    private var slashQuery: String {
+        let t = followUp.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard t.hasPrefix("/") else { return "" }
+        return t
+    }
+
+    private var slashSuggestions: [(token: String, detail: String)] {
+        let q = slashQuery.lowercased()
+        guard !q.isEmpty else { return [] }
+        // Only while composing a slash command (no multi-line free text yet).
+        guard !followUp.contains("\n") else { return [] }
+        return Self.slashCommands.filter { $0.token.lowercased().hasPrefix(q) || q.hasPrefix("/g") && $0.token.hasPrefix("/goal") }
+    }
+
+    private var showsSlashMenu: Bool {
+        model.canAcceptInput && !slashSuggestions.isEmpty && slashQuery.count >= 1
+    }
+
     private enum GitSheetAction: String, Identifiable {
         case commit, push, pr, all
         var id: String { rawValue }
@@ -91,12 +116,21 @@ struct SessionView: View {
                         .padding(.horizontal, 16)
                         .padding(.bottom, 4)
                 }
+                if model.showsGoalBanner {
+                    goalBanner
+                }
+                if let modelStatus = model.modelStatus {
+                    modelLoadingBanner(modelStatus)
+                }
                 if model.hasAgentTasks {
                     agentTasksBanner
                 }
                 transcript
                 if let permission = model.pendingPermission {
                     permissionBar(permission)
+                }
+                if showsSlashMenu {
+                    slashCommandMenu
                 }
                 inputArea
             }
@@ -293,6 +327,128 @@ struct SessionView: View {
         showServerPairing = true
     }
 
+    /// Live `/goal` strip — condition + latest evaluator reason.
+    private var goalBanner: some View {
+        let goal = model.goalStatus
+        return HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "target")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(goal?.status == "achieved" ? "Goal achieved" : "◎ /goal active")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                if let condition = goal?.condition, !condition.isEmpty {
+                    Text(condition)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textSecondary)
+                        .lineLimit(2)
+                }
+                if let reason = goal?.reason, !reason.isEmpty {
+                    Text(reason)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.textTertiary)
+                        .lineLimit(2)
+                }
+            }
+            Spacer(minLength: 0)
+            if model.hasActiveGoal {
+                Button("Clear") {
+                    model.sendUserMessage("/goal clear")
+                }
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Theme.surfaceElevated)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Theme.separator.opacity(0.5))
+                .frame(height: 0.5)
+        }
+    }
+
+    /// Live local-model strip — "Loading model…" / "Generating…" from the
+    /// desktop server's `model_status` frames (desktop Metal / MLX).
+    private func modelLoadingBanner(_ status: ServerMessage.ModelStatusPayload) -> some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+                .tint(Theme.accent)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title(for: status))
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                if let message = status.message, !message.isEmpty {
+                    Text(message)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.textTertiary)
+                        .lineLimit(1)
+                } else if let hubID = status.hubID, !hubID.isEmpty {
+                    Text(hubID)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(Theme.textTertiary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Theme.surfaceElevated)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Theme.separator.opacity(0.5))
+                .frame(height: 0.5)
+        }
+        .transition(.opacity.combined(with: .move(edge: .bottom)))
+        .accessibilityElement(children: .combine)
+    }
+
+    private func title(for status: ServerMessage.ModelStatusPayload) -> String {
+        if status.isLoading {
+            return "Loading model…"
+        }
+        return "Generating…"
+    }
+
+    private var slashCommandMenu: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(slashSuggestions, id: \.token) { item in
+                Button {
+                    followUp = item.token.hasSuffix(" ") ? item.token : item.token + " "
+                } label: {
+                    HStack(spacing: 10) {
+                        Text(item.token)
+                            .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(Theme.accent)
+                        Text(item.detail)
+                            .font(.system(size: 13))
+                            .foregroundStyle(Theme.textSecondary)
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .background(Theme.surfaceElevated)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Theme.separator.opacity(0.6), lineWidth: 1)
+        )
+        .padding(.horizontal, 12)
+        .padding(.bottom, 4)
+    }
+
     /// Compact live checklist strip — tap for the full sheet.
     private var agentTasksBanner: some View {
         let progress = model.taskProgress
@@ -400,6 +556,8 @@ struct SessionView: View {
     /// row, or an in-flight tool card).
     private var shouldShowTypingIndicator: Bool {
         guard model.isRunning else { return false }
+        // The model_status banner (loading/generating) already signals progress.
+        guard model.modelStatus == nil else { return false }
         guard let last = model.items.last else { return true }
         switch last {
         case .user, .diff, .notice:

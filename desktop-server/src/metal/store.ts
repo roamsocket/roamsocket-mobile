@@ -176,12 +176,13 @@ export class MetalModelStore {
   async download(
     hubID: string,
     onProgress?: (p: MetalDownloadProgress) => void,
+    signal?: AbortSignal,
   ): Promise<DownloadedMetalModel> {
     const dest = this.pathFor(hubID);
     mkdirSync(dest, { recursive: true });
     onProgress?.({ hubID, fraction: 0, status: "Listing files…" });
 
-    const tree = await listRepoFiles(hubID);
+    const tree = await listRepoFiles(hubID, signal);
     const files = tree.filter((f) => f.type === "file" && !f.path.includes(".git"));
     if (files.length === 0) {
       throw new Error(
@@ -215,6 +216,9 @@ export class MetalModelStore {
 
     try {
       for (const file of toFetch) {
+        if (signal?.aborted) {
+          throw new Error("Download cancelled");
+        }
         const target = path.join(dest, file.path);
         mkdirSync(path.dirname(target), { recursive: true });
         const expected = file.size && file.size > 0 ? file.size : undefined;
@@ -234,7 +238,7 @@ export class MetalModelStore {
         }
 
         report(`Downloading ${file.path}…`, file.path, 0);
-        await downloadFileStreaming(hubID, file.path, target, (written) => {
+        await downloadFileStreaming(hubID, file.path, target, signal, (written) => {
           report(`Downloading ${file.path}…`, file.path, written);
         });
 
@@ -304,10 +308,11 @@ function selectModelFiles(files: HFTreeEntry[]): HFTreeEntry[] {
   });
 }
 
-async function listRepoFiles(hubID: string): Promise<HFTreeEntry[]> {
+async function listRepoFiles(hubID: string, signal?: AbortSignal): Promise<HFTreeEntry[]> {
   // Hub ids are `org/name` — do not encode the slash.
   const url = `https://huggingface.co/api/models/${hubID}/tree/main?recursive=1`;
   const res = await fetch(url, {
+    signal,
     headers: {
       "user-agent": "RoamSocket-desktop/1.0 (metal-store)",
       accept: "application/json",
@@ -328,6 +333,7 @@ async function downloadFileStreaming(
   hubID: string,
   filePath: string,
   dest: string,
+  signal?: AbortSignal,
   onBytes?: (written: number) => void,
 ): Promise<void> {
   const encodedPath = filePath
@@ -336,6 +342,7 @@ async function downloadFileStreaming(
     .join("/");
   const url = `https://huggingface.co/${hubID}/resolve/main/${encodedPath}?download=true`;
   const res = await fetch(url, {
+    signal,
     headers: {
       "user-agent": "RoamSocket-desktop/1.0 (metal-store)",
     },
@@ -353,7 +360,7 @@ async function downloadFileStreaming(
     if (existsSync(partial)) rmSync(partial, { force: true });
     if (existsSync(dest)) rmSync(dest, { force: true });
 
-    const nodeStream = Readable.fromWeb(res.body as import("stream/web").ReadableStream);
+    const nodeStream = Readable.fromWeb(res.body as import("stream/web").ReadableStream, { signal });
     let written = 0;
     let lastReport = 0;
     nodeStream.on("data", (chunk: Buffer | string) => {
@@ -364,7 +371,7 @@ async function downloadFileStreaming(
         onBytes?.(written);
       }
     });
-    await pipeline(nodeStream, createWriteStream(partial));
+    await pipeline(nodeStream, createWriteStream(partial), { signal });
     onBytes?.(written);
     // Atomic rename so a crash mid-write never leaves a half "complete" file.
     renameSync(partial, dest);

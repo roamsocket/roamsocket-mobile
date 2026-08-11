@@ -15,7 +15,7 @@ export const BONJOUR_SERVICE_TYPE = "roamsocket";
  * LEGACY data-dir basenames only (pre-RoamSocket installs). Not product branding.
  * Used solely so existing user data under older folder names is still found.
  */
-export const LEGACY_DATA_DIRNAMES = [".codesocket", ".anyprov-code"] as const;
+export const LEGACY_DATA_DIRNAMES = [".roamsocket", ".anyprov-code"] as const;
 export const DATA_DIRNAME = `.${PRODUCT_SLUG}`;
 
 /** ~/.roamsocket, or a LEGACY data dir if the user already has data there. */

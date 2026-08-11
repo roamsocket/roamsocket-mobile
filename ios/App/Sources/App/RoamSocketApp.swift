@@ -3,7 +3,6 @@ import AnyProvCore
 
 @main
 struct RoamSocketApp: App {
-    @UIApplicationDelegateAdaptor(RoamSocketAppDelegate.self) private var appDelegate
     @StateObject private var state = AppState(secrets: KeychainSecretStore())
     @Environment(\.scenePhase) private var scenePhase
 
@@ -11,7 +10,6 @@ struct RoamSocketApp: App {
         // On-device Metal is registered for **chat only** (not coding sessions).
         // Models are never bundled — users download them in Settings.
         LocalMetalBootstrap.ensureRegistered()
-        LocalMetalBackgroundURLSession.shared.ensureSession()
         // Apply saved appearance before the first frame so Theme.* tokens match.
         Theme.apply(AppAppearance.resolve(
             rawValue: UserDefaults.standard.string(forKey: AppAppearance.storageKey)
@@ -37,7 +35,9 @@ struct RoamSocketApp: App {
                 }
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active {
-                        LocalMetalBackgroundURLSession.shared.ensureSession()
+                        // A Live Activity orphaned by a killed process would
+                        // otherwise stay on the Lock Screen forever.
+                        AIThinkingActivityManager.shared.reconcileStaleActivities()
                         LocalMetalDownloadManager.shared.resumePendingDownloadsIfNeeded(appState: state)
                     }
                 }

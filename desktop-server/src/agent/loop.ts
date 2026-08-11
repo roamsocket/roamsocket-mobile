@@ -7,6 +7,9 @@
  *   - acceptEdits: mutating tools run without asking
  *   - ask:        mutating tools emit a permission_request and wait
  *   - plan:       mutating tools are described but not executed
+ *
+ * `/goal` support: when a session has an active completion condition, each
+ * finished turn is evaluated; if not met, another turn starts automatically.
  */
 import { randomUUID } from "node:crypto";
 import type { ModelSelection, PermissionMode, ServerMessage, EnvironmentConfig } from "../protocol.js";
@@ -19,8 +22,19 @@ import {
 } from "../tools/index.js";
 import { diffFiles } from "../git/github.js";
 import { getAgentAdapter, type NormalizedMessage, type ProviderAdapter } from "../providers/index.js";
+import {
+  type ActiveGoal,
+  type AchievedGoal,
+  type GoalStatusKind,
+  MAX_GOAL_TURNS,
+  buildGoalStatusMessage,
+  evaluateGoal,
+  goalContinuePrompt,
+  goalKickoffPrompt,
+  parseGoalCommand,
+} from "./goal.js";
 
-const BASE_SYSTEM_PROMPT = `You are a coding agent running on the user's desktop in a cloned Git repository.
+const BASE_SYSTEM_PROMPT_PHONE = `You are a coding agent running on the user's desktop in a cloned Git repository.
 Work directly in the repository using the provided tools. Make focused, correct changes.
 Prefer reading files before editing them. Run tests or builds when relevant.
 When you have completed the request, stop and briefly summarize what you changed.
@@ -28,9 +42,33 @@ When you have completed the request, stop and briefly summarize what you changed
 ## Task checklist
 For multi-step work, call the \`update_tasks\` tool early with a short checklist (3–8 items).
 Update statuses as you go (one \`in_progress\` when possible; mark \`completed\` when done).
-Use stable task ids so merges update the same items. The user sees this list live on their phone.`;
+Use stable task ids so merges update the same items. The user sees this list live on their phone.
+
+## Goals (/goal)
+When the user sets a goal, keep working until the condition is verifiably met.
+Surface proof in the transcript (test output, build exit codes, file contents).
+Do not stop early with a plan-only reply while a goal is active.`;
+
+const BASE_SYSTEM_PROMPT_CLI = `You are a coding agent running in the user's terminal (RoamSocket CLI) inside a local working directory.
+Work directly in that directory using the provided tools. Make focused, correct changes.
+Prefer reading files before editing them. Run tests or builds when relevant.
+When you have completed the request, stop and briefly summarize what you changed.
+The user sees your output and tool activity in this terminal (not on a phone).
+
+## Task checklist
+For multi-step work, call the \`update_tasks\` tool early with a short checklist (3–8 items).
+Update statuses as you go (one \`in_progress\` when possible; mark \`completed\` when done).
+Use stable task ids so merges update the same items. The user sees this list in the terminal.
+
+## Goals (/goal)
+When the user sets a goal, keep working until the condition is verifiably met.
+Surface proof in the transcript (test output, build exit codes, file contents).
+Do not stop early with a plan-only reply while a goal is active.`;
 
 const MAX_ROUNDS = 24;
+
+/** Where the agent is being driven from — affects system prompt wording only. */
+export type AgentSurface = "phone" | "cli";
 
 export interface AgentDeps {
   sessionId: string;
@@ -47,6 +85,8 @@ export interface AgentDeps {
   skills?: string[];
   /** Optional environment config — drives the bash network policy. */
   environment?: EnvironmentConfig;
+  /** Phone (default) vs local terminal CLI surface. */
+  surface?: AgentSurface;
 }
 
 export class AgentSession {
@@ -57,6 +97,10 @@ export class AgentSession {
   private deps: AgentDeps;
   /** Working checklist the agent maintains via `update_tasks`. */
   private agentTasks: AgentTask[] = [];
+  /** Session-scoped /goal completion condition. */
+  private activeGoal: ActiveGoal | null = null;
+  /** Last achieved goal this session (for `/goal` status). */
+  private achievedGoal: AchievedGoal | null = null;
 
   constructor(deps: AgentDeps) {
     this.deps = deps;
@@ -74,6 +118,10 @@ export class AgentSession {
     return this.agentTasks;
   }
 
+  get goal(): ActiveGoal | null {
+    return this.activeGoal;
+  }
+
   /** Push the current checklist to the app (e.g. after WebSocket reattach). */
   emitTaskList(): void {
     if (this.agentTasks.length === 0) return;
@@ -82,6 +130,27 @@ export class AgentSession {
       sessionId: this.deps.sessionId,
       tasks: this.agentTasks,
     });
+  }
+
+  /** Re-send active (or last achieved) goal status after reconnect. */
+  emitGoalStatusReplay(): void {
+    if (this.activeGoal) {
+      this.emitGoalStatus("active", {
+        condition: this.activeGoal.condition,
+        reason: this.activeGoal.lastReason,
+        turnsEvaluated: this.activeGoal.turnsEvaluated,
+        startedAt: this.activeGoal.startedAt,
+      });
+      return;
+    }
+    if (this.achievedGoal) {
+      this.emitGoalStatus("achieved", {
+        condition: this.achievedGoal.condition,
+        turnsEvaluated: this.achievedGoal.turnsEvaluated,
+        startedAt: this.achievedGoal.startedAt,
+        endedAt: this.achievedGoal.endedAt,
+      });
+    }
   }
 
   /**
@@ -111,9 +180,10 @@ export class AgentSession {
       // switches (e.g. Anthropic → OpenAI) don't keep the old adapter.
       // Preserve an explicit test override only when the provider is unchanged.
       const override = this.deps.adapter;
-      const providerChanged = next.model.provider !== previousModel.provider
-        || next.model.baseUrl !== previousModel.baseUrl
-        || next.model.apiStyle !== previousModel.apiStyle;
+      const providerChanged =
+        next.model.provider !== previousModel.provider ||
+        next.model.baseUrl !== previousModel.baseUrl ||
+        next.model.apiStyle !== previousModel.apiStyle;
       if (override && !providerChanged) {
         this.adapter = override;
       } else {
@@ -126,24 +196,192 @@ export class AgentSession {
   }
 
   private buildSystemPrompt(): string {
-    let prompt = BASE_SYSTEM_PROMPT;
-    
+    let prompt =
+      this.deps.surface === "cli" ? BASE_SYSTEM_PROMPT_CLI : BASE_SYSTEM_PROMPT_PHONE;
+
     if (this.deps.skills && this.deps.skills.length > 0) {
       prompt += "\n\n## Active Skills\n\n";
       prompt += "The following skills are active and should guide your approach:\n\n";
-      
+
       for (const skillContent of this.deps.skills) {
         prompt += skillContent;
         prompt += "\n\n";
       }
     }
-    
+
     return prompt;
   }
 
+  private emitGoalStatus(
+    status: GoalStatusKind,
+    fields: {
+      condition?: string;
+      reason?: string;
+      turnsEvaluated?: number;
+      startedAt?: number;
+      endedAt?: number;
+    } = {},
+  ): void {
+    const sessionId = this.deps.sessionId;
+    const startedAt = fields.startedAt;
+    const endedAt = fields.endedAt;
+    const elapsedMs =
+      startedAt != null ? Math.max(0, (endedAt ?? Date.now()) - startedAt) : undefined;
+    const message = buildGoalStatusMessage({
+      status,
+      condition: fields.condition,
+      reason: fields.reason,
+      turnsEvaluated: fields.turnsEvaluated,
+      startedAt,
+      endedAt,
+    });
+    this.deps.emit({
+      type: "goal_status",
+      sessionId,
+      status,
+      condition: fields.condition,
+      reason: fields.reason,
+      turnsEvaluated: fields.turnsEvaluated,
+      startedAt,
+      elapsedMs,
+      message,
+    });
+  }
+
+  /**
+   * Handle a user composer line. Interprets `/goal` slash commands and runs
+   * the agent; while a goal is active, auto-continues turns after evaluation.
+   */
   async handleUserMessage(text: string): Promise<void> {
-    this.messages.push({ role: "user", text });
-    // Always read emit/sessionId from deps so a rebind mid-session is honored.
+    const sessionId = this.deps.sessionId;
+    const cmd = parseGoalCommand(text);
+
+    if (cmd?.kind === "status") {
+      if (this.activeGoal) {
+        this.emitGoalStatus("active", {
+          condition: this.activeGoal.condition,
+          reason: this.activeGoal.lastReason,
+          turnsEvaluated: this.activeGoal.turnsEvaluated,
+          startedAt: this.activeGoal.startedAt,
+        });
+      } else if (this.achievedGoal) {
+        this.emitGoalStatus("achieved", {
+          condition: this.achievedGoal.condition,
+          turnsEvaluated: this.achievedGoal.turnsEvaluated,
+          startedAt: this.achievedGoal.startedAt,
+          endedAt: this.achievedGoal.endedAt,
+        });
+      } else {
+        this.emitGoalStatus("none");
+      }
+      this.deps.emit({ type: "session_done", sessionId, stopReason: "goal_status" });
+      return;
+    }
+
+    if (cmd?.kind === "clear") {
+      if (!this.activeGoal) {
+        this.emitGoalStatus("none", { condition: undefined });
+        // Explicit "No goal set" is already the none message.
+      } else {
+        const condition = this.activeGoal.condition;
+        this.activeGoal = null;
+        this.emitGoalStatus("cleared", { condition });
+      }
+      this.deps.emit({ type: "session_done", sessionId, stopReason: "goal_cleared" });
+      return;
+    }
+
+    let kickoff = text;
+    if (cmd?.kind === "set") {
+      this.activeGoal = {
+        condition: cmd.condition,
+        startedAt: Date.now(),
+        turnsEvaluated: 0,
+      };
+      this.achievedGoal = null;
+      this.emitGoalStatus("active", {
+        condition: cmd.condition,
+        turnsEvaluated: 0,
+        startedAt: this.activeGoal.startedAt,
+      });
+      kickoff = goalKickoffPrompt(cmd.condition);
+    }
+
+    // Outer goal loop: each iteration is one agent "turn" (tool rounds until idle).
+    let nextUserText: string | null = kickoff;
+    while (nextUserText !== null) {
+      if (this.deps.signal.aborted) return;
+
+      await this.runAgentTurn(nextUserText);
+
+      if (this.deps.signal.aborted) return;
+
+      if (!this.activeGoal) {
+        this.deps.emit({ type: "session_done", sessionId, stopReason: "end_turn" });
+        return;
+      }
+
+      const evaluation = await evaluateGoal({
+        condition: this.activeGoal.condition,
+        messages: this.messages,
+        model: this.deps.model,
+        adapter: this.adapter,
+        signal: this.deps.signal,
+      });
+
+      this.activeGoal.turnsEvaluated += 1;
+      this.activeGoal.lastReason = evaluation.reason;
+
+      if (evaluation.met) {
+        const endedAt = Date.now();
+        this.achievedGoal = {
+          condition: this.activeGoal.condition,
+          startedAt: this.activeGoal.startedAt,
+          endedAt,
+          turnsEvaluated: this.activeGoal.turnsEvaluated,
+        };
+        const condition = this.activeGoal.condition;
+        const turns = this.activeGoal.turnsEvaluated;
+        const startedAt = this.activeGoal.startedAt;
+        this.activeGoal = null;
+        this.emitGoalStatus("achieved", {
+          condition,
+          reason: evaluation.reason,
+          turnsEvaluated: turns,
+          startedAt,
+          endedAt,
+        });
+        this.deps.emit({ type: "session_done", sessionId, stopReason: "goal_achieved" });
+        return;
+      }
+
+      this.emitGoalStatus("active", {
+        condition: this.activeGoal.condition,
+        reason: evaluation.reason,
+        turnsEvaluated: this.activeGoal.turnsEvaluated,
+        startedAt: this.activeGoal.startedAt,
+      });
+
+      if (this.activeGoal.turnsEvaluated >= MAX_GOAL_TURNS) {
+        this.deps.emit({
+          type: "error",
+          sessionId,
+          message: `Goal stopped after ${MAX_GOAL_TURNS} evaluation turns without meeting the condition.`,
+        });
+        this.deps.emit({ type: "session_done", sessionId, stopReason: "goal_max_turns" });
+        return;
+      }
+
+      nextUserText = goalContinuePrompt(this.activeGoal.condition, evaluation.reason);
+    }
+  }
+
+  /**
+   * One user → assistant multi-round tool loop. Does not emit `session_done`
+   * (caller decides based on goal state).
+   */
+  private async runAgentTurn(userText: string): Promise<void> {
+    this.messages.push({ role: "user", text: userText });
     const sessionId = this.deps.sessionId;
 
     for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -169,6 +407,14 @@ export class AgentSession {
         if (ev.kind === "text") {
           assistantText += ev.text;
           this.deps.emit({ type: "assistant_delta", sessionId, text: ev.text });
+        } else if (ev.kind === "model_status") {
+          this.deps.emit({
+            type: "model_status",
+            sessionId,
+            status: ev.status,
+            hubID: ev.hubID,
+            message: ev.message,
+          });
         } else if (ev.kind === "tool_call") {
           toolCalls.push(ev.call);
         } else if (ev.kind === "done") {
@@ -180,7 +426,7 @@ export class AgentSession {
       this.messages.push({ role: "assistant", text: assistantText, toolCalls });
 
       if (toolCalls.length === 0) {
-        this.deps.emit({ type: "session_done", sessionId, stopReason });
+        void stopReason;
         return;
       }
 

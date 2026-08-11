@@ -229,6 +229,8 @@ const api = {
       hubID: string,
     ): Promise<{ hubID: string; localPath: string; downloadedAt: number; displayName: string }> =>
       ipcRenderer.invoke("metal:download", hubID),
+    cancel: (hubID: string): Promise<{ ok: true; cancelled: boolean }> =>
+      ipcRenderer.invoke("metal:cancel", hubID),
     delete: (hubID: string): Promise<{ ok: true }> => ipcRenderer.invoke("metal:delete", hubID),
     deleteAll: (): Promise<{ ok: true; removed: number }> => ipcRenderer.invoke("metal:deleteAll"),
     openDir: (): Promise<{ ok: true; path: string }> => ipcRenderer.invoke("metal:openDir"),

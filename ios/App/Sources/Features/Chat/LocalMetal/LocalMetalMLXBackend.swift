@@ -32,11 +32,11 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
     private let cache = ContainerCache()
 
     private let hubCache: HubCache
-    /// Foreground session — metadata, listing, load-time fetches while the app is open.
+    /// Hub client — metadata, listing, weight downloads, load-time fetches.
+    /// Uses a normal foreground session: `HubClient` relies on completion-handler
+    /// based async APIs that background `URLSession` configurations do not support
+    /// (they crash with NSGenericException).
     private let hubClient: HubClient
-    /// Background-configured session — multi‑GB weight snapshots keep transferring
-    /// when the app is suspended (system may relaunch for completion events).
-    private let downloadHubClient: HubClient
 
     init() {
         // Must match LocalMetalModelStore / LocalMetalPaths so downloads appear
@@ -48,12 +48,6 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
         let hubCache = HubCache(cacheDirectory: dir)
         self.hubCache = hubCache
         self.hubClient = HubClient(cache: hubCache)
-        // Ensure the background session is created before hub downloads start.
-        LocalMetalBackgroundURLSession.shared.ensureSession()
-        self.downloadHubClient = HubClient(
-            session: LocalMetalBackgroundURLSession.shared.session,
-            cache: hubCache
-        )
     }
 
     // MARK: LocalMetalGenerating
@@ -146,6 +140,15 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
             throw CancellationError()
         } catch {
             Memory.clearCache()
+            // A raw (non-transport, non-cancellation) failure means the runtime
+            // itself blew up mid-generation (OOM, Metal shader error, …).
+            // Persist a crash report so the next launch can offer the logs and
+            // a re-download/delete path.
+            await LocalMetalCrashStore.shared.record(
+                modelID: modelID,
+                displayName: LocalMetalCatalog.displayName(for: modelID),
+                error: error.localizedDescription
+            )
             throw ProviderError.transport(
                 "Metal generation failed: \(error.localizedDescription)"
             )
@@ -169,20 +172,34 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
             throw ProviderError.transport("Invalid model id “\(modelID)”.")
         }
 
-        progress(LocalMetalDownloadProgress(fraction: 0, status: "Listing files…"))
+        // Catalog size first so multi‑GB models (Gemma E4B ~5.2 GB) show a real
+        // total immediately — hub tree listing can take several seconds on cellular.
+        let catalogBytes = Self.approxBytesFromCatalog(modelID: modelID)
+        progress(LocalMetalDownloadProgress(
+            fraction: 0,
+            status: "Listing files…",
+            bytesDownloaded: 0,
+            bytesTotal: catalogBytes
+        ))
+        // Let SwiftUI paint the progress banner before hub I/O.
+        await Task.yield()
 
         let repoDir = hubCache.repoDirectory(repo: repoID, kind: .model)
         let broker = DownloadProgressBroker(emit: progress)
+        if let catalogBytes, catalogBytes > 0 {
+            await broker.setExpectedBytes(catalogBytes)
+        }
 
         // Expected size from the hub tree so we can report true byte progress even
         // when Foundation Progress freezes mid-file and while URLSession stages
         // multi‑GB weights in tmp/ before they land in the hub cache.
-        // Use the *foreground* client for listing (background sessions defer data tasks).
+        // Cap wait so a hung listFiles cannot freeze the UI with no further updates.
         do {
             let expected = try await Self.expectedDownloadBytes(
                 hubClient: hubClient,
                 repoID: repoID,
-                patterns: Self.modelDownloadPatterns
+                patterns: Self.modelDownloadPatterns,
+                timeoutSeconds: 20
             )
             if expected > 0 {
                 await broker.setExpectedBytes(expected)
@@ -193,59 +210,107 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
                     bytesTotal: expected
                 ))
             } else {
-                progress(LocalMetalDownloadProgress(fraction: 0, status: "Preparing download…"))
+                progress(LocalMetalDownloadProgress(
+                    fraction: 0,
+                    status: "Preparing download…",
+                    bytesDownloaded: 0,
+                    bytesTotal: catalogBytes
+                ))
             }
         } catch {
-            // Tree size is optional; continue with hub Progress alone.
-            progress(LocalMetalDownloadProgress(fraction: 0, status: "Preparing download…"))
+            // Tree size is optional; continue with catalog / hub Progress alone.
+            progress(LocalMetalDownloadProgress(
+                fraction: 0,
+                status: "Preparing download…",
+                bytesDownloaded: 0,
+                bytesTotal: catalogBytes
+            ))
         }
 
         // Baseline tmp occupancy so we only attribute *growth* to this download
         // (other URLSession traffic must not inflate the bar).
-        let tmpBaseline = Self.largeTempFileBytes()
+        let tmpBaseline = await Task.detached(priority: .utility) {
+            Self.largeTempFileBytes()
+        }.value
         await broker.setTempBaseline(tmpBaseline)
 
         // Seed UI from anything already cached (resume / retry).
+        let initialCache = await Task.detached(priority: .utility) {
+            Self.directoryByteSize(at: repoDir)
+        }.value
         await broker.noteObservedBytes(
-            cacheBytes: Self.directoryByteSize(at: repoDir),
+            cacheBytes: initialCache,
             tempBytes: tmpBaseline,
-            status: "Resuming…"
+            status: initialCache > 1_048_576 ? "Resuming…" : "Downloading weights…"
         )
 
-        // Poll cache + large temp files + last hub Progress at ~10 Hz.
-        let diskPoll = Task {
-            while !Task.isCancelled {
-                let cacheBytes = Self.directoryByteSize(at: repoDir)
-                let tempBytes = Self.largeTempFileBytes()
-                await broker.noteObservedBytes(
-                    cacheBytes: cacheBytes,
-                    tempBytes: tempBytes,
-                    status: "Downloading in background…"
-                )
-                await broker.rescanHubProgress()
-                try? await Task.sleep(nanoseconds: 100_000_000)
-            }
-        }
+        // Poll cache + large temp files + last hub Progress at ~2.5 Hz.
+        // (Was 10 Hz — full-tree walks of multi‑GB caches thrash the phone.)
+        var diskPoll = Self.startDiskPoll(broker: broker, repoDir: repoDir)
 
         do {
             await broker.setStatus("Downloading weights…")
-            // Background URLSession: weight files keep transferring while suspended.
-            // Incomplete hub blobs support Range resume if the process is killed.
-            _ = try await downloadHubClient.downloadSnapshot(
+            // Foreground URLSession: `HubClient` uses completion-handler based
+            // async APIs, which background URLSessions reject.
+            //
+            // IMPORTANT: progressHandler must NOT hop to MainActor. Hugging Face
+            // fires it very frequently for multi‑GB weights; MainActor + SwiftUI
+            // floods froze / jetsammed the app on Gemma E4B (~5 GB).
+            _ = try await hubClient.downloadSnapshot(
                 of: repoID,
                 revision: "main",
                 matching: Self.modelDownloadPatterns,
-                // Fewer parallel files is more reliable on background sessions.
-                maxConcurrentDownloads: 2,
-                progressHandler: { @MainActor p in
-                    // Fire-and-forget onto the broker actor; sampling is ~10 Hz.
-                    Task(priority: .userInitiated) {
+                // One large safetensors at a time is more reliable on phones.
+                maxConcurrentDownloads: 1,
+                progressHandler: { p in
+                    Task(priority: .utility) {
                         await broker.noteHubProgress(p)
                     }
                 }
             )
             diskPoll.cancel()
             _ = await diskPoll.result
+
+            // Verify the snapshot is actually complete before declaring success.
+            // Interrupted downloads can leave config + partial weights looking
+            // complete to a simple filename check, which then fails at load time
+            // with missing-key errors.
+            await broker.setStatus("Verifying…")
+            do {
+                try await Self.verifyDownloadedFiles(
+                    hubClient: hubClient,
+                    repoID: repoID,
+                    repoDir: repoDir,
+                    patterns: Self.modelDownloadPatterns
+                )
+            } catch {
+                // A verification failure after `downloadSnapshot` returns usually
+                // means the network dropped before the final bytes were flushed.
+                // Range-resume the partial blobs once automatically before giving up.
+                await broker.setStatus("Resuming after incomplete verification…")
+                diskPoll = Self.startDiskPoll(broker: broker, repoDir: repoDir)
+                _ = try await hubClient.downloadSnapshot(
+                    of: repoID,
+                    revision: "main",
+                    matching: Self.modelDownloadPatterns,
+                    maxConcurrentDownloads: 1,
+                    progressHandler: { p in
+                        Task(priority: .utility) {
+                            await broker.noteHubProgress(p)
+                        }
+                    }
+                )
+                diskPoll.cancel()
+                _ = await diskPoll.result
+                try await Self.verifyDownloadedFiles(
+                    hubClient: hubClient,
+                    repoID: repoID,
+                    repoDir: repoDir,
+                    patterns: Self.modelDownloadPatterns
+                )
+            }
+            LocalMetalModelStore.touchVerifiedSentinel(at: repoDir)
+
             await broker.finish()
             // Persist so Settings UI + model picker see the model even if cache
             // layout detection is flaky (HF hub uses blobs + snapshot symlinks).
@@ -298,6 +363,7 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
         }
         // Engine cache root (RoamSocket or legacy AnyProvCode, whichever we bind to).
         let repoDir = hubCache.repoDirectory(repo: repoID, kind: .model)
+        LocalMetalModelStore.removeVerifiedSentinel(at: repoDir)
         if FileManager.default.fileExists(atPath: repoDir.path) {
             try FileManager.default.removeItem(at: repoDir)
         }
@@ -308,10 +374,33 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
             let extra = root.appendingPathComponent(folderName, isDirectory: true)
             if extra.standardizedFileURL != repoDir.standardizedFileURL,
                FileManager.default.fileExists(atPath: extra.path) {
+                LocalMetalModelStore.removeVerifiedSentinel(at: extra)
                 try? FileManager.default.removeItem(at: extra)
             }
         }
         await LocalMetalModelStore.shared.markDeleted(modelID: modelID)
+    }
+
+    func invalidateVerifiedSentinel(modelID: String) async {
+        if modelID.hasPrefix("local/") {
+            let name = String(modelID.dropFirst("local/".count))
+            if let dir = try? await LocalMetalModelStore.shared.modelsDirectory() {
+                LocalMetalModelStore.removeVerifiedSentinel(at: dir.appendingPathComponent(name, isDirectory: true))
+            }
+            return
+        }
+        guard let repoID = Repo.ID(rawValue: modelID) else { return }
+        let repoDir = hubCache.repoDirectory(repo: repoID, kind: .model)
+        LocalMetalModelStore.removeVerifiedSentinel(at: repoDir)
+        // Same sweep as deleteModel, but leave the actual weights/blobs in
+        // place so HubClient can Range-resume them on the next download.
+        let folderName = LocalMetalPaths.hubRepoFolderName(for: modelID)
+        for root in LocalMetalPaths.hubCacheRootsToScan() {
+            let extra = root.appendingPathComponent(folderName, isDirectory: true)
+            if extra.standardizedFileURL != repoDir.standardizedFileURL {
+                LocalMetalModelStore.removeVerifiedSentinel(at: extra)
+            }
+        }
     }
 
     func unloadFromMemory(modelID: String) async {
@@ -338,11 +427,16 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
             }
             return false
         }
-        // In-memory container from a just-finished download counts as ready.
-        if await cache.get(modelID) != nil { return true }
         guard let repoID = Repo.ID(rawValue: modelID) else { return false }
         let repoDir = hubCache.repoDirectory(repo: repoID, kind: .model)
         if LocalMetalModelStore.hasUsableModelCache(at: repoDir) { return true }
+        // An in-memory container (recent load / just-finished download) only
+        // counts while the weights are still usable on disk. A model whose
+        // files were deleted must not keep reporting as downloaded — the chat
+        // selector and Manage-models state both trust this check.
+        if await cache.get(modelID) != nil {
+            return await LocalMetalModelStore.shared.isDownloadedOnDisk(modelID: modelID)
+        }
         // Fallback: store scans RoamSocket + legacy AnyProvCode trees.
         return await LocalMetalModelStore.shared.isDownloadedOnDisk(modelID: modelID)
     }
@@ -420,6 +514,15 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
             progress(1)
             return container
         } catch {
+            // If loading failed, the cache may be incomplete/corrupted. Clear the
+            // downloaded mark and verified sentinel so the user can re-download.
+            if !id.hasPrefix("local/") {
+                await LocalMetalModelStore.shared.markDeleted(modelID: id)
+                if let repoID = Repo.ID(rawValue: id) {
+                    let repoDir = hubCache.repoDirectory(repo: repoID, kind: .model)
+                    LocalMetalModelStore.removeVerifiedSentinel(at: repoDir)
+                }
+            }
             throw ProviderError.transport(
                 "Failed to load on-device model “\(id)”: \(error.localizedDescription). " +
                 "Check network for the download, then retry. Models are not bundled in the app."
@@ -436,16 +539,192 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
     private static func expectedDownloadBytes(
         hubClient: HubClient,
         repoID: Repo.ID,
-        patterns: [String]
+        patterns: [String],
+        timeoutSeconds: Double = 20
     ) async throws -> Int64 {
-        let entries = try await hubClient.listFiles(in: repoID, kind: .model, revision: "main", recursive: true)
-        var total: Int64 = 0
-        for entry in entries {
-            guard entry.type == .file else { continue }
-            guard matchesGlobPatterns(entry.path, patterns: patterns) else { continue }
-            total += Int64(entry.size ?? 0)
+        let files = try await expectedDownloadFiles(
+            hubClient: hubClient,
+            repoID: repoID,
+            patterns: patterns,
+            timeoutSeconds: timeoutSeconds
+        )
+        return files.reduce(0) { $0 + $1.size }
+    }
+
+    /// List hub files we expect locally after a complete download.
+    private static func expectedDownloadFiles(
+        hubClient: HubClient,
+        repoID: Repo.ID,
+        patterns: [String],
+        timeoutSeconds: Double = 20
+    ) async throws -> [(path: String, size: Int64)] {
+        try await withThrowingTaskGroup(of: [(path: String, size: Int64)].self) { group in
+            group.addTask {
+                let entries = try await hubClient.listFiles(
+                    in: repoID,
+                    kind: .model,
+                    revision: "main",
+                    recursive: true
+                )
+                return entries.compactMap { entry -> (path: String, size: Int64)? in
+                    guard entry.type == .file else { return nil }
+                    guard matchesGlobPatterns(entry.path, patterns: patterns) else { return nil }
+                    return (entry.path, Int64(entry.size ?? 0))
+                }
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                throw CancellationError()
+            }
+            guard let first = try await group.next() else { return [] }
+            group.cancelAll()
+            return first
         }
-        return total
+    }
+
+    /// Verify that every hub file we expect is present in the local snapshot(s)
+    /// and, when the hub reports a size, that the on-disk size matches exactly.
+    /// Follows HF symlinks so blob sizes are checked, not symlink sizes.
+    private static func verifyDownloadedFiles(
+        hubClient: HubClient,
+        repoID: Repo.ID,
+        repoDir: URL,
+        patterns: [String]
+    ) async throws {
+        let expected = try await expectedDownloadFiles(
+            hubClient: hubClient,
+            repoID: repoID,
+            patterns: patterns
+        )
+        guard !expected.isEmpty else {
+            throw ProviderError.transport("Verification failed: no model files listed by Hugging Face.")
+        }
+
+        let fm = FileManager.default
+        let snapshotsDir = repoDir.appendingPathComponent("snapshots", isDirectory: true)
+        guard fm.fileExists(atPath: snapshotsDir.path) else {
+            throw ProviderError.transport("Verification failed: no snapshot directory found after download.")
+        }
+
+        let revs = (try? fm.contentsOfDirectory(
+            at: snapshotsDir,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ))?.filter { url in
+            var isDir: ObjCBool = false
+            return fm.fileExists(atPath: url.path, isDirectory: &isDir) && isDir.boolValue
+        } ?? []
+
+        var missing: [String] = []
+        var wrongSize: [(path: String, expected: Int64, actual: Int64)] = []
+
+        for (path, expectedSize) in expected {
+            var found = false
+            var actualIfExists: Int64 = 0
+            for rev in revs {
+                let candidate = rev.appendingPathComponent(path, isDirectory: false)
+                guard fm.fileExists(atPath: candidate.path) else { continue }
+                let actualSize = resolvedFileByteSize(at: candidate)
+                actualIfExists = actualSize
+                if expectedSize <= 0 || actualSize == expectedSize {
+                    found = true
+                    break
+                }
+            }
+            if !found {
+                if revs.isEmpty {
+                    missing.append(path)
+                } else {
+                    // Determine whether it is missing or just the wrong size.
+                    let anyExists = revs.contains { fm.fileExists(atPath: $0.appendingPathComponent(path).path) }
+                    if anyExists {
+                        wrongSize.append((path, expectedSize, actualIfExists))
+                    } else {
+                        missing.append(path)
+                    }
+                }
+            }
+        }
+
+        guard missing.isEmpty, wrongSize.isEmpty else {
+            let missingPart = missing.isEmpty ? nil : "missing \(missing.joined(separator: ", "))"
+            let wrongSizePart = wrongSize.isEmpty ? nil : "wrong size " + wrongSize.map {
+                "\($0.path) (got \($0.actual) B, expected \($0.expected) B)"
+            }.joined(separator: ", ")
+            let parts: [String] = [missingPart, wrongSizePart].compactMap { $0 }
+            throw ProviderError.transport(
+                "Download verification failed: \(parts.joined(separator: "; ")). " +
+                "Retry to resume or delete the model and download again."
+            )
+        }
+    }
+
+    /// Size of a file, resolving HF symlinks to the underlying blob.
+    ///
+    /// Uses the **logical** file size (`URLResourceKey.fileSizeKey`), not
+    /// `totalFileAllocatedSize`. Block-allocation on iOS APFS can report a
+    /// different value for newly-written blobs right after a `URLSession`
+    /// stream finishes (esp. multi-GB safetensors), which would falsely fail
+    /// the exact-size check against the HF tree API.
+    private static func resolvedFileByteSize(at url: URL) -> Int64 {
+        let fm = FileManager.default
+        guard let values = try? url.resourceValues(forKeys: [.isSymbolicLinkKey, .isRegularFileKey]),
+              values.isRegularFile == true || values.isSymbolicLink == true else {
+            return 0
+        }
+        if values.isSymbolicLink == true {
+            guard let dest = try? fm.destinationOfSymbolicLink(atPath: url.path) else { return 0 }
+            let destURL: URL
+            if (dest as NSString).isAbsolutePath {
+                destURL = URL(fileURLWithPath: dest)
+            } else {
+                destURL = url.deletingLastPathComponent().appendingPathComponent(dest)
+            }
+            return logicalFileByteSize(destURL)
+        }
+        return logicalFileByteSize(url)
+    }
+
+    /// Logical byte length of a regular file (the size HF reports).
+    private static func logicalFileByteSize(_ url: URL) -> Int64 {
+        guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+              values.isRegularFile == true,
+              let size = values.fileSize
+        else { return 0 }
+        return Int64(size)
+    }
+
+    /// Parse catalog `approxSize` strings like `~5.2 GB` / `~800 MB` into bytes.
+    private static func approxBytesFromCatalog(modelID: String) -> Int64? {
+        let lower = modelID.lowercased()
+        let hit = LocalMetalCatalog.recommended.first {
+            $0.hubID == modelID || $0.hubID.lowercased() == lower
+        } ?? LocalMetalCatalog.registry.first {
+            $0.hubID == modelID || $0.hubID.lowercased() == lower
+        }
+        return parseApproxSizeBytes(hit?.approxSize)
+    }
+
+    private static func parseApproxSizeBytes(_ raw: String?) -> Int64? {
+        guard var s = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty else {
+            return nil
+        }
+        if s.hasPrefix("~") { s = String(s.dropFirst()) }
+        s = s.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let numberPart = s.prefix(while: { $0.isNumber || $0 == "." || $0 == "," })
+        let unitPart = s.dropFirst(numberPart.count).trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = numberPart.replacingOccurrences(of: ",", with: ".")
+        guard let value = Double(normalized), value > 0 else { return nil }
+        if unitPart.hasPrefix("GB") || unitPart.hasPrefix("G") {
+            return Int64(value * 1_000_000_000) // decimal GB as HF often reports
+        }
+        if unitPart.hasPrefix("MB") || unitPart.hasPrefix("M") {
+            return Int64(value * 1_000_000)
+        }
+        if unitPart.hasPrefix("KB") || unitPart.hasPrefix("K") {
+            return Int64(value * 1_000)
+        }
+        return nil
     }
 
     private static func matchesGlobPatterns(_ path: String, patterns: [String]) -> Bool {
@@ -465,6 +744,23 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
     /// Best-effort size of a hub repo cache tree (blobs + incomplete + snapshots).
     private static func directoryByteSize(at root: URL) -> Int64 {
         sumRegularFileBytes(at: root)
+    }
+
+    /// Poll cache + large temp files + last hub Progress at ~2.5 Hz.
+    private static func startDiskPoll(broker: DownloadProgressBroker, repoDir: URL) -> Task<Void, Never> {
+        Task.detached(priority: .utility) {
+            while !Task.isCancelled {
+                let cacheBytes = Self.directoryByteSize(at: repoDir)
+                let tempBytes = Self.largeTempFileBytes()
+                await broker.noteObservedBytes(
+                    cacheBytes: cacheBytes,
+                    tempBytes: tempBytes,
+                    status: "Downloading…"
+                )
+                await broker.rescanHubProgress()
+                try? await Task.sleep(nanoseconds: 400_000_000)
+            }
+        }
     }
 
     /// Sum of large regular files under the app temp directory.
@@ -617,18 +913,26 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
 ///   - hub `Progress.fractionCompleted` / unit counts
 ///   - hub cache size (blobs + incomplete + snapshots)
 ///   - growth of large files under the app temp directory
+///
+/// Emits are throttled (~4/s, MB-granular) so multi‑GB models do not flood the
+/// main actor / SwiftUI and freeze the phone.
 private actor DownloadProgressBroker {
     private let emit: @Sendable (LocalMetalDownloadProgress) -> Void
     private var bestFraction: Double = 0
     private var expectedBytes: Int64 = 0
     private var lastEmitted: Double = -1
     private var lastStatusKey = ""
+    private var lastPublishAt: ContinuousClock.Instant?
     private var tempBaseline: Int64 = 0
     private var status: String = "Downloading weights…"
     private var currentFile: String?
     private var bytesDownloaded: Int64 = 0
-    /// Last Progress object from the hub client (sampled between handler callbacks).
-    private var lastHubProgress: Progress?
+    /// Snapshot of the last hub Progress (unit counts only — avoid re-entering Progress).
+    private var lastHubCompleted: Int64 = 0
+    private var lastHubTotal: Int64 = 0
+    private var lastHubFraction: Double = 0
+    private var lastHubStatus: String?
+    private var lastHubFile: String?
 
     init(emit: @escaping @Sendable (LocalMetalDownloadProgress) -> Void) {
         self.emit = emit
@@ -648,37 +952,42 @@ private actor DownloadProgressBroker {
     }
 
     func noteHubProgress(_ progress: Progress) {
-        lastHubProgress = progress
-        if progress.totalUnitCount > 1_024 {
-            expectedBytes = max(expectedBytes, progress.totalUnitCount)
+        // Snapshot counts immediately; do not retain Progress across awaits.
+        let completed = progress.completedUnitCount
+        let total = progress.totalUnitCount
+        let hierarchical = progress.fractionCompleted
+        let label = Self.statusLabel(from: progress)
+        let file = Self.fileLabel(from: progress)
+
+        lastHubCompleted = max(lastHubCompleted, completed)
+        if total > 0 {
+            lastHubTotal = max(lastHubTotal, total)
         }
-        // Prefer hub-provided step labels when present (file counts, names).
-        if let label = Self.statusLabel(from: progress) {
-            status = label
+        if hierarchical.isFinite, hierarchical > 0 {
+            lastHubFraction = max(lastHubFraction, hierarchical)
         }
-        if let file = Self.fileLabel(from: progress) {
-            currentFile = file
+        if let label { lastHubStatus = label; status = label }
+        if let file { lastHubFile = file; currentFile = file }
+
+        if total > 1_024 {
+            expectedBytes = max(expectedBytes, total)
         }
-        if progress.totalUnitCount > 0, progress.completedUnitCount >= 0 {
-            // When unit counts look like bytes, surface them.
-            if progress.totalUnitCount > 1_024 * 1_024 {
-                bytesDownloaded = max(bytesDownloaded, progress.completedUnitCount)
-                expectedBytes = max(expectedBytes, progress.totalUnitCount)
-            }
+        if total > 1_024 * 1_024, completed >= 0 {
+            bytesDownloaded = max(bytesDownloaded, completed)
+            expectedBytes = max(expectedBytes, total)
         }
-        raise(Self.fraction(from: progress))
+        raise(Self.fraction(completed: completed, total: total, hierarchical: hierarchical))
     }
 
-    /// Re-read the last hub Progress (URLSession updates it off-thread).
+    /// Re-apply the last hub snapshot between disk polls.
     func rescanHubProgress() {
-        guard let progress = lastHubProgress else { return }
-        if let label = Self.statusLabel(from: progress) {
-            status = label
-        }
-        if let file = Self.fileLabel(from: progress) {
-            currentFile = file
-        }
-        raise(Self.fraction(from: progress))
+        if let label = lastHubStatus { status = label }
+        if let file = lastHubFile { currentFile = file }
+        raise(Self.fraction(
+            completed: lastHubCompleted,
+            total: lastHubTotal,
+            hierarchical: lastHubFraction
+        ))
     }
 
     /// Cache bytes + absolute temp occupancy (baseline subtracted inside).
@@ -709,25 +1018,33 @@ private actor DownloadProgressBroker {
 
     private func raise(_ value: Double) {
         let clamped = min(0.99, max(0, value))
-        guard clamped > bestFraction + 0.0005 || (clamped > 0 && bestFraction == 0) else {
-            if clamped > bestFraction { bestFraction = clamped }
-            // Still push status/file changes even if fraction barely moved.
-            publish(bestFraction, force: false)
-            return
+        if clamped > bestFraction {
+            bestFraction = clamped
         }
-        bestFraction = clamped
         publish(bestFraction, force: false)
     }
 
     private func publish(_ raw: Double, force: Bool) {
         let value = min(1, max(0, raw))
-        let statusKey = "\(status)|\(currentFile ?? "")|\(bytesDownloaded)|\(expectedBytes)"
-        // ~0.1% steps so multi‑GB transfers feel alive without flooding SwiftUI.
-        let fractionMoved = value >= 1 || value >= lastEmitted + 0.001 || lastEmitted < 0
+        // MB-granular key so multi‑GB byte ticks do not emit every kilobyte.
+        let mbDown = bytesDownloaded / 1_048_576
+        let mbTotal = expectedBytes / 1_048_576
+        let statusKey = "\(status)|\(currentFile ?? "")|\(mbDown)|\(mbTotal)|\(Int(value * 200))"
+        let now = ContinuousClock.now
+        let minInterval: Duration = .milliseconds(250)
+        let timeOK: Bool = {
+            guard let last = lastPublishAt else { return true }
+            return now - last >= minInterval
+        }()
+        // ~0.5% steps + status/file/MB changes, rate-limited to ~4 UI updates/sec.
+        let fractionMoved = value >= 1 || value >= lastEmitted + 0.005 || lastEmitted < 0
         let statusMoved = statusKey != lastStatusKey
-        guard force || fractionMoved || statusMoved else { return }
+        guard force || ((fractionMoved || statusMoved) && timeOK) || (value >= 1 && lastEmitted < 1) else {
+            return
+        }
         lastEmitted = value
         lastStatusKey = statusKey
+        lastPublishAt = now
 
         let step: String
         if value >= 1 {
@@ -748,24 +1065,27 @@ private actor DownloadProgressBroker {
     }
 
     static func fraction(from progress: Progress) -> Double {
-        let hierarchical = progress.fractionCompleted
+        fraction(
+            completed: progress.completedUnitCount,
+            total: progress.totalUnitCount,
+            hierarchical: progress.fractionCompleted
+        )
+    }
+
+    static func fraction(completed: Int64, total: Int64, hierarchical: Double) -> Double {
         if hierarchical.isFinite, hierarchical > 0 {
             return min(0.99, max(0, hierarchical))
         }
-        if progress.totalUnitCount > 0, progress.completedUnitCount > 0 {
-            return min(
-                0.99,
-                max(0, Double(progress.completedUnitCount) / Double(progress.totalUnitCount))
-            )
+        if total > 0, completed > 0 {
+            return min(0.99, max(0, Double(completed) / Double(total)))
         }
-        if progress.completedUnitCount > 0 {
-            // Indeterminate total — soft estimate from completed units (often bytes).
-            return min(0.99, Double(progress.completedUnitCount) / 4_000_000_000)
+        if completed > 0 {
+            return min(0.99, Double(completed) / 4_000_000_000)
         }
         return 0
     }
 
-    /// Human step label from Foundation Progress (file counts / descriptions).
+    /// Human step label from Foundation Progress (file counts only — never raw byte “0 of N”).
     static func statusLabel(from progress: Progress) -> String? {
         if progress.totalUnitCount > 0,
            progress.totalUnitCount <= 10_000,
@@ -777,17 +1097,7 @@ private actor DownloadProgressBroker {
                 return "Downloading files… \(done)/\(total)"
             }
         }
-        if let extra = progress.localizedAdditionalDescription?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-           !extra.isEmpty {
-            return extra
-        }
-        if let desc = progress.localizedDescription?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-           !desc.isEmpty,
-           !desc.lowercased().contains("completed") {
-            return desc
-        }
+        // Skip Foundation’s default “0 of 5,179,239,349” byte strings.
         return nil
     }
 

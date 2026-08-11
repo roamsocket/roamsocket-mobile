@@ -408,6 +408,24 @@ public enum ServerMessage: Decodable, Sendable {
     case remoteEndpoint(status: String, url: String?, provider: String?, error: String?)
     /// Agent working checklist snapshot (`update_tasks` tool).
     case taskList(sessionId: String, tasks: [AgentTaskPayload])
+    /// `/goal` completion-condition status for the coding session.
+    case goalStatus(
+        sessionId: String,
+        status: String,
+        condition: String?,
+        reason: String?,
+        turnsEvaluated: Int?,
+        startedAt: Double?,
+        elapsedMs: Double?,
+        message: String
+    )
+    /// Live status while a local (desktop Metal / MLX) model loads or generates.
+    case modelStatus(
+        sessionId: String,
+        status: String,
+        hubID: String?,
+        message: String?
+    )
 
     public struct AgentTaskPayload: Codable, Hashable, Sendable, Identifiable {
         public let id: String
@@ -420,6 +438,56 @@ public enum ServerMessage: Decodable, Sendable {
             self.content = content
             self.status = status
         }
+    }
+
+    /// Live `/goal` banner state (mirrors `goal_status` frames).
+    public struct GoalStatusPayload: Hashable, Sendable {
+        /// `active` | `achieved` | `cleared` | `none`
+        public let status: String
+        public let condition: String?
+        public let reason: String?
+        public let turnsEvaluated: Int?
+        public let startedAt: Double?
+        public let elapsedMs: Double?
+        public let message: String
+
+        public init(
+            status: String,
+            condition: String?,
+            reason: String?,
+            turnsEvaluated: Int?,
+            startedAt: Double?,
+            elapsedMs: Double?,
+            message: String
+        ) {
+            self.status = status
+            self.condition = condition
+            self.reason = reason
+            self.turnsEvaluated = turnsEvaluated
+            self.startedAt = startedAt
+            self.elapsedMs = elapsedMs
+            self.message = message
+        }
+
+        public var isActive: Bool { status == "active" }
+    }
+
+    /// Live local-model loading state (mirrors `model_status` frames).
+    public struct ModelStatusPayload: Hashable, Sendable {
+        /// `loading` | `generating` | `done`
+        public let status: String
+        /// Hub id of the local model, when known.
+        public let hubID: String?
+        /// Human-readable progress detail.
+        public let message: String?
+
+        public init(status: String, hubID: String?, message: String?) {
+            self.status = status
+            self.hubID = hubID
+            self.message = message
+        }
+
+        public var isLoading: Bool { status == "loading" }
     }
 
     public struct FileEntryPayload: Codable, Hashable, Sendable {
@@ -458,6 +526,8 @@ public enum ServerMessage: Decodable, Sendable {
         case name, isDirectory, size, modifiedAt, changeStatus, changes
         case tunnels, availableProviders, provider, status, error, tunnelId
         case tasks
+        case condition, reason, turnsEvaluated, startedAt, elapsedMs
+        case hubID
     }
 
     // CodingKeys already cover remote_endpoint fields: status, url, provider, error
@@ -573,6 +643,22 @@ public enum ServerMessage: Decodable, Sendable {
             self = .taskList(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
                 tasks: try c.decode([AgentTaskPayload].self, forKey: .tasks))
+        case "goal_status":
+            self = .goalStatus(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                status: try c.decode(String.self, forKey: .status),
+                condition: try c.decodeIfPresent(String.self, forKey: .condition),
+                reason: try c.decodeIfPresent(String.self, forKey: .reason),
+                turnsEvaluated: try c.decodeIfPresent(Int.self, forKey: .turnsEvaluated),
+                startedAt: try c.decodeIfPresent(Double.self, forKey: .startedAt),
+                elapsedMs: try c.decodeIfPresent(Double.self, forKey: .elapsedMs),
+                message: try c.decode(String.self, forKey: .message))
+        case "model_status":
+            self = .modelStatus(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                status: try c.decode(String.self, forKey: .status),
+                hubID: try c.decodeIfPresent(String.self, forKey: .hubID),
+                message: try c.decodeIfPresent(String.self, forKey: .message))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .type, in: c, debugDescription: "Unknown server message type: \(type)")

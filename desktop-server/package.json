@@ -37,9 +37,9 @@
   },
   "bin": {
     "roamsocket": "bin/roamsocket.js",
-    "codesocket": "bin/codesocket.js",
-    "codesocket-server": "bin/codesocket.js",
-    "anyprov-code-server": "bin/codesocket.js"
+    "roamsocket": "bin/roamsocket.js",
+    "roamsocket-server": "bin/roamsocket.js",
+    "anyprov-code-server": "bin/roamsocket.js"
   },
   "files": [
     "bin",
@@ -51,14 +51,15 @@
     "access": "public"
   },
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "start": "node dist/src/index.js",
+    "dev": "tsx src/cli/main.ts",
+    "start": "node dist/src/cli/main.js",
     "build": "tsc -p tsconfig.json",
     "prepublishOnly": "npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.electron.json",
     "typecheck:server": "tsc -p tsconfig.json --noEmit",
     "typecheck:electron": "tsc -p tsconfig.electron.json",
     "smoke": "tsx scripts/smoke.ts",
+    "test:cli": "tsx scripts/cli-unit.ts",
     "test:client": "tsx scripts/client-unit.ts && tsx scripts/client-shell-check.ts",
     "test:metal": "tsx scripts/metal-check.ts",
     "test:electron-dom": "tsx scripts/electron-dom-check.ts",
@@ -71,8 +72,10 @@
   "dependencies": {
     "bonjour-service": "^1.4.4",
     "express": "^4.21.2",
+    "ink": "^7.1.1",
     "node-pty": "^1.1.0",
     "qrcode": "^1.5.4",
+    "react": "^19.2.8",
     "ws": "^8.18.0",
     "zod": "^3.24.1"
   },
@@ -91,6 +94,7 @@
     "@types/express": "^4.17.21",
     "@types/node": "^22.10.5",
     "@types/qrcode": "^1.5.6",
+    "@types/react": "^19.2.18",
     "@types/ws": "^8.5.13",
     "electron": "^33.2.0",
     "tsx": "^4.19.2",

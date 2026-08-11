@@ -113,6 +113,22 @@ final class ProviderTests: XCTestCase {
         }
     }
 
+    func testHTTPErrorDescriptionExtractsOpenAIStyleMessage() {
+        let body = #"{"error":{"message":"You exceeded your current quota, please check your plan and billing details.","type":"insufficient_quota"}}"#
+        let err = ProviderError.http(status: 429, body: body)
+        XCTAssertEqual(err.errorDescription, "HTTP 429: You exceeded your current quota, please check your plan and billing details.")
+    }
+
+    func testHTTPErrorDescriptionHandlesLegacyStringError() {
+        let err = ProviderError.http(status: 401, body: #"{"error":"bad key"}"#)
+        XCTAssertEqual(err.errorDescription, "HTTP 401: bad key")
+    }
+
+    func testHTTPErrorDescriptionFallsBackToRawBody() {
+        let err = ProviderError.http(status: 502, body: "upstream went away")
+        XCTAssertEqual(err.errorDescription, "HTTP 502: upstream went away")
+    }
+
     func testCatalogFanOutCapturesPerProviderErrors() async {
         let http = MockHTTPClient(routes: [
             (match: "api.anthropic.com", status: 200, body: json(#"{"data":[{"id":"claude-x"}]}"#)),
@@ -332,6 +348,96 @@ final class ProviderTests: XCTestCase {
         XCTAssertEqual(content[1]["text"] as? String, "Describe")
     }
 
+    func testOpenRouterParsesOrganizationAndFreeFlag() async throws {
+        let http = MockHTTPClient(routes: [(
+            match: "openrouter.ai/api/v1/models",
+            status: 200,
+            body: json(#"""
+            {"data":[
+              {"id":"openai/gpt-4o","organization":"OpenAI","context_length":128000,
+               "is_free":false,"pricing":{"prompt":"2.5","completion":"10"}},
+              {"id":"meta-llama/llama-3.1-8b-instruct","organization":"Meta",
+               "context_length":131072,"is_free":true,
+               "pricing":{"prompt":"0","completion":"0"}},
+              {"id":"openai/gpt-4o-mini","organization":"OpenAI","context_length":128000,
+               "pricing":{"prompt":"0","completion":"0"}}
+            ]}
+            """#)
+        )])
+        let models = try await OpenAICompatibleProvider(id: .openrouter, http: http)
+            .listModels(apiKey: "sk-or")
+        XCTAssertEqual(models.count, 3)
+        XCTAssertEqual(models[0].organization, "OpenAI")
+        XCTAssertEqual(models[0].isFree, false)
+        XCTAssertEqual(models[1].organization, "Meta")
+        XCTAssertEqual(models[1].isFree, true)
+        // Zero pricing without is_free is still free.
+        XCTAssertEqual(models[2].organization, "OpenAI")
+        XCTAssertEqual(models[2].isFree, true)
+    }
+
+    func testOpenRouterChatEncodesWebSearchPlugin() async throws {
+        final class CapturingHTTP: HTTPClient, @unchecked Sendable {
+            var lastBody: Data?
+            func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+                lastBody = request.httpBody
+                let payload = #"{"choices":[{"message":{"role":"assistant","content":"Live result."}}]}"#
+                let resp = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: nil
+                )!
+                return (Data(payload.utf8), resp)
+            }
+        }
+
+        // With a web search query the `web` plugin must be attached.
+        let withSearch = CapturingHTTP()
+        let provider = OpenAICompatibleProvider(id: .openrouter, http: withSearch)
+        _ = try await provider.chat(
+            model: "openai/gpt-4o-mini",
+            apiKey: "sk-or",
+            messages: [ProviderChatMessage(role: .user, content: "Latest Swift news")],
+            effort: nil,
+            webSearchQuery: "Latest Swift news"
+        )
+        var json = try XCTUnwrap(withSearch.lastBody)
+        var obj = try JSONSerialization.jsonObject(with: json) as! [String: Any]
+        var plugins = obj["plugins"] as! [[String: Any]]
+        XCTAssertEqual(plugins.count, 1)
+        XCTAssertEqual(plugins[0]["id"] as? String, "web")
+        XCTAssertEqual(plugins[0]["max_results"] as? Int, 5)
+        XCTAssertEqual(plugins[0]["search_prompt"] as? String, "Latest Swift news")
+
+        // Without a query (or for non-OpenRouter hosts) no plugins are sent.
+        let noSearch = CapturingHTTP()
+        let noSearchProvider = OpenAICompatibleProvider(id: .openrouter, http: noSearch)
+        _ = try await noSearchProvider.chat(
+            model: "openai/gpt-4o-mini",
+            apiKey: "sk-or",
+            messages: [ProviderChatMessage(role: .user, content: "Hi")],
+            effort: nil,
+            webSearchQuery: nil
+        )
+        json = try XCTUnwrap(noSearch.lastBody)
+        obj = try JSONSerialization.jsonObject(with: json) as! [String: Any]
+        XCTAssertNil(obj["plugins"])
+
+        let openAICapture = CapturingHTTP()
+        let openAI = OpenAICompatibleProvider(id: .openai, http: openAICapture)
+        _ = try await openAI.chat(
+            model: "gpt-4o",
+            apiKey: "sk-test",
+            messages: [ProviderChatMessage(role: .user, content: "Hi")],
+            effort: nil,
+            webSearchQuery: "Something to look up"
+        )
+        json = try XCTUnwrap(openAICapture.lastBody)
+        obj = try JSONSerialization.jsonObject(with: json) as! [String: Any]
+        XCTAssertNil(obj["plugins"])
+    }
+
     func testModelSelectionEncodesBaseUrlAndApiStyle() throws {
         let sel = ModelSelection(
             provider: .custom("ollama"),
@@ -347,5 +453,40 @@ final class ProviderTests: XCTestCase {
         XCTAssertEqual(obj["baseUrl"] as? String, "http://127.0.0.1:11434/v1")
         XCTAssertEqual(obj["apiStyle"] as? String, "openai")
         XCTAssertEqual(obj["model"] as? String, "llama3.2")
+    }
+
+    func testPrettifiedDisplayName() {
+        // OpenRouter: org prefix dropped (shown as the submenu header).
+        XCTAssertEqual(
+            AIModel.prettifiedDisplayName(for: "deepseek/deepseek-r1", provider: .openrouter),
+            "DeepSeek R1"
+        )
+        XCTAssertEqual(
+            AIModel.prettifiedDisplayName(for: "meta-llama/llama-3.1-70b-instruct", provider: .openrouter),
+            "Llama 3.1 70B Instruct"
+        )
+        XCTAssertEqual(
+            AIModel.prettifiedDisplayName(for: "openai/gpt-4o-mini", provider: .openrouter),
+            "GPT 4o Mini"
+        )
+        // Brand capitalization overrides.
+        XCTAssertEqual(
+            AIModel.prettifiedDisplayName(for: "deepseek-r1", provider: .openai),
+            "DeepSeek R1"
+        )
+        XCTAssertEqual(
+            AIModel.prettifiedDisplayName(for: "qwen2.5-coder-7b-instruct", provider: .openrouter),
+            "Qwen2.5 Coder 7B Instruct"
+        )
+        // ~ becomes a space, - becomes a space, words are capitalized.
+        XCTAssertEqual(
+            AIModel.prettifiedDisplayName(for: "roberta-base~v2", provider: .custom("x")),
+            "Roberta Base V2"
+        )
+        // Unprefixed ids keep their full path prettified.
+        XCTAssertEqual(
+            AIModel.prettifiedDisplayName(for: "gemini-2.0-flash", provider: .google),
+            "Gemini 2.0 Flash"
+        )
     }
 }

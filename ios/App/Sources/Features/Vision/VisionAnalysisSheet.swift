@@ -420,9 +420,24 @@ struct VisionAnalysisSheet: View {
                 }
             }
 
+            // Re-run the same still with a different task / system prompt.
+            if viewModel.canReanalyze {
+                Button {
+                    viewModel.presentReanalyzePrompt()
+                } label: {
+                    Image(systemName: "text.badge.plus")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.textSecondary)
+                        .frame(width: 32, height: 32)
+                        .background(Theme.surfaceElevated, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Re-analyze with different prompt")
+            }
+
             // Retake lives on the sheet so full/medium states don’t trap the user
             // under the top chrome or behind a tall card.
-            if viewModel.capturedImage != nil {
+            if viewModel.hasFrozenCapture {
                 Button {
                     onRetake()
                 } label: {
@@ -607,6 +622,19 @@ struct VisionAnalysisSheet: View {
                     }
                     .frame(maxHeight: 280)
                 }
+                if viewModel.canReanalyze {
+                    Button {
+                        showCapturePromptDetail = false
+                        viewModel.presentReanalyzePrompt()
+                    } label: {
+                        Label("Change prompt & re-analyze", systemImage: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Theme.accent)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 4)
+                }
             }
             .padding(16)
             .frame(minWidth: 260, idealWidth: 300, maxWidth: 340)
@@ -618,7 +646,12 @@ struct VisionAnalysisSheet: View {
 
     private var titleText: String {
         if viewModel.isReplying { return "Replying" }
-        if case .analyzing = viewModel.phase { return "Analyzing" }
+        switch viewModel.phase {
+        case .capturing, .analyzing:
+            return "Analyzing"
+        default:
+            break
+        }
         if viewModel.turns.contains(where: { $0.role == .user }) { return "Vision chat" }
         return "Analysis"
     }
@@ -656,15 +689,32 @@ struct VisionAnalysisSheet: View {
                     // Thread starts with the answer so long system instructions
                     // never push results below the fold.
 
-                    if case .analyzing = viewModel.phase, viewModel.turns.isEmpty {
+                    if viewModel.turns.isEmpty,
+                       viewModel.phase == .analyzing || viewModel.phase == .capturing {
                         thinkingBlock
                             .id("vision-analyzing")
                     } else if case .failed(let msg) = viewModel.phase, viewModel.turns.isEmpty {
-                        Text(msg)
-                            .font(.system(size: 15))
-                            .foregroundStyle(Color.red.opacity(0.95))
-                            .frame(maxWidth: .infinity, alignment: .topLeading)
-                            .textSelection(.enabled)
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text(msg)
+                                .font(.system(size: 15))
+                                .foregroundStyle(Color.red.opacity(0.95))
+                                .frame(maxWidth: .infinity, alignment: .topLeading)
+                                .textSelection(.enabled)
+                            if viewModel.canReanalyze {
+                                Button {
+                                    viewModel.retryAnalysis()
+                                } label: {
+                                    Label("Try again", systemImage: "arrow.clockwise")
+                                        .font(.system(size: 15, weight: .semibold))
+                                        .foregroundStyle(Theme.background)
+                                        .padding(.horizontal, 18)
+                                        .padding(.vertical, 10)
+                                        .background(Theme.accent, in: Capsule())
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Retry analysis")
+                            }
+                        }
                     } else {
                         ForEach(viewModel.turns) { turn in
                             turnBubble(turn)
@@ -818,6 +868,7 @@ struct VisionAnalysisSheet: View {
         switch call.name {
         case "web_search", "research": return "globe"
         case "wikipedia": return "book"
+        case "image_scan": return "viewfinder"
         default: return "wrench.and.screwdriver"
         }
     }

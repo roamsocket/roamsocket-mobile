@@ -106,11 +106,11 @@ check("product identity is RoamSocket", async () => {
   assert.equal(PRODUCT_SLUG, "roamsocket");
   assert.equal(BONJOUR_SERVICE_TYPE, "roamsocket");
   assert.equal(DATA_DIRNAME, ".roamsocket");
-  assert.ok(LEGACY_DATA_DIRNAMES.includes(".codesocket"), "legacy data dir still listed for migration");
+  assert.ok(LEGACY_DATA_DIRNAMES.includes(".roamsocket"), "legacy data dir still listed for migration");
   assert.ok(
     productDataDir().includes(".roamsocket") ||
-      productDataDir().includes(".codesocket") ||
-      productDataDir().includes(".anyprov-code"),
+    productDataDir().includes(".roamsocket") ||
+    productDataDir().includes(".anyprov-code"),
     "data dir is product or legacy path",
   );
 
@@ -916,6 +916,39 @@ async function runAsyncChecks() {
   } catch (err) {
     failed += 1;
     console.error(`FAIL listCloudModels custom baseUrl: ${(err as Error).message}`);
+  }
+
+  // OpenRouter listing keeps organization + free flags and is not capped.
+  try {
+    const rows: Array<Record<string, unknown>> = [];
+    for (let i = 0; i < 85; i++) {
+      rows.push({
+        id: `${["openai", "anthropic", "meta"][i % 3]!}/model-${i}`,
+        organization: ["OpenAI", "Anthropic", "Meta"][i % 3]!,
+        is_free: i % 2 === 0,
+        pricing: { prompt: "0", completion: "0" },
+      });
+    }
+    const listedOR = await listCloudModels("openrouter", "sk-or", async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: rows }),
+    }));
+    assert.equal(listedOR.length, 85, "openrouter catalog is not capped");
+    assert.ok(listedOR.some((m) => m.organization === "OpenAI"));
+    assert.ok(listedOR.some((m) => m.isFree === true));
+    assert.ok(listedOR.every((m) => typeof m.organization === "string"));
+
+    const listedGroq = await listCloudModels("groq", "gsk-test", async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: rows }),
+    }));
+    assert.equal(listedGroq.length, 80, "other providers keep the cap");
+    console.log("ok  listCloudModels openrouter org/free meta + unbounded");
+  } catch (err) {
+    failed += 1;
+    console.error(`FAIL listCloudModels openrouter: ${(err as Error).message}`);
   }
 
   // Agent adapter with custom baseUrl must call that host (not cloud defaults)

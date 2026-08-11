@@ -70,18 +70,19 @@ export async function discoverLocalSkills(): Promise<Skill[]> {
 function crudeParse(text: string): { name?: string; description?: string; body: string } {
   if (!text.startsWith("---")) return { body: text };
   const lines = text.split(/\r?\n/);
-  if (lines.length < 2 || lines[0].trim() !== "---") return { body: text };
+  if (lines.length < 2 || (lines[0] ?? "").trim() !== "---") return { body: text };
   let end = -1;
   for (let i = 1; i < lines.length; i++) {
-    if (lines[i].trim() === "---") { end = i; break; }
+    if ((lines[i] ?? "").trim() === "---") { end = i; break; }
   }
   if (end < 0) return { body: text };
   const fm: Record<string, string> = {};
   for (let i = 1; i < end; i++) {
-    const colon = lines[i].indexOf(":");
+    const line = lines[i] ?? "";
+    const colon = line.indexOf(":");
     if (colon > 0) {
-      const key = lines[i].slice(0, colon).trim();
-      let value = lines[i].slice(colon + 1).trim();
+      const key = line.slice(0, colon).trim();
+      let value = line.slice(colon + 1).trim();
       if (value.startsWith(">")) value = value.slice(1).trim();
       fm[key] = value;
     }

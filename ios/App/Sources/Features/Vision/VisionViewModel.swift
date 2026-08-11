@@ -69,7 +69,8 @@ final class VisionViewModel: ObservableObject {
 
     // MARK: Tools (client-side; same stack as Chat)
 
-    /// DuckDuckGo web search injected as system context. On by default for Vision.
+    /// DuckDuckGo web search. On capture: query is derived from the photo (never the
+    /// system/capture instruction). On follow-ups: query is the user's question.
     @Published var webSearchEnabled: Bool = true
     /// Multi-query research + Wikipedia. Implies web search when enabled.
     @Published var researchEnabled: Bool = false
@@ -85,6 +86,8 @@ final class VisionViewModel: ObservableObject {
     /// Prompt actually sent with the frozen photo (for the thread header).
     @Published private(set) var lastUsedPrompt: String = ""
     @Published private(set) var lastUsedPresetTitle: String?
+    /// Sheet to re-run analysis on the frozen photo with a different task prompt.
+    @Published var showReanalyzePrompt = false
 
     let promptStore: VisionPromptStore
 
@@ -110,7 +113,22 @@ final class VisionViewModel: ObservableObject {
     /// Built-in fallback when the user leaves the capture prompt empty.
     /// Lead with the takeaway so the user sees the useful result without scrolling.
     static let defaultAnalysisPrompt = """
-    Analyze this photo for the user. Structure your reply exactly like this:
+    Analyze this photo for the user.
+
+    **If this is a quiz, test, worksheet, or homework** (true/false, multiple choice, short answer, or several discrete questions), use this layout instead of the general one:
+
+    1. One-line intro naming the question type and count (e.g. “Here are the answers to the four true/false questions on your screen.”).
+    2. For each question:
+
+    ## Question N
+
+    - **Text:** Restate the full question (and options if multiple choice).
+    - **Answer:** Bold the correct choice, True/False, number, or short phrase.
+    - **Reason:** One or two concise sentences of explanation.
+
+    Separate questions with `---`. Do not open with a photo description.
+
+    **Otherwise** (general photos), structure your reply like this:
 
     ## Answer
     Start with the key takeaway, result, identification, or recommendation in 1–3 short sentences (or a tight bullet list). Put what the user needs first — not a scenic description.
@@ -121,7 +139,7 @@ final class VisionViewModel: ObservableObject {
     ## Notes (optional)
     Uncertainty, missing context, or follow-up suggestions only if helpful.
 
-    Be concise. Do not open with “This photo shows…” or a long scene description before the answer.
+    Be concise. Never open with “This photo shows…” or a long scene description before the answer.
     """
 
     var presets: [VisionPromptPreset] {
@@ -158,8 +176,32 @@ final class VisionViewModel: ObservableObject {
     }
 
     var isThinking: Bool {
-        if case .analyzing = phase { return true }
-        return isReplying
+        switch phase {
+        case .capturing, .analyzing:
+            return true
+        default:
+            return isReplying
+        }
+    }
+
+    /// Shutter has fired — freeze frame + analysis card (preview freeze or still).
+    var hasFrozenCapture: Bool {
+        phase != .live
+    }
+
+    /// Keep the capture session mounted while live and while the still is developing.
+    var showsCameraSession: Bool {
+        switch phase {
+        case .live, .capturing:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Pause the live preview connection so the last frame freezes immediately.
+    var freezesCameraPreview: Bool {
+        phase == .capturing
     }
 
     /// Whether the follow-up composer should be shown.
@@ -188,12 +230,24 @@ final class VisionViewModel: ObservableObject {
         }
     }
 
+    /// Frozen photo available to re-run with a new system/task prompt.
+    var canReanalyze: Bool {
+        guard !isThinking, (analysisSourceImage ?? capturedImage) != nil else { return false }
+        switch phase {
+        case .result, .failed:
+            return true
+        default:
+            return false
+        }
+    }
+
     init(
         catalog: ModelCatalog = ModelCatalog(),
-        promptStore: VisionPromptStore = .shared
+        promptStore: VisionPromptStore? = nil
     ) {
         self.catalog = catalog
-        self.promptStore = promptStore
+        // Resolve on MainActor (class is @MainActor); default args are nonisolated.
+        self.promptStore = promptStore ?? VisionPromptStore.shared
     }
 
     // MARK: - Capture prompts / presets
@@ -272,15 +326,82 @@ final class VisionViewModel: ObservableObject {
         state.allModels.filter { state.modelSupportsVision($0) }
     }
 
-    /// Encode a captured frame and run the selected vision model.
-    func analyze(image: UIImage) {
+    /// Call as soon as the shutter fires (before the still finishes developing).
+    /// Freezes the preview path and opens the analyzing card immediately.
+    func beginCapture() {
+        guard canCapture else { return }
         analysisTask?.cancel()
-        // Downscale immediately so the full sensor buffer is not retained
-        // alongside the VLM weights for the whole generation.
-        let forDisplay = Self.displayImage(from: image)
-        analysisSourceImage = forDisplay
+        analysisTask = nil
+        AIThinkingActivityManager.shared.thinkingDidEnd()
+
+        analysisText = ""
+        errorMessage = nil
+        turns = []
+        draftText = ""
+        providerMessages = []
+        sessionImageAttachment = nil
+        // Keep any previous still until the new one lands only when retaking from
+        // result/failed — from live, capturedImage is already nil.
+        if phase == .live {
+            capturedImage = nil
+            analysisSourceImage = nil
+            lastCropNormalized = CGRect(x: 0, y: 0, width: 1, height: 1)
+        }
+        activeToolCalls = []
+        isReplying = false
+
+        // Snapshot prompt/preset at shutter so the sheet header is correct while
+        // the sensor still is still developing.
+        let displayPrompt = trimmedCapturePrompt
+        let presetTitle = selectedPresetID.flatMap { id in
+            promptStore.presets.first(where: { $0.id == id })?.title
+        }
+        lastUsedPrompt = displayPrompt.isEmpty ? "" : displayPrompt
+        lastUsedPresetTitle = displayPrompt.isEmpty ? nil : presetTitle
+        lastProviderPrompt = resolvedProviderPrompt()
+
+        phase = .capturing
+        sheetMode = .expanded
+        AIThinkingActivityManager.shared.thinkingDidStart(
+            kind: .vision,
+            prompt: displayPrompt.isEmpty ? "Analyzing image" : displayPrompt
+        )
+    }
+
+    /// Capture failed before a still arrived — return to the live viewfinder.
+    func abortCapture(message: String? = nil) {
+        guard phase == .capturing else { return }
+        analysisTask?.cancel()
+        analysisTask = nil
+        AIThinkingActivityManager.shared.thinkingDidEnd()
+        capturedImage = nil
+        analysisSourceImage = nil
         lastCropNormalized = CGRect(x: 0, y: 0, width: 1, height: 1)
-        capturedImage = forDisplay
+        lastProviderPrompt = ""
+        analysisText = ""
+        errorMessage = message
+        turns = []
+        draftText = ""
+        lastUsedPrompt = ""
+        lastUsedPresetTitle = nil
+        providerMessages = []
+        sessionImageAttachment = nil
+        activeToolCalls = []
+        isReplying = false
+        phase = .live
+        sheetMode = .hidden
+    }
+
+    /// Encode a captured frame and run the selected vision model.
+    /// Prefer calling `beginCapture()` first so the UI freezes on shutter.
+    func analyze(image: UIImage) {
+        // Ignore stills that finish after Retake restored the live viewfinder.
+        guard phase == .capturing || phase == .analyzing else { return }
+
+        analysisTask?.cancel()
+
+        // Publish analyzing UI *before* any downscale work so the sheet and
+        // freeze path never wait on JPEG/raster work.
         analysisText = ""
         errorMessage = nil
         turns = []
@@ -289,26 +410,38 @@ final class VisionViewModel: ObservableObject {
         sessionImageAttachment = nil
         activeToolCalls = []
         isReplying = false
+        lastCropNormalized = CGRect(x: 0, y: 0, width: 1, height: 1)
         phase = .analyzing
         sheetMode = .expanded
 
-        // Snapshot the prompt at shutter time so editing the field mid-flight
-        // does not change what this analysis was asked to do.
-        let promptSnapshot = resolvedProviderPrompt()
-        lastProviderPrompt = promptSnapshot
-        let displayPrompt = trimmedCapturePrompt
-        let presetTitle = selectedPresetID.flatMap { id in
-            promptStore.presets.first(where: { $0.id == id })?.title
-        }
-        lastUsedPrompt = displayPrompt.isEmpty ? "" : displayPrompt
-        lastUsedPresetTitle = displayPrompt.isEmpty ? nil : presetTitle
+        // Show the still immediately (even full-res) so freeze doesn't wait on
+        // downscale; replace with the capped display buffer next.
+        capturedImage = image
 
-        startAnalysisTask(
-            image: Self.scaledImage(forDisplay, maxDimension: 1024),
-            providerPrompt: promptSnapshot,
-            searchQuery: searchQueryForCapture(displayPrompt: displayPrompt),
-            livePreview: displayPrompt.isEmpty ? "Analyzing image" : displayPrompt
-        )
+        let promptSnapshot = lastProviderPrompt.isEmpty ? resolvedProviderPrompt() : lastProviderPrompt
+        lastProviderPrompt = promptSnapshot
+        let displayPrompt = lastUsedPrompt
+        let livePreview = displayPrompt.isEmpty ? "Analyzing image" : displayPrompt
+
+        // Downscale off the synchronous entry so freeze + analyzing chrome paint
+        // on the same frame as phase flip. Then hand off to the shared task runner.
+        analysisTask = Task { [weak self] in
+            guard let self else { return }
+            let forDisplay = Self.displayImage(from: image)
+            let forModel = Self.scaledImage(forDisplay, maxDimension: 1024)
+            guard !Task.isCancelled else {
+                AIThinkingActivityManager.shared.thinkingDidEnd()
+                return
+            }
+            self.analysisSourceImage = forDisplay
+            self.capturedImage = forDisplay
+            // Replaces this task reference with the network/VLM work task.
+            self.startAnalysisTask(
+                image: forModel,
+                providerPrompt: promptSnapshot,
+                livePreview: livePreview
+            )
+        }
     }
 
     /// User finished resizing the Lens-style crop; re-run analysis on that region.
@@ -342,9 +475,72 @@ final class VisionViewModel: ObservableObject {
         startAnalysisTask(
             image: forModel,
             providerPrompt: prompt,
-            searchQuery: searchQueryForCapture(displayPrompt: lastUsedPrompt),
             livePreview: livePreview
         )
+    }
+
+    /// Open the re-analyze editor prefilled with the last (or current) task prompt.
+    func presentReanalyzePrompt() {
+        guard canReanalyze else { return }
+        // Prefill the editor with what was last sent for this still so the user
+        // can tweak it rather than starting from a blank field.
+        if capturePrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           !lastUsedPrompt.isEmpty {
+            capturePrompt = lastUsedPrompt
+            capturePromptEdited()
+        }
+        showReanalyzePrompt = true
+    }
+
+    /// Re-run analysis on the frozen photo using the current capture prompt.
+    func reanalyzeWithCurrentPrompt() {
+        guard canReanalyze else { return }
+        guard let source = analysisSourceImage ?? capturedImage else { return }
+
+        showReanalyzePrompt = false
+
+        let promptSnapshot = resolvedProviderPrompt()
+        lastProviderPrompt = promptSnapshot
+        let displayPrompt = trimmedCapturePrompt
+        let presetTitle = selectedPresetID.flatMap { id in
+            promptStore.presets.first(where: { $0.id == id })?.title
+        }
+        lastUsedPrompt = displayPrompt.isEmpty ? "" : displayPrompt
+        lastUsedPresetTitle = displayPrompt.isEmpty ? nil : presetTitle
+
+        let forModel: UIImage = {
+            let cropped = Self.croppedImage(source, normalized: lastCropNormalized)
+            return Self.scaledImage(cropped, maxDimension: 1024)
+        }()
+
+        analysisTask?.cancel()
+        analysisText = ""
+        errorMessage = nil
+        turns = []
+        draftText = ""
+        providerMessages = []
+        sessionImageAttachment = nil
+        activeToolCalls = []
+        isReplying = false
+        phase = .analyzing
+        if sheetMode == .hidden || sheetMode == .minimized {
+            sheetMode = .expanded
+        }
+
+        let livePreview = displayPrompt.isEmpty ? "Re-analyzing image" : displayPrompt
+        startAnalysisTask(
+            image: forModel,
+            providerPrompt: promptSnapshot,
+            livePreview: livePreview
+        )
+    }
+
+    /// Re-run analysis on the frozen photo after a failure (e.g. the network
+    /// dropped while the app was backgrounded). Keeps the same prompt that was
+    /// used for the failed attempt.
+    func retryAnalysis() {
+        guard canReanalyze else { return }
+        reanalyzeWithCurrentPrompt()
     }
 
     /// Ask a follow-up about the frozen photo and prior analysis.
@@ -384,7 +580,7 @@ final class VisionViewModel: ObservableObject {
                 messages.append(ProviderChatMessage(role: .user, content: text))
                 self.providerMessages = messages
 
-                let reply = try await self.runChat(messages: messages)
+                let reply = try await self.runChat(messages: messages, webSearchQuery: tools.nativeWebSearchQuery)
                 guard !Task.isCancelled else { return }
                 self.providerMessages.append(ProviderChatMessage(role: .assistant, content: reply))
                 self.turns.append(
@@ -416,6 +612,7 @@ final class VisionViewModel: ObservableObject {
         analysisTask?.cancel()
         analysisTask = nil
         AIThinkingActivityManager.shared.thinkingDidEnd()
+        showReanalyzePrompt = false
         capturedImage = nil
         analysisSourceImage = nil
         lastCropNormalized = CGRect(x: 0, y: 0, width: 1, height: 1)
@@ -487,10 +684,21 @@ final class VisionViewModel: ObservableObject {
 
     // MARK: - Private
 
+    /// Ask the VLM for a short SERP query grounded in image content only —
+    /// never the capture/system instruction.
+    private static let imageSearchQueryPrompt = """
+    Look at this photo and write ONE web search query (max 12 words) that would help identify or research what is actually visible: main subject, product, brand, landmark, plant, animal, model number, place name, or readable text.
+
+    Rules:
+    - Search for content IN the image only — not analysis instructions or meta commentary.
+    - Prefer specific names, brands, products, species, places, or short quoted text from the photo.
+    - If nothing is usefully searchable (heavy blur, pure UI chrome, empty scene), reply with exactly: NONE
+    - Reply with ONLY the query text or NONE. No quotes, labels, or explanation.
+    """
+
     private func startAnalysisTask(
         image: UIImage,
         providerPrompt: String,
-        searchQuery: String?,
         livePreview: String
     ) {
         AIThinkingActivityManager.shared.thinkingDidStart(kind: .vision, prompt: livePreview)
@@ -502,11 +710,18 @@ final class VisionViewModel: ObservableObject {
                 AIThinkingActivityManager.shared.thinkingDidEnd()
             }
             do {
-                let tools = try await self.runOptionalWebTools(query: searchQuery)
+                let model = try await self.resolveModel()
+                let attachment = try self.makeAttachment(from: image, model: model)
+
+                // Capture-time search is image-grounded: extract a query from the
+                // photo, then SERP — never use the system/capture prompt as the query.
+                let imageQuery = try await self.extractImageSearchQuery(attachment: attachment)
+                let tools = try await self.runOptionalWebTools(query: imageQuery)
                 let reply = try await self.runInitialAnalysis(
-                    image: image,
+                    attachment: attachment,
                     providerPrompt: providerPrompt,
-                    searchContext: tools.promptBlock
+                    searchContext: tools.promptBlock,
+                    webSearchQuery: tools.nativeWebSearchQuery
                 )
                 guard !Task.isCancelled else { return }
                 self.analysisText = reply
@@ -539,49 +754,166 @@ final class VisionViewModel: ObservableObject {
         }
     }
 
-    /// Query used for capture-time search. Empty custom prompt → skip SERP
-    /// (toggle still applies to follow-ups).
-    private func searchQueryForCapture(displayPrompt: String) -> String? {
-        let q = displayPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        return q.isEmpty ? nil : q
+    /// Lightweight VLM pass → short SERP query from photo content. Returns nil to skip search.
+    private func extractImageSearchQuery(
+        attachment: ProviderChatMessage.ImageAttachment
+    ) async throws -> String? {
+        guard supportsWebTools, researchEnabled || webSearchEnabled else { return nil }
+
+        let scanID = UUID()
+        var scan = ToolCall(
+            id: scanID,
+            name: "image_scan",
+            summary: "Finding searchable details in the photo…",
+            status: .running
+        )
+        activeToolCalls = [scan]
+        AIThinkingActivityManager.shared.thinkingDidUpdate(status: scan.summary)
+
+        do {
+            let raw = try await runChat(
+                messages: [
+                    ProviderChatMessage(
+                        role: .user,
+                        content: Self.imageSearchQueryPrompt,
+                        images: [attachment]
+                    ),
+                ]
+            )
+            try Task.checkCancellation()
+            let query = Self.parseImageSearchQuery(raw)
+            if let query {
+                scan.summary = "Search terms from photo: “\(Self.truncateForUI(query, 72))”"
+                scan.detail = query
+                scan.status = .completed
+            } else {
+                scan.summary = "No web search needed for this photo"
+                scan.status = .completed
+            }
+            activeToolCalls = [scan]
+            return query
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // Soft-fail: continue without image-grounded search.
+            scan.summary = "Could not derive search terms from photo"
+            scan.detail = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            scan.status = .failed(scan.detail ?? "failed")
+            activeToolCalls = [scan]
+            return nil
+        }
+    }
+
+    /// Parse a one-line SERP query from the lightweight vision reply.
+    private static func parseImageSearchQuery(_ raw: String) -> String? {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Strip common wrappers models still emit despite instructions.
+        if text.hasPrefix("```") {
+            text = text
+                .replacingOccurrences(of: "```", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let firstLine = text.split(whereSeparator: \.isNewline).first {
+            text = String(firstLine).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if (text.hasPrefix("\"") && text.hasSuffix("\""))
+            || (text.hasPrefix("'") && text.hasSuffix("'")) {
+            text = String(text.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let upper = text.uppercased()
+        if upper.isEmpty || upper == "NONE" || upper == "N/A" || upper == "NA" {
+            return nil
+        }
+        // Reject if the model echoed a long instruction instead of a query.
+        if text.count > 120 || text.contains("\n") {
+            let clipped = String(text.prefix(120)).trimmingCharacters(in: .whitespacesAndNewlines)
+            return clipped.isEmpty ? nil : clipped
+        }
+        return text
+    }
+
+    private static func truncateForUI(_ text: String, _ max: Int) -> String {
+        guard text.count > max else { return text }
+        return String(text.prefix(max - 1)).trimmingCharacters(in: .whitespaces) + "…"
     }
 
     private struct WebToolsResult {
         var calls: [ToolCall]
         var promptBlock: String?
+        /// Query to hand to the provider-native web search (OpenRouter), when used.
+        var nativeWebSearchQuery: String?
+
+        init(calls: [ToolCall] = [], promptBlock: String? = nil, nativeWebSearchQuery: String? = nil) {
+            self.calls = calls
+            self.promptBlock = promptBlock
+            self.nativeWebSearchQuery = nativeWebSearchQuery
+        }
+    }
+
+    private func applyWebSearchStep(
+        _ step: WebSearchService.Step,
+        preserving prior: [ToolCall] = []
+    ) {
+        var calls = activeToolCalls
+        // Ensure image-scan (or other prior) steps stay first when SERP updates stream in.
+        if !prior.isEmpty {
+            let priorIDs = Set(prior.map(\.id))
+            let rest = calls.filter { !priorIDs.contains($0.id) }
+            calls = prior + rest
+        }
+        if let idx = calls.firstIndex(where: { $0.id == step.id }) {
+            calls[idx] = ToolCall(from: step)
+        } else {
+            calls.append(ToolCall(from: step))
+        }
+        activeToolCalls = calls
+        AIThinkingActivityManager.shared.thinkingDidUpdate(
+            status: step.summary.isEmpty ? "Searching…" : step.summary
+        )
     }
 
     private func runOptionalWebTools(query: String?) async throws -> WebToolsResult {
         guard supportsWebTools, researchEnabled || webSearchEnabled else {
-            return WebToolsResult(calls: [], promptBlock: nil)
+            return WebToolsResult()
         }
         let q = (query ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else {
-            return WebToolsResult(calls: [], promptBlock: nil)
+            return WebToolsResult()
+        }
+
+        // Keep any prior image-scan step visible while SERP runs.
+        let prior = activeToolCalls.filter { $0.name == "image_scan" }
+
+        // OpenRouter models use the provider-native web search API — the host
+        // runs the search and injects fresh results server-side.
+        if let model = try? await resolveModel(), model.provider == .openrouter {
+            let step = WebSearchService.Step(
+                name: researchEnabled ? "research" : "web_search",
+                summary: researchEnabled
+                    ? "Researching with OpenRouter web search…"
+                    : "Searching the web with OpenRouter…",
+                detail: "Native OpenRouter web search API",
+                status: .completed
+            )
+            let call = ToolCall(from: step)
+            activeToolCalls = prior + [call]
+            return WebToolsResult(
+                calls: prior + [call],
+                promptBlock: nil,
+                nativeWebSearchQuery: q
+            )
         }
 
         let mode: WebSearchService.Mode = researchEnabled ? .research : .webSearch
         do {
             let bundle = try await webSearchService.search(userMessage: q, mode: mode) {
                 [weak self] step in
-                await MainActor.run {
-                    guard let self else { return }
-                    var calls = self.activeToolCalls
-                    if let idx = calls.firstIndex(where: { $0.id == step.id }) {
-                        calls[idx] = ToolCall(from: step)
-                    } else {
-                        calls.append(ToolCall(from: step))
-                    }
-                    self.activeToolCalls = calls
-                    AIThinkingActivityManager.shared.thinkingDidUpdate(
-                        status: step.summary.isEmpty ? "Searching…" : step.summary
-                    )
-                }
+                await self?.applyWebSearchStep(step, preserving: prior)
             }
-            let calls = bundle.steps.map { ToolCall(from: $0) }
-            activeToolCalls = calls
+            let searchCalls = bundle.steps.map { ToolCall(from: $0) }
+            activeToolCalls = prior + searchCalls
             return WebToolsResult(
-                calls: calls,
+                calls: prior + searchCalls,
                 promptBlock: bundle.promptBlock.isEmpty ? nil : bundle.promptBlock
             )
         } catch {
@@ -592,19 +924,18 @@ final class VisionViewModel: ObservableObject {
                 detail: msg,
                 status: .failed(msg)
             )
-            activeToolCalls = [failed]
+            activeToolCalls = prior + [failed]
             // Soft-fail: continue analysis without web context.
-            return WebToolsResult(calls: [failed], promptBlock: nil)
+            return WebToolsResult(calls: prior + [failed], promptBlock: nil)
         }
     }
 
     private func runInitialAnalysis(
-        image: UIImage,
+        attachment: ProviderChatMessage.ImageAttachment,
         providerPrompt: String,
-        searchContext: String?
+        searchContext: String?,
+        webSearchQuery: String? = nil
     ) async throws -> String {
-        let model = try await resolveModel()
-        let attachment = try makeAttachment(from: image, model: model)
         sessionImageAttachment = attachment
 
         var turns: [ProviderChatMessage] = []
@@ -614,13 +945,13 @@ final class VisionViewModel: ObservableObject {
         turns.append(
             ProviderChatMessage(role: .user, content: providerPrompt, images: [attachment])
         )
-        let reply = try await runChat(messages: turns)
+        let reply = try await runChat(messages: turns, webSearchQuery: webSearchQuery)
         // Seed multi-turn history: optional search context, image+prompt, then assistant.
         providerMessages = turns + [ProviderChatMessage(role: .assistant, content: reply)]
         return reply
     }
 
-    private func runChat(messages: [ProviderChatMessage]) async throws -> String {
+    private func runChat(messages: [ProviderChatMessage], webSearchQuery: String? = nil) async throws -> String {
         guard let state else {
             throw ProviderError.transport("App state is not ready.")
         }
@@ -653,7 +984,8 @@ final class VisionViewModel: ObservableObject {
                 // balloon the KV cache and jetsam mid-reply on phones.
                 effort: model.provider == .localMetal
                     ? (state.effort == .high ? .medium : state.effort)
-                    : state.effort
+                    : state.effort,
+                webSearchQuery: webSearchQuery
             )
         } catch is CancellationError {
             throw CancellationError()

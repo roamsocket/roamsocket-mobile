@@ -131,6 +131,8 @@ fall back to the built-in OpenAI / Anthropic cloud hosts.
 | `tool_call`          | `sessionId`, `callId`, `tool`, `summary`, `input` |
 | `tool_result`        | `sessionId`, `callId`, `ok`, `output` |
 | `task_list`          | `sessionId`, `tasks[]` (`id`, `content`, `status`) — agent checklist snapshot |
+| `goal_status`        | `sessionId`, `status` (`active`\|`achieved`\|`cleared`\|`none`), `condition?`, `reason?`, `turnsEvaluated?`, `startedAt?`, `elapsedMs?`, `message` — `/goal` slash-command state |
+| `model_status`       | `sessionId`, `status` (`loading`\|`generating`\|`done`), `hubID?`, `message?` — desktop Metal/MLX model load progress |
 | `diff`               | `sessionId`, `path`, `patch`, `added`, `removed` |
 | `permission_request` | `sessionId`, `requestId`, `tool`, `summary` |
 | `session_done`       | `sessionId`, `stopReason?` |
@@ -190,3 +192,55 @@ After each successful call the server emits a full `task_list` snapshot:
 
 `status` is one of `pending`, `in_progress`, `completed`, `cancelled`. On
 session reattach the server re-sends the current list when non-empty.
+
+### `/goal` completion condition
+
+The coding composer accepts a `/goal` slash command as a normal `user_message`:
+
+| Input | Effect |
+|-------|--------|
+| `/goal <condition>` | Set (or replace) the session goal and start working. Condition max 4000 chars. |
+| `/goal` | Report active or last-achieved goal status (`goal_status`). |
+| `/goal clear` | Clear an active goal early. Aliases: `stop`, `off`, `reset`, `none`, `cancel`. |
+
+While a goal is **active**, the desktop agent does not return control after each
+turn. After the agent finishes a turn, a small/fast evaluator model reads the
+transcript and decides whether the condition is met:
+
+- **No** → emit `goal_status` (`active` + reason) and start another turn.
+- **Yes** → emit `goal_status` (`achieved`), then `session_done` with
+  `stopReason: "goal_achieved"`.
+
+```json
+{
+  "type": "goal_status",
+  "sessionId": "…",
+  "status": "active",
+  "condition": "all tests in test/auth pass",
+  "reason": "test suite has not been run yet",
+  "turnsEvaluated": 1,
+  "startedAt": 1710000000000,
+  "elapsedMs": 45000,
+  "message": "◎ /goal active: all tests in test/auth pass Running 45s. 1 turn(s) evaluated. Latest: test suite has not been run yet"
+}
+```
+
+On reattach the server re-sends the active goal (or last achieved status) when
+present. Evaluation uses `APC_GOAL_EVAL_MODEL` when set; otherwise a provider
+default small model. Offline / `APC_MOCK=1` uses a transcript heuristic.
+
+### Local model load progress
+
+When the coding session runs a desktop Metal / MLX model, the server emits
+`model_status` frames as weights load into memory and tokens generate:
+
+```json
+{ "type": "model_status", "sessionId": "…", "status": "loading", "hubID": "mlx-community/gemma-3-4b", "message": "Loading model weights into memory…" }
+{ "type": "model_status", "sessionId": "…", "status": "generating", "hubID": "mlx-community/gemma-3-4b", "message": "Generating…" }
+{ "type": "model_status", "sessionId": "…", "status": "done" }
+```
+
+`status` is `loading`, `generating`, or `done`. The app shows a "Loading
+model…" indicator while `loading`, switches to "Generating…" while
+`generating`, and clears it on `done`, the first `assistant_delta`, or
+`session_done`. Clients that don't render the banner may ignore the frame.

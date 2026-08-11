@@ -75,6 +75,10 @@ struct ChatView: View {
             .padding(.bottom, keyboardLift)
             .animation(.easeOut(duration: 0.25), value: keyboardLift)
         }
+        // Own keyboard avoidance via `keyboardLift`. Without this, SwiftUI also
+        // applies the keyboard safe-area inset and the composer ends up roughly
+        // one keyboard-height too high (large empty band above the keys).
+        .ignoresSafeArea(.keyboard)
         .onAppear {
             bindAndLoad()
         }
@@ -124,6 +128,11 @@ struct ChatView: View {
                 if let config = SessionLauncher.makeConfig(in: state, task: task) {
                     sessionConfig = config
                 }
+            }
+        }
+        .sheet(isPresented: $viewModel.showCamera) {
+            CameraCapture(isPresented: $viewModel.showCamera) { data in
+                viewModel.attachCameraImage(data)
             }
         }
         .sheet(isPresented: $viewModel.showConnectorsView) {
@@ -552,6 +561,10 @@ struct ChatView: View {
                 .frame(minHeight: 24, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
 
+            if !viewModel.attachedImages.isEmpty {
+                attachedImageStrip
+            }
+
             // Bottom: controls row — +, model pill, send.
             HStack(alignment: .center, spacing: 8) {
                 // Plus: opens the AddToChat sheet
@@ -573,10 +586,10 @@ struct ChatView: View {
 
                 Spacer(minLength: 0)
 
-                // Vision camera — always one tap from chat (hardware Camera Control
-                // / volume shutter also fire once Vision is open).
+                // Camera — opens the system camera and attaches the photo to
+                // this chat (no Vision analysis flow).
                 Button {
-                    DeepLinkBridge.request(.vision)
+                    viewModel.showCamera = true
                 } label: {
                     Image(systemName: "camera.fill")
                         .font(.system(size: 16, weight: .semibold))
@@ -586,8 +599,8 @@ struct ChatView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(viewModel.isLoadingChat || viewModel.isProcessing)
-                .accessibilityLabel("Open Vision camera")
-                .accessibilityHint("Analyze the camera or a photo with a vision model")
+                .accessibilityLabel("Take photo")
+                .accessibilityHint("Capture a photo to attach to this chat")
 
                 if hasText {
                     // Send — only when there is real input.
@@ -626,6 +639,37 @@ struct ChatView: View {
             RoundedRectangle(cornerRadius: 28)
                 .stroke(Theme.separator, lineWidth: 1)
         )
+    }
+
+    /// Pending camera photos staged in the composer (tap x to remove).
+    private var attachedImageStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(viewModel.attachedImages) { attachment in
+                    if let image = UIImage(data: attachment.thumbnailData) {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: 72, height: 72)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .overlay(alignment: .topTrailing) {
+                                Button {
+                                    viewModel.removeAttachedImage(attachment.id)
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.system(size: 18))
+                                        .foregroundStyle(Theme.surface)
+                                        .background(Circle().fill(Color.black.opacity(0.55)))
+                                }
+                                .buttonStyle(.plain)
+                                .padding(4)
+                                .accessibilityLabel("Remove photo")
+                            }
+                    }
+                }
+            }
+        }
+        .frame(height: 72)
     }
 
     /// Compact indicators for optional context attached on send.
@@ -729,6 +773,7 @@ struct ChatView: View {
 
     private var hasText: Bool {
         !viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !viewModel.attachedImages.isEmpty
     }
 
     private var sendBackground: some ShapeStyle {
@@ -751,8 +796,10 @@ struct ChatView: View {
     /// provider-backed chat as before.
     private func sendTapped() {
         let text = viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        if let config = SessionLauncher.makeConfig(in: state, task: text) {
+        guard !text.isEmpty || !viewModel.attachedImages.isEmpty else { return }
+        // Photos always go through the provider chat path — never a coding session.
+        if viewModel.attachedImages.isEmpty,
+           let config = SessionLauncher.makeConfig(in: state, task: text) {
             viewModel.inputText = ""
             sessionConfig = config
         } else {
