@@ -41,6 +41,10 @@ struct ChatView: View {
     /// Full-screen live voice chat (Siri dictation + spoken replies).
     @State private var showVoiceChat = false
 
+    /// Study mode (sidebar graduation-cap toggle). When on, every send
+    /// attaches web sources, shown as a locked Sources chip above the composer.
+    @AppStorage("studyMode.v1") private var studyMode: Bool = false
+
     /// Extra bottom lift so the composer sits above the software keyboard.
     /// System keyboard avoidance is unreliable here (full-bleed background +
     /// sibling composer VStack), so we track the keyboard frame ourselves.
@@ -548,6 +552,7 @@ struct ChatView: View {
                 || viewModel.locationEnabled
                 || viewModel.webSearchEnabled
                 || viewModel.researchEnabled
+                || studyMode
             {
                 contextChips
             }
@@ -675,6 +680,13 @@ struct ChatView: View {
     /// Compact indicators for optional context attached on send.
     private var contextChips: some View {
         HStack(spacing: 8) {
+            if studyMode {
+                contextChip(
+                    systemImage: "book.closed.fill",
+                    imageColor: Theme.accent,
+                    title: "Sources"
+                )
+            }
             if viewModel.researchEnabled {
                 contextChip(
                     systemImage: "magnifyingglass",
@@ -724,8 +736,8 @@ struct ChatView: View {
         systemImage: String,
         imageColor: Color,
         title: String,
-        dismissLabel: String,
-        onDismiss: @escaping () -> Void
+        dismissLabel: String? = nil,
+        onDismiss: (() -> Void)? = nil
     ) -> some View {
         HStack(spacing: 6) {
             Image(systemName: systemImage)
@@ -734,18 +746,22 @@ struct ChatView: View {
             Text(title)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(Theme.textSecondary)
-            Button(action: onDismiss) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(Theme.textTertiary)
-                    .frame(width: 20, height: 20)
+            if let onDismiss {
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(Theme.textTertiary)
+                        .frame(width: 20, height: 20)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(dismissLabel ?? "Dismiss")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(dismissLabel)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .background(Theme.surfaceElevated, in: Capsule())
+        .accessibilityElement(children: onDismiss == nil ? .combine : .contain)
+        .accessibilityLabel(Text(title))
     }
 
     private var modelPillTitle: String {

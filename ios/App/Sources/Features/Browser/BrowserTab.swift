@@ -161,7 +161,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             const style = window.getComputedStyle(el);
             return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
           }
-          const text = document.body ? document.body.innerText.replace(/\\s+/g, ' ').trim().slice(0, 4000) : '';
+          const text = document.body ? document.body.innerText.replace(/\\s+/g, ' ').trim().slice(0, 12000) : '';
           const nodes = Array.from(document.querySelectorAll('a, button, input, [role="button"]')).filter(visible).slice(0, 60);
           const links = nodes.map(function (el) {
             const label = __labelOf(el).replace(/\\s+/g, ' ').trim().slice(0, 80);

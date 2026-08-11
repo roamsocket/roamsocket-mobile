@@ -22,6 +22,9 @@ final class BrowserStore: ObservableObject {
     @Published var isAsking = false
     /// The model's plain-prose answer to an Ask-mode question.
     @Published var chatReply: String?
+    /// True when a web search was used to supplement a thin page snapshot in
+    /// Ask mode — drives a small "Searched the web" indicator on the reply.
+    @Published var chatSearchedWeb = false
     /// True while the approved plan is actively executing steps.
     @Published var isPlanRunning = false
     /// A freshly proposed plan awaiting Approve/Deny — nothing has executed yet.
@@ -191,16 +194,56 @@ final class BrowserStore: ObservableObject {
 
         promptText = ""
         errorMessage = nil
+        chatSearchedWeb = false
 
         guard promptMode == .act else {
             chatReply = nil
             isAsking = true
             defer { isAsking = false }
-            let context = await activeTab?.captureContext()
+
+            // Wait for the page to finish loading before capturing content —
+            // heavy JS sites (ESPN, etc.) are often still rendering when the
+            // snapshot would otherwise be taken, yielding an empty context.
+            if let tab = activeTab {
+                await waitForLoadSettled(tab)
+            }
+            var context = await activeTab?.captureContext()
+
+            // Retry once after a short delay if the page yielded no text
+            // (common on JS-heavy sites where content renders asynchronously).
+            if (context?.textSnippet.isEmpty ?? true), let tab = activeTab {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                await waitForLoadSettled(tab, timeout: 4)
+                context = await tab.captureContext()
+            }
+
+            // Fall back to a web search when the page snapshot is thin so the
+            // model gets curated live content instead of guessing from stale
+            // training data — this is what Chat and Vision already do.
+            var webSearchBlock: String?
+            if (context?.textSnippet.count ?? 0) < 200 {
+                let query = Self.browserSearchQuery(prompt: goal, context: context)
+                let service = WebSearchService()
+                do {
+                    let bundle = try await service.search(
+                        userMessage: query,
+                        mode: .webSearch,
+                        onStep: { _ in }
+                    )
+                    if !bundle.hits.isEmpty {
+                        webSearchBlock = bundle.promptBlock
+                        chatSearchedWeb = true
+                    }
+                } catch {
+                    // Search failed — we still have whatever page context was captured.
+                }
+            }
+
             do {
                 chatReply = try await BrowserAgent.chatAboutPage(
                     prompt: goal,
                     context: context,
+                    webSearchBlock: webSearchBlock,
                     model: model,
                     apiKey: apiKey,
                     catalog: appState.catalog,
@@ -216,6 +259,10 @@ final class BrowserStore: ObservableObject {
         completionSummary = nil
         cancelAutoDismiss()
         isPlanning = true
+        // Wait for the page to settle before planning, same reason as Ask mode.
+        if let tab = activeTab {
+            await waitForLoadSettled(tab)
+        }
         let context = await activeTab?.captureContext()
         defer { isPlanning = false }
 
@@ -551,5 +598,21 @@ final class BrowserStore: ObservableObject {
 
     private func saveGranularity() {
         UserDefaults.standard.set(lastGranularity.rawValue, forKey: granularityKey)
+    }
+
+    /// Constructs a web search query from the page title/host + user's question
+    /// so the fallback search is grounded in the current browsing context.
+    private static func browserSearchQuery(prompt: String, context: BrowserPageContext?) -> String {
+        var parts: [String] = []
+        if let context, !context.title.isEmpty, !context.title.lowercased().contains("new tab") {
+            let title = context.title
+                .replacingOccurrences(of: #"\s*[\|\-–—].*$"#, with: "", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !title.isEmpty {
+                parts.append(title)
+            }
+        }
+        parts.append(prompt)
+        return parts.joined(separator: " ")
     }
 }

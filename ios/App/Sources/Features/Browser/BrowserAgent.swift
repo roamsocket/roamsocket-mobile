@@ -51,7 +51,9 @@ enum BrowserAgent {
             "Current page title: \(context.title)",
         ]
         if !context.textSnippet.isEmpty {
-            lines.append("Visible page text (truncated): \(context.textSnippet.prefix(2000))")
+            lines.append("Visible page text (truncated): \(context.textSnippet.prefix(6000))")
+        } else {
+            lines.append("Visible page text: (empty — the page may still be loading, may require JavaScript that hasn't finished, or may be a consent/interstitial page)")
         }
         if !context.links.isEmpty {
             let sample = context.links.prefix(30).map { "- \($0.label)" }.joined(separator: "\n")
@@ -207,8 +209,8 @@ enum BrowserAgent {
         return try parseNextStepDecision(raw)
     }
 
-    private static func chatSystemPrompt() -> String {
-        """
+    private static func chatSystemPrompt(hasWebResults: Bool) -> String {
+        var prompt = """
         You are a helpful assistant embedded in a web browser. You can see the \
         current page's URL, title, and visible text, and you answer questions \
         about it conversationally.
@@ -221,21 +223,32 @@ enum BrowserAgent {
         plainly and suggest what to check or search for. Answer in plain prose \
         only, no JSON.
         """
+        if hasWebResults {
+            prompt += "\n\nYou also have live web search results provided below. Use them to answer when the page content is thin, empty, or doesn't contain the answer the user is looking for. Cite sources inline with markdown links when you use a fact from the search results."
+        }
+        return prompt
     }
 
-    private static func chatUserPrompt(prompt: String, context: BrowserPageContext?) -> String {
+    private static func chatUserPrompt(prompt: String, context: BrowserPageContext?, webSearchBlock: String?) -> String {
         var lines: [String] = ["User: \(prompt)"]
         lines.append(contentsOf: pageContextLines(context))
+        if let block = webSearchBlock, !block.isEmpty {
+            lines.append(block)
+        }
         lines.append("Answer the user's question about the current page in plain prose.")
         return lines.joined(separator: "\n\n")
     }
 
     /// Ask the model about the current page. Unlike `requestPlan` this never
     /// returns steps — the model is told it cannot act, so the page is never
-    /// touched in Ask mode.
+    /// touched in Ask mode. When `webSearchBlock` is provided (because the
+    /// page snapshot was thin), it gives the model live web results so it
+    /// can still answer with curated content instead of falling back to
+    /// stale training data.
     static func chatAboutPage(
         prompt: String,
         context: BrowserPageContext?,
+        webSearchBlock: String? = nil,
         model: AIModel,
         apiKey: String,
         catalog: ModelCatalog,
@@ -244,8 +257,8 @@ enum BrowserAgent {
     ) async throws -> String {
         let provider = catalog.provider(model.provider, customBaseURL: customBaseURL, style: style)
         let messages = [
-            ProviderChatMessage(role: .system, content: chatSystemPrompt()),
-            ProviderChatMessage(role: .user, content: chatUserPrompt(prompt: prompt, context: context)),
+            ProviderChatMessage(role: .system, content: chatSystemPrompt(hasWebResults: webSearchBlock != nil)),
+            ProviderChatMessage(role: .user, content: chatUserPrompt(prompt: prompt, context: context, webSearchBlock: webSearchBlock)),
         ]
         do {
             return try await provider.chat(model: model.modelID, apiKey: apiKey, messages: messages, effort: nil)

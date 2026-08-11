@@ -59,6 +59,13 @@ final class ChatViewModel: ObservableObject {
     // Per-chat feature toggles (live in the Add-to-Chat sheet).
     @Published var webSearchEnabled: Bool = false
     @Published var researchEnabled: Bool = false
+
+    /// Study mode (sidebar graduation-cap toggle, key `studyMode.v1`): every
+    /// send is forced to attach live web sources so answers always carry
+    /// citations.
+    var studyModeEnabled: Bool {
+        UserDefaults.standard.bool(forKey: "studyMode.v1")
+    }
     @Published var healthEnabled: Bool = false
     @Published var locationEnabled: Bool = false
     @Published var connectorDiscoveryEnabled: Bool = true
@@ -420,13 +427,16 @@ final class ChatViewModel: ObservableObject {
         // Web search / Research — live SERP + optional Wikipedia, shown as
         // grey tool lines on the assistant bubble. OpenRouter models use the
         // provider-native web search API instead of client-side scraping.
+        // Study mode forces sources on every text send so answers always cite.
+        let sourcesForced = studyModeEnabled && !text.isEmpty
         var toolCalls: [ToolCall] = []
-        let nativeWebSearch = model.provider == .openrouter && (researchEnabled || webSearchEnabled)
-        if researchEnabled || webSearchEnabled {
+        let nativeWebSearch = model.provider == .openrouter
+            && (researchEnabled || webSearchEnabled || sourcesForced)
+        if researchEnabled || webSearchEnabled || sourcesForced {
             if nativeWebSearch {
                 let step = WebSearchService.Step(
-                    name: researchEnabled ? "research" : "web_search",
-                    summary: researchEnabled
+                    name: researchEnabled || sourcesForced ? "research" : "web_search",
+                    summary: researchEnabled || sourcesForced
                         ? "Researching with OpenRouter web search…"
                         : "Searching the web with OpenRouter…",
                     detail: "Native OpenRouter web search API",
@@ -437,7 +447,8 @@ final class ChatViewModel: ObservableObject {
                     messages[idx].toolCalls = toolCalls
                 }
             } else {
-                let mode: WebSearchService.Mode = researchEnabled ? .research : .webSearch
+                let mode: WebSearchService.Mode =
+                    researchEnabled || sourcesForced ? .research : .webSearch
                 do {
                     let bundle = try await webSearchService.search(userMessage: text, mode: mode) {
                         [weak self] step in
@@ -458,8 +469,8 @@ final class ChatViewModel: ObservableObject {
                 } catch {
                     let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                     let failed = ToolCall(
-                        name: researchEnabled ? "research" : "web_search",
-                        summary: researchEnabled
+                        name: researchEnabled || sourcesForced ? "research" : "web_search",
+                        summary: researchEnabled || sourcesForced
                             ? "Research unavailable"
                             : "Web search unavailable",
                         detail: msg,
@@ -472,6 +483,16 @@ final class ChatViewModel: ObservableObject {
                     presentError(msg)
                 }
             }
+        }
+
+        // Study mode: every answer must carry sources, not just "cite when
+        // you use a fact" — the search block above already lists them.
+        if sourcesForced {
+            systemContext.append(
+                "Study mode is on: every answer must include sources. "
+                    + "Cite the live web sources listed above inline with markdown links for every factual claim. "
+                    + "When the sources don't cover a claim, say so explicitly and never invent citations."
+            )
         }
 
         if !systemContext.isEmpty {
@@ -533,7 +554,7 @@ final class ChatViewModel: ObservableObject {
                 messages: turns,
                 effort: state.effort,
                 webSearchQuery: (liveModel.provider == .openrouter
-                    && (researchEnabled || webSearchEnabled))
+                    && (researchEnabled || webSearchEnabled || sourcesForced))
                     ? text
                     : nil
             )

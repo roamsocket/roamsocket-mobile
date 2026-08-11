@@ -228,6 +228,7 @@ struct BrowserHomeView: View {
         Button {
             store.promptMode = mode
             store.chatReply = nil
+            store.chatSearchedWeb = false
         } label: {
             Text(mode.title)
                 .font(.system(size: 11, weight: .semibold))
@@ -491,28 +492,41 @@ struct BrowserHomeView: View {
     /// The model's plain-prose answer to an Ask-mode question. Stays until
     /// dismissed (or the next prompt) so it can be read at leisure.
     private func chatReplyBanner(_ reply: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "questionmark.bubble")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Theme.accent)
-                .frame(width: 18)
-                .padding(.top, 1)
-            Text(reply)
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.textPrimary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .textSelection(.enabled)
-            Button(action: { store.chatReply = nil }) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Theme.textSecondary)
-                    .frame(width: 26, height: 26)
-                    .background(Theme.surfaceElevated, in: Circle())
+        VStack(alignment: .leading, spacing: 0) {
+            if store.chatSearchedWeb {
+                HStack(spacing: 4) {
+                    Image(systemName: "magnifyingglass.circle")
+                        .font(.system(size: 10, weight: .medium))
+                    Text("Searched the web for more context")
+                        .font(.system(size: 10, weight: .medium))
+                }
+                .foregroundStyle(Theme.textTertiary)
+                .padding(.horizontal, 14)
+                .padding(.top, 6)
             }
-            .buttonStyle(.plain)
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "questionmark.bubble")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                    .frame(width: 18)
+                    .padding(.top, 1)
+                Text(reply)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.textPrimary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+                Button(action: { store.chatReply = nil }) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.textSecondary)
+                        .frame(width: 26, height: 26)
+                        .background(Theme.surfaceElevated, in: Circle())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
         .background(Theme.surface)
         .overlay(Divider().overlay(Theme.separator), alignment: .top)
     }
