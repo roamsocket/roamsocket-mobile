@@ -17,23 +17,44 @@ final class BrowserStore: ObservableObject {
     @Published var isPlanning = false
     /// A freshly proposed plan awaiting Approve/Deny — nothing has executed yet.
     @Published var pendingPlan: BrowserPlan?
-    /// The plan currently executing (or just finished) so progress/results show.
+    /// The plan currently executing (or just finished). Starts empty and
+    /// grows one real step at a time as `runApprovedSteps` re-analyzes the
+    /// live page after every action — it is not a static copy of the
+    /// original preview shown in `pendingPlan`.
     @Published var runningPlan: BrowserPlan?
-    /// In step-by-step mode, the single step waiting for an explicit decision.
-    @Published var pendingStepApproval: BrowserStep?
+    /// In step-by-step mode, the step(s) waiting for one explicit decision.
+    /// The model may batch several mechanical actions together (e.g.
+    /// checking a row of checkboxes) into a single approval instead of
+    /// asking again after every individual one — this can hold 1 or more.
+    @Published var pendingStepsApproval: [BrowserStep]?
 
     @Published var lastGranularity: BrowserApprovalGranularity
     @Published var errorMessage: String?
+    /// Set once a run finishes (or the model declares the goal done/blocked)
+    /// so the finished banner can show the model's actual last word instead
+    /// of a generic "Plan finished".
+    @Published var completionSummary: String?
 
     @Published var bookmarks: [BrowserBookmark] = []
     @Published var history: [BrowserHistoryEntry] = []
     @Published var showTabsSheet = false
     @Published var showBookmarksSheet = false
 
+    /// Weak back-reference captured the first time a prompt is submitted,
+    /// so the execution loop can re-query the model (for real-time
+    /// re-analysis between steps) without AppState needing to own us.
+    private weak var appState: AppState?
+
     private let bookmarksKey = "browser.bookmarks.v1"
     private let historyKey = "browser.history.v1"
     private let granularityKey = "browser.approvalGranularity.v1"
     private var stepDecisionContinuation: CheckedContinuation<Bool, Never>?
+    /// Safety valve: stop re-planning after this many actions even if the
+    /// model keeps saying "done": false, so a confused loop can't run away.
+    private let maxStepsPerRun = 12
+    /// How long the finished/stopped banner stays up before it auto-dismisses.
+    private let finishedBannerAutoDismissSeconds: UInt64 = 10
+    private var autoDismissTask: Task<Void, Never>?
 
     init() {
         let raw = UserDefaults.standard.string(forKey: granularityKey)
@@ -134,6 +155,7 @@ final class BrowserStore: ObservableObject {
     /// Ask the model for a plan grounded in the current page. Always
     /// produces `pendingPlan` (or an error) — never executes anything.
     func submitPrompt(appState: AppState) async {
+        self.appState = appState
         let goal = promptText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !goal.isEmpty else { return }
         guard let model = appState.selectedModel else {
@@ -148,6 +170,8 @@ final class BrowserStore: ObservableObject {
 
         promptText = ""
         errorMessage = nil
+        completionSummary = nil
+        cancelAutoDismiss()
         isPlanning = true
         let context = await activeTab?.captureContext()
         defer { isPlanning = false }
@@ -172,39 +196,74 @@ final class BrowserStore: ObservableObject {
         pendingPlan = nil
     }
 
-    /// Approve every step now; steps still run one at a time and stop at the
-    /// first failure, but no further per-step confirmation is required.
+    /// Approve and run every step in the plan now (they run in order and
+    /// stop at the first failure). Once that batch finishes, everything
+    /// after it is decided in real time (see `runApprovedSteps`) by
+    /// re-analyzing the live page rather than trusting further guesses,
+    /// and no further confirmation is required for those either.
     func approvePlanBulk() {
         guard let plan = pendingPlan else { return }
         lastGranularity = .bulk
         saveGranularity()
-        var approved = plan
-        for idx in approved.steps.indices { approved.steps[idx].status = .approved }
-        runningPlan = approved
-        pendingPlan = nil
-        Task { await runApprovedSteps(bulk: true) }
+        beginRun(plan, bulk: true)
     }
 
-    /// Approve the plan but pause before every individual step.
+    /// Approve and run every step in the plan now, but pause for a fresh
+    /// combined approval before anything the AI proposes afterward —
+    /// which may itself be more than one step at once.
     func approvePlanStepByStep() {
         guard let plan = pendingPlan else { return }
         lastGranularity = .stepByStep
         saveGranularity()
-        runningPlan = plan
-        pendingPlan = nil
-        Task { await runApprovedSteps(bulk: false) }
+        beginRun(plan, bulk: false)
     }
 
-    /// Response to the single step currently shown in `pendingStepApproval`.
+    private func beginRun(_ plan: BrowserPlan, bulk: Bool) {
+        pendingPlan = nil
+        completionSummary = nil
+        cancelAutoDismiss()
+        // Start the live/executed list empty — the preview steps above were
+        // only ever a forecast for the approval card. What actually runs is
+        // decided one action at a time (see `runApprovedSteps`), so this
+        // list is rebuilt from real executed steps as they happen.
+        runningPlan = BrowserPlan(id: plan.id, goal: plan.goal, steps: [])
+        // The steps above were already approved as a batch (this is exactly
+        // the same "approve several things at once" flow used for anything
+        // proposed later) — they run immediately; only what comes *after*
+        // this batch gets freshly re-derived from the live page.
+        Task { await runApprovedSteps(goal: plan.goal, initialQueue: plan.steps, bulk: bulk) }
+    }
+
+    /// Response to the step(s) currently shown in `pendingStepsApproval`.
+    /// One decision approves or denies the whole batch together.
     func respondToPendingStep(allow: Bool) {
-        pendingStepApproval = nil
+        pendingStepsApproval = nil
         let continuation = stepDecisionContinuation
         stepDecisionContinuation = nil
         continuation?.resume(returning: allow)
     }
 
     func dismissRunningPlan() {
+        cancelAutoDismiss()
         runningPlan = nil
+        completionSummary = nil
+    }
+
+    private func cancelAutoDismiss() {
+        autoDismissTask?.cancel()
+        autoDismissTask = nil
+    }
+
+    /// Keeps the finished/stopped banner up long enough to actually read,
+    /// then clears it automatically.
+    private func scheduleAutoDismiss() {
+        cancelAutoDismiss()
+        autoDismissTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: (self?.finishedBannerAutoDismissSeconds ?? 10) * 1_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.runningPlan = nil
+            self?.completionSummary = nil
+        }
     }
 
     private func waitForStepDecision() async -> Bool {
@@ -213,28 +272,128 @@ final class BrowserStore: ObservableObject {
         }
     }
 
-    private func runApprovedSteps(bulk: Bool) async {
-        guard var plan = runningPlan else { return }
-        stepLoop: for idx in plan.steps.indices {
-            if !bulk {
-                plan.steps[idx].status = .pending
-                runningPlan = plan
-                pendingStepApproval = plan.steps[idx]
-                let approved = await waitForStepDecision()
-                guard approved else {
-                    plan.steps[idx].status = .denied
-                    runningPlan = plan
-                    continue
+    /// Runs steps in batches, re-analyzing the actual page after each batch
+    /// finishes to decide what happens next. `initialQueue` (the approved
+    /// plan) always runs immediately since the user already approved it as
+    /// a group; every batch after that is freshly proposed by the model —
+    /// usually one step, but it may bundle several clearly-independent
+    /// mechanical actions (e.g. checking a row of checkboxes) into a single
+    /// combined approval instead of asking again after every individual one.
+    /// Either way, the model always sees each batch's real outcome before
+    /// proposing the next, so it can adapt instead of marching through a
+    /// script that's gone stale the moment the page changed.
+    private func runApprovedSteps(goal: String, initialQueue: [BrowserStep], bulk: Bool) async {
+        var queue = initialQueue
+        var completed: [BrowserStep] = []
+
+        while !queue.isEmpty {
+            var stoppedEarly = false
+
+            for step in queue {
+                if completed.count >= maxStepsPerRun {
+                    completionSummary = "Stopped after \(maxStepsPerRun) steps to avoid an endless loop — ask again to continue."
+                    stoppedEarly = true
+                    break
+                }
+                var currentStep = step
+                currentStep.status = .running
+                appendStep(currentStep)
+                let result = await execute(step: currentStep)
+                currentStep.status = result.ok ? .done : .failed
+                currentStep.resultNote = result.note
+                updateLastStep(currentStep)
+                completed.append(currentStep)
+                if !result.ok {
+                    stoppedEarly = true
+                    break
                 }
             }
-            plan.steps[idx].status = .running
-            runningPlan = plan
-            let result = await execute(step: plan.steps[idx])
-            plan.steps[idx].status = result.ok ? .done : .failed
-            plan.steps[idx].resultNote = result.note
-            runningPlan = plan
-            if !result.ok { break stepLoop }
+
+            if stoppedEarly { break }
+
+            guard let modelContext = resolveModelContext() else {
+                completionSummary = "Stopped: no model/API key available to plan the next step."
+                break
+            }
+
+            let context = await activeTab?.captureContext()
+            do {
+                let decision = try await BrowserAgent.requestNextStep(
+                    goal: goal,
+                    completedSteps: completed,
+                    context: context,
+                    model: modelContext.model,
+                    apiKey: modelContext.apiKey,
+                    catalog: modelContext.catalog,
+                    customBaseURL: modelContext.customBaseURL,
+                    style: modelContext.style
+                )
+                guard !decision.done, !decision.steps.isEmpty else {
+                    completionSummary = decision.summary.isEmpty ? "Done." : decision.summary
+                    queue = []
+                    continue
+                }
+                if bulk {
+                    queue = decision.steps
+                } else {
+                    pendingStepsApproval = decision.steps
+                    let approved = await waitForStepDecision()
+                    pendingStepsApproval = nil
+                    if approved {
+                        queue = decision.steps
+                    } else {
+                        for deniedStep in decision.steps {
+                            var denied = deniedStep
+                            denied.status = .denied
+                            appendStep(denied)
+                        }
+                        queue = []
+                    }
+                }
+            } catch {
+                errorMessage = error.localizedDescription
+                completionSummary = "Stopped: couldn't work out the next step."
+                queue = []
+            }
         }
+
+        scheduleAutoDismiss()
+    }
+
+    /// Appends `step` as a new entry at the end of the live `runningPlan`.
+    private func appendStep(_ step: BrowserStep) {
+        guard var plan = runningPlan else { return }
+        plan.steps.append(step)
+        runningPlan = plan
+    }
+
+    /// Replaces the last entry in the live `runningPlan` (used right after
+    /// `appendStep` to reflect that same step's final status/result).
+    private func updateLastStep(_ step: BrowserStep) {
+        guard var plan = runningPlan, !plan.steps.isEmpty else { return }
+        plan.steps[plan.steps.count - 1] = step
+        runningPlan = plan
+    }
+
+    private struct ResolvedModelContext {
+        let model: AIModel
+        let apiKey: String
+        let catalog: ModelCatalog
+        let customBaseURL: URL?
+        let style: CustomProviderStyle?
+    }
+
+    private func resolveModelContext() -> ResolvedModelContext? {
+        guard let appState, let model = appState.selectedModel else { return nil }
+        let apiKey = appState.resolvedAPIKey(for: model.provider)
+        if model.provider.requiresAPIKey, apiKey.isEmpty { return nil }
+        return ResolvedModelContext(
+            model: model,
+            apiKey: apiKey,
+            catalog: appState.catalog,
+            customBaseURL: appState.baseURL(for: model.provider),
+            style: appState.apiStyle(for: model.provider)
+        )
     }
 
     private func execute(step: BrowserStep) async -> (ok: Bool, note: String?) {

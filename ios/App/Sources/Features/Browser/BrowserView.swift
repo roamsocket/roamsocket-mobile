@@ -127,8 +127,8 @@ struct BrowserHomeView: View {
         VStack(spacing: 0) {
             if let plan = store.pendingPlan {
                 planApprovalCard(plan)
-            } else if let step = store.pendingStepApproval {
-                stepApprovalBar(step)
+            } else if let steps = store.pendingStepsApproval {
+                stepsApprovalCard(steps)
             } else if let running = store.runningPlan {
                 if running.isFinished {
                     finishedPlanBanner(running)
@@ -330,6 +330,10 @@ struct BrowserHomeView: View {
                 }
             }
 
+            Text("These steps run in order below. After that, the AI re-checks the live page before proposing anything further — it may ask to run several more mechanical steps at once (like checking a row of boxes), but always shows them first.")
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.textTertiary)
+
             HStack(spacing: 10) {
                 Button("Deny") { store.denyPendingPlan() }
                     .buttonStyle(.bordered)
@@ -348,28 +352,55 @@ struct BrowserHomeView: View {
         .overlay(Divider().overlay(Theme.separator), alignment: .top)
     }
 
-    private func stepApprovalBar(_ step: BrowserStep) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: step.kind.systemImage)
-                .font(.system(size: 16))
-                .foregroundStyle(Theme.accent)
-                .frame(width: 20)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Allow this step?")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Theme.textTertiary)
-                Text(step.description)
-                    .font(.system(size: 14))
+    /// Shows one combined approval for whatever the AI just proposed after
+    /// re-analyzing the page — usually a single step, but it may bundle
+    /// several clearly-independent mechanical actions together (e.g.
+    /// checking a row of checkboxes) so the user approves the whole group
+    /// with one tap instead of confirming each checkbox individually.
+    private func stepsApprovalCard(_ steps: [BrowserStep]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                Text(steps.count == 1 ? "Allow this step?" : "Allow these \(steps.count) steps?")
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Theme.textPrimary)
-                    .lineLimit(2)
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 8)
-            Button("Deny") { store.respondToPendingStep(allow: false) }
-                .buttonStyle(.bordered)
-                .tint(Theme.textSecondary)
-            Button("Allow") { store.respondToPendingStep(allow: true) }
+
+            VStack(alignment: .leading, spacing: 7) {
+                ForEach(Array(steps.enumerated()), id: \.element.id) { index, step in
+                    HStack(alignment: .top, spacing: 8) {
+                        if steps.count > 1 {
+                            Text("\(index + 1).")
+                                .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                                .foregroundStyle(Theme.textTertiary)
+                        }
+                        Image(systemName: step.kind.systemImage)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.accent)
+                            .frame(width: 16)
+                        Text(step.description)
+                            .font(.system(size: 14))
+                            .foregroundStyle(Theme.textPrimary)
+                            .lineLimit(2)
+                        Spacer(minLength: 0)
+                    }
+                }
+            }
+
+            HStack(spacing: 10) {
+                Button("Deny") { store.respondToPendingStep(allow: false) }
+                    .buttonStyle(.bordered)
+                    .tint(Theme.textSecondary)
+                Spacer()
+                Button(steps.count == 1 ? "Allow" : "Allow all \(steps.count)") {
+                    store.respondToPendingStep(allow: true)
+                }
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.accent)
+            }
         }
         .padding(14)
         .background(Theme.surface)
@@ -400,15 +431,26 @@ struct BrowserHomeView: View {
         return "Running plan… (\(doneCount)/\(plan.steps.count))"
     }
 
+    /// Shown once a run finishes, fails, or gets denied. Auto-dismisses
+    /// after ~10s (see `BrowserStore.scheduleAutoDismiss`) but can also be
+    /// closed immediately.
     private func finishedPlanBanner(_ plan: BrowserPlan) -> some View {
         let failed = plan.steps.contains { $0.status == .failed }
         return VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
                 Image(systemName: failed ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                     .foregroundStyle(failed ? Color.orange : Color.green)
-                Text(failed ? "Plan stopped early" : "Plan finished")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.textPrimary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(failed ? "Plan stopped early" : "Plan finished")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                    if let summary = store.completionSummary, !summary.isEmpty {
+                        Text(summary)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.textSecondary)
+                            .lineLimit(3)
+                    }
+                }
                 Spacer(minLength: 0)
                 Button(action: { store.dismissRunningPlan() }) {
                     Image(systemName: "xmark")

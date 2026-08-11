@@ -92,8 +92,11 @@ struct BrowserPlan: Identifiable, Equatable {
         self.createdAt = createdAt
     }
 
+    /// `false` while `steps` is still empty (e.g. the brief moment right
+    /// after a run starts, before its first live step lands) — otherwise
+    /// an empty list would be vacuously "finished" and flash the wrong banner.
     var isFinished: Bool {
-        steps.allSatisfy { $0.status == .done || $0.status == .failed || $0.status == .denied }
+        !steps.isEmpty && steps.allSatisfy { $0.status == .done || $0.status == .failed || $0.status == .denied }
     }
 }
 
