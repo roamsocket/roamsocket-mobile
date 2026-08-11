@@ -24,6 +24,7 @@ struct ModelPickerSheet: View {
     @State private var statusMessage = ""
     @State private var expandedProviders: Set<ProviderID> = []
     @State private var expandedOpenRouterOrgs: Set<String> = []
+    @State private var showingHiddenModels = false
 
     private var catalogResults: [ModelCatalog.ProviderResult] {
         if codingOnly {
@@ -127,21 +128,7 @@ struct ModelPickerSheet: View {
                 }
 
                 if state.hasHiddenModels {
-                    Section {
-                        Button {
-                            state.restoreHiddenModels()
-                            statusMessage = "Restored hidden models to the list."
-                        } label: {
-                            Label("Show hidden models", systemImage: "eye")
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(Theme.accent)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .buttonStyle(.plain)
-                        .listRowBackground(Theme.surface)
-                        .listRowSeparator(.hidden)
-                        .accessibilityHint("Bring back models you removed with swipe Delete")
-                    }
+                    hiddenModelsSection
                 }
 
                 Section {
@@ -197,7 +184,7 @@ struct ModelPickerSheet: View {
                             }
                         } label: {
                             openRouterSubmenuLabel(
-                                title: group.organization,
+                                title: AIModel.prettifiedDisplayName(for: group.organization),
                                 detail: "\(group.models.count)"
                             )
                         }
@@ -217,6 +204,55 @@ struct ModelPickerSheet: View {
             }
             .tint(Theme.textSecondary)
             .listRowBackground(Theme.surface)
+        }
+    }
+
+    @ViewBuilder
+    private var hiddenModelsSection: some View {
+        let hidden = state.hiddenModels
+        Section {
+            DisclosureGroup(isExpanded: $showingHiddenModels) {
+                ForEach(hidden) { model in
+                    ModelRow(
+                        model: model,
+                        isSelected: false,
+                        providerDisplayName: providerDisplayName(forHidden: model),
+                        isHidden: true,
+                        onSelect: {},
+                        onToggleHidden: { state.toggleModelHidden(model) }
+                    )
+                    .listRowBackground(Theme.surface)
+                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                }
+                Button {
+                    state.restoreHiddenModels()
+                    showingHiddenModels = false
+                    statusMessage = "Restored hidden models to the list."
+                } label: {
+                    Label("Show all hidden models", systemImage: "eye")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(Theme.accent)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Bring back every model you hid")
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "eye.slash")
+                        .font(.system(size: 15))
+                        .foregroundStyle(Theme.textSecondary)
+                    Text("Hidden models")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(Theme.textPrimary)
+                    Text("\(hidden.count)")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.textTertiary)
+                    Spacer(minLength: 0)
+                }
+            }
+            .tint(Theme.textSecondary)
+            .listRowBackground(Theme.surface)
+            .listRowSeparator(.hidden)
         }
     }
 
@@ -286,7 +322,12 @@ struct ModelPickerSheet: View {
             },
             onUnload: (!codingOnly && model.provider == .localMetal)
                 ? { Task { await unload(model.modelID) } }
-                : nil
+                : nil,
+            onToggleHidden: {
+                let wasHidden = state.isModelHidden(model)
+                state.toggleModelHidden(model)
+                if !wasHidden { showingHiddenModels = true }
+            }
         )
         .listRowBackground(Theme.surface)
         .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
@@ -361,6 +402,13 @@ struct ModelPickerSheet: View {
             return "Desktop Metal"
         }
         return state.customProvider(for: result.provider)?.label ?? result.provider.displayName
+    }
+
+    private func providerDisplayName(forHidden model: AIModel) -> String {
+        if codingOnly, model.provider == .localMetal {
+            return "Desktop Metal"
+        }
+        return state.customProvider(for: model.provider)?.label ?? model.provider.displayName
     }
 
     @ViewBuilder
@@ -465,8 +513,10 @@ private struct ModelRow: View {
     let isSelected: Bool
     let providerDisplayName: String
     var isLoadedInMemory: Bool = false
+    var isHidden: Bool = false
     var onSelect: () -> Void
     var onUnload: (() -> Void)?
+    var onToggleHidden: (() -> Void)? = nil
 
     private var contextSubtitle: String? {
         var parts: [String] = [providerDisplayName]
@@ -491,7 +541,7 @@ private struct ModelRow: View {
                 HStack(spacing: 8) {
                     Text(state.displayName(for: model))
                         .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(Theme.textPrimary)
+                        .foregroundStyle(isHidden ? Theme.textTertiary : Theme.textPrimary)
                         .lineLimit(1)
                     if model.isFree == true {
                         Text("Free")
@@ -516,7 +566,25 @@ private struct ModelRow: View {
                         .foregroundStyle(isLoadedInMemory ? Theme.accent : Theme.textTertiary)
                 }
             }
+            .opacity(isHidden ? 0.55 : 1)
             Spacer()
+            if let onToggleHidden {
+                Button {
+                    onToggleHidden()
+                } label: {
+                    Image(systemName: isHidden ? "eye.slash" : "eye")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(isHidden ? Theme.textTertiary : Theme.textSecondary)
+                        .frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(
+                    isHidden
+                        ? "Show \(state.displayName(for: model)) in the list"
+                        : "Hide \(state.displayName(for: model)) from the list"
+                )
+            }
             if isSelected {
                 Image(systemName: "checkmark")
                     .font(.system(size: 18, weight: .semibold))
@@ -545,7 +613,7 @@ private struct ModelRow: View {
                 ? "\(state.displayName(for: model)), supports vision"
                 : state.displayName(for: model)
         )
-        .accessibilityHint("Select model")
+        .accessibilityHint(isHidden ? "Hidden from the list" : "Select model")
     }
 }
 

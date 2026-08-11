@@ -6,7 +6,7 @@ import AnyProvCore
 /// devices or back up before reinstalls. Schema version is part of the
 /// payload so future clients can ignore older shapes.
 struct AppSettingsSnapshot: Codable, Sendable {
-    static let currentSchemaVersion = 1
+    static let currentSchemaVersion = 2
 
     var schemaVersion: Int
     var generatedAt: Date
@@ -18,6 +18,10 @@ struct AppSettingsSnapshot: Codable, Sendable {
     var environments: [EnvironmentConfig]
     var customProviders: [CustomProvider]
     var modelAliases: [String: String]
+
+    /// `"provider/modelID"` keys of models hidden from the picker (eye toggle
+    /// or swipe Delete). Sorted for stable diffs.
+    var hiddenModels: [String]
 
     var skillsRepoURL: String
     var skillsRepoBranch: String
@@ -34,11 +38,61 @@ struct AppSettingsSnapshot: Codable, Sendable {
             environments: [],
             customProviders: [],
             modelAliases: [:],
+            hiddenModels: [],
             skillsRepoURL: "",
             skillsRepoBranch: "main",
             mcpRepoURL: "",
             mcpRepoBranch: "main"
         )
+    }
+
+    init(
+        schemaVersion: Int,
+        generatedAt: Date,
+        alwaysExpandThinking: Bool,
+        defaultPermissionMode: PermissionMode,
+        defaultEffort: Effort,
+        environments: [EnvironmentConfig],
+        customProviders: [CustomProvider],
+        modelAliases: [String: String],
+        hiddenModels: [String],
+        skillsRepoURL: String,
+        skillsRepoBranch: String,
+        mcpRepoURL: String,
+        mcpRepoBranch: String
+    ) {
+        self.schemaVersion = schemaVersion
+        self.generatedAt = generatedAt
+        self.alwaysExpandThinking = alwaysExpandThinking
+        self.defaultPermissionMode = defaultPermissionMode
+        self.defaultEffort = defaultEffort
+        self.environments = environments
+        self.customProviders = customProviders
+        self.modelAliases = modelAliases
+        self.hiddenModels = hiddenModels
+        self.skillsRepoURL = skillsRepoURL
+        self.skillsRepoBranch = skillsRepoBranch
+        self.mcpRepoURL = mcpRepoURL
+        self.mcpRepoBranch = mcpRepoBranch
+    }
+
+    /// Older snapshots predate some fields (hidden models, skill/MCP repo URLs);
+    /// decode missing keys to sane defaults so v1 backups still restore.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
+        generatedAt = try c.decode(Date.self, forKey: .generatedAt)
+        alwaysExpandThinking = try c.decode(Bool.self, forKey: .alwaysExpandThinking)
+        defaultPermissionMode = try c.decode(PermissionMode.self, forKey: .defaultPermissionMode)
+        defaultEffort = try c.decode(Effort.self, forKey: .defaultEffort)
+        environments = try c.decode([EnvironmentConfig].self, forKey: .environments)
+        customProviders = try c.decode([CustomProvider].self, forKey: .customProviders)
+        modelAliases = try c.decode([String: String].self, forKey: .modelAliases)
+        hiddenModels = try c.decodeIfPresent([String].self, forKey: .hiddenModels) ?? []
+        skillsRepoURL = try c.decodeIfPresent(String.self, forKey: .skillsRepoURL) ?? ""
+        skillsRepoBranch = try c.decodeIfPresent(String.self, forKey: .skillsRepoBranch) ?? "main"
+        mcpRepoURL = try c.decodeIfPresent(String.self, forKey: .mcpRepoURL) ?? ""
+        mcpRepoBranch = try c.decodeIfPresent(String.self, forKey: .mcpRepoBranch) ?? "main"
     }
 }
 

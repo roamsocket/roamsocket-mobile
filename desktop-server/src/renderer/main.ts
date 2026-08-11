@@ -53,6 +53,7 @@ import {
   type ComposerToolsState,
   titleFromContent,
   friendlyModelLabel,
+  prettifyName,
   listCloudModels,
   isUsableChatSelection,
   loadCustomProviders,
@@ -1306,7 +1307,7 @@ async function populateModelPickerList(
         for (const [org, orgModels] of sorted) {
           const orgBody = el("div", { class: "model-picker-submenu nested" });
           const orgToggle = makeSubmenuToggle(
-            org,
+            prettifyName(org),
             `${orgModels.length}`,
             orgBody,
             {

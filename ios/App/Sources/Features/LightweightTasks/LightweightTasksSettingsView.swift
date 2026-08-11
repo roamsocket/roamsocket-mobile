@@ -12,8 +12,9 @@ struct LightweightTasksSettingsView: View {
     private var linkedModels: [AIModel] {
         guard let provider = settings.linkedProvider else { return [] }
         return state.providerResults
-            .first(where: { $0.provider == provider })?
-            .models ?? []
+            .first(where: { $0.provider == provider })
+            .map { state.visibleModels(in: $0) }
+            ?? []
     }
 
     var body: some View {

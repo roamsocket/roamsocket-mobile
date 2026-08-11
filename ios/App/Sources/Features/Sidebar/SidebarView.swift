@@ -7,6 +7,7 @@ enum SidebarDestination: Hashable {
     case projects
     case artifacts
     case code
+    case browser
     case models
     case chat(ChatHistoryItem)
     case project(ProjectItem)
@@ -94,6 +95,9 @@ struct SidebarView: View {
             }
             SidebarRow(systemImage: "chevron.left.forwardslash.chevron.right", title: "Code") {
                 onSelect(.code)
+            }
+            SidebarRow(systemImage: "globe", title: "Browser") {
+                onSelect(.browser)
             }
         }
     }

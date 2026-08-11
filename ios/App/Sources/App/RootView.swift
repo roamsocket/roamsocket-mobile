@@ -49,6 +49,8 @@ struct RootView: View {
                             )
                         case .code:
                             CodeHomeView(onOpenSidebar: { setSidebarOpen(true) })
+                        case .browser:
+                            BrowserHomeView(store: state.browserStore, onOpenSidebar: { setSidebarOpen(true) })
                         case .projectDetail(let project):
                             ProjectDetailView(project: project, history: history, path: $path)
                         case .projectChat(let project, let chat):
@@ -303,6 +305,10 @@ struct RootView: View {
             history.discardActiveIfBlank()
             path = [.code]
             setSidebarOpen(false)
+        case .browser:
+            history.discardActiveIfBlank()
+            path = [.browser]
+            setSidebarOpen(false)
         case .models:
             history.discardActiveIfBlank()
             setSidebarOpen(false)
@@ -349,6 +355,7 @@ enum RootRoute: Hashable {
     case projects
     case artifacts
     case code
+    case browser
     case projectDetail(ProjectItem)
     case projectChat(ProjectItem, ProjectChatItem)
 }
