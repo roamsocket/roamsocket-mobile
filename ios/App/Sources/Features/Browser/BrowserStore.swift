@@ -39,6 +39,8 @@ final class BrowserStore: ObservableObject {
     @Published var history: [BrowserHistoryEntry] = []
     @Published var showTabsSheet = false
     @Published var showBookmarksSheet = false
+    /// Drives the model-picker sheet opened from the header dropdown.
+    @Published var showModelPicker = false
 
     /// Weak back-reference captured the first time a prompt is submitted,
     /// so the execution loop can re-query the model (for real-time

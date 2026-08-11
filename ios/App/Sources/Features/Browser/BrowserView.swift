@@ -12,6 +12,7 @@ struct BrowserHomeView: View {
 
     @FocusState private var promptFocused: Bool
     @FocusState private var addressFocused: Bool
+    @State private var showProviderSettings = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,9 +27,23 @@ struct BrowserHomeView: View {
         .toolbar(.hidden, for: .navigationBar)
         .sheet(isPresented: $store.showTabsSheet) { tabsSheet }
         .sheet(isPresented: $store.showBookmarksSheet) { bookmarksSheet }
+        .sheet(isPresented: $store.showModelPicker) {
+            ModelPickerSheet()
+        }
+        .sheet(isPresented: $showProviderSettings) {
+            AppSettingsView(initialFocus: .providers)
+        }
     }
 
     // MARK: - Top bar
+
+    /// Which model drives the AI prompt bar — tap to switch, same dropdown
+    /// pattern as the Vision header's model pill. Empty string flips the
+    /// pill into a "+ Add a model" CTA when nothing usable is configured.
+    private var modelPillTitle: String {
+        guard let model = state.selectedModel else { return "" }
+        return state.displayName(for: model)
+    }
 
     private var topBar: some View {
         HStack(spacing: 10) {
@@ -46,7 +61,14 @@ struct BrowserHomeView: View {
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Theme.textPrimary)
                 .lineLimit(1)
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            ModelSelectorPill(
+                modelDisplayName: modelPillTitle,
+                onPick: { store.showModelPicker = true },
+                onAddModel: { showProviderSettings = true }
+            )
+            .accessibilityLabel("Browser AI model")
 
             if let urlString = store.activeTab?.urlString, let url = URL(string: urlString), !urlString.isEmpty {
                 ShareLink(item: url) {
