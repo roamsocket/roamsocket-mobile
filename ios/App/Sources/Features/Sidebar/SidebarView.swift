@@ -4,6 +4,8 @@ import SwiftUI
 enum SidebarDestination: Hashable {
     case chats
     case vision
+    case study
+    case scanQuestions
     case projects
     case artifacts
     case code
@@ -24,6 +26,7 @@ struct SidebarView: View {
 
     @State private var renameTarget: ChatHistoryItem?
     @State private var addToProjectTarget: ChatHistoryItem?
+    @AppStorage("studyMode.v1") private var studyMode: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -73,6 +76,26 @@ struct SidebarView: View {
                 .font(.system(size: 28, weight: .semibold))
                 .foregroundStyle(Theme.textPrimary)
             Spacer()
+            // Study mode toggle: swaps the sidebar links for Study destinations.
+            Button {
+                studyMode.toggle()
+            } label: {
+                Image(systemName: studyMode ? "graduationcap.fill" : "graduationcap")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(studyMode ? Theme.accent : Theme.textSecondary)
+                    .frame(width: 40, height: 40)
+                    .background(Theme.surfaceElevated, in: Circle())
+                    .overlay {
+                        Circle()
+                            .stroke(
+                                studyMode ? Theme.accent.opacity(0.6) : Theme.separator.opacity(0.7),
+                                lineWidth: 1
+                            )
+                    }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(studyMode ? "Exit Study mode" : "Enter Study mode")
+            .accessibilityAddTraits(studyMode ? [.isSelected] : [])
         }
         .padding(.bottom, 16)
     }
@@ -81,20 +104,29 @@ struct SidebarView: View {
 
     private var navList: some View {
         VStack(spacing: 2) {
-            SidebarRow(systemImage: "bubble.left.and.bubble.right", title: "Chats") {
-                onSelect(.chats)
-            }
-            SidebarRow(systemImage: "eye", title: "Vision") {
-                onSelect(.vision)
-            }
-            SidebarRow(systemImage: "tray.full", title: "Projects") {
-                onSelect(.projects)
-            }
-            SidebarRow(systemImage: "square.stack.3d.up", title: "Artifacts") {
-                onSelect(.artifacts)
-            }
-            SidebarRow(systemImage: "chevron.left.forwardslash.chevron.right", title: "Code") {
-                onSelect(.code)
+            if studyMode {
+                SidebarRow(systemImage: "camera.viewfinder", title: "Scan questions") {
+                    onSelect(.scanQuestions)
+                }
+                SidebarRow(systemImage: "square.stack.3d.up", title: "Decks") {
+                    onSelect(.study)
+                }
+            } else {
+                SidebarRow(systemImage: "bubble.left.and.bubble.right", title: "Chats") {
+                    onSelect(.chats)
+                }
+                SidebarRow(systemImage: "eye", title: "Vision") {
+                    onSelect(.vision)
+                }
+                SidebarRow(systemImage: "tray.full", title: "Projects") {
+                    onSelect(.projects)
+                }
+                SidebarRow(systemImage: "square.stack.3d.up", title: "Artifacts") {
+                    onSelect(.artifacts)
+                }
+                SidebarRow(systemImage: "chevron.left.forwardslash.chevron.right", title: "Code") {
+                    onSelect(.code)
+                }
             }
             SidebarRow(systemImage: "globe", title: "Browser") {
                 onSelect(.browser)
