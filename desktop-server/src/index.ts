@@ -23,6 +23,14 @@ import { parseClientMessage, encodeServerMessage, PairRequest, type ServerMessag
 import { mockAdapter } from "./providers/index.js";
 import { syncSkillsRepo, upsertSkill, removeSkill } from "./skills/sync.js";
 import { syncMCPRepo, upsertMCPServer, removeMCPServer } from "./mcp/sync.js";
+import { listConnectorDefinitions } from "./connectors/catalog.js";
+import {
+  clearStoredConnector,
+  getStoredConnector,
+  isConnectorConnected,
+  upsertStoredConnector,
+} from "./connectors/store.js";
+import { startOAuthFlow } from "./connectors/oauth.js";
 import { killTerminal, resizeTerminal, startTerminal, writeToTerminal } from "./terminal/index.js";
 import { diffAgainstBase, listChanges, listDir, readFile, writeFile } from "./workspace/files.js";
 import { listListeningPorts } from "./workspace/ports.js";
@@ -114,6 +122,21 @@ function readPackageVersion(): string {
 }
 
 const DEFAULT_VERSION = readPackageVersion();
+
+/** Build the live connector status list sent to the app. */
+function buildConnectorStatusList(): ServerMessage {
+  return {
+    type: "connector_status",
+    connectors: listConnectorDefinitions().map((def) => ({
+      id: def.id,
+      name: def.name,
+      authType: def.authType,
+      connected: isConnectorConnected(def.id),
+      helpText: def.helpText,
+      error: getStoredConnector(def.id)?.lastError,
+    })),
+  };
+}
 
 /** Configured skills/MCP repos. Read once at startup. The desktop is the
  * git operator; both repos are user-configured in the desktop UI / env. */
@@ -369,6 +392,37 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
               const servers = await syncMCPRepo(syncConfig.mcpRepo, syncConfig.mcpRepo.token || undefined);
               emit({ type: "mcp_sync", servers });
             }
+            break;
+          case "connector_list_request":
+            emit(buildConnectorStatusList());
+            break;
+          case "connector_set_token":
+            upsertStoredConnector(msg.id, { token: msg.token, lastError: undefined });
+            emit(buildConnectorStatusList());
+            break;
+          case "connector_set_oauth_app":
+            upsertStoredConnector(msg.id, {
+              clientId: msg.clientId,
+              clientSecret: msg.clientSecret,
+              lastError: undefined,
+            });
+            emit(buildConnectorStatusList());
+            break;
+          case "connector_oauth_start": {
+            const result = await startOAuthFlow(msg.id, () => {
+              // Authorize URL opened locally on this machine — nothing to
+              // push to the phone; the app just waits for connector_status.
+            });
+            if ("error" in result) {
+              upsertStoredConnector(msg.id, { lastError: result.error });
+              emit({ type: "error", message: result.error });
+            }
+            emit(buildConnectorStatusList());
+            break;
+          }
+          case "connector_disconnect":
+            clearStoredConnector(msg.id);
+            emit(buildConnectorStatusList());
             break;
           case "terminal_open": {
             const workdir = manager.workdirFor(msg.sessionId);

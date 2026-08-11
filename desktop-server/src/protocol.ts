@@ -230,6 +230,43 @@ export const MCPDeleteMsg = z.object({
 });
 export type MCPDeleteMsg = z.infer<typeof MCPDeleteMsg>;
 
+// Connectors — real linked-account integrations (token or OAuth2). The
+// desktop holds the credentials; the phone only configures + triggers.
+
+export const ConnectorListRequestMsg = z.object({
+  type: z.literal("connector_list_request"),
+});
+export type ConnectorListRequestMsg = z.infer<typeof ConnectorListRequestMsg>;
+
+export const ConnectorSetTokenMsg = z.object({
+  type: z.literal("connector_set_token"),
+  id: z.string(),
+  token: z.string(),
+});
+export type ConnectorSetTokenMsg = z.infer<typeof ConnectorSetTokenMsg>;
+
+/** Save the user's own OAuth app credentials for an OAuth2 connector (BYO app). */
+export const ConnectorSetOAuthAppMsg = z.object({
+  type: z.literal("connector_set_oauth_app"),
+  id: z.string(),
+  clientId: z.string(),
+  clientSecret: z.string().optional(),
+});
+export type ConnectorSetOAuthAppMsg = z.infer<typeof ConnectorSetOAuthAppMsg>;
+
+/** Begin the OAuth2 authorize flow (desktop opens its own system browser). */
+export const ConnectorOAuthStartMsg = z.object({
+  type: z.literal("connector_oauth_start"),
+  id: z.string(),
+});
+export type ConnectorOAuthStartMsg = z.infer<typeof ConnectorOAuthStartMsg>;
+
+export const ConnectorDisconnectMsg = z.object({
+  type: z.literal("connector_disconnect"),
+  id: z.string(),
+});
+export type ConnectorDisconnectMsg = z.infer<typeof ConnectorDisconnectMsg>;
+
 // Terminal, file explorer, port manager.
 
 export const TerminalOpenMsg = z.object({
@@ -339,6 +376,11 @@ export const ClientMessage = z.discriminatedUnion("type", [
   MCPSyncRequestMsg,
   MCPUpsertMsg,
   MCPDeleteMsg,
+  ConnectorListRequestMsg,
+  ConnectorSetTokenMsg,
+  ConnectorSetOAuthAppMsg,
+  ConnectorOAuthStartMsg,
+  ConnectorDisconnectMsg,
   TerminalOpenMsg,
   TerminalInputMsg,
   TerminalResizeMsg,
@@ -461,6 +503,24 @@ export const MCPSyncMsg = z.object({
   servers: z.array(MCPServer),
 });
 export type MCPSyncMsg = z.infer<typeof MCPSyncMsg>;
+
+/** One connector's live status, sent in reply to `connector_list_request`
+ * and after any connector op (set token, OAuth complete, disconnect). */
+export const ConnectorStatus = z.object({
+  id: z.string(),
+  name: z.string(),
+  authType: z.enum(["token", "oauth2", "unsupported"]),
+  connected: z.boolean(),
+  helpText: z.string(),
+  error: z.string().optional(),
+});
+export type ConnectorStatus = z.infer<typeof ConnectorStatus>;
+
+export const ConnectorStatusMsg = z.object({
+  type: z.literal("connector_status"),
+  connectors: z.array(ConnectorStatus),
+});
+export type ConnectorStatusMsg = z.infer<typeof ConnectorStatusMsg>;
 
 export const TerminalDataMsg = z.object({
   type: z.literal("terminal_data"),
@@ -643,6 +703,7 @@ export const ServerMessage = z.discriminatedUnion("type", [
   ErrorMsg,
   SkillsSyncMsg,
   MCPSyncMsg,
+  ConnectorStatusMsg,
   TerminalDataMsg,
   TerminalControlMsg,
   FileListResultMsg,
