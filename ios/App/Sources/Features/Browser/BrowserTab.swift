@@ -88,13 +88,74 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         }
     }
 
+    /// Shared JS: resolves a human-readable label for an element (falling
+    /// back to an inner `<img alt>` or an associated `<label for>`, since
+    /// plenty of real buttons/links — like a site's logo — carry no text of
+    /// their own), plus fuzzy matching so a model-provided hint like
+    /// "Google button" still finds an element merely labeled "Google".
+    /// Tried in order: exact substring either direction, then stopword-
+    /// stripped token overlap. Kept as one constant so `click`/`type` share
+    /// identical matching behavior.
+    private static let matchHelperJS = """
+    function __normalize(s) {
+      return (s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\\s+/g, ' ').trim();
+    }
+    var __STOPWORDS = ['button','link','icon','the','a','an','of','on','to','for','click','tap','press','field','box','input','menu'];
+    function __tokens(s) {
+      return __normalize(s).split(' ').filter(function (t) { return t && __STOPWORDS.indexOf(t) === -1; });
+    }
+    function __labelOf(el) {
+      var raw = el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('title') || '';
+      if (!raw && el.querySelector) {
+        var img = el.querySelector('img[alt]');
+        if (img) raw = img.getAttribute('alt') || '';
+      }
+      if (!raw && el.id) {
+        var labelFor = document.querySelector('label[for="' + el.id + '"]');
+        if (labelFor) raw = labelFor.innerText || '';
+      }
+      if (!raw) raw = el.getAttribute('name') || el.id || '';
+      return raw;
+    }
+    function __score(el, hintTokens) {
+      var labelTokens = __tokens(__labelOf(el));
+      if (labelTokens.length === 0 || hintTokens.length === 0) return 0;
+      var overlap = 0;
+      for (var i = 0; i < hintTokens.length; i++) {
+        if (labelTokens.indexOf(hintTokens[i]) !== -1) overlap++;
+      }
+      return overlap / Math.max(labelTokens.length, hintTokens.length);
+    }
+    function __bestMatch(candidates, hint) {
+      var hintNorm = __normalize(hint);
+      var hintTokens = __tokens(hint);
+      for (var i = 0; i < candidates.length; i++) {
+        var labelNorm = __normalize(__labelOf(candidates[i]));
+        if (labelNorm && (labelNorm.indexOf(hintNorm) !== -1 || hintNorm.indexOf(labelNorm) !== -1)) {
+          return candidates[i];
+        }
+      }
+      var best = null, bestScore = 0;
+      for (var j = 0; j < candidates.length; j++) {
+        var s = __score(candidates[j], hintTokens);
+        if (s > bestScore) { bestScore = s; best = candidates[j]; }
+      }
+      return bestScore >= 0.34 ? best : null;
+    }
+    """
+
     // MARK: - Grounding
 
     /// Pull a lightweight snapshot of the page: title, URL, visible text,
     /// and the most prominent clickable elements with their text labels.
+    /// Uses the same `__labelOf` fallback as `click`/`type` (image `alt`,
+    /// associated `<label>`) so icon-only controls the AI might target —
+    /// like a bare logo link — actually show up here instead of being
+    /// silently dropped, which used to leave the model guessing blind.
     func captureContext() async -> BrowserPageContext {
         let js = """
         (function () {
+          \(Self.matchHelperJS)
           function visible(el) {
             const r = el.getBoundingClientRect();
             const style = window.getComputedStyle(el);
@@ -103,7 +164,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
           const text = document.body ? document.body.innerText.replace(/\\s+/g, ' ').trim().slice(0, 4000) : '';
           const nodes = Array.from(document.querySelectorAll('a, button, input, [role="button"]')).filter(visible).slice(0, 60);
           const links = nodes.map(function (el) {
-            const label = (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || '').replace(/\\s+/g, ' ').trim().slice(0, 80);
+            const label = __labelOf(el).replace(/\\s+/g, ' ').trim().slice(0, 80);
             const href = el.getAttribute('href') || el.getAttribute('name') || el.id || '';
             return { label: label, href: href };
           }).filter(function (l) { return l.label.length > 0; });
@@ -130,20 +191,19 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
 
     // MARK: - Agent actions (only invoked after explicit user approval)
 
-    /// Clicks the first visible link/button/input whose label, aria-label,
-    /// placeholder, id, or name contains `hint` (case-insensitive). Falls
-    /// back to treating `hint` as a raw CSS selector if nothing matches.
+    /// Clicks the visible link/button/input that best matches `hint`.
+    /// Matching (see `matchHelperJS`) tries an exact label substring first,
+    /// then falls back to stopword-stripped token overlap — so a hint like
+    /// "Google button" still matches an element merely labeled "Google" —
+    /// and finally falls back to treating `hint` as a raw CSS selector.
     @discardableResult
     func click(hint: String) async -> Bool {
         let escaped = escapeJS(hint)
         let js = """
         (function () {
-          const hint = "\(escaped)".toLowerCase();
-          const candidates = Array.from(document.querySelectorAll('a, button, input, [role="button"], [onclick]'));
-          function labelOf(el) {
-            return (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.id || el.getAttribute('name') || '').toLowerCase();
-          }
-          let match = candidates.find(function (el) { return labelOf(el).includes(hint); });
+          \(Self.matchHelperJS)
+          const candidates = Array.from(document.querySelectorAll('a, button, input, [role="button"], [onclick], summary'));
+          let match = __bestMatch(candidates, "\(escaped)");
           if (!match) {
             try { match = document.querySelector("\(escaped)"); } catch (e) { match = null; }
           }
@@ -156,21 +216,18 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         return (await evaluateJS(js) as? Bool) ?? false
     }
 
-    /// Types `text` into the first visible input/textarea whose label,
-    /// placeholder, aria-label, id, or name contains `hint`, dispatching
-    /// input/change events so frameworks (React, etc.) observe the update.
+    /// Types `text` into the visible input/textarea that best matches
+    /// `hint` (same fuzzy matching as `click`), dispatching input/change
+    /// events so frameworks (React, etc.) observe the update.
     @discardableResult
     func type(hint: String, text: String, submit: Bool) async -> Bool {
         let escapedHint = escapeJS(hint)
         let escapedText = escapeJS(text)
         let js = """
         (function () {
-          const hint = "\(escapedHint)".toLowerCase();
+          \(Self.matchHelperJS)
           const fields = Array.from(document.querySelectorAll('input, textarea, [contenteditable="true"]'));
-          function labelOf(el) {
-            return (el.placeholder || el.getAttribute('aria-label') || el.name || el.id || '').toLowerCase();
-          }
-          let field = fields.find(function (el) { return labelOf(el).includes(hint); });
+          let field = __bestMatch(fields, "\(escapedHint)");
           if (!field && fields.length === 1) field = fields[0];
           if (!field) {
             try { field = document.querySelector("\(escapedHint)"); } catch (e) { field = null; }
