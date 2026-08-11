@@ -166,6 +166,17 @@ struct AddToChatSheet: View {
     
     private var skillsSection: some View {
         VStack(spacing: 0) {
+            // Guided Learning — Socratic tutor mode: teaches step by step,
+            // asks check-ins, and hints instead of answering.
+            skillToggleRow(
+                systemImage: "graduationcap.fill",
+                title: "Guided learning",
+                subtitle: guidedLearningSubtitle,
+                isOn: $viewModel.guidedLearningEnabled
+            )
+
+            Divider().background(Theme.separator).padding(.leading, 50)
+
             // Research — multi-query web search + Wikipedia, injected as
             // live sources for this turn (shown as grey tool status lines).
             skillToggleRow(
@@ -364,6 +375,13 @@ struct AddToChatSheet: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
+    }
+
+    private var guidedLearningSubtitle: String {
+        if viewModel.guidedLearningEnabled {
+            return "On — the assistant teaches step by step with check-ins and hints."
+        }
+        return "The assistant becomes a tutor: teaches one step at a time and hints instead of answering."
     }
 
     /// Research is the deep mode; turning it on implies web search.

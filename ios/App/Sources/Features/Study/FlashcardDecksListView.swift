@@ -6,6 +6,7 @@ struct FlashcardDecksListView: View {
     @ObservedObject private var store = FlashcardDeckStore.shared
 
     @State private var showScanner = false
+    @State private var showGuided = false
 
     var body: some View {
         ZStack {
@@ -14,6 +15,7 @@ struct FlashcardDecksListView: View {
             ScrollView {
                 VStack(spacing: 18) {
                     scanCTA
+                    guidedCTA
 
                     if store.sortedDecks.isEmpty {
                         emptyDecks
@@ -31,6 +33,10 @@ struct FlashcardDecksListView: View {
         .navigationBarTitleDisplayMode(.inline)
         .fullScreenCover(isPresented: $showScanner) {
             StudyScanView()
+                .environmentObject(state)
+        }
+        .fullScreenCover(isPresented: $showGuided) {
+            GuidedLearningView()
                 .environmentObject(state)
         }
     }
@@ -69,6 +75,46 @@ struct FlashcardDecksListView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Scan questions into a flashcard deck")
+    }
+
+    // MARK: - Guided Learning CTA
+
+    private var guidedCTA: some View {
+        Button {
+            showGuided = true
+        } label: {
+            HStack(spacing: 14) {
+                Image(systemName: "graduationcap.fill")
+                    .font(.system(size: 24, weight: .medium))
+                    .foregroundStyle(Theme.accent)
+                    .frame(width: 52, height: 52)
+                    .background(Theme.accent.opacity(0.14), in: Circle())
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Guided learning")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                    Text("A tutor teaches step by step, with check-ins and hints")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.textSecondary)
+                        .multilineTextAlignment(.leading)
+                }
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.textTertiary)
+            }
+            .padding(18)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(Theme.separator.opacity(0.8), lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Start a guided learning lesson")
     }
 
     // MARK: - Decks
