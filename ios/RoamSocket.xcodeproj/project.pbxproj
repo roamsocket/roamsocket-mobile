@@ -114,6 +114,7 @@
 		E76982093466A87FFE305DA8 /* PreviewSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DDB8096BD8EDC931A40E9D0 /* PreviewSheets.swift */; };
 		E92BA656265BD2D626A7E87F /* MarkdownContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E6BDFEC5407686C57AE778B /* MarkdownContentView.swift */; };
 		E9E79CF1625A1B3950BDC10E /* RoamSocketControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44394A209E58F5112FF34826 /* RoamSocketControls.swift */; };
+		EA4AE35CEECAC53D1DD38A3E /* IncognitoChatSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CDA789F62DF1F26F2CAF00E /* IncognitoChatSheet.swift */; };
 		EC62DB2503CF447AA2F8197A /* MCPClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42BABB50CEDBC0DA4FA8B242 /* MCPClient.swift */; };
 		EDD0A4F1757206B2284C2004 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94DAD72AF3A8EDCB01382ED6 /* RootView.swift */; };
 		EF4C15028F079D5FF4DCCC18 /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = 44B4E6CFD2D8728BED39DEE3 /* Tokenizers */; };
@@ -220,6 +221,7 @@
 		972605C18C1EDD61772BF802 /* BrowserModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserModels.swift; sourceTree = "<group>"; };
 		97A8944EF43317CCBCDD259F /* BrowserTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserTab.swift; sourceTree = "<group>"; };
 		9ACE6D7C117681CD3BC86593 /* ProviderAPIKeyLinks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderAPIKeyLinks.swift; sourceTree = "<group>"; };
+		9CDA789F62DF1F26F2CAF00E /* IncognitoChatSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncognitoChatSheet.swift; sourceTree = "<group>"; };
 		9D20602502A40D7C1B883B31 /* ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMessage.swift; sourceTree = "<group>"; };
 		9DC4F2A2740B259BDBC20BB8 /* AIThinkingAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIThinkingAttributes.swift; sourceTree = "<group>"; };
 		9FAA5102103B2604B36B1C7E /* SpeechRecognitionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechRecognitionService.swift; sourceTree = "<group>"; };
@@ -385,6 +387,7 @@
 				122D73711B783A293FCCA9E5 /* ChatView.swift */,
 				25BB8C5338F7DF305283B5CA /* ChatViewModel.swift */,
 				54E6B70D6D9963ABFF34F70B /* ConnectorsView.swift */,
+				9CDA789F62DF1F26F2CAF00E /* IncognitoChatSheet.swift */,
 				FF4F2321A25F5FD7563850FD /* MessageActionsSheet.swift */,
 				034F6306CDB313273AFEFBB1 /* ThinkingBlock.swift */,
 				C9727CF8FE5BD4BAF42842E2 /* ThoughtProcessView.swift */,
@@ -808,6 +811,7 @@
 				8CCFF3A7038AF2B4D2975167 /* EnvironmentPickerSheet.swift in Sources */,
 				0DBC945A4F7EA9E196F7106D /* GitHubLinkView.swift in Sources */,
 				9908E3AA9D2E0F8F5E0D6213 /* HealthKitService.swift in Sources */,
+				EA4AE35CEECAC53D1DD38A3E /* IncognitoChatSheet.swift in Sources */,
 				FA1031175F29909D11D63CB3 /* InstalledSkillsView.swift in Sources */,
 				A674EF03137640F7CB3FD496 /* KeychainSecretStore.swift in Sources */,
 				C2DD54AA29CA0384D7A83304 /* LightweightTaskRunner.swift in Sources */,

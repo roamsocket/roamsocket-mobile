@@ -137,10 +137,21 @@ struct SidebarView: View {
                         .tint(Theme.textSecondary)
                     }
                     .contextMenu {
-                        Button {
-                            addToProjectTarget = item
-                        } label: {
-                            Label("Add to project", systemImage: "tray.full")
+                        // Incognito transcripts are meant to self-destruct —
+                        // never copy them into a permanent project chat.
+                        if !item.isIncognito {
+                            Button {
+                                addToProjectTarget = item
+                            } label: {
+                                Label("Add to project", systemImage: "tray.full")
+                            }
+                        }
+                        if item.isIncognito {
+                            Button(role: .destructive) {
+                                history.forgetChatNow(item.id)
+                            } label: {
+                                Label("Forget now", systemImage: "theatermasks")
+                            }
                         }
                         Button {
                             history.setStarred(item.id, starred: !item.isStarred)
@@ -380,6 +391,11 @@ private struct RecentRow: View {
             if item.isStarred {
                 Image(systemName: "star.fill")
                     .font(.system(size: 11))
+                    .foregroundStyle(Theme.accent)
+            }
+            if item.isIncognito {
+                Image(systemName: "theatermasks.fill")
+                    .font(.system(size: 12))
                     .foregroundStyle(Theme.accent)
             } else if item.isToolCall {
                 Image(systemName: "bubble.left.fill")

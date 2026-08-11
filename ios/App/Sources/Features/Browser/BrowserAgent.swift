@@ -207,6 +207,53 @@ enum BrowserAgent {
         return try parseNextStepDecision(raw)
     }
 
+    private static func chatSystemPrompt() -> String {
+        """
+        You are a helpful assistant embedded in a web browser. You can see the \
+        current page's URL, title, and visible text, and you answer questions \
+        about it conversationally.
+
+        You must NEVER propose browser actions, steps, or plans. You have no \
+        ability to click, type, navigate, or otherwise change the page — if the \
+        user asks you to do something on the page, explain what you found and \
+        suggest how they could do it themselves, but do not invent an action \
+        plan. If the page doesn't contain what's needed to answer, say so \
+        plainly and suggest what to check or search for. Answer in plain prose \
+        only, no JSON.
+        """
+    }
+
+    private static func chatUserPrompt(prompt: String, context: BrowserPageContext?) -> String {
+        var lines: [String] = ["User: \(prompt)"]
+        lines.append(contentsOf: pageContextLines(context))
+        lines.append("Answer the user's question about the current page in plain prose.")
+        return lines.joined(separator: "\n\n")
+    }
+
+    /// Ask the model about the current page. Unlike `requestPlan` this never
+    /// returns steps — the model is told it cannot act, so the page is never
+    /// touched in Ask mode.
+    static func chatAboutPage(
+        prompt: String,
+        context: BrowserPageContext?,
+        model: AIModel,
+        apiKey: String,
+        catalog: ModelCatalog,
+        customBaseURL: URL?,
+        style: CustomProviderStyle?
+    ) async throws -> String {
+        let provider = catalog.provider(model.provider, customBaseURL: customBaseURL, style: style)
+        let messages = [
+            ProviderChatMessage(role: .system, content: chatSystemPrompt()),
+            ProviderChatMessage(role: .user, content: chatUserPrompt(prompt: prompt, context: context)),
+        ]
+        do {
+            return try await provider.chat(model: model.modelID, apiKey: apiKey, messages: messages, effort: nil)
+        } catch {
+            throw PlanError(message: error.localizedDescription)
+        }
+    }
+
     static func parseNextStepDecision(_ raw: String) throws -> NextStepDecision {
         guard let jsonSubstring = extractJSONObject(from: raw),
               let data = jsonSubstring.data(using: .utf8),

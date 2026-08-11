@@ -115,7 +115,7 @@ struct BrowserHomeView: View {
             Text("Browse the web, hands-free")
                 .font(.system(size: 21, weight: .semibold))
                 .foregroundStyle(Theme.textPrimary)
-            Text("Type an address below, or ask the AI to do something — it always shows its plan before acting.")
+            Text("Type an address below, ask the AI a question about a page with Ask, or tell it to do something — it always shows its plan before acting.")
                 .font(.system(size: 14))
                 .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)
@@ -152,11 +152,14 @@ struct BrowserHomeView: View {
             } else if let steps = store.pendingStepsApproval {
                 stepsApprovalCard(steps)
             } else if let running = store.runningPlan {
-                if running.isFinished {
-                    finishedPlanBanner(running)
-                } else {
+                if store.isPlanRunning {
                     runningPlanBanner(running)
+                } else {
+                    finishedPlanBanner(running)
                 }
+            }
+            if let reply = store.chatReply {
+                chatReplyBanner(reply)
             }
             if let error = store.errorMessage {
                 errorBanner(error)
@@ -171,21 +174,27 @@ struct BrowserHomeView: View {
     // MARK: - AI prompt bar (sits where the URL bar usually would)
 
     private var aiPromptBar: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "sparkles")
+        HStack(spacing: 8) {
+            promptModeToggle
+
+            Image(systemName: store.promptMode == .ask ? "questionmark.bubble" : "sparkles")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Theme.accent)
                 .frame(width: 20)
 
-            TextField("Ask AI to do something on this page…", text: $store.promptText, axis: .vertical)
-                .font(.system(size: 15))
-                .foregroundStyle(Theme.textPrimary)
-                .lineLimit(1...3)
-                .focused($promptFocused)
-                .submitLabel(.send)
-                .onSubmit(submitPrompt)
+            TextField(
+                store.promptMode == .ask ? "Ask about this page…" : "Ask AI to do something on this page…",
+                text: $store.promptText,
+                axis: .vertical
+            )
+            .font(.system(size: 15))
+            .foregroundStyle(Theme.textPrimary)
+            .lineLimit(1...3)
+            .focused($promptFocused)
+            .submitLabel(.send)
+            .onSubmit(submitPrompt)
 
-            if store.isPlanning {
+            if store.isPlanning || store.isAsking {
                 ProgressView()
                     .tint(Theme.textSecondary)
             } else if !store.promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -201,6 +210,33 @@ struct BrowserHomeView: View {
         .padding(.vertical, 10)
         .background(Theme.surface)
         .overlay(Divider().overlay(Theme.separator), alignment: .top)
+    }
+
+    /// Compact Ask / Do switch in the prompt bar. "Ask" talks to the model
+    /// about the page without ever proposing or running an action.
+    private var promptModeToggle: some View {
+        HStack(spacing: 2) {
+            modeToggleButton(.ask)
+            modeToggleButton(.act)
+        }
+        .padding(2)
+        .background(Theme.surfaceElevated, in: Capsule())
+        .accessibilityLabel("Prompt mode: \(store.promptMode.title)")
+    }
+
+    private func modeToggleButton(_ mode: BrowserPromptMode) -> some View {
+        Button {
+            store.promptMode = mode
+            store.chatReply = nil
+        } label: {
+            Text(mode.title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(store.promptMode == mode ? Theme.inkOnAccent : Theme.textSecondary)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4)
+                .background(store.promptMode == mode ? Theme.accent : Color.clear, in: Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     private func submitPrompt() {
@@ -446,16 +482,45 @@ struct BrowserHomeView: View {
     }
 
     private func currentStepLabel(_ plan: BrowserPlan) -> String {
-        if let running = plan.steps.first(where: { $0.status == .running }) {
+        if let running = plan.steps.last, running.status == .running {
             return running.description
         }
-        let doneCount = plan.steps.filter { $0.status == .done }.count
-        return "Running plan… (\(doneCount)/\(plan.steps.count))"
+        return "Thinking about the next step…"
     }
 
-    /// Shown once a run finishes, fails, or gets denied. Auto-dismisses
-    /// after ~10s (see `BrowserStore.scheduleAutoDismiss`) but can also be
-    /// closed immediately.
+    /// The model's plain-prose answer to an Ask-mode question. Stays until
+    /// dismissed (or the next prompt) so it can be read at leisure.
+    private func chatReplyBanner(_ reply: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "questionmark.bubble")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+                .frame(width: 18)
+                .padding(.top, 1)
+            Text(reply)
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.textPrimary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+            Button(action: { store.chatReply = nil }) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.textSecondary)
+                    .frame(width: 26, height: 26)
+                    .background(Theme.surfaceElevated, in: Circle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Theme.surface)
+        .overlay(Divider().overlay(Theme.separator), alignment: .top)
+    }
+
+    /// Shown once a run finishes, fails, or gets denied. Individual steps
+    /// dismiss themselves after ~5s (see `BrowserStore.scheduleStepDismiss`);
+    /// the remaining banner auto-dismisses after ~10s but can also be closed
+    /// immediately.
     private func finishedPlanBanner(_ plan: BrowserPlan) -> some View {
         let failed = plan.steps.contains { $0.status == .failed }
         return VStack(alignment: .leading, spacing: 8) {

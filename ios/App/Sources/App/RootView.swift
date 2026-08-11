@@ -15,6 +15,7 @@ struct RootView: View {
 
     @State private var sidebarOpen: Bool = false
     @State private var showSettings: Bool = false
+    @State private var showIncognitoSheet: Bool = false
     @State private var showVision: Bool = false
     @State private var showLocalMetal: Bool = false
     @State private var path: [RootRoute] = []
@@ -125,6 +126,26 @@ struct RootView: View {
         .sheet(isPresented: $showSettings) {
             AppSettingsView()
         }
+        .sheet(isPresented: $showIncognitoSheet) {
+            IncognitoChatSheet(
+                history: history,
+                onStartIncognito: { lifetime in
+                    history.startIncognitoChat(
+                        lifetime: lifetime,
+                        selectedModel: state.selectedModel
+                    )
+                    chatResumeToken = UUID()
+                    path = []
+                    setSidebarOpen(false)
+                },
+                onStartFresh: {
+                    history.startNewChat(selectedModel: state.selectedModel)
+                    chatResumeToken = UUID()
+                    path = []
+                    setSidebarOpen(false)
+                }
+            )
+        }
         .sheet(isPresented: $showLocalMetal) {
             LocalMetalSettingsView()
         }
@@ -146,6 +167,11 @@ struct RootView: View {
                 .environmentObject(state)
         }
         .onChange(of: path) { oldPath, newPath in
+            // Leaving the chat root for any pushed destination — forget an
+            // "on exit" incognito chat the user walked away from.
+            if oldPath.isEmpty, !newPath.isEmpty {
+                history.forgetActiveIfOnExit()
+            }
             // Returning to the chat root (e.g. system back from Code) — refresh
             // so a discarded blank draft doesn't leave a stale empty shell, and
             // so the composer layout is rebuilt after being covered.
@@ -239,7 +265,7 @@ struct RootView: View {
             .sharedBackgroundVisibility(.hidden)
 
             ToolbarItem(placement: .topBarTrailing) {
-                settingsToolbarButton
+                incognitoToolbarButton
             }
             .sharedBackgroundVisibility(.hidden)
         } else {
@@ -247,7 +273,7 @@ struct RootView: View {
                 menuToolbarButton
             }
             ToolbarItem(placement: .topBarTrailing) {
-                settingsToolbarButton
+                incognitoToolbarButton
             }
         }
     }
@@ -265,17 +291,25 @@ struct RootView: View {
         .accessibilityLabel("Menu")
     }
 
-    private var settingsToolbarButton: some View {
-        Button(action: { showSettings = true }) {
-            Image(systemName: "gearshape")
+    /// True while the chat shown in the composer is an incognito chat — used
+    /// to highlight the toolbar incognito button so the mode is visible.
+    private var activeChatIsIncognito: Bool {
+        guard let id = history.activeChatID else { return false }
+        return history.recents.first(where: { $0.id == id })?.isIncognito == true
+    }
+
+    /// Opens a new incognito chat (or the forget settings when already in one).
+    private var incognitoToolbarButton: some View {
+        Button(action: { showIncognitoSheet = true }) {
+            Image(systemName: "theatermasks.fill")
                 .font(.system(size: 18, weight: .medium))
-                .foregroundStyle(Theme.textPrimary)
+                .foregroundStyle(activeChatIsIncognito ? Theme.accent : Theme.textPrimary)
                 .frame(width: 40, height: 40)
                 .background(Theme.surfaceElevated, in: Circle())
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Settings")
+        .accessibilityLabel("Incognito chat")
     }
 
     // MARK: - Routing
@@ -290,27 +324,33 @@ struct RootView: View {
             setSidebarOpen(false)
         case .vision:
             history.discardActiveIfBlank()
+            history.forgetActiveIfOnExit()
             setSidebarOpen(false)
             showVision = true
         case .projects:
             // Leaving the composer — drop unsent "New chat" rows from Recents.
             history.discardActiveIfBlank()
+            history.forgetActiveIfOnExit()
             path = [.projects]
             setSidebarOpen(false)
         case .artifacts:
             history.discardActiveIfBlank()
+            history.forgetActiveIfOnExit()
             path = [.artifacts]
             setSidebarOpen(false)
         case .code:
             history.discardActiveIfBlank()
+            history.forgetActiveIfOnExit()
             path = [.code]
             setSidebarOpen(false)
         case .browser:
             history.discardActiveIfBlank()
+            history.forgetActiveIfOnExit()
             path = [.browser]
             setSidebarOpen(false)
         case .models:
             history.discardActiveIfBlank()
+            history.forgetActiveIfOnExit()
             setSidebarOpen(false)
             showLocalMetal = true
         case .chat(let item):
@@ -320,6 +360,7 @@ struct RootView: View {
             setSidebarOpen(false)
         case .project(let project):
             history.discardActiveIfBlank()
+            history.forgetActiveIfOnExit()
             path = [.projectDetail(project)]
             setSidebarOpen(false)
         }
@@ -342,9 +383,11 @@ struct RootView: View {
         case .code:
             showVision = false
             history.discardActiveIfBlank()
+            history.forgetActiveIfOnExit()
             path = [.code]
         case .vision:
             history.discardActiveIfBlank()
+            history.forgetActiveIfOnExit()
             // Leave path as-is under the cover; Vision is a full-screen flow.
             showVision = true
         }
