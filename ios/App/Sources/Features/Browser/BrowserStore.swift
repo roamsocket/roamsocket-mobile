@@ -13,8 +13,17 @@ final class BrowserStore: ObservableObject {
 
     @Published var addressText: String = ""
     @Published var promptText: String = ""
+    /// Whether the prompt bar plans actions ("Do") or just talks about the
+    /// page ("Ask"). Ask mode never touches the page.
+    @Published var promptMode: BrowserPromptMode = .act
 
     @Published var isPlanning = false
+    /// Model is answering a question in Ask mode (page untouched).
+    @Published var isAsking = false
+    /// The model's plain-prose answer to an Ask-mode question.
+    @Published var chatReply: String?
+    /// True while the approved plan is actively executing steps.
+    @Published var isPlanRunning = false
     /// A freshly proposed plan awaiting Approve/Deny — nothing has executed yet.
     @Published var pendingPlan: BrowserPlan?
     /// The plan currently executing (or just finished). Starts empty and
@@ -54,9 +63,18 @@ final class BrowserStore: ObservableObject {
     /// Safety valve: stop re-planning after this many actions even if the
     /// model keeps saying "done": false, so a confused loop can't run away.
     private let maxStepsPerRun = 12
+    /// How long a finished step stays visible in the plan list before it
+    /// dismisses itself individually (so the list shows recent activity
+    /// instead of stacking every action forever).
+    private let stepAutoDismissSeconds: UInt64 = 5
     /// How long the finished/stopped banner stays up before it auto-dismisses.
     private let finishedBannerAutoDismissSeconds: UInt64 = 10
     private var autoDismissTask: Task<Void, Never>?
+    /// Per-step dismissal tasks keyed by step id, so a new run (or manual
+    /// dismissal) can cancel the old ones. Each task also guards on the plan
+    /// id it was scheduled for, so a stale task can never eat steps from a
+    /// later run.
+    private var stepDismissTasks: [UUID: Task<Void, Never>] = [:]
 
     init() {
         let raw = UserDefaults.standard.string(forKey: granularityKey)
@@ -154,8 +172,9 @@ final class BrowserStore: ObservableObject {
 
     // MARK: - AI planning
 
-    /// Ask the model for a plan grounded in the current page. Always
-    /// produces `pendingPlan` (or an error) — never executes anything.
+    /// Route the prompt bar text: in Ask mode the model just answers
+    /// questions about the current page (nothing executes); in Do mode it
+    /// produces `pendingPlan` for approval (also nothing executes).
     func submitPrompt(appState: AppState) async {
         self.appState = appState
         let goal = promptText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -172,6 +191,28 @@ final class BrowserStore: ObservableObject {
 
         promptText = ""
         errorMessage = nil
+
+        guard promptMode == .act else {
+            chatReply = nil
+            isAsking = true
+            defer { isAsking = false }
+            let context = await activeTab?.captureContext()
+            do {
+                chatReply = try await BrowserAgent.chatAboutPage(
+                    prompt: goal,
+                    context: context,
+                    model: model,
+                    apiKey: apiKey,
+                    catalog: appState.catalog,
+                    customBaseURL: appState.baseURL(for: model.provider),
+                    style: appState.apiStyle(for: model.provider)
+                )
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            return
+        }
+
         completionSummary = nil
         cancelAutoDismiss()
         isPlanning = true
@@ -224,6 +265,8 @@ final class BrowserStore: ObservableObject {
         pendingPlan = nil
         completionSummary = nil
         cancelAutoDismiss()
+        cancelStepDismissals()
+        isPlanRunning = true
         // Start the live/executed list empty — the preview steps above were
         // only ever a forecast for the approval card. What actually runs is
         // decided one action at a time (see `runApprovedSteps`), so this
@@ -247,13 +290,38 @@ final class BrowserStore: ObservableObject {
 
     func dismissRunningPlan() {
         cancelAutoDismiss()
+        cancelStepDismissals()
         runningPlan = nil
         completionSummary = nil
+        isPlanRunning = false
     }
 
     private func cancelAutoDismiss() {
         autoDismissTask?.cancel()
         autoDismissTask = nil
+    }
+
+    private func cancelStepDismissals() {
+        stepDismissTasks.values.forEach { $0.cancel() }
+        stepDismissTasks.removeAll()
+    }
+
+    /// Removes a single finished step from the visible plan list after
+    /// `stepAutoDismissSeconds`, so completed actions fade out one by one
+    /// instead of the list growing taller forever. Guards on the plan id it
+    /// was scheduled under so a stale task can't remove steps from a later run.
+    private func scheduleStepDismiss(stepID: UUID) {
+        guard let planID = runningPlan?.id else { return }
+        stepDismissTasks[stepID]?.cancel()
+        let task = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: stepAutoDismissSeconds * 1_000_000_000)
+            guard !Task.isCancelled else { return }
+            guard let self, var plan = self.runningPlan, plan.id == planID else { return }
+            plan.steps.removeAll { $0.id == stepID }
+            self.runningPlan = plan
+            self.stepDismissTasks[stepID] = nil
+        }
+        stepDismissTasks[stepID] = task
     }
 
     /// Keeps the finished/stopped banner up long enough to actually read,
@@ -304,6 +372,7 @@ final class BrowserStore: ObservableObject {
                 currentStep.status = result.ok ? .done : .failed
                 currentStep.resultNote = result.note
                 updateLastStep(currentStep)
+                scheduleStepDismiss(stepID: currentStep.id)
                 completed.append(currentStep)
                 if !result.ok {
                     stoppedEarly = true
@@ -348,6 +417,7 @@ final class BrowserStore: ObservableObject {
                             var denied = deniedStep
                             denied.status = .denied
                             appendStep(denied)
+                            scheduleStepDismiss(stepID: denied.id)
                         }
                         queue = []
                     }
@@ -359,6 +429,7 @@ final class BrowserStore: ObservableObject {
             }
         }
 
+        isPlanRunning = false
         scheduleAutoDismiss()
     }
 

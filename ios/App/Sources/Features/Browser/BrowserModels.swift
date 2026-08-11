@@ -91,12 +91,21 @@ struct BrowserPlan: Identifiable, Equatable {
         self.steps = steps
         self.createdAt = createdAt
     }
+}
 
-    /// `false` while `steps` is still empty (e.g. the brief moment right
-    /// after a run starts, before its first live step lands) — otherwise
-    /// an empty list would be vacuously "finished" and flash the wrong banner.
-    var isFinished: Bool {
-        !steps.isEmpty && steps.allSatisfy { $0.status == .done || $0.status == .failed || $0.status == .denied }
+/// What the AI prompt bar does with the user's text.
+enum BrowserPromptMode: String, CaseIterable {
+    /// Ask questions about the current page — the model answers in prose
+    /// grounded in the live page and never proposes actions.
+    case ask
+    /// Turn the request into an action plan to review and approve.
+    case act
+
+    var title: String {
+        switch self {
+        case .ask: return "Ask"
+        case .act: return "Do"
+        }
     }
 }
 
