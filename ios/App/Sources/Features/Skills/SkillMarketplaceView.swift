@@ -3,15 +3,23 @@ import AnyProvCore
 
 /// Browse marketplace skill listings (official + user-added marketplaces)
 /// alongside skills already synced from the user's skills repo.
+///
+/// Marketplace skills with `instructions` can be installed directly: the
+/// listing is mapped into a `Skill` and pushed to the desktop via
+/// `skill_upsert`, which commits it to the user's skills git repo.
 struct SkillMarketplaceView: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var marketplace = MarketplaceStore.shared
 
+    @State private var installingSkillIDs: Set<String> = []
+    @State private var installError: String?
+    @State private var installingPluginID: String?
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                if marketplace.skills.isEmpty && state.skillManager.installedSkills.isEmpty {
+                if marketplace.skills.isEmpty && marketplace.plugins.isEmpty && state.skillManager.installedSkills.isEmpty {
                     emptyState
                 } else {
                     List {
@@ -23,7 +31,19 @@ struct SkillMarketplaceView: View {
                             } header: {
                                 Text("Marketplace")
                             } footer: {
-                                Text("From enabled marketplace repos. Install full skill bodies via your skills repo or desktop.")
+                                Text("Install a skill to push it to your skills repo via the paired desktop. Requires an active server connection.")
+                            }
+                        }
+
+                        if !marketplace.plugins.isEmpty {
+                            Section {
+                                ForEach(marketplace.plugins) { plugin in
+                                    pluginRow(plugin)
+                                }
+                            } header: {
+                                Text("Plugins")
+                            } footer: {
+                                Text("Plugins install all their skills at once.")
                             }
                         }
 
@@ -86,6 +106,10 @@ struct SkillMarketplaceView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    private func isInstalled(_ skillId: String) -> Bool {
+        state.skillManager.installedSkills.contains { $0.id == skillId }
+    }
+
     private func marketplaceSkillRow(_ skill: MarketplaceSkillListing) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
@@ -115,6 +139,95 @@ struct SkillMarketplaceView: View {
                     .foregroundStyle(Theme.textSecondary)
                     .lineLimit(3)
             }
+            HStack {
+                if isInstalled(skill.id) {
+                    Label("Installed", systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Theme.accent)
+                } else {
+                    Button {
+                        Task { await installSkill(skill) }
+                    } label: {
+                        if installingSkillIDs.contains(skill.id) {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Label("Install", systemImage: "arrow.down.circle")
+                                .font(.system(size: 13, weight: .medium))
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .tint(Theme.accent)
+                    .disabled(installingSkillIDs.contains(skill.id))
+                }
+            }
+            .padding(.top, 2)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func pluginRow(_ plugin: MarketplacePlugin) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Image(systemName: "shippingbox")
+                    .foregroundStyle(Theme.accent)
+                Text(plugin.name)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                if plugin.featured == true {
+                    Text("Featured")
+                        .font(.system(size: 11, weight: .medium))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Theme.accent.opacity(0.2), in: Capsule())
+                        .foregroundStyle(Theme.accent)
+                }
+                Spacer()
+            }
+            if let desc = plugin.description, !desc.isEmpty {
+                Text(desc)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.textSecondary)
+                    .lineLimit(2)
+            }
+            HStack {
+                let skillIds = plugin.skillIds ?? []
+                let available = skillIds.compactMap { id in
+                    marketplace.skills.first { $0.id == id }
+                }
+                let allInstalled = !available.isEmpty && available.allSatisfy { isInstalled($0.id) }
+                Text("\(skillIds.count) skill\(skillIds.count == 1 ? "" : "s")")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.textTertiary)
+                Spacer()
+                if available.isEmpty {
+                    Text("No skills")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textTertiary)
+                } else if allInstalled {
+                    Label("Installed", systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Theme.accent)
+                } else {
+                    Button {
+                        Task { await installPlugin(plugin) }
+                    } label: {
+                        if installingPluginID == plugin.id {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Label("Install all", systemImage: "arrow.down.circle")
+                                .font(.system(size: 13, weight: .medium))
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .tint(Theme.accent)
+                    .disabled(installingPluginID == plugin.id)
+                }
+            }
+            .padding(.top, 2)
         }
         .padding(.vertical, 4)
     }
@@ -155,5 +268,41 @@ struct SkillMarketplaceView: View {
                 Label("Delete", systemImage: "trash")
             }
         }
+    }
+
+    // MARK: - Install actions
+
+    private func installSkill(_ listing: MarketplaceSkillListing) async {
+        installingSkillIDs.insert(listing.id)
+        installError = nil
+        defer { installingSkillIDs.remove(listing.id) }
+
+        let skill = listing.toSkill()
+        do {
+            try await state.skillsMCPClient.upsertSkill(skill, over: state.serverClient)
+            state.skillManager.apply(skills: state.skillsMCPClient.cachedSkills)
+        } catch {
+            installError = error.localizedDescription
+        }
+    }
+
+    private func installPlugin(_ plugin: MarketplacePlugin) async {
+        installingPluginID = plugin.id
+        installError = nil
+        defer { installingPluginID = nil }
+
+        let skillIds = plugin.skillIds ?? []
+        for id in skillIds {
+            guard let listing = marketplace.skills.first(where: { $0.id == id }) else { continue }
+            guard !isInstalled(listing.id) else { continue }
+            let skill = listing.toSkill()
+            do {
+                try await state.skillsMCPClient.upsertSkill(skill, over: state.serverClient)
+            } catch {
+                installError = error.localizedDescription
+                break
+            }
+        }
+        state.skillManager.apply(skills: state.skillsMCPClient.cachedSkills)
     }
 }
