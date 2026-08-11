@@ -1,6 +1,49 @@
 import Foundation
 import AnyProvCore
 
+/// How long an incognito chat keeps its transcript before it is forgotten.
+enum IncognitoLifetime: String, Codable, CaseIterable, Identifiable {
+    /// Deleted the moment the user leaves the chat (or relaunches the app).
+    case onExit
+    case oneHour
+    case sixHours
+    case twelveHours
+    case twentyFourHours
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .onExit: return "When you exit the chat"
+        case .oneHour: return "1 hour"
+        case .sixHours: return "6 hours"
+        case .twelveHours: return "12 hours"
+        case .twentyFourHours: return "24 hours"
+        }
+    }
+
+    /// Countdown length in seconds, or nil when the chat dies on exit.
+    var timeInterval: TimeInterval? {
+        switch self {
+        case .onExit: return nil
+        case .oneHour: return 60 * 60
+        case .sixHours: return 6 * 60 * 60
+        case .twelveHours: return 12 * 60 * 60
+        case .twentyFourHours: return 24 * 60 * 60
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .onExit: return "Chat is deleted when you leave it"
+        case .oneHour: return "Chat is deleted 1 hour after your last message"
+        case .sixHours: return "Chat is deleted 6 hours after your last message"
+        case .twelveHours: return "Chat is deleted 12 hours after your last message"
+        case .twentyFourHours: return "Chat is deleted 24 hours after your last message"
+        }
+    }
+}
+
 /// Lightweight model for a chat shown in the sidebar Recents list.
 struct ChatHistoryItem: Identifiable, Hashable, Codable {
     let id: UUID
@@ -23,6 +66,12 @@ struct ChatHistoryItem: Identifiable, Hashable, Codable {
     var didAutoTitle: Bool
     /// User-message count when auto-title last ran (for every-N refresh).
     var autoTitleAtUserCount: Int
+    /// Incognito chat — transcript is auto-deleted after its lifetime.
+    var isIncognito: Bool
+    /// Forget schedule for incognito chats (nil = regular chat).
+    var incognitoLifetime: IncognitoLifetime?
+    /// When the auto-forget countdown expires (nil = on-exit or regular chat).
+    var forgetAt: Date?
 
     init(
         id: UUID = UUID(),
@@ -35,7 +84,10 @@ struct ChatHistoryItem: Identifiable, Hashable, Codable {
         selectedModel: AIModel? = nil,
         titleIsUserEdited: Bool = false,
         didAutoTitle: Bool = false,
-        autoTitleAtUserCount: Int = 0
+        autoTitleAtUserCount: Int = 0,
+        isIncognito: Bool = false,
+        incognitoLifetime: IncognitoLifetime? = nil,
+        forgetAt: Date? = nil
     ) {
         self.id = id
         self.title = title
@@ -48,6 +100,9 @@ struct ChatHistoryItem: Identifiable, Hashable, Codable {
         self.titleIsUserEdited = titleIsUserEdited
         self.didAutoTitle = didAutoTitle
         self.autoTitleAtUserCount = autoTitleAtUserCount
+        self.isIncognito = isIncognito
+        self.incognitoLifetime = incognitoLifetime
+        self.forgetAt = forgetAt
     }
 
     init(from decoder: Decoder) throws {
@@ -79,6 +134,9 @@ struct ChatHistoryItem: Identifiable, Hashable, Codable {
         } else {
             autoTitleAtUserCount = 0
         }
+        isIncognito = try c.decodeIfPresent(Bool.self, forKey: .isIncognito) ?? false
+        incognitoLifetime = try c.decodeIfPresent(IncognitoLifetime.self, forKey: .incognitoLifetime)
+        forgetAt = try c.decodeIfPresent(Date.self, forKey: .forgetAt)
     }
 }
 
@@ -244,7 +302,15 @@ final class ChatHistoryStore: ObservableObject {
     @Published var activeProject: ProjectItem?
 
     /// Chat currently open in the main composer (nil = blank new chat).
-    @Published var activeChatID: UUID?
+    @Published var activeChatID: UUID? {
+        didSet {
+            // Switching away from an "on exit" incognito chat forgets it.
+            // Timed incognito chats stay in Recents until the countdown expires.
+            if let previous = oldValue, previous != activeChatID {
+                forgetOnExitChat(previous)
+            }
+        }
+    }
 
     private let storeKey = "chatHistory.v2"
     /// In-flight on-device title jobs (keyed by chat id).
@@ -252,9 +318,16 @@ final class ChatHistoryStore: ObservableObject {
     /// Coalesces disk writes so opening a large chat doesn't block the UI
     /// on a full JSON encode of every transcript.
     private var pendingSaveTask: Task<Void, Never>?
+    /// Periodic sweep that deletes incognito chats whose countdown expired.
+    private var forgetTimer: Timer?
 
     init() {
         load()
+        startForgetTimer()
+    }
+
+    deinit {
+        forgetTimer?.invalidate()
     }
 
     func chats(for project: ProjectItem) -> [ProjectChatItem] {
@@ -324,6 +397,57 @@ final class ChatHistoryStore: ObservableObject {
         return item
     }
 
+    /// Start a new incognito chat with the given forget schedule and make it active.
+    /// Works exactly like a regular chat, except the transcript is deleted when
+    /// the user leaves (`.onExit`) or once `forgetAt` passes.
+    @discardableResult
+    func startIncognitoChat(
+        lifetime: IncognitoLifetime,
+        selectedModel: AIModel? = nil
+    ) -> ChatHistoryItem {
+        discardBlankDrafts()
+        let now = Date()
+        let item = ChatHistoryItem(
+            title: ChatTitleGenerator.defaultTitle,
+            lastMessageAt: now,
+            selectedModel: selectedModel,
+            isIncognito: true,
+            incognitoLifetime: lifetime,
+            forgetAt: lifetime.timeInterval.map { now.addingTimeInterval($0) }
+        )
+        recents.insert(item, at: 0)
+        activeChatID = item.id
+        activeProject = nil
+        save()
+        return item
+    }
+
+    /// Change the forget schedule of an existing incognito chat.
+    /// The countdown restarts from now on every change and on each new message.
+    func setIncognitoLifetime(_ lifetime: IncognitoLifetime, for chatID: UUID) {
+        guard let idx = recents.firstIndex(where: { $0.id == chatID }) else { return }
+        recents[idx].incognitoLifetime = lifetime
+        recents[idx].forgetAt = lifetime.timeInterval.map { Date().addingTimeInterval($0) }
+        save()
+    }
+
+    /// Immediately delete an incognito chat (and its transcript).
+    func forgetChatNow(_ id: UUID) {
+        forgetChat(id)
+    }
+
+    /// Forget the active chat when it is an "on exit" incognito chat.
+    /// Called when the user leaves the chat screen without switching chats
+    /// (e.g. opening Projects / Code / Vision).
+    func forgetActiveIfOnExit() {
+        guard let id = activeChatID,
+              let item = recents.first(where: { $0.id == id }),
+              item.isIncognito,
+              item.incognitoLifetime == .onExit
+        else { return }
+        forgetChat(id)
+    }
+
     /// Ensure there is an active chat row for the current conversation.
     @discardableResult
     func ensureActiveChat(selectedModel: AIModel? = nil) -> UUID {
@@ -367,6 +491,11 @@ final class ChatHistoryStore: ObservableObject {
         let persisted = messages.compactMap { Self.persist($0) }
         recents[idx].messages = persisted
         recents[idx].lastMessageAt = Date()
+        // Incognito countdown resets with the last message ("forget N after your
+        // last message"), so an actively used chat isn't silently deleted.
+        if recents[idx].isIncognito, let interval = recents[idx].incognitoLifetime?.timeInterval {
+            recents[idx].forgetAt = Date().addingTimeInterval(interval)
+        }
         // Interim title from the first user message until on-device naming finishes.
         if !recents[idx].titleIsUserEdited,
            !recents[idx].didAutoTitle,
@@ -579,6 +708,53 @@ final class ChatHistoryStore: ObservableObject {
         save()
     }
 
+    // MARK: - Incognito forgetting
+
+    /// Remove an incognito chat (and its transcript) entirely.
+    /// Leaves `activeChatID` untouched when a different chat is active so the
+    /// in-progress conversation isn't clobbered by a background sweep.
+    private func forgetChat(_ id: UUID) {
+        recents.removeAll { $0.id == id }
+        if activeChatID == id {
+            activeChatID = nil
+        }
+        save()
+    }
+
+    /// Forget an "on exit" incognito chat when the user switches away from it.
+    private func forgetOnExitChat(_ id: UUID) {
+        guard let item = recents.first(where: { $0.id == id }),
+              item.isIncognito,
+              item.incognitoLifetime == .onExit
+        else { return }
+        forgetChat(id)
+    }
+
+    /// Periodic sweep for incognito chats whose countdown expired while the
+    /// app was running (cold-start expiry is pruned in `load()`).
+    private func startForgetTimer() {
+        forgetTimer?.invalidate()
+        let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.forgetExpiredChats()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        forgetTimer = timer
+    }
+
+    private func forgetExpiredChats() {
+        let now = Date()
+        let expired = recents.filter {
+            $0.isIncognito && ($0.forgetAt ?? .distantFuture) <= now
+        }.map(\.id)
+        guard !expired.isEmpty else { return }
+        for id in expired {
+            forgetChat(id)
+        }
+        save()
+    }
+
     /// Swipe-to-archive for a global recent chat.
     func archiveChat(_ id: UUID) {
         guard let idx = recents.firstIndex(where: { $0.id == id }) else { return }
@@ -626,9 +802,11 @@ final class ChatHistoryStore: ObservableObject {
     }
 
     /// Copy a global recent into a project (keeps the original in Recents).
+    /// Incognito chats are never copied — their transcript is meant to self-destruct.
     @discardableResult
     func addChatToProject(chatID: UUID, projectID: UUID) -> ProjectChatItem? {
         guard let chat = recents.first(where: { $0.id == chatID }),
+              !chat.isIncognito,
               projects.contains(where: { $0.id == projectID })
         else { return nil }
         let projectChat = ProjectChatItem(
@@ -745,6 +923,26 @@ final class ChatHistoryStore: ObservableObject {
         activeChatID = nil
         // Cold-start cleanup: drop leftover blank drafts from previous sessions.
         pruneBlankDraftsSilently()
+        // Cold-start incognito sweep: "on exit" chats are gone (the app was
+        // exited), and timed chats whose countdown expired while closed are too.
+        pruneExpiredIncognito()
+    }
+
+    /// Forget incognito chats that should not survive this launch: every
+    /// "on exit" chat (exiting the app = exiting the chat) plus any timed chat
+    /// whose `forgetAt` passed while the app was closed.
+    private func pruneExpiredIncognito() {
+        let now = Date()
+        let forgotten = recents.filter { item in
+            guard item.isIncognito else { return false }
+            if let forgetAt = item.forgetAt { return forgetAt <= now }
+            return item.incognitoLifetime == .onExit
+        }.map(\.id)
+        guard !forgotten.isEmpty else { return }
+        for id in forgotten {
+            forgetChat(id)
+        }
+        save()
     }
 
     /// Remove empty global + project drafts left over from previous sessions.
