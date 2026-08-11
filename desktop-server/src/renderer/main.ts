@@ -53,6 +53,7 @@ import {
   type ComposerToolsState,
   titleFromContent,
   friendlyModelLabel,
+  prettifyName,
   listCloudModels,
   isUsableChatSelection,
   loadCustomProviders,
@@ -88,6 +89,14 @@ import {
   appForm,
   appPrompt,
 } from "./dialogs.js";
+import {
+  installMarketplaceSkill,
+  installMarketplacePlugin,
+  isMarketplaceSkillInstalled,
+  resolvePluginSkills,
+  type InstallTarget,
+} from "../marketplace/install.js";
+import { emptyCatalog } from "../marketplace/types.js";
 
 declare global {
   interface Window {
@@ -1306,7 +1315,7 @@ async function populateModelPickerList(
         for (const [org, orgModels] of sorted) {
           const orgBody = el("div", { class: "model-picker-submenu nested" });
           const orgToggle = makeSubmenuToggle(
-            org,
+            prettifyName(org),
             `${orgModels.length}`,
             orgBody,
             {
@@ -4114,9 +4123,26 @@ function fillSettingsSkills(panel: HTMLElement): void {
     sec.append(el("div", { class: "settings-subhead", style: "margin-top:18px" }, ["From marketplace"]));
     const mpTable = el("div", { class: "settings-table skills-table" });
     for (const s of mpSkills.slice(0, 12)) {
-      const row = el("div", { class: "settings-table-row" });
-      row.append(el("span", {}, [s.name + (s.featured ? " ★" : "")]));
-      row.append(el("span", { class: "settings-hint" }, [s.description.slice(0, 80)]));
+      const row = el("div", { class: "settings-table-row", style: "align-items:center;gap:10px" });
+      const left = el("div", { style: "flex:1;min-width:0" });
+      left.append(el("span", {}, [s.name + (s.featured ? " ★" : "")]));
+      left.append(el("span", { class: "settings-hint" }, [s.description.slice(0, 80)]));
+      row.append(left);
+      if (isMarketplaceSkillInstalled(skillsStore, s.id)) {
+        row.append(el("span", { class: "pill ok" }, ["Installed"]));
+      } else {
+        const installBtn = el("button", { class: "ghost-btn sm", type: "button" }, ["Install"]);
+        installBtn.addEventListener("click", () => {
+          try {
+            installMarketplaceSkill(skillsStore as InstallTarget, s);
+            showToast(`Installed skill “${s.name}”`);
+            renderSettings();
+          } catch (e) {
+            void appAlert({ title: "Install failed", message: String((e as Error).message ?? e) });
+          }
+        });
+        row.append(installBtn);
+      }
       mpTable.append(row);
     }
     sec.append(mpTable);
@@ -4124,6 +4150,16 @@ function fillSettingsSkills(panel: HTMLElement): void {
 
   sec.append(actions);
   panel.append(sec);
+}
+
+function showToast(message: string): void {
+  const notice = el("div", { class: "notice ok" }, [message]);
+  notice.style.position = "fixed";
+  notice.style.bottom = "24px";
+  notice.style.right = "24px";
+  notice.style.zIndex = "100";
+  document.body.append(notice);
+  setTimeout(() => notice.remove(), 2500);
 }
 
 async function fillSettingsMarketplace(panel: HTMLElement): Promise<void> {
@@ -4217,6 +4253,80 @@ async function fillSettingsMarketplace(panel: HTMLElement): Promise<void> {
     list.append(row);
   }
   sec.append(list);
+
+  // --- Skills (install from marketplace) ---
+  const mpSkills = status.catalog.skills ?? [];
+  if (mpSkills.length) {
+    sec.append(el("div", { class: "settings-subhead", style: "margin-top:18px" }, ["Skills"]));
+    const skTable = el("div", { class: "settings-table skills-table" });
+    for (const s of mpSkills) {
+      const row = el("div", { class: "settings-table-row", style: "align-items:center;gap:10px" });
+      const left = el("div", { style: "flex:1;min-width:0" });
+      left.append(el("span", {}, [s.name + (s.featured ? " ★" : "")]));
+      left.append(el("span", { class: "settings-hint" }, [s.description.slice(0, 80)]));
+      row.append(left);
+      const already = isMarketplaceSkillInstalled(skillsStore, s.id);
+      if (already) {
+        row.append(el("span", { class: "pill ok" }, ["Installed"]));
+      } else {
+        const installBtn = el("button", { class: "ghost-btn sm", type: "button" }, ["Install"]);
+        installBtn.addEventListener("click", () => {
+          try {
+            installMarketplaceSkill(skillsStore as InstallTarget, s);
+            showToast(`Installed skill “${s.name}”`);
+            renderSettings();
+          } catch (e) {
+            void appAlert({ title: "Install failed", message: String((e as Error).message ?? e) });
+          }
+        });
+        row.append(installBtn);
+      }
+      skTable.append(row);
+    }
+    sec.append(skTable);
+  }
+
+  // --- Plugins (install all skills in a plugin) ---
+  const mpPlugins = status.catalog.plugins ?? [];
+  if (mpPlugins.length) {
+    sec.append(el("div", { class: "settings-subhead", style: "margin-top:18px" }, ["Plugins"]));
+    const plTable = el("div", { class: "settings-table" });
+    for (const p of mpPlugins) {
+      const row = el("div", { class: "settings-table-row", style: "align-items:center;gap:10px" });
+      const left = el("div", { style: "flex:1;min-width:0" });
+      left.append(el("span", {}, [p.name + (p.featured ? " ★" : "")]));
+      const { available, missing } = resolvePluginSkills(p, status.catalog);
+      const parts = [`${available.length} skill${available.length === 1 ? "" : "s"}`];
+      if (missing.length) parts.push(`${missing.length} missing`);
+      left.append(el("span", { class: "settings-hint" }, [parts.join(" · ")]));
+      if (p.description) {
+        left.append(el("span", { class: "settings-hint" }, [p.description.slice(0, 60)]));
+      }
+      row.append(left);
+      if (available.length === 0) {
+        row.append(el("span", { class: "pill empty" }, ["No skills"]));
+      } else {
+        const allInstalled = available.every((s) => isMarketplaceSkillInstalled(skillsStore, s.id));
+        if (allInstalled) {
+          row.append(el("span", { class: "pill ok" }, ["Installed"]));
+        } else {
+          const installBtn = el("button", { class: "ghost-btn sm", type: "button" }, ["Install"]);
+          installBtn.addEventListener("click", () => {
+            const res = installMarketplacePlugin(skillsStore as InstallTarget, p, status.catalog);
+            const parts: string[] = [];
+            if (res.installed) parts.push(`${res.installed} installed`);
+            if (res.skipped) parts.push(`${res.skipped} already installed`);
+            if (res.missing) parts.push(`${res.missing} missing`);
+            showToast(parts.join(" · ") || "Nothing to install");
+            renderSettings();
+          });
+          row.append(installBtn);
+        }
+      }
+      plTable.append(row);
+    }
+    sec.append(plTable);
+  }
 
   const actions = el("div", { class: "tunnel-cli-actions", style: "margin-top:14px;justify-content:flex-start" });
   const refresh = el("button", { class: "primary-btn", type: "button" }, ["Refresh all"]);
@@ -4370,6 +4480,7 @@ function fillSettingsPlugins(panel: HTMLElement): void {
     el("div", { class: "settings-table-head" }, [
       el("span", {}, ["Plugin"]),
       el("span", {}, ["Skills"]),
+      el("span", {}, [""]),
     ]),
   );
   if (plugins.length === 0) {
@@ -4377,16 +4488,39 @@ function fillSettingsPlugins(panel: HTMLElement): void {
       el("div", { class: "settings-table-row muted" }, [
         el("span", {}, ["No plugins in merged catalog"]),
         el("span", {}, ["0"]),
+        el("span", {}, [""]),
       ]),
     );
   } else {
     for (const p of plugins) {
-      table.append(
-        el("div", { class: "settings-table-row" }, [
-          el("span", {}, [p.name + (p.featured ? " ★" : "")]),
-          el("span", {}, [String(p.skillIds?.length ?? 0)]),
-        ]),
-      );
+      const row = el("div", { class: "settings-table-row", style: "align-items:center" });
+      row.append(el("span", {}, [p.name + (p.featured ? " ★" : "")]));
+      row.append(el("span", {}, [String(p.skillIds?.length ?? 0)]));
+      const { available } = resolvePluginSkills(p, state.marketplace?.catalog ?? emptyCatalog());
+      if (available.length === 0) {
+        row.append(el("span", { class: "pill empty" }, ["—"]));
+      } else {
+        const allInstalled = available.every((s) => isMarketplaceSkillInstalled(skillsStore, s.id));
+        if (allInstalled) {
+          row.append(el("span", { class: "pill ok" }, ["Installed"]));
+        } else {
+          const installBtn = el("button", { class: "ghost-btn sm", type: "button" }, ["Install"]);
+          installBtn.addEventListener("click", () => {
+            const res = installMarketplacePlugin(
+              skillsStore as InstallTarget,
+              p,
+              state.marketplace?.catalog ?? emptyCatalog(),
+            );
+            const parts: string[] = [];
+            if (res.installed) parts.push(`${res.installed} installed`);
+            if (res.skipped) parts.push(`${res.skipped} already installed`);
+            showToast(parts.join(" · ") || "Nothing to install");
+            renderSettings();
+          });
+          row.append(installBtn);
+        }
+      }
+      table.append(row);
     }
   }
   sec.append(table);

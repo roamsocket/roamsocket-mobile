@@ -78,6 +78,12 @@ import {
   normalizeMarketplaceUrl,
   metalModelsForPlatform,
   BUNDLED_MARKETPLACE_CATALOG,
+  installMarketplaceSkill,
+  installMarketplacePlugin,
+  isMarketplaceSkillInstalled,
+  skillInstructionsFor,
+  resolvePluginSkills,
+  type InstallTarget,
 } from "../src/marketplace/index.js";
 import { getAgentAdapter } from "../src/providers/index.js";
 
@@ -847,6 +853,138 @@ check("marketplace apply updates connector + metal catalogs", () => {
   assert.ok(listChatMetalCatalog().some((e) => e.hubID === "test/remote-MLX-4bit"));
   setRemoteMetalCatalog(null);
   assert.ok(!listChatMetalCatalog().some((e) => e.hubID === "test/remote-MLX-4bit"));
+});
+
+// --- Marketplace install helpers ---
+
+/** In-memory mock for InstallTarget (get/create). */
+function mockStore(seed: { id: string; name: string; description: string; instructions: string }[] = []): InstallTarget {
+  const data = [...seed];
+  return {
+    get(id: string) {
+      return data.find((s) => s.id === id || s.name === id) as any;
+    },
+    create(input: { name: string; description: string; instructions: string }) {
+      const id = input.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+      const rec = { id, name: input.name, description: input.description, instructions: input.instructions };
+      data.push(rec as any);
+      return rec as any;
+    },
+  };
+}
+
+check("marketplace install: skillInstructionsFor uses instructions when present", () => {
+  const skill = { id: "x", name: "x", description: "d", instructions: "# Real\nBody" };
+  assert.equal(skillInstructionsFor(skill), "# Real\nBody");
+});
+
+check("marketplace install: skillInstructionsFor synthesises from name+description", () => {
+  const skill = { id: "x", name: "my-skill", description: "Does things" };
+  assert.equal(skillInstructionsFor(skill), "# my-skill\n\nDoes things\n");
+});
+
+check("marketplace install: isMarketplaceSkillInstalled detects existing", () => {
+  const store = mockStore([{ id: "existing", name: "existing", description: "d", instructions: "i" }]);
+  assert.ok(isMarketplaceSkillInstalled(store, "existing"));
+  assert.ok(!isMarketplaceSkillInstalled(store, "missing"));
+});
+
+check("marketplace install: installMarketplaceSkill creates and returns record", () => {
+  const store = mockStore();
+  const skill = { id: "new-skill", name: "new-skill", description: "A new skill", instructions: "# Body" };
+  const rec = installMarketplaceSkill(store, skill);
+  assert.equal(rec.id, "new-skill");
+  assert.equal(rec.instructions, "# Body");
+  assert.ok(isMarketplaceSkillInstalled(store, "new-skill"));
+});
+
+check("marketplace install: installMarketplaceSkill throws if already installed", () => {
+  const store = mockStore([{ id: "dupe", name: "dupe", description: "d", instructions: "i" }]);
+  const skill = { id: "dupe", name: "dupe", description: "d" };
+  assert.throws(() => installMarketplaceSkill(store, skill), /already installed/);
+});
+
+check("marketplace install: installMarketplacePlugin installs all available skills", () => {
+  const store = mockStore();
+  const catalog = {
+    schemaVersion: 1,
+    connectors: [],
+    skills: [
+      { id: "s1", name: "s1", description: "d1", instructions: "# 1" },
+      { id: "s2", name: "s2", description: "d2", instructions: "# 2" },
+      { id: "s3", name: "s3", description: "d3" },
+    ],
+    plugins: [],
+    pluginCategories: [],
+    metalModels: [],
+  };
+  const plugin = { id: "kit", name: "Kit", skillIds: ["s1", "s2", "s3", "missing"] };
+  const res = installMarketplacePlugin(store, plugin, catalog);
+  assert.equal(res.installed, 3);
+  assert.equal(res.skipped, 0);
+  assert.equal(res.missing, 1);
+  assert.ok(isMarketplaceSkillInstalled(store, "s1"));
+  assert.ok(isMarketplaceSkillInstalled(store, "s2"));
+  assert.ok(isMarketplaceSkillInstalled(store, "s3"));
+});
+
+check("marketplace install: installMarketplacePlugin skips already-installed", () => {
+  const store = mockStore([{ id: "s1", name: "s1", description: "d", instructions: "i" }]);
+  const catalog = {
+    schemaVersion: 1,
+    connectors: [],
+    skills: [
+      { id: "s1", name: "s1", description: "d1", instructions: "# 1" },
+      { id: "s2", name: "s2", description: "d2", instructions: "# 2" },
+    ],
+    plugins: [],
+    pluginCategories: [],
+    metalModels: [],
+  };
+  const plugin = { id: "kit", name: "Kit", skillIds: ["s1", "s2"] };
+  const res = installMarketplacePlugin(store, plugin, catalog);
+  assert.equal(res.installed, 1);
+  assert.equal(res.skipped, 1);
+  assert.equal(res.missing, 0);
+});
+
+check("marketplace install: resolvePluginSkills partitions available vs missing", () => {
+  const catalog = {
+    schemaVersion: 1,
+    connectors: [],
+    skills: [{ id: "a", name: "a", description: "d" }],
+    plugins: [],
+    pluginCategories: [],
+    metalModels: [],
+  };
+  const { available, missing } = resolvePluginSkills({ id: "p", name: "P", skillIds: ["a", "b"] }, catalog);
+  assert.equal(available.length, 1);
+  assert.equal(missing.length, 1);
+  assert.equal(missing[0], "b");
+});
+
+check("marketplace install: bundled catalog skills have instructions", () => {
+  for (const s of BUNDLED_MARKETPLACE_CATALOG.skills) {
+    assert.ok(s.instructions && s.instructions.length > 0, `skill ${s.id} missing instructions`);
+  }
+});
+
+check("marketplace install: real SkillsStore round-trip", () => {
+  const mem = new Map<string, string>();
+  const storage = {
+    getItem: (k: string) => mem.get(k) ?? null,
+    setItem: (k: string, v: string) => void mem.set(k, v),
+    removeItem: (k: string) => void mem.delete(k),
+  };
+  const store = new SkillsStore(storage);
+  const skill = { id: "mp-test", name: "mp-test", description: "From marketplace", instructions: "# MP\nBody" };
+  assert.ok(!isMarketplaceSkillInstalled(store, "mp-test"));
+  installMarketplaceSkill(store, skill);
+  assert.ok(isMarketplaceSkillInstalled(store, "mp-test"));
+  const got = store.get("mp-test");
+  assert.ok(got);
+  assert.equal(got!.instructions, "# MP\nBody");
+  assert.equal(got!.description, "From marketplace");
 });
 
 async function runAsyncChecks() {

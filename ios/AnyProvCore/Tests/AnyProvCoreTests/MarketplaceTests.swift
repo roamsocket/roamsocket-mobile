@@ -62,4 +62,79 @@ final class MarketplaceTests: XCTestCase {
         XCTAssertFalse(b.connectors.isEmpty)
         XCTAssertFalse(b.metalModels.isEmpty)
     }
+
+    // MARK: - Install mapping
+
+    func testSkillContentUsesInstructionsWhenPresent() {
+        let s = MarketplaceSkillListing(
+            id: "x", name: "x", description: "d",
+            instructions: "# Real\nBody"
+        )
+        XCTAssertEqual(s.skillContent, "# Real\nBody")
+    }
+
+    func testSkillContentSynthesisesWhenMissing() {
+        let s = MarketplaceSkillListing(id: "my", name: "my", description: "Does things")
+        XCTAssertEqual(s.skillContent, "# my\n\nDoes things\n")
+    }
+
+    func testToSkillMapsAllFields() {
+        let s = MarketplaceSkillListing(
+            id: "mcp-builder",
+            name: "mcp-builder",
+            description: "Guide for creating high-quality MCP servers",
+            category: "devops",
+            source: "official",
+            featured: true,
+            instructions: "# MCP Builder\nBody"
+        )
+        let skill = s.toSkill()
+        XCTAssertEqual(skill.id, "mcp-builder")
+        XCTAssertEqual(skill.name, "mcp-builder")
+        XCTAssertEqual(skill.description, "Guide for creating high-quality MCP servers")
+        XCTAssertEqual(skill.content, "# MCP Builder\nBody")
+        XCTAssertEqual(skill.category, .devops)
+        XCTAssertEqual(skill.source, .official)
+        XCTAssertEqual(skill.frontmatter["name"], "mcp-builder")
+        XCTAssertEqual(skill.frontmatter["description"], "Guide for creating high-quality MCP servers")
+    }
+
+    func testToSkillCategoryFallback() {
+        let s = MarketplaceSkillListing(id: "x", name: "x", description: "d", category: "unknown-cat")
+        XCTAssertEqual(s.toSkill().category, .other)
+    }
+
+    func testToSkillCategoryNilDefaultsOther() {
+        let s = MarketplaceSkillListing(id: "x", name: "x", description: "d")
+        XCTAssertEqual(s.toSkill().category, .other)
+    }
+
+    func testToSkillSourceFallback() {
+        let s = MarketplaceSkillListing(id: "x", name: "x", description: "d", source: "unknown")
+        XCTAssertEqual(s.toSkill().source, .community)
+    }
+
+    func testBundledSkillsHaveInstructions() {
+        for s in MarketplaceStore.bundledCatalog.skills {
+            XCTAssertNotNil(s.instructions, "skill \(s.id) should have instructions for install")
+            XCTAssertFalse(s.instructions!.isEmpty, "skill \(s.id) instructions should not be empty")
+        }
+    }
+
+    func testSkillCategoryFromMapping() {
+        XCTAssertEqual(SkillCategory.from(marketplaceCategory: "devops"), .devops)
+        XCTAssertEqual(SkillCategory.from(marketplaceCategory: "frontend"), .frontend)
+        XCTAssertEqual(SkillCategory.from(marketplaceCategory: "documentation"), .documentation)
+        XCTAssertEqual(SkillCategory.from(marketplaceCategory: "design"), .design)
+        XCTAssertEqual(SkillCategory.from(marketplaceCategory: nil), .other)
+        XCTAssertEqual(SkillCategory.from(marketplaceCategory: "bogus"), .other)
+    }
+
+    func testSkillSourceFromMapping() {
+        XCTAssertEqual(SkillSource.from(marketplaceSource: "official"), .official)
+        XCTAssertEqual(SkillSource.from(marketplaceSource: "community"), .community)
+        XCTAssertEqual(SkillSource.from(marketplaceSource: "custom"), .custom)
+        XCTAssertEqual(SkillSource.from(marketplaceSource: nil), .community)
+        XCTAssertEqual(SkillSource.from(marketplaceSource: "bogus"), .community)
+    }
 }

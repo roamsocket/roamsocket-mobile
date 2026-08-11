@@ -17,6 +17,7 @@ final class AppState: ObservableObject {
     let skillsMCPClient = SkillsMCPClient()
     let codeSessionStore = CodeSessionStore()
     let settingsSync = SettingsSync()
+    let browserStore = BrowserStore()
 
     /// Your GitHub OAuth app client id for Device Flow. Replace before shipping;
     /// can also be provided at runtime via Settings.
@@ -1286,6 +1287,30 @@ final class AppState: ObservableObject {
         hiddenModelKeys.contains(Self.aliasKey(provider: model.provider, modelID: model.modelID))
     }
 
+    /// Hidden models across every catalog result (and desktop Metal inventory).
+    /// Used by the picker's "Hidden models" section so users can unhide one at a time.
+    var hiddenModels: [AIModel] {
+        var all = providerResults.flatMap(\.models)
+        if !desktopMetalModels.isEmpty { all += desktopMetalModels }
+        return all.filter { isModelHidden($0) }
+    }
+
+    /// Toggle a model's visibility in the picker. Hiding keeps the model and any
+    /// alias intact (unlike swipe Delete) so it can be brought back with one tap.
+    func toggleModelHidden(_ model: AIModel) {
+        let key = Self.aliasKey(provider: model.provider, modelID: model.modelID)
+        if hiddenModelKeys.contains(key) {
+            hiddenModelKeys.remove(key)
+        } else {
+            hiddenModelKeys.insert(key)
+            if selectedModel?.id == model.id {
+                selectedModel = allModels.first
+            }
+        }
+        saveHiddenModels()
+        objectWillChange.send()
+    }
+
     /// Hide a catalog model from the picker (or delete on-device Metal weights).
     /// Returns a short status line for the UI, or throws for Metal failures.
     @discardableResult
@@ -1707,6 +1732,7 @@ final class AppState: ObservableObject {
             environments: environments,
             customProviders: customProviders,
             modelAliases: modelAliases,
+            hiddenModels: Array(hiddenModelKeys).sorted(),
             skillsRepoURL: skillsRepoURL,
             skillsRepoBranch: skillsRepoBranch,
             mcpRepoURL: mcpRepoURL,
@@ -1726,6 +1752,8 @@ final class AppState: ObservableObject {
         saveCustomProviders()
         modelAliases = snapshot.modelAliases
         saveModelAliases()
+        hiddenModelKeys = Set(snapshot.hiddenModels)
+        saveHiddenModels()
         skillsRepoURL = snapshot.skillsRepoURL
         skillsRepoBranch = snapshot.skillsRepoBranch
         UserDefaults.standard.set(skillsRepoURL, forKey: skillsRepoKey)

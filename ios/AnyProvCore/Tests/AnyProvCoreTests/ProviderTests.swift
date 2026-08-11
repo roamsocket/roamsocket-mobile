@@ -488,5 +488,11 @@ final class ProviderTests: XCTestCase {
             AIModel.prettifiedDisplayName(for: "gemini-2.0-flash", provider: .google),
             "Gemini 2.0 Flash"
         )
+        // OpenRouter org slugs (submenu headers) are prettified the same way.
+        XCTAssertEqual(AIModel.prettifiedDisplayName(for: "meta-llama"), "Meta Llama")
+        XCTAssertEqual(AIModel.prettifiedDisplayName(for: "deepseek"), "DeepSeek")
+        XCTAssertEqual(AIModel.prettifiedDisplayName(for: "openai"), "OpenAI")
+        XCTAssertEqual(AIModel.prettifiedDisplayName(for: "anthropic"), "Anthropic")
+        XCTAssertEqual(AIModel.prettifiedDisplayName(for: "mistralai"), "Mistral AI")
     }
 }

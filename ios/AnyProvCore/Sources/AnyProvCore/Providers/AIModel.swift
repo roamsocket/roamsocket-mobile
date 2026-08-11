@@ -177,6 +177,7 @@ extension AIModel {
         "glm": "GLM",
         "grok": "Grok",
         "mistral": "Mistral",
+        "mistralai": "Mistral AI",
         "ministral": "Ministral",
         "llama": "Llama",
         "claude": "Claude",

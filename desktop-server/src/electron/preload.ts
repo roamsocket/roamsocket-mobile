@@ -73,7 +73,10 @@ interface MarketplaceStatusInfo {
       name: string;
       description: string;
       category?: string;
+      author?: string;
+      source?: string;
       featured?: boolean;
+      instructions?: string;
     }>;
     plugins: Array<{
       id: string;

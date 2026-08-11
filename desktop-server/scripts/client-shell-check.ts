@@ -117,15 +117,16 @@ console.log("goal: /goal slash command + banner + slash menu");
 assert.ok(main.includes("fillSettingsMarketplace") || main.includes("marketplace"), "marketplace settings");
 assert.ok(main.includes("applyMarketplaceStatusToRenderer"), "marketplace applied to renderer");
 assert.ok(main.includes("applyMarketplaceConnectors"), "marketplace connectors wired");
+assert.ok(main.includes("installMarketplaceSkill"), "marketplace install in renderer");
 assert.ok(main.includes('"marketplace"'), "marketplace settings tab");
 const marketplaceDir = path.join(root, "src/marketplace");
 assert.ok(
-  ["types.ts", "store.ts", "parse.ts", "apply.ts"].every((f) =>
+  ["types.ts", "store.ts", "parse.ts", "apply.ts", "install.ts"].every((f) =>
     existsSync(path.join(marketplaceDir, f)),
   ),
   "marketplace module files",
 );
-console.log("marketplace: multi-source catalog for connectors/skills/plugins/metal");
+console.log("marketplace: multi-source catalog + install for connectors/skills/plugins/metal");
 
 // Chat send uses shipped pure turn builders (not inline-only stubs)
 assert.ok(main.includes("buildUserContent"), "user content builder");

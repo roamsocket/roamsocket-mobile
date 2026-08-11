@@ -74,10 +74,30 @@ public enum SkillCategory: String, Codable, CaseIterable, Sendable {
         case .other: return "star"
         }
     }
+
+    /// Map a free-form marketplace category string (e.g. "devops", "frontend")
+    /// to the closest enum case, defaulting to `.other`.
+    public static func from(marketplaceCategory raw: String?) -> SkillCategory {
+        guard let raw else { return .other }
+        let lower = raw.lowercased()
+        for c in allCases where c.rawValue.lowercased() == lower { return c }
+        if lower == "full stack" || lower == "fullstack" { return .fullstack }
+        return .other
+    }
 }
 
 public enum SkillSource: String, Codable, Sendable {
     case official = "Official"
     case community = "Community"
     case custom = "Custom"
+
+    /// Map a marketplace source string (e.g. "official", "community") to the
+    /// enum, defaulting to `.community` for unknown values.
+    public static func from(marketplaceSource raw: String?) -> SkillSource {
+        guard let raw else { return .community }
+        let lower = raw.lowercased()
+        if lower == "official" { return .official }
+        if lower == "custom" { return .custom }
+        return .community
+    }
 }
