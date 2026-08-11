@@ -13,6 +13,9 @@ struct BrowserHomeView: View {
     @FocusState private var promptFocused: Bool
     @FocusState private var addressFocused: Bool
     @State private var showProviderSettings = false
+    /// Ask-mode conversation starts collapsed so the page stays visible; it
+    /// expands automatically while the user is asking follow-up questions.
+    @State private var askChatExpanded = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -78,8 +81,6 @@ struct BrowserHomeView: View {
                         .frame(width: 34, height: 34)
                         .background(Theme.surfaceElevated, in: Circle())
                 }
-            } else {
-                Color.clear.frame(width: 34, height: 34)
             }
         }
         .padding(.horizontal, 12)
@@ -168,7 +169,9 @@ struct BrowserHomeView: View {
             addressBar
             bottomToolbar
         }
-        .background(Theme.surfaceElevated)
+        // Extend the footer fill behind the keyboard while the AI/address bar
+        // is focused, so the bottom chrome color runs right down to the keys.
+        .background(Theme.surfaceElevated.ignoresSafeArea(.keyboard, edges: .bottom))
     }
 
     // MARK: - AI prompt bar (sits where the URL bar usually would)
@@ -241,6 +244,10 @@ struct BrowserHomeView: View {
 
     private func submitPrompt() {
         promptFocused = false
+        // A new question is a reason to surface the conversation again.
+        if store.promptMode == .ask, !store.chatMessages.isEmpty {
+            askChatExpanded = true
+        }
         Task { await store.submitPrompt(appState: state) }
     }
 
@@ -488,25 +495,51 @@ struct BrowserHomeView: View {
         return "Thinking about the next step…"
     }
 
-    /// The Ask-mode conversation about the current page. Follow-ups keep the
-    /// thread: each new question is grounded in a fresh page snapshot and the
-    /// prior turns are sent along as history. Thinking is collapsed behind a
-    /// disclosure row (matching Chat) so raw `<think>` markup never leaks.
+    /// The Ask-mode conversation about the current page. Collapsed to a
+    /// single header row by default so the browser stays the star of the
+    /// screen; tap the header (or ask a follow-up in the prompt bar) to
+    /// expand the thread. Follow-ups keep the thread: each new question is
+    /// grounded in a fresh page snapshot and the prior turns are sent along
+    /// as history. Thinking is collapsed behind a disclosure row (matching
+    /// Chat) so raw `<think>` markup never leaks.
     private var askChatPanel: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Image(systemName: "questionmark.bubble")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Theme.accent)
-                Text("Ask · About this page")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Theme.textSecondary)
-                Spacer(minLength: 0)
-                if store.isAsking {
-                    ProgressView()
-                        .controlSize(.mini)
-                        .tint(Theme.textSecondary)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        askChatExpanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "questionmark.bubble")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Theme.accent)
+                        Text("Ask · About this page")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Theme.textSecondary)
+                        if askChatExpanded {
+                            Text("\(store.chatMessages.count)")
+                                .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                                .foregroundStyle(Theme.textTertiary)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Theme.surfaceElevated, in: Capsule())
+                        }
+                        if store.isAsking {
+                            ProgressView()
+                                .controlSize(.mini)
+                                .tint(Theme.textSecondary)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: askChatExpanded ? "chevron.down" : "chevron.up")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Theme.textTertiary)
+                    }
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel(askChatExpanded ? "Collapse conversation" : "Expand conversation")
+
                 Button(action: { store.clearChat() }) {
                     Image(systemName: "xmark")
                         .font(.system(size: 11, weight: .semibold))
@@ -522,45 +555,54 @@ struct BrowserHomeView: View {
 
             Divider().overlay(Theme.separator)
 
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 14) {
-                        ForEach(store.chatMessages) { message in
-                            askMessageRow(message)
-                                .id(message.id)
-                        }
-                        if store.isAsking {
-                            HStack(spacing: 8) {
-                                Image(systemName: "questionmark.bubble")
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(Theme.accent)
-                                    .frame(width: 18)
-                                AssistantTypingIndicator()
+            if askChatExpanded {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 14) {
+                            ForEach(store.chatMessages) { message in
+                                askMessageRow(message)
+                                    .id(message.id)
                             }
-                            .padding(.top, 2)
+                            if store.isAsking {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "questionmark.bubble")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(Theme.accent)
+                                        .frame(width: 18)
+                                    AssistantTypingIndicator()
+                                }
+                                .padding(.top, 2)
+                            }
+                        }
+                        .padding(14)
+                    }
+                    .frame(maxHeight: 340)
+                    .onChange(of: store.chatMessages.count) {
+                        if let last = store.chatMessages.last {
+                            withAnimation(.easeOut(duration: 0.3)) {
+                                proxy.scrollTo(last.id, anchor: .bottom)
+                            }
                         }
                     }
-                    .padding(14)
-                }
-                .frame(maxHeight: 340)
-                .onChange(of: store.chatMessages.count) {
-                    if let last = store.chatMessages.last {
-                        withAnimation(.easeOut(duration: 0.3)) {
-                            proxy.scrollTo(last.id, anchor: .bottom)
+                    .onChange(of: store.isAsking) {
+                        if store.isAsking {
+                            withAnimation(.easeOut(duration: 0.3)) {
+                                proxy.scrollTo(store.chatMessages.last?.id, anchor: .bottom)
+                            }
                         }
                     }
                 }
-                .onChange(of: store.isAsking) {
-                    if store.isAsking {
-                        withAnimation(.easeOut(duration: 0.3)) {
-                            proxy.scrollTo(store.chatMessages.last?.id, anchor: .bottom)
-                        }
-                    }
-                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .background(Theme.surface)
         .overlay(Divider().overlay(Theme.separator), alignment: .top)
+        .onChange(of: store.isAsking) {
+            // Surfacing a streaming answer is a reason to expand the thread.
+            if store.isAsking {
+                askChatExpanded = true
+            }
+        }
     }
 
     private func askMessageRow(_ message: BrowserChatMessage) -> some View {

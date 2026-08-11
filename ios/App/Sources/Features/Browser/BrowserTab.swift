@@ -80,13 +80,27 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     /// error/timeout. Kept as an explicit helper (rather than an inline
     /// `try? await … as? T` expression) so the optional-unwrapping is
     /// unambiguous at every call site.
+    ///
+    /// Evaluation runs in a dedicated app content world (not the page's own
+    /// world) because pages with a strict Content-Security-Policy — GitHub,
+    /// banking sites, many SPAs — silently refuse `eval`-style injection in
+    /// the `.page` world, which used to make `captureContext` return an empty
+    /// snapshot and the Ask/plan prompts describe the page as "blank or
+    /// loading". Content worlds share the same DOM, so clicks, typing,
+    /// scrolling, and reading text all still affect the real page and its
+    /// event listeners.
     private func evaluateJS(_ js: String) async -> Any? {
         do {
-            return try await webView.callAsyncJavaScript(js, in: nil, contentWorld: .page)
+            return try await webView.callAsyncJavaScript(js, in: nil, contentWorld: Self.agentWorld)
         } catch {
             return nil
         }
     }
+
+    /// App-owned content world used for every script the agent runs. Kept
+    /// out of the page world so strict page CSPs can't block the snapshot or
+    /// the approved actions; DOM changes stay visible to the page's own JS.
+    private static let agentWorld = WKContentWorld.world(name: "roamsocket.browser.agent")
 
     /// Shared JS: resolves a human-readable label for an element (falling
     /// back to an inner `<img alt>` or an associated `<label for>`, since
