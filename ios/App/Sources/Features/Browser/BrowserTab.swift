@@ -152,6 +152,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     /// associated `<label>`) so icon-only controls the AI might target —
     /// like a bare logo link — actually show up here instead of being
     /// silently dropped, which used to leave the model guessing blind.
+    /// Text extraction prefers `innerText` but falls back to a script/style-
+    /// stripped `textContent` for sites whose content lives in a hidden
+    /// container at snapshot time — `innerText` returns empty for them.
     func captureContext() async -> BrowserPageContext {
         let js = """
         (function () {
@@ -161,7 +164,22 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             const style = window.getComputedStyle(el);
             return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
           }
-          const text = document.body ? document.body.innerText.replace(/\\s+/g, ' ').trim().slice(0, 12000) : '';
+          var text = '';
+          if (document.body) {
+            var inner = document.body.innerText;
+            if (inner && inner.trim().length > 0) {
+              text = inner.replace(/\\s+/g, ' ').trim();
+            } else {
+              var clone = document.body.cloneNode(true);
+              var drop = clone.querySelectorAll('script, style, noscript, svg, canvas, iframe');
+              for (var i = 0; i < drop.length; i++) {
+                if (drop[i].parentNode) drop[i].parentNode.removeChild(drop[i]);
+              }
+              var tc = (clone.textContent || '').replace(/\\s+/g, ' ').trim();
+              if (tc.length > 0) text = tc;
+            }
+          }
+          text = text.slice(0, 12000);
           const nodes = Array.from(document.querySelectorAll('a, button, input, [role="button"]')).filter(visible).slice(0, 60);
           const links = nodes.map(function (el) {
             const label = __labelOf(el).replace(/\\s+/g, ' ').trim().slice(0, 80);

@@ -158,8 +158,8 @@ struct BrowserHomeView: View {
                     finishedPlanBanner(running)
                 }
             }
-            if let reply = store.chatReply {
-                chatReplyBanner(reply)
+            if !store.chatMessages.isEmpty {
+                askChatPanel
             }
             if let error = store.errorMessage {
                 errorBanner(error)
@@ -227,8 +227,7 @@ struct BrowserHomeView: View {
     private func modeToggleButton(_ mode: BrowserPromptMode) -> some View {
         Button {
             store.promptMode = mode
-            store.chatReply = nil
-            store.chatSearchedWeb = false
+            store.chatMessages.removeAll()
         } label: {
             Text(mode.title)
                 .font(.system(size: 11, weight: .semibold))
@@ -489,33 +488,26 @@ struct BrowserHomeView: View {
         return "Thinking about the next step…"
     }
 
-    /// The model's plain-prose answer to an Ask-mode question. Stays until
-    /// dismissed (or the next prompt) so it can be read at leisure.
-    private func chatReplyBanner(_ reply: String) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if store.chatSearchedWeb {
-                HStack(spacing: 4) {
-                    Image(systemName: "magnifyingglass.circle")
-                        .font(.system(size: 10, weight: .medium))
-                    Text("Searched the web for more context")
-                        .font(.system(size: 10, weight: .medium))
-                }
-                .foregroundStyle(Theme.textTertiary)
-                .padding(.horizontal, 14)
-                .padding(.top, 6)
-            }
-            HStack(alignment: .top, spacing: 8) {
+    /// The Ask-mode conversation about the current page. Follow-ups keep the
+    /// thread: each new question is grounded in a fresh page snapshot and the
+    /// prior turns are sent along as history. Thinking is collapsed behind a
+    /// disclosure row (matching Chat) so raw `<think>` markup never leaks.
+    private var askChatPanel: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
                 Image(systemName: "questionmark.bubble")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Theme.accent)
-                    .frame(width: 18)
-                    .padding(.top, 1)
-                Text(reply)
-                    .font(.system(size: 13))
-                    .foregroundStyle(Theme.textPrimary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-                Button(action: { store.chatReply = nil }) {
+                Text("Ask · About this page")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.textSecondary)
+                Spacer(minLength: 0)
+                if store.isAsking {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .tint(Theme.textSecondary)
+                }
+                Button(action: { store.clearChat() }) {
                     Image(systemName: "xmark")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Theme.textSecondary)
@@ -523,12 +515,96 @@ struct BrowserHomeView: View {
                         .background(Theme.surfaceElevated, in: Circle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Clear conversation")
             }
             .padding(.horizontal, 14)
-            .padding(.vertical, 10)
+            .padding(.vertical, 8)
+
+            Divider().overlay(Theme.separator)
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 14) {
+                        ForEach(store.chatMessages) { message in
+                            askMessageRow(message)
+                                .id(message.id)
+                        }
+                        if store.isAsking {
+                            HStack(spacing: 8) {
+                                Image(systemName: "questionmark.bubble")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(Theme.accent)
+                                    .frame(width: 18)
+                                AssistantTypingIndicator()
+                            }
+                            .padding(.top, 2)
+                        }
+                    }
+                    .padding(14)
+                }
+                .frame(maxHeight: 340)
+                .onChange(of: store.chatMessages.count) {
+                    if let last = store.chatMessages.last {
+                        withAnimation(.easeOut(duration: 0.3)) {
+                            proxy.scrollTo(last.id, anchor: .bottom)
+                        }
+                    }
+                }
+                .onChange(of: store.isAsking) {
+                    if store.isAsking {
+                        withAnimation(.easeOut(duration: 0.3)) {
+                            proxy.scrollTo(store.chatMessages.last?.id, anchor: .bottom)
+                        }
+                    }
+                }
+            }
         }
         .background(Theme.surface)
         .overlay(Divider().overlay(Theme.separator), alignment: .top)
+    }
+
+    private func askMessageRow(_ message: BrowserChatMessage) -> some View {
+        Group {
+            if message.role == .user {
+                HStack {
+                    Spacer(minLength: 48)
+                    Text(message.content)
+                        .font(.system(size: 15))
+                        .foregroundStyle(Theme.textPrimary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(Theme.surfaceElevated, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .textSelection(.enabled)
+                }
+            } else {
+                let parsed = ThinkingExtractor.extract(from: message.content)
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "questionmark.bubble")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                        .frame(width: 18)
+                        .padding(.top, 1)
+                    VStack(alignment: .leading, spacing: 8) {
+                        if message.searchedWeb {
+                            HStack(spacing: 4) {
+                                Image(systemName: "magnifyingglass.circle")
+                                    .font(.system(size: 10, weight: .medium))
+                                Text("Searched the web for more context")
+                                    .font(.system(size: 10, weight: .medium))
+                            }
+                            .foregroundStyle(Theme.textTertiary)
+                        }
+                        if let thinking = parsed.thinking {
+                            ThinkingBlock(text: thinking, expanded: state.alwaysExpandThinking)
+                        }
+                        if !parsed.content.isEmpty {
+                            MarkdownContentView(text: parsed.content, fontSize: 15)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
     }
 
     /// Shown once a run finishes, fails, or gets denied. Individual steps

@@ -204,7 +204,7 @@ final class LocalMetalDownloadManager: ObservableObject {
             // (now-stale) "complete" flag is not honored.
             LocalMetalBootstrap.ensureRegistered()
             if let engine = LocalMetalRuntime.engine {
-                try? await engine.invalidateVerifiedSentinel(modelID: modelID)
+                await engine.invalidateVerifiedSentinel(modelID: modelID)
             }
             start(modelID: modelID, appState: appState, displayName: displayName)
         }

@@ -147,7 +147,7 @@ final class ChatViewModel: ObservableObject {
     /// Downsample JPEG data straight to the target pixel size with ImageIO, then
     /// re-encode at the given quality. Decodes once at the target resolution
     /// (never a full-size bitmap) and bakes EXIF orientation in.
-    private static func downsampledJPEG(
+    nonisolated private static func downsampledJPEG(
         from data: Data,
         maxDimension: CGFloat,
         quality: CGFloat

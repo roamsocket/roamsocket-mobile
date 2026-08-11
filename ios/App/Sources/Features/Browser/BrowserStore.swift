@@ -20,11 +20,9 @@ final class BrowserStore: ObservableObject {
     @Published var isPlanning = false
     /// Model is answering a question in Ask mode (page untouched).
     @Published var isAsking = false
-    /// The model's plain-prose answer to an Ask-mode question.
-    @Published var chatReply: String?
-    /// True when a web search was used to supplement a thin page snapshot in
-    /// Ask mode — drives a small "Searched the web" indicator on the reply.
-    @Published var chatSearchedWeb = false
+    /// The Ask-mode conversation about the current page. Grows with follow-up
+    /// questions; each turn is grounded in a fresh snapshot of the live page.
+    @Published var chatMessages: [BrowserChatMessage] = []
     /// True while the approved plan is actively executing steps.
     @Published var isPlanRunning = false
     /// A freshly proposed plan awaiting Approve/Deny — nothing has executed yet.
@@ -180,6 +178,7 @@ final class BrowserStore: ObservableObject {
     /// produces `pendingPlan` for approval (also nothing executes).
     func submitPrompt(appState: AppState) async {
         self.appState = appState
+        guard !isAsking, !isPlanning else { return }
         let goal = promptText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !goal.isEmpty else { return }
         guard let model = appState.selectedModel else {
@@ -194,28 +193,19 @@ final class BrowserStore: ObservableObject {
 
         promptText = ""
         errorMessage = nil
-        chatSearchedWeb = false
 
         guard promptMode == .act else {
-            chatReply = nil
             isAsking = true
             defer { isAsking = false }
 
-            // Wait for the page to finish loading before capturing content —
-            // heavy JS sites (ESPN, etc.) are often still rendering when the
-            // snapshot would otherwise be taken, yielding an empty context.
-            if let tab = activeTab {
-                await waitForLoadSettled(tab)
-            }
-            var context = await activeTab?.captureContext()
+            let userMessage = BrowserChatMessage(role: .user, content: goal)
+            chatMessages.append(userMessage)
 
-            // Retry once after a short delay if the page yielded no text
-            // (common on JS-heavy sites where content renders asynchronously).
-            if (context?.textSnippet.isEmpty ?? true), let tab = activeTab {
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
-                await waitForLoadSettled(tab, timeout: 4)
-                context = await tab.captureContext()
-            }
+            // Poll until the page actually renders text before snapshotting —
+            // heavy JS sites (ESPN, etc.) report "loading" done long before
+            // their content is painted, which used to hand the model an
+            // empty page it then told the user about.
+            var context = await captureContextForPage()
 
             // Fall back to a web search when the page snapshot is thin so the
             // model gets curated live content instead of guessing from stale
@@ -232,7 +222,6 @@ final class BrowserStore: ObservableObject {
                     )
                     if !bundle.hits.isEmpty {
                         webSearchBlock = bundle.promptBlock
-                        chatSearchedWeb = true
                     }
                 } catch {
                     // Search failed — we still have whatever page context was captured.
@@ -240,17 +229,23 @@ final class BrowserStore: ObservableObject {
             }
 
             do {
-                chatReply = try await BrowserAgent.chatAboutPage(
+                let reply = try await BrowserAgent.chatAboutPage(
                     prompt: goal,
                     context: context,
                     webSearchBlock: webSearchBlock,
+                    history: chatHistoryMessages(),
                     model: model,
                     apiKey: apiKey,
                     catalog: appState.catalog,
                     customBaseURL: appState.baseURL(for: model.provider),
                     style: appState.apiStyle(for: model.provider)
                 )
+                chatMessages.append(
+                    BrowserChatMessage(role: .assistant, content: reply, searchedWeb: webSearchBlock != nil)
+                )
             } catch {
+                // Don't leave an unanswered question stranded in the transcript.
+                chatMessages.removeLast()
                 errorMessage = error.localizedDescription
             }
             return
@@ -260,10 +255,7 @@ final class BrowserStore: ObservableObject {
         cancelAutoDismiss()
         isPlanning = true
         // Wait for the page to settle before planning, same reason as Ask mode.
-        if let tab = activeTab {
-            await waitForLoadSettled(tab)
-        }
-        let context = await activeTab?.captureContext()
+        let context = await captureContextForPage()
         defer { isPlanning = false }
 
         do {
@@ -284,6 +276,11 @@ final class BrowserStore: ObservableObject {
 
     func denyPendingPlan() {
         pendingPlan = nil
+    }
+
+    /// Ends the Ask-mode conversation (header X in the browser chat panel).
+    func clearChat() {
+        chatMessages.removeAll()
     }
 
     /// Approve and run every step in the plan now (they run in order and
@@ -361,7 +358,7 @@ final class BrowserStore: ObservableObject {
         guard let planID = runningPlan?.id else { return }
         stepDismissTasks[stepID]?.cancel()
         let task = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: stepAutoDismissSeconds * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: (self?.stepAutoDismissSeconds ?? 5) * 1_000_000_000)
             guard !Task.isCancelled else { return }
             guard let self, var plan = self.runningPlan, plan.id == planID else { return }
             plan.steps.removeAll { $0.id == stepID }
@@ -567,6 +564,34 @@ final class BrowserStore: ObservableObject {
         let start = Date()
         while tab.isLoading, Date().timeIntervalSince(start) < timeout {
             try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+    }
+
+    /// Snapshot the active page, polling until visible text actually appears.
+    /// `WKWebView.isLoading` flips to false when the network load finishes,
+    /// well before SPA-heavy sites (ESPN, news, scoreboards) paint their
+    /// content — so we re-capture every ~0.6s up to `budget` seconds rather
+    /// than handing the model a blank page it then describes as "empty".
+    private func captureContextForPage(budget: TimeInterval = 15) async -> BrowserPageContext? {
+        guard let tab = activeTab else { return nil }
+        await waitForLoadSettled(tab)
+        let start = Date()
+        var context = await tab.captureContext()
+        while context.textSnippet.isEmpty, Date().timeIntervalSince(start) < budget {
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            context = await tab.captureContext()
+        }
+        return context
+    }
+
+    /// Prior Ask-mode turns, ready to send back to the model so follow-up
+    /// questions keep conversational context. The current turn is excluded
+    /// (it is sent separately with a fresh page snapshot).
+    private func chatHistoryMessages() -> [ProviderChatMessage] {
+        chatMessages.dropLast().map { message in
+            let role: ProviderChatMessage.Role = message.role == .assistant ? .assistant : .user
+            let content = message.role == .assistant ? message.visibleContent : message.content
+            return ProviderChatMessage(role: role, content: content)
         }
     }
 

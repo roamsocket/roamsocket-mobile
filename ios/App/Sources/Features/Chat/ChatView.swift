@@ -86,7 +86,7 @@ struct ChatView: View {
         .onAppear {
             bindAndLoad()
         }
-        .onChange(of: resumeToken) { _ in
+        .onChange(of: resumeToken) {
             // Switching chats / new chat while this screen stays mounted.
             persistAndAutoTitleOnLeave()
             bindAndLoad()
@@ -462,7 +462,7 @@ struct ChatView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
             }
-            .onChange(of: viewModel.messages.count) { _ in
+            .onChange(of: viewModel.messages.count) {
                 // Prefer explicit artifact scroll target over following the stream tail.
                 if let target = state.scrollToMessageId {
                     withAnimation(.easeOut(duration: 0.35)) {

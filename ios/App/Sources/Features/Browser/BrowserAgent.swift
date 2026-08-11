@@ -244,11 +244,14 @@ enum BrowserAgent {
     /// touched in Ask mode. When `webSearchBlock` is provided (because the
     /// page snapshot was thin), it gives the model live web results so it
     /// can still answer with curated content instead of falling back to
-    /// stale training data.
+    /// stale training data. `history` carries prior Ask-mode turns so
+    /// follow-up questions keep conversational context; only the latest turn
+    /// gets a fresh page snapshot (captured at submit time).
     static func chatAboutPage(
         prompt: String,
         context: BrowserPageContext?,
         webSearchBlock: String? = nil,
+        history: [ProviderChatMessage] = [],
         model: AIModel,
         apiKey: String,
         catalog: ModelCatalog,
@@ -256,10 +259,13 @@ enum BrowserAgent {
         style: CustomProviderStyle?
     ) async throws -> String {
         let provider = catalog.provider(model.provider, customBaseURL: customBaseURL, style: style)
-        let messages = [
-            ProviderChatMessage(role: .system, content: chatSystemPrompt(hasWebResults: webSearchBlock != nil)),
-            ProviderChatMessage(role: .user, content: chatUserPrompt(prompt: prompt, context: context, webSearchBlock: webSearchBlock)),
+        var messages: [ProviderChatMessage] = [
+            ProviderChatMessage(role: .system, content: chatSystemPrompt(hasWebResults: webSearchBlock != nil))
         ]
+        messages.append(contentsOf: history)
+        messages.append(
+            ProviderChatMessage(role: .user, content: chatUserPrompt(prompt: prompt, context: context, webSearchBlock: webSearchBlock))
+        )
         do {
             return try await provider.chat(model: model.modelID, apiKey: apiKey, messages: messages, effort: nil)
         } catch {
