@@ -133,6 +133,7 @@ final class AIThinkingActivityManager {
         case .chat: return "Thinking…"
         case .code: return "Working…"
         case .vision: return "Analyzing…"
+        case .study: return "Reading questions…"
         }
     }
 

@@ -24,12 +24,14 @@ extension AIThinkingAttributes {
         case chat
         case code
         case vision
+        case study
 
         var title: String {
             switch self {
             case .chat: return "Chat"
             case .code: return "Code"
             case .vision: return "Vision"
+            case .study: return "Study"
             }
         }
 
@@ -38,6 +40,7 @@ extension AIThinkingAttributes {
             case .chat: return "bubble.left.and.bubble.right.fill"
             case .code: return "chevron.left.forwardslash.chevron.right"
             case .vision: return "eye.fill"
+            case .study: return "graduationcap.fill"
             }
         }
 
@@ -46,6 +49,7 @@ extension AIThinkingAttributes {
             case .chat: return .chat
             case .code: return .code
             case .vision: return .vision
+            case .study: return .chat
             }
         }
     }

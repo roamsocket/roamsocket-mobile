@@ -8,6 +8,8 @@ import UIKit
 ///  * `ChatView` is the default landing screen.
 ///  * A left-edge sidebar lists top-level destinations (Chats, Vision,
 ///    Projects, Artifacts, Code) plus a Recents list and a settings entry.
+///    A Study toggle in the header swaps those links for Study destinations
+///    (Scan questions, Decks).
 ///  * Settings is reachable from the toolbar gear and the sidebar.
 struct RootView: View {
     @EnvironmentObject var state: AppState
@@ -17,6 +19,7 @@ struct RootView: View {
     @State private var showSettings: Bool = false
     @State private var showVision: Bool = false
     @State private var showLocalMetal: Bool = false
+    @State private var showScanQuestions: Bool = false
     @State private var path: [RootRoute] = []
     /// Bumps when the user picks a recent chat so ChatView reloads messages.
     @State private var chatResumeToken = UUID()
@@ -49,6 +52,10 @@ struct RootView: View {
                             )
                         case .code:
                             CodeHomeView(onOpenSidebar: { setSidebarOpen(true) })
+                        case .study:
+                            FlashcardDecksListView()
+                        case .studyDeck(let deckID):
+                            FlashcardDeckDetailView(deckID: deckID)
                         case .projectDetail(let project):
                             ProjectDetailView(project: project, history: history, path: $path)
                         case .projectChat(let project, let chat):
@@ -141,6 +148,10 @@ struct RootView: View {
         }
         .fullScreenCover(isPresented: $showVision) {
             VisionView()
+                .environmentObject(state)
+        }
+        .fullScreenCover(isPresented: $showScanQuestions) {
+            StudyScanView()
                 .environmentObject(state)
         }
         .onChange(of: path) { oldPath, newPath in
@@ -290,6 +301,14 @@ struct RootView: View {
             history.discardActiveIfBlank()
             setSidebarOpen(false)
             showVision = true
+        case .study:
+            history.discardActiveIfBlank()
+            path = [.study]
+            setSidebarOpen(false)
+        case .scanQuestions:
+            history.discardActiveIfBlank()
+            setSidebarOpen(false)
+            showScanQuestions = true
         case .projects:
             // Leaving the composer — drop unsent "New chat" rows from Recents.
             history.discardActiveIfBlank()
@@ -349,6 +368,8 @@ enum RootRoute: Hashable {
     case projects
     case artifacts
     case code
+    case study
+    case studyDeck(UUID)
     case projectDetail(ProjectItem)
     case projectChat(ProjectItem, ProjectChatItem)
 }
