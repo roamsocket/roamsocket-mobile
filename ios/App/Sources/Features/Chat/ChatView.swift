@@ -38,6 +38,10 @@ struct ChatView: View {
     /// settings screen.
     @State private var showProviderSettings = false
 
+    /// Set when a coding-session launch is requested from the chat but the
+    /// prerequisites (paired server, repo, model with key) aren't met.
+    @State private var sessionLaunchError: String?
+
     /// Full-screen live voice chat (Siri dictation + spoken replies).
     @State private var showVoiceChat = false
 
@@ -131,8 +135,18 @@ struct ChatView: View {
             AddToChatSheet(viewModel: viewModel) { task in
                 if let config = SessionLauncher.makeConfig(in: state, task: task) {
                     sessionConfig = config
+                } else {
+                    let missing = SessionLauncher.missingRequirements(in: state)
+                    sessionLaunchError = missing.isEmpty
+                        ? "Pick a coding model with an API key, then start again."
+                        : missing.joined(separator: "\n")
                 }
             }
+        }
+        .alert("Start a coding session", isPresented: sessionLaunchErrorBinding) {
+            Button("OK", role: .cancel) { sessionLaunchError = nil }
+        } message: {
+            Text(sessionLaunchError ?? "")
         }
         .sheet(isPresented: $viewModel.showCamera) {
             CameraCapture(isPresented: $viewModel.showCamera) { data in
@@ -213,6 +227,14 @@ struct ChatView: View {
     /// Depth of the bound root navigation path (0 = chat is the visible root).
     private var navigationPathDepth: Int {
         path?.wrappedValue.count ?? 0
+    }
+
+    /// Binding for the coding-session launch alert (message + dismiss).
+    private var sessionLaunchErrorBinding: Binding<Bool> {
+        Binding(
+            get: { sessionLaunchError != nil },
+            set: { if !$0 { sessionLaunchError = nil } }
+        )
     }
 
     private func bindAndLoad() {

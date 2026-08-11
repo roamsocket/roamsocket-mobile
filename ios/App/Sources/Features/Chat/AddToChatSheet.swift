@@ -10,6 +10,10 @@ struct AddToChatSheet: View {
     var onStartCodingSession: ((String) -> Void)?
     @Environment(\.dismiss) private var dismiss
 
+    @State private var showProjectPicker = false
+    @State private var showCreateProject = false
+    @State private var showToolAccessPicker = false
+
     var body: some View {
         SheetScaffold(
             title: "Add to Chat",
@@ -39,6 +43,26 @@ struct AddToChatSheet: View {
                 viewModel.attachedFileURLs.append(url)
             }
         }
+        .confirmationDialog("Add to project", isPresented: $showProjectPicker, titleVisibility: .visible) {
+            ForEach(viewModel.history?.projects ?? []) { project in
+                Button(project.name) {
+                    viewModel.attachCurrentChat(to: project)
+                }
+            }
+            Button("New project…") { showCreateProject = true }
+            Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog("Tool access", isPresented: $showToolAccessPicker, titleVisibility: .visible) {
+            ForEach(ChatViewModel.ToolAccess.allCases, id: \.self) { option in
+                Button(option.rawValue) { viewModel.toolAccess = option }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .sheet(isPresented: $showCreateProject) {
+            CreateProjectSheet { name, _ in
+                viewModel.createProjectAndAttach(name: name)
+            }
+        }
     }
 
     // MARK: - Options Section
@@ -53,14 +77,10 @@ struct AddToChatSheet: View {
             ) {
                 let task = viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines)
                 dismiss()
-                if !task.isEmpty {
-                    // Small delay so the sheet finishes dismissing before the
-                    // cover presents — avoids the iOS sheet/cover z-fight.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                        onStartCodingSession?(task)
-                    }
-                } else {
-                    onStartCodingSession?("Help me with this repo")
+                // Small delay so the sheet finishes dismissing before the
+                // cover / alert presents — avoids the iOS sheet/cover z-fight.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    onStartCodingSession?(task.isEmpty ? "Help me with this repo" : task)
                 }
             }
 
@@ -76,57 +96,67 @@ struct AddToChatSheet: View {
 
             Divider().background(Theme.separator).padding(.leading, 50)
             
-            // Add to project
-            HStack(spacing: 14) {
-                Image(systemName: "tray.full")
-                    .font(.system(size: 20))
-                    .foregroundStyle(Theme.textSecondary)
-                    .frame(width: 32, height: 32)
-                
-                Text("Add to project")
-                    .font(.system(size: 17))
-                    .foregroundStyle(Theme.textPrimary)
-                
-                Spacer()
-                
-                Text(viewModel.currentProject ?? "None")
-                    .font(.system(size: 17))
-                    .foregroundStyle(Theme.textSecondary)
-                
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 14))
-                    .foregroundStyle(Theme.textTertiary)
+            // Add to project — copies the current chat into a project.
+            Button {
+                showProjectPicker = true
+            } label: {
+                HStack(spacing: 14) {
+                    Image(systemName: "tray.full")
+                        .font(.system(size: 20))
+                        .foregroundStyle(Theme.textSecondary)
+                        .frame(width: 32, height: 32)
+                    
+                    Text("Add to project")
+                        .font(.system(size: 17))
+                        .foregroundStyle(Theme.textPrimary)
+                    
+                    Spacer()
+                    
+                    Text(viewModel.currentProject ?? "None")
+                        .font(.system(size: 17))
+                        .foregroundStyle(Theme.textSecondary)
+                    
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 14))
+                        .foregroundStyle(Theme.textTertiary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
             
             Divider().background(Theme.separator).padding(.leading, 50)
             
-            // Tool access
-            HStack(spacing: 14) {
-                Image(systemName: "briefcase")
-                    .font(.system(size: 20))
-                    .foregroundStyle(Theme.textSecondary)
-                    .frame(width: 32, height: 32)
-                
-                Text("Tool access")
-                    .font(.system(size: 17))
-                    .foregroundStyle(Theme.textPrimary)
-                
-                Spacer()
-                
-                Text(viewModel.toolAccess.rawValue)
-                    .font(.system(size: 17))
-                    .foregroundStyle(Theme.textSecondary)
-                
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 14))
-                    .foregroundStyle(Theme.textTertiary)
+            // Tool access — Auto / Manual / Disabled for this chat.
+            Button {
+                showToolAccessPicker = true
+            } label: {
+                HStack(spacing: 14) {
+                    Image(systemName: "briefcase")
+                        .font(.system(size: 20))
+                        .foregroundStyle(Theme.textSecondary)
+                        .frame(width: 32, height: 32)
+                    
+                    Text("Tool access")
+                        .font(.system(size: 17))
+                        .foregroundStyle(Theme.textPrimary)
+                    
+                    Spacer()
+                    
+                    Text(viewModel.toolAccess.rawValue)
+                        .font(.system(size: 17))
+                        .foregroundStyle(Theme.textSecondary)
+                    
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 14))
+                        .foregroundStyle(Theme.textTertiary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
         }
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.cardRadius))
         .padding(.horizontal, 16)

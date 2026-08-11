@@ -178,6 +178,7 @@ final class ChatViewModel: ObservableObject {
         let defaults = preferred.filter { availableIds.contains($0) }
         // Both branches must be `[String]` — `prefix` returns `ArraySlice`.
         self.selectedConnectors = Set(defaults.isEmpty ? Array(availableIds.prefix(3)) : defaults)
+        loadSelectedConnectors()
         healthService.refreshAuthorizationState()
         locationService.refreshAuthorizationState()
         // Bubble nested service publishes so the Add-to-Chat sheet
@@ -492,6 +493,19 @@ final class ChatViewModel: ObservableObject {
                 "Study mode is on: every answer must include sources. "
                     + "Cite the live web sources listed above inline with markdown links for every factual claim. "
                     + "When the sources don't cover a claim, say so explicitly and never invent citations."
+            )
+        }
+
+        // Enabled connectors — the model knows which linked accounts / services
+        // are enabled for this chat (local preference, matching the desktop
+        // composer). Live MCP connections are attached via coding sessions.
+        let enabledConnectorNames = connectors
+            .filter { selectedConnectors.contains($0.id) && $0.isEnabled }
+            .map(\.name)
+        if !enabledConnectorNames.isEmpty {
+            systemContext.append(
+                "Enabled connectors (local preference): \(enabledConnectorNames.joined(separator: ", ")). "
+                    + "Use them when the user asks for linked accounts; otherwise note when a live MCP connection is required."
             )
         }
 
@@ -919,10 +933,62 @@ final class ChatViewModel: ObservableObject {
         } else {
             selectedConnectors.insert(connector.id)
         }
+        persistSelectedConnectors()
     }
 
     /// True when the connector is currently attached to this chat.
     func isConnectorSelected(_ connector: Connector) -> Bool {
         selectedConnectors.contains(connector.id)
+    }
+
+    /// Set a connector's enabled state for this chat and persist it.
+    func setConnector(_ connectorID: String, enabled: Bool) {
+        if enabled {
+            selectedConnectors.insert(connectorID)
+        } else {
+            selectedConnectors.remove(connectorID)
+        }
+        persistSelectedConnectors()
+    }
+
+    /// Persist the selected connector ids so toggles survive relaunches.
+    private func persistSelectedConnectors() {
+        UserDefaults.standard.set(Array(selectedConnectors), forKey: Self.selectedConnectorsKey)
+    }
+
+    private static let selectedConnectorsKey = "roamsocket.chat.selectedConnectors.v1"
+
+    /// Load the persisted connector selection on launch.
+    private func loadSelectedConnectors() {
+        guard let saved = UserDefaults.standard.array(forKey: Self.selectedConnectorsKey) as? [String],
+              !saved.isEmpty
+        else { return }
+        selectedConnectors = Set(saved)
+    }
+
+    // MARK: - Projects
+
+    /// Copy the current chat into a project (keeps the global recent too) and
+    /// record the project on this chat. Returns the copied project chat, or
+    /// nil when the chat is already project-scoped or storage failed.
+    @discardableResult
+    func attachCurrentChat(to project: ProjectItem) -> ProjectChatItem? {
+        guard let history else { return nil }
+        // Project-scoped chats are already in a project — no-op there.
+        guard activeProjectID == nil else { return nil }
+        let chatID = history.ensureActiveChat(selectedModel: state?.selectedModel)
+        activeChatID = chatID
+        guard let added = history.addChatToProject(chatID: chatID, projectID: project.id) else {
+            return nil
+        }
+        currentProject = project.name
+        return added
+    }
+
+    /// Create a new project and attach the current chat to it.
+    func createProjectAndAttach(name: String) {
+        guard let history else { return }
+        let project = history.createProject(name: name)
+        attachCurrentChat(to: project)
     }
 }

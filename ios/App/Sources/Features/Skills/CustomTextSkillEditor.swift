@@ -86,7 +86,16 @@ struct CustomTextSkillEditor: View {
         )
         Task {
             do {
-                try await state.skillsMCPClient.upsertSkill(skill, over: state.serverClient)
+                guard let pair = state.connectedPair else {
+                    self.error = "Pair a desktop server in Settings first."
+                    saving = false
+                    return
+                }
+                try await state.skillsMCPClient.upsertSkill(
+                    skill,
+                    endpoint: pair.endpoint,
+                    token: pair.token
+                )
                 state.skillManager.apply(skills: state.skillsMCPClient.cachedSkills)
                 saving = false
                 dismiss()

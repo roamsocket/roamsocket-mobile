@@ -42,10 +42,13 @@ struct InstalledSkillsView: View {
                             for index in indexSet {
                                 let skill = state.skillManager.installedSkills[index]
                                 Task {
-                                    try? await state.skillsMCPClient.deleteSkill(
-                                        id: skill.id,
-                                        over: state.serverClient
-                                    )
+                                    if let pair = state.connectedPair {
+                                        try? await state.skillsMCPClient.deleteSkill(
+                                            id: skill.id,
+                                            endpoint: pair.endpoint,
+                                            token: pair.token
+                                        )
+                                    }
                                 }
                             }
                         }

@@ -143,8 +143,20 @@ struct AddConnectorView: View {
         )
 
         Task {
-            try? await state.skillsMCPClient.upsertMCPServer(server, over: state.serverClient)
+            guard let pair = state.connectedPair else {
+                error = "Pair a desktop server in Settings first."
+                return
+            }
+            do {
+                try await state.skillsMCPClient.upsertMCPServer(
+                    server,
+                    endpoint: pair.endpoint,
+                    token: pair.token
+                )
+                dismiss()
+            } catch {
+                self.error = error.localizedDescription
+            }
         }
-        dismiss()
     }
 }
