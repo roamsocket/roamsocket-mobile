@@ -574,6 +574,8 @@ struct StudyScanView: View {
 }
 
 // MARK: - Study model picker
+// Mirrors VisionModelPickerSheet grouping: provider sections (rawValue sort),
+// OpenRouter nested by organization, same row chrome.
 
 private struct StudyModelPickerSheet: View {
     @ObservedObject var viewModel: StudyViewModel
@@ -582,9 +584,108 @@ private struct StudyModelPickerSheet: View {
 
     @State private var showLocalMetal = false
     @State private var showProviderSettings = false
+    @State private var expandedProviders: Set<ProviderID> = []
+    @State private var expandedOrgs: Set<String> = []
 
     private var models: [AIModel] {
         viewModel.visionModels(from: state)
+    }
+
+    private var grouped: [(ProviderID, [AIModel])] {
+        let map = Dictionary(grouping: models, by: \.provider)
+        return map.keys.sorted { $0.rawValue < $1.rawValue }.map { id in
+            (id, map[id] ?? [])
+        }
+    }
+
+    private func studyOrg(_ model: AIModel) -> String {
+        model.organization
+            ?? model.modelID.split(separator: "/", maxSplits: 1).first.map(String.init)
+            ?? "Other"
+    }
+
+    @ViewBuilder
+    private func openRouterSection(models: [AIModel]) -> some View {
+        let groups = Dictionary(grouping: models, by: studyOrg)
+            .map { (org: $0.key, models: $0.value) }
+            .sorted { $0.org.localizedCaseInsensitiveCompare($1.org) == .orderedAscending }
+        ForEach(groups, id: \.org) { group in
+            DisclosureGroup(isExpanded: expandedOrgBinding(for: group.org)) {
+                ForEach(group.models) { model in
+                    studyModelRow(model)
+                }
+            } label: {
+                submenuLabel(title: group.org, detail: "\(group.models.count)")
+            }
+            .tint(Theme.textSecondary)
+            .listRowBackground(Theme.surface)
+        }
+    }
+
+    private func submenuLabel(title: String, detail: String) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Theme.textPrimary)
+            Text(detail)
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.textTertiary)
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func providerBinding(for provider: ProviderID) -> Binding<Bool> {
+        Binding(
+            get: { expandedProviders.contains(provider) },
+            set: { expanded in
+                if expanded { expandedProviders.insert(provider) }
+                else { expandedProviders.remove(provider) }
+            }
+        )
+    }
+
+    private func expandedOrgBinding(for org: String) -> Binding<Bool> {
+        Binding(
+            get: { expandedOrgs.contains(org) },
+            set: { expanded in
+                if expanded { expandedOrgs.insert(org) }
+                else { expandedOrgs.remove(org) }
+            }
+        )
+    }
+
+    private func studyModelRow(_ model: AIModel) -> some View {
+        Button {
+            viewModel.selectedModel = model
+            dismiss()
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 8) {
+                        Text(state.displayName(for: model))
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(Theme.textPrimary)
+                            .lineLimit(1)
+                        Text("Vision")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Color.yellow)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Color.yellow.opacity(0.18), in: Capsule())
+                    }
+                    Text(model.modelID)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textSecondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                if viewModel.selectedModel?.id == model.id {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(Theme.accent)
+                }
+            }
+        }
+        .listRowBackground(Theme.surface)
     }
 
     var body: some View {
@@ -593,43 +694,25 @@ private struct StudyModelPickerSheet: View {
                 emptyModels
             } else {
                 List {
-                    Section {
-                        ForEach(models) { model in
-                            Button {
-                                viewModel.selectedModel = model
-                                dismiss()
-                            } label: {
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        HStack(spacing: 8) {
-                                            Text(state.displayName(for: model))
-                                                .font(.system(size: 16, weight: .medium))
-                                                .foregroundStyle(Theme.textPrimary)
-                                                .lineLimit(1)
-                                            Text("Vision")
-                                                .font(.system(size: 11, weight: .semibold))
-                                                .foregroundStyle(Color.yellow)
-                                                .padding(.horizontal, 7)
-                                                .padding(.vertical, 3)
-                                                .background(Color.yellow.opacity(0.18), in: Capsule())
-                                        }
-                                        Text(model.modelID)
-                                            .font(.system(size: 12))
-                                            .foregroundStyle(Theme.textSecondary)
-                                            .lineLimit(1)
-                                    }
-                                    Spacer()
-                                    if viewModel.selectedModel?.id == model.id {
-                                        Image(systemName: "checkmark.circle.fill")
-                                            .foregroundStyle(Theme.accent)
+                    ForEach(grouped, id: \.0) { provider, list in
+                        Section {
+                            DisclosureGroup(isExpanded: providerBinding(for: provider)) {
+                                if provider == .openrouter {
+                                    openRouterSection(models: list)
+                                } else {
+                                    ForEach(list) { model in
+                                        studyModelRow(model)
                                     }
                                 }
+                            } label: {
+                                submenuLabel(
+                                    title: provider.displayName,
+                                    detail: "\(list.count) model\(list.count == 1 ? "" : "s")"
+                                )
                             }
+                            .tint(Theme.textSecondary)
                             .listRowBackground(Theme.surface)
                         }
-                    } header: {
-                        Text("Vision models")
-                            .foregroundStyle(Theme.textSecondary)
                     }
 
                     Section {
@@ -650,6 +733,9 @@ private struct StudyModelPickerSheet: View {
                                 .foregroundStyle(Theme.textPrimary)
                         }
                         .listRowBackground(Theme.surface)
+                    } footer: {
+                        Text("Need another model? Download an on-device VLM or add a cloud API key.")
+                            .foregroundStyle(Theme.textTertiary)
                     }
                 }
                 .listStyle(.insetGrouped)
@@ -674,6 +760,17 @@ private struct StudyModelPickerSheet: View {
         }) {
             AppSettingsView()
                 .environmentObject(state)
+        }
+        .onChange(of: state.allModels.map(\.id)) { _, _ in
+            viewModel.bind(state: state)
+        }
+        .task {
+            if let selected = viewModel.selectedModel {
+                expandedProviders.insert(selected.provider)
+                if selected.provider == .openrouter {
+                    expandedOrgs.insert(studyOrg(selected))
+                }
+            }
         }
     }
 
