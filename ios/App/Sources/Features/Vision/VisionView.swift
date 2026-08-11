@@ -715,7 +715,7 @@ private struct VisionModelPickerSheet: View {
                 }
             } label: {
                 openRouterSubmenuLabel(
-                    title: group.org,
+                    title: AIModel.prettifiedDisplayName(for: group.org),
                     detail: "\(group.models.count)"
                 )
             }

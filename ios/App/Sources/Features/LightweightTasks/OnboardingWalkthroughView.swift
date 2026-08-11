@@ -184,8 +184,9 @@ struct OnboardingWalkthroughView: View {
 
                         if settings.linkedProvider != nil {
                             let models = state.providerResults
-                                .first(where: { $0.provider == settings.linkedProvider })?
-                                .models ?? []
+                                .first(where: { $0.provider == settings.linkedProvider })
+                                .map { state.visibleModels(in: $0) }
+                                ?? []
                             if models.isEmpty {
                                 Button {
                                     Task {

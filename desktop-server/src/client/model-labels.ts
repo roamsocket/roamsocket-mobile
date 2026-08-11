@@ -56,6 +56,7 @@ const BRAND_CAPS: Record<string, string> = {
   glm: "GLM",
   grok: "Grok",
   mistral: "Mistral",
+  mistralai: "Mistral AI",
   ministral: "Ministral",
   llama: "Llama",
   claude: "Claude",
@@ -115,15 +116,16 @@ export function friendlyModelLabel(provider: string, modelId: string): string {
   // OpenRouter: the org is shown separately as a submenu header — prettify
   // only the slug. Other providers have no org prefix to strip.
   const slug = raw.includes("/") ? raw.split("/").slice(1).join(" ") : raw;
-  return prettifyCloudId(slug);
+  return prettifyName(slug);
 }
 
 /**
- * Prettify a cloud model slug: strip "~", turn separators into spaces and
- * title-case each word with common brand capitalization
- * ("deepseek-r1" → "DeepSeek R1", "gpt-4o-mini" → "GPT 4o Mini").
+ * Prettify a cloud model slug or org name: strip "~", turn separators into
+ * spaces and title-case each word with common brand capitalization
+ * ("deepseek-r1" → "DeepSeek R1", "gpt-4o-mini" → "GPT 4o Mini",
+ * "meta-llama" → "Meta Llama").
  */
-function prettifyCloudId(raw: string): string {
+export function prettifyName(raw: string): string {
   const tokens = raw
     .replace(/~\s*/g, "")
     .replace(/-\d{8}$/g, "")

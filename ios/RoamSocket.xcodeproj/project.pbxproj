@@ -39,6 +39,7 @@
 		4ABC786625BBA12076E26C20 /* ThoughtProcessView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9727CF8FE5BD4BAF42842E2 /* ThoughtProcessView.swift */; };
 		4BF37354D50C69E27E6F7102 /* ChatTitleGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07E0EA6CEE19C97FF0163C50 /* ChatTitleGenerator.swift */; };
 		4C3F1A45F6166F0FB3619396 /* CreateProjectSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B113EFED5DCB949A927BDF5 /* CreateProjectSheet.swift */; };
+		50127AE18A6F3A5813FCFF30 /* BrowserStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA22EEF171C8C5BF6D6F64F1 /* BrowserStore.swift */; };
 		519CD9CF7D2942240434B175 /* MCPManagerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51F057DEB317B1FB052775B7 /* MCPManagerView.swift */; };
 		53C8C4B19DCEBDDA11872543 /* AppDeepLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE9FA560FAB7091DF4FE35F5 /* AppDeepLink.swift */; };
 		550B1CB1218756A76172C94A /* LocalMetalDownloadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05A42D0ABFD59D6D75107C6E /* LocalMetalDownloadManager.swift */; };
@@ -78,9 +79,11 @@
 		97D13AEE0AFADB4D4367D733 /* AddToChatSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2AD82A2DBDD5F7EDE716636 /* AddToChatSheet.swift */; };
 		9908E3AA9D2E0F8F5E0D6213 /* HealthKitService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26154A8C1130ED5DEBC3EBF6 /* HealthKitService.swift */; };
 		9C739E43424BF449F722BFD5 /* CustomTextSkillEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF9AD9584C979837931C1242 /* CustomTextSkillEditor.swift */; };
+		9CC3BE6C5F7A875DBC81191B /* BrowserTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97A8944EF43317CCBCDD259F /* BrowserTab.swift */; };
 		9E1FE29136A3C6963F8CEDFB /* Components.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5396ACA2D6321A437473CAD7 /* Components.swift */; };
 		A674EF03137640F7CB3FD496 /* KeychainSecretStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABA3A0391F8CEDC76881F77B /* KeychainSecretStore.swift */; };
 		A7A7AF3E6257F0FD9CD1BBE6 /* VoiceSettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 352FE68186D3C683405420B1 /* VoiceSettingsStore.swift */; };
+		AB1C70A03FA51065E60508A6 /* BrowserAgent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39D8FEED07F13BE94263CA2A /* BrowserAgent.swift */; };
 		ABF6B0DA9E2354F21FFBB2E4 /* ProjectsListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92157B46A462037562EF4756 /* ProjectsListView.swift */; };
 		B4B49863D71A674AFED82070 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B06724B6CAF0E3252DE862FC /* Assets.xcassets */; };
 		BAB981EFCBC3EC5DCAA518DF /* ThinkingBlock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 034F6306CDB313273AFEFBB1 /* ThinkingBlock.swift */; };
@@ -93,9 +96,11 @@
 		CA699B226F3FD4B352DC4D12 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = 43E358FAF805F505611BE0C6 /* MLXLMCommon */; };
 		CD8A68F94472005C884A3438 /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25BB8C5338F7DF305283B5CA /* ChatViewModel.swift */; };
 		CE984FB513D3BBDC93DDFBE3 /* RoamSocketApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E4E188C5E1EDA070A2F8B11 /* RoamSocketApp.swift */; };
+		CECF151DD9F2D6A926AABFCD /* BrowserModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 972605C18C1EDD61772BF802 /* BrowserModels.swift */; };
 		CF79F46BFA799A70755A0701 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = F0AFD00574E865E5D818751F /* MarkdownUI */; };
 		D18C08D2D8969DE9190FA899 /* VisionCapability.swift in Sources */ = {isa = PBXBuildFile; fileRef = 484A3E7253B503CC7D47B333 /* VisionCapability.swift */; };
 		D4DB63610EDF67A3BA1DC3AA /* AnyProvCore in Frameworks */ = {isa = PBXBuildFile; productRef = B56CF955E91DED9605031824 /* AnyProvCore */; };
+		D5D661AEAFDA9970D369CD15 /* BrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B0A0BA661CBE63B23938DD1 /* BrowserView.swift */; };
 		D7587A96A2194EE6916276DE /* DeviceConnectionHelpSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2E0977C8D358EDB08F7CB9A /* DeviceConnectionHelpSheet.swift */; };
 		DC6DC687994549C8353E56A5 /* VisionViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5865BD07DDF2FB090FEEB8B8 /* VisionViewModel.swift */; };
 		DD168B7BD1267C1A7A2300E4 /* AIThinkingAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DC4F2A2740B259BDBC20BB8 /* AIThinkingAttributes.swift */; };
@@ -109,6 +114,7 @@
 		E76982093466A87FFE305DA8 /* PreviewSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DDB8096BD8EDC931A40E9D0 /* PreviewSheets.swift */; };
 		E92BA656265BD2D626A7E87F /* MarkdownContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E6BDFEC5407686C57AE778B /* MarkdownContentView.swift */; };
 		E9E79CF1625A1B3950BDC10E /* RoamSocketControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44394A209E58F5112FF34826 /* RoamSocketControls.swift */; };
+		EA4AE35CEECAC53D1DD38A3E /* IncognitoChatSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CDA789F62DF1F26F2CAF00E /* IncognitoChatSheet.swift */; };
 		EC62DB2503CF447AA2F8197A /* MCPClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42BABB50CEDBC0DA4FA8B242 /* MCPClient.swift */; };
 		EDD0A4F1757206B2284C2004 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94DAD72AF3A8EDCB01382ED6 /* RootView.swift */; };
 		EF4C15028F079D5FF4DCCC18 /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = 44B4E6CFD2D8728BED39DEE3 /* Tokenizers */; };
@@ -167,6 +173,8 @@
 		2EA229245167DD022667D914 /* VisionCameraView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionCameraView.swift; sourceTree = "<group>"; };
 		2F2D62CFB337D25D6AEEC04E /* ServerPairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerPairingView.swift; sourceTree = "<group>"; };
 		352FE68186D3C683405420B1 /* VoiceSettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceSettingsStore.swift; sourceTree = "<group>"; };
+		39D8FEED07F13BE94263CA2A /* BrowserAgent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserAgent.swift; sourceTree = "<group>"; };
+		3B0A0BA661CBE63B23938DD1 /* BrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserView.swift; sourceTree = "<group>"; };
 		42BABB50CEDBC0DA4FA8B242 /* MCPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPClient.swift; sourceTree = "<group>"; };
 		44394A209E58F5112FF34826 /* RoamSocketControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoamSocketControls.swift; sourceTree = "<group>"; };
 		471E0875DF99071BF74BD76E /* WebSearchService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSearchService.swift; sourceTree = "<group>"; };
@@ -210,7 +218,10 @@
 		93DDEC2DB82D0DAE2ADEA609 /* CameraCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraCapture.swift; sourceTree = "<group>"; };
 		94DA5E752C67E433CD266E72 /* VisionZoomableImageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionZoomableImageView.swift; sourceTree = "<group>"; };
 		94DAD72AF3A8EDCB01382ED6 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		972605C18C1EDD61772BF802 /* BrowserModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserModels.swift; sourceTree = "<group>"; };
+		97A8944EF43317CCBCDD259F /* BrowserTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserTab.swift; sourceTree = "<group>"; };
 		9ACE6D7C117681CD3BC86593 /* ProviderAPIKeyLinks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderAPIKeyLinks.swift; sourceTree = "<group>"; };
+		9CDA789F62DF1F26F2CAF00E /* IncognitoChatSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncognitoChatSheet.swift; sourceTree = "<group>"; };
 		9D20602502A40D7C1B883B31 /* ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMessage.swift; sourceTree = "<group>"; };
 		9DC4F2A2740B259BDBC20BB8 /* AIThinkingAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIThinkingAttributes.swift; sourceTree = "<group>"; };
 		9FAA5102103B2604B36B1C7E /* SpeechRecognitionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechRecognitionService.swift; sourceTree = "<group>"; };
@@ -247,6 +258,7 @@
 		E7C91CD10546F9AFECAEDF55 /* ModelPickerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelPickerSheet.swift; sourceTree = "<group>"; };
 		ED37FFBC41F72BE5DE0BBFE6 /* RoamSocket.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = RoamSocket.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		FA0507292ED88FCCE1C34063 /* SettingsSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsSync.swift; sourceTree = "<group>"; };
+		FA22EEF171C8C5BF6D6F64F1 /* BrowserStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserStore.swift; sourceTree = "<group>"; };
 		FCFCDDBCB421E72768436B69 /* PairQRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairQRScannerView.swift; sourceTree = "<group>"; };
 		FF4F2321A25F5FD7563850FD /* MessageActionsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageActionsSheet.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -375,6 +387,7 @@
 				122D73711B783A293FCCA9E5 /* ChatView.swift */,
 				25BB8C5338F7DF305283B5CA /* ChatViewModel.swift */,
 				54E6B70D6D9963ABFF34F70B /* ConnectorsView.swift */,
+				9CDA789F62DF1F26F2CAF00E /* IncognitoChatSheet.swift */,
 				FF4F2321A25F5FD7563850FD /* MessageActionsSheet.swift */,
 				034F6306CDB313273AFEFBB1 /* ThinkingBlock.swift */,
 				C9727CF8FE5BD4BAF42842E2 /* ThoughtProcessView.swift */,
@@ -396,6 +409,18 @@
 				9D8537F2A3872C349B880C4F /* Features */,
 			);
 			path = Sources;
+			sourceTree = "<group>";
+		};
+		60EF74AE9A3EC22914CE0E0A /* Browser */ = {
+			isa = PBXGroup;
+			children = (
+				39D8FEED07F13BE94263CA2A /* BrowserAgent.swift */,
+				972605C18C1EDD61772BF802 /* BrowserModels.swift */,
+				FA22EEF171C8C5BF6D6F64F1 /* BrowserStore.swift */,
+				97A8944EF43317CCBCDD259F /* BrowserTab.swift */,
+				3B0A0BA661CBE63B23938DD1 /* BrowserView.swift */,
+			);
+			path = Browser;
 			sourceTree = "<group>";
 		};
 		6CBD894D66103C2B6EF87A6A /* App */ = {
@@ -500,6 +525,7 @@
 			isa = PBXGroup;
 			children = (
 				8E5DE67E29F9AC5CE0D39614 /* Artifacts */,
+				60EF74AE9A3EC22914CE0E0A /* Browser */,
 				4DE6214F2251EA1137915EBD /* Chat */,
 				361621AFDA34AEAFB16A27ED /* Chats */,
 				C9CF5AEAE51F199A17A8CD47 /* Code */,
@@ -758,6 +784,11 @@
 				882E61A07468CE9778156F2C /* AppState.swift in Sources */,
 				3ED8384A7E92A6EBF70E901B /* ArtifactTitleGenerator.swift in Sources */,
 				BF433B743AE0D1C832CEAE25 /* ArtifactsListView.swift in Sources */,
+				AB1C70A03FA51065E60508A6 /* BrowserAgent.swift in Sources */,
+				CECF151DD9F2D6A926AABFCD /* BrowserModels.swift in Sources */,
+				50127AE18A6F3A5813FCFF30 /* BrowserStore.swift in Sources */,
+				9CC3BE6C5F7A875DBC81191B /* BrowserTab.swift in Sources */,
+				D5D661AEAFDA9970D369CD15 /* BrowserView.swift in Sources */,
 				5F6FA43C13E3764A6690BBD8 /* CameraCapture.swift in Sources */,
 				65D9C1844ED21CDCF8E64E55 /* ChatHistory.swift in Sources */,
 				337F2A7121469A6E149FC635 /* ChatMessage.swift in Sources */,
@@ -780,6 +811,7 @@
 				8CCFF3A7038AF2B4D2975167 /* EnvironmentPickerSheet.swift in Sources */,
 				0DBC945A4F7EA9E196F7106D /* GitHubLinkView.swift in Sources */,
 				9908E3AA9D2E0F8F5E0D6213 /* HealthKitService.swift in Sources */,
+				EA4AE35CEECAC53D1DD38A3E /* IncognitoChatSheet.swift in Sources */,
 				FA1031175F29909D11D63CB3 /* InstalledSkillsView.swift in Sources */,
 				A674EF03137640F7CB3FD496 /* KeychainSecretStore.swift in Sources */,
 				C2DD54AA29CA0384D7A83304 /* LightweightTaskRunner.swift in Sources */,

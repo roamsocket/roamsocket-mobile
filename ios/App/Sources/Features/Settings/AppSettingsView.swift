@@ -563,13 +563,13 @@ struct AppSettingsView: View {
             }
             Button("Cancel", role: .cancel) { pendingPullSnapshot = nil }
         } message: { snap in
-            Text("GitHub snapshot has \(snap.environments.count) environment(s), \(snap.customProviders.count) custom provider(s), and \(snap.modelAliases.count) model alias(es).")
+            Text("GitHub snapshot has \(snap.environments.count) environment(s), \(snap.customProviders.count) custom provider(s), \(snap.modelAliases.count) model alias(es), and \(snap.hiddenModels.count) hidden model(s).")
         }
     }
 
     private var settingsBackupBlurb: String {
         if let repo = state.settingsSyncRepoFullName {
-            return "Settings are stored in \(repo). Add a new device and restore from GitHub to get the same environments, custom providers, and model aliases."
+            return "Settings are stored in \(repo). Add a new device and restore from GitHub to get the same environments, custom providers, model aliases, and hidden models."
         }
         return "We'll create a private \(SettingsSync.repoName) repo in your account and push your settings there."
     }
@@ -1064,8 +1064,9 @@ private struct CustomProviderModelsSection: View {
 
     private var models: [AIModel] {
         state.providerResults
-            .first(where: { $0.provider == provider.providerID })?
-            .models ?? []
+            .first(where: { $0.provider == provider.providerID })
+            .map { state.visibleModels(in: $0) }
+            ?? []
     }
 
     var body: some View {
