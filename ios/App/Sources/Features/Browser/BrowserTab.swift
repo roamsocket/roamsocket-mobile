@@ -41,7 +41,14 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             Task { @MainActor in self?.urlString = wv.url?.absoluteString ?? "" }
         })
         observations.append(webView.observe(\.title, options: [.new]) { [weak self] wv, _ in
-            Task { @MainActor in self?.title = (wv.title?.isEmpty == false ? wv.title! : self?.urlString) ?? "New Tab" }
+            Task { @MainActor in
+                guard let self else { return }
+                if let pageTitle = wv.title, !pageTitle.isEmpty {
+                    self.title = pageTitle
+                } else {
+                    self.title = self.urlString.isEmpty ? "New Tab" : self.urlString
+                }
+            }
         })
         observations.append(webView.observe(\.isLoading, options: [.new]) { [weak self] wv, _ in
             Task { @MainActor in self?.isLoading = wv.isLoading }
@@ -69,6 +76,18 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     func reload() { webView.reload() }
     func stop() { webView.stopLoading() }
 
+    /// Runs `js` in the page context and returns its result, or `nil` on
+    /// error/timeout. Kept as an explicit helper (rather than an inline
+    /// `try? await … as? T` expression) so the optional-unwrapping is
+    /// unambiguous at every call site.
+    private func evaluateJS(_ js: String) async -> Any? {
+        do {
+            return try await webView.callAsyncJavaScript(js, in: nil, contentWorld: .page)
+        } catch {
+            return nil
+        }
+    }
+
     // MARK: - Grounding
 
     /// Pull a lightweight snapshot of the page: title, URL, visible text,
@@ -91,7 +110,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
           return JSON.stringify({ title: document.title, url: location.href, text: text, links: links });
         })();
         """
-        guard let raw = try? await webView.callAsyncJavaScript(js, in: nil, contentWorld: .page) as? String,
+        guard let raw = await evaluateJS(js) as? String,
               let data = raw.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else {
@@ -134,7 +153,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
           return true;
         })();
         """
-        return (try? await webView.callAsyncJavaScript(js, in: nil, contentWorld: .page) as? Bool) ?? false
+        return (await evaluateJS(js) as? Bool) ?? false
     }
 
     /// Types `text` into the first visible input/textarea whose label,
@@ -177,16 +196,12 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
           return true;
         })();
         """
-        return (try? await webView.callAsyncJavaScript(js, in: nil, contentWorld: .page) as? Bool) ?? false
+        return (await evaluateJS(js) as? Bool) ?? false
     }
 
     func scroll(direction: String, amount: CGFloat = 600) async {
         let dy = direction.lowercased() == "up" ? -amount : amount
-        _ = try? await webView.callAsyncJavaScript(
-            "window.scrollBy(0, \(dy));",
-            in: nil,
-            contentWorld: .page
-        )
+        _ = await evaluateJS("window.scrollBy(0, \(dy));")
     }
 
     private func escapeJS(_ s: String) -> String {
