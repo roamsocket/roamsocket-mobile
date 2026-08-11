@@ -305,9 +305,9 @@ public final class MarketplaceStore: ObservableObject {
             .init(id: "github", name: "GitHub", available: true, category: "engineering"),
         ],
         skills: [
-            .init(id: "mcp-builder", name: "mcp-builder", description: "Guide for creating high-quality MCP servers", category: "devops", source: "official", featured: true),
-            .init(id: "skill-creator", name: "skill-creator", description: "Author new agent skills", category: "other", source: "official", featured: true),
-            .init(id: "frontend-design-css", name: "frontend-design-css", description: "Premium HTML Landing Page Generator", category: "frontend", source: "official", featured: true),
+            .init(id: "mcp-builder", name: "mcp-builder", description: "Guide for creating high-quality MCP servers", category: "devops", source: "official", featured: true, instructions: "# MCP Builder\n\nGuide for creating high-quality MCP (Model Context Protocol) servers that enable LLMs to interact with external tools and data sources.\n\n## Goals\n- Clear tool schemas and descriptions\n- Safe auth and error handling\n- Idiomatic TypeScript / Python server layouts\n\n## Invocation\n- \"build an MCP server\"\n- \"add tools for …\"\n- \"/mcp-builder\"\n"),
+            .init(id: "skill-creator", name: "skill-creator", description: "Author new agent skills", category: "other", source: "official", featured: true, instructions: "# Skill Creator\n\nHelp the user design SKILL.md files: name, description, triggers, and instructions.\n\n## Invocation\n- \"create a skill\"\n- \"skill for …\"\n"),
+            .init(id: "frontend-design-css", name: "frontend-design-css", description: "Premium HTML Landing Page Generator", category: "frontend", source: "official", featured: true, instructions: "# Landing — Premium HTML Landing Page Generator\n\nGenerate a polished, self-contained `.html` landing page from a text prompt or brief. The output is ONE HTML file: all CSS inline in `<style>`, all JS inline in `<script>`, only external dependencies being Google Fonts + GSAP via CDN. The page is visually distinctive, animated, and production-quality.\n\n## Invocation Triggers\n- \"create a landing page\"\n- \"build a landing page\"\n- \"make a landing page for X\"\n- \"I need a web page for Y\"\n"),
         ],
         plugins: [
             .init(id: "engineering-kit", name: "Engineering kit", description: "MCP builders and developer-oriented skills.", category: "engineering", skillIds: ["mcp-builder", "skill-creator"], featured: true),

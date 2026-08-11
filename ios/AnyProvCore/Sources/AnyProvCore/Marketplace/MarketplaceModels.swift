@@ -70,6 +70,31 @@ public struct MarketplaceSkillListing: Codable, Identifiable, Hashable, Sendable
         self.featured = featured
         self.instructions = instructions
     }
+
+    /// Full skill body for installation. Uses `instructions` when present;
+    /// otherwise synthesises a minimal markdown body from name + description.
+    public var skillContent: String {
+        let body = instructions?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !body.isEmpty { return body }
+        return "# \(name)\n\n\(description)\n"
+    }
+
+    /// Map this marketplace listing into a `Skill` ready for `skill_upsert`.
+    public func toSkill() -> Skill {
+        Skill(
+            id: id,
+            name: name,
+            description: description,
+            content: skillContent,
+            category: SkillCategory.from(marketplaceCategory: category),
+            source: SkillSource.from(marketplaceSource: source),
+            isEnabled: true,
+            frontmatter: [
+                "name": name,
+                "description": description,
+            ]
+        )
+    }
 }
 
 public struct MarketplacePlugin: Codable, Identifiable, Hashable, Sendable {
