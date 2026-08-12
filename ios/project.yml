@@ -96,6 +96,10 @@ targets:
           NSAllowsLocalNetworking: true
         NSLocalNetworkUsageDescription: "Connect to your desktop coding server on the local network."
         NSCameraUsageDescription: "Scan pairing QR codes and capture photos for Vision analysis."
+        # Required by PHPicker / PHAsset on iOS for the Gallery button. Even
+        # though PHPicker runs out-of-process, the OS prompts the first time
+        # the user opens the system photo picker for this app.
+        NSPhotoLibraryUsageDescription: "Pick photos from your library to attach to a chat for Vision analysis."
         # Required for NWBrowser to discover `_roamsocket._tcp` (desktop Bonjour).
         # LEGACY: `_roamsocket._tcp` only so older desktops still advertising that type are found.
         NSBonjourServices:
@@ -142,3 +146,25 @@ targets:
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
         NSSupportsLiveActivities: true
+
+  # Unit tests for the iOS app target. Anything that touches UIKit / ImageIO
+  # lives here (not in AnyProvCore, which is platform-agnostic). Run with
+  # `xcodebuild test -scheme RoamSocket -destination 'platform=iOS Simulator'`.
+  RoamSocketTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: App/Sources/Features/Chat/ImageProcessing.swift
+      - path: App/Tests
+    dependencies:
+      - target: RoamSocket
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.roamsocket.app.tests
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        DEVELOPMENT_TEAM: 4JBMBNGPK7
+        CODE_SIGN_IDENTITY: "iPhone Developer"
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/RoamSocket.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/RoamSocket"

@@ -47,6 +47,8 @@
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>Scan pairing QR codes and capture photos for Vision analysis.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Pick photos from your library to attach to a chat for Vision analysis.</string>
 	<key>NSHealthShareUsageDescription</key>
 	<string>RoamSocket reads your Apple Health data when you turn on Health in chat, so the assistant can answer questions about steps, sleep, workouts, and other stats you choose to share.</string>
 	<key>NSHealthUpdateUsageDescription</key>

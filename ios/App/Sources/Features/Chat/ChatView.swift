@@ -135,6 +135,16 @@ struct ChatView: View {
                 viewModel.attachCameraImage(data)
             }
         }
+        .sheet(isPresented: $viewModel.showGallery) {
+            // selectionLimit mirrors ChatViewModel.maxAttachedImages so the
+            // picker can't return more than the composer would accept.
+            GalleryPicker(
+                isPresented: $viewModel.showGallery,
+                selectionLimit: ChatViewModel.maxAttachedImages
+            ) { payloads in
+                viewModel.attachGalleryImages(payloads)
+            }
+        }
         .sheet(isPresented: $viewModel.showConnectorsView) {
             ConnectorsView(viewModel: viewModel)
         }
@@ -632,6 +642,37 @@ struct ChatView: View {
                 .accessibilityHint(
                     viewModel.photoDisabledReason
                         ?? "Capture a photo to attach to this chat"
+                )
+
+                // Gallery — opens PHPicker (system Photos) and attaches the
+                // selected photos. Same vision-disabled rules as the camera
+                // button: a text-only on-device model would crash inside MLX
+                // if we fed it images, so we grey it out with the same hint.
+                //
+                // Also greyed when the composer is already at the staged-photo
+                // cap so the user knows why before tapping.
+                Button {
+                    viewModel.showGallery = true
+                } label: {
+                    Image(systemName: "photo.on.rectangle.angled")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                        .frame(width: 36, height: 36)
+                        .background(Theme.surfaceElevated, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(
+                    viewModel.isLoadingChat
+                        || viewModel.isProcessing
+                        || !viewModel.selectedModelSupportsPhotos
+                        || viewModel.attachedImages.count >= ChatViewModel.maxAttachedImages
+                )
+                .accessibilityLabel("Pick photos from library")
+                .accessibilityHint(
+                    viewModel.photoDisabledReason
+                        ?? (viewModel.attachedImages.count >= ChatViewModel.maxAttachedImages
+                            ? "Maximum \(ChatViewModel.maxAttachedImages) photos per message"
+                            : "Choose photos to attach to this chat")
                 )
 
                 if hasText {

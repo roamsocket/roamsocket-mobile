@@ -79,6 +79,7 @@
 		89CF80174C1C0CAC31FB162A /* MessageActionsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF4F2321A25F5FD7563850FD /* MessageActionsSheet.swift */; };
 		8CCFF3A7038AF2B4D2975167 /* EnvironmentPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F90DB94C3BF91EA0A18CB26 /* EnvironmentPickerSheet.swift */; };
 		911B84ECB62E36A7CCDDB70F /* AIThinkingActivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5C9CA36BC4097C3E3526E60 /* AIThinkingActivityManager.swift */; };
+		93BFF170E4B5AD70F4AF7E92 /* GalleryPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BAED357FB143CAA4A585022 /* GalleryPicker.swift */; };
 		975EBCE0B6BF23BF231C1C8C /* NewSessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82FC70BD52C9A49A33BFACE6 /* NewSessionView.swift */; };
 		97D13AEE0AFADB4D4367D733 /* AddToChatSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2AD82A2DBDD5F7EDE716636 /* AddToChatSheet.swift */; };
 		9908E3AA9D2E0F8F5E0D6213 /* HealthKitService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26154A8C1130ED5DEBC3EBF6 /* HealthKitService.swift */; };
@@ -218,6 +219,7 @@
 		82FC70BD52C9A49A33BFACE6 /* NewSessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewSessionView.swift; sourceTree = "<group>"; };
 		84CE2A5843612EAEEEBD8DEC /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		857FC93A399636F79301B819 /* LightweightTasksSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LightweightTasksSettings.swift; sourceTree = "<group>"; };
+		8BAED357FB143CAA4A585022 /* GalleryPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryPicker.swift; sourceTree = "<group>"; };
 		8DDB8096BD8EDC931A40E9D0 /* PreviewSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewSheets.swift; sourceTree = "<group>"; };
 		8E6BDFEC5407686C57AE778B /* MarkdownContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownContentView.swift; sourceTree = "<group>"; };
 		92139FD1C2399BF1338D4E31 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -399,6 +401,7 @@
 				122D73711B783A293FCCA9E5 /* ChatView.swift */,
 				25BB8C5338F7DF305283B5CA /* ChatViewModel.swift */,
 				54E6B70D6D9963ABFF34F70B /* ConnectorsView.swift */,
+				8BAED357FB143CAA4A585022 /* GalleryPicker.swift */,
 				9CDA789F62DF1F26F2CAF00E /* IncognitoChatSheet.swift */,
 				FF4F2321A25F5FD7563850FD /* MessageActionsSheet.swift */,
 				034F6306CDB313273AFEFBB1 /* ThinkingBlock.swift */,
@@ -837,6 +840,7 @@
 				8CCFF3A7038AF2B4D2975167 /* EnvironmentPickerSheet.swift in Sources */,
 				75E2A949A36E02B2681DAD28 /* FlashcardDecksListView.swift in Sources */,
 				549702D77C444B25F0C6BD29 /* FlashcardModels.swift in Sources */,
+				93BFF170E4B5AD70F4AF7E92 /* GalleryPicker.swift in Sources */,
 				0DBC945A4F7EA9E196F7106D /* GitHubLinkView.swift in Sources */,
 				9908E3AA9D2E0F8F5E0D6213 /* HealthKitService.swift in Sources */,
 				EA4AE35CEECAC53D1DD38A3E /* IncognitoChatSheet.swift in Sources */,
