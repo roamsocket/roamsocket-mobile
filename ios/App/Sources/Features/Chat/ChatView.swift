@@ -516,6 +516,16 @@ struct ChatView: View {
                     style: .card
                 )
                 .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if let notice = state.memoryUnloadNotice, !notice.isEmpty {
+                // Soft notice after iOS forced us to unload a multi-GB
+                // vision tower. Distinct from `localMetalLoadError` so it
+                // doesn't get cleared by the next load attempt and reads
+                // as informational, not as an error.
+                Text(notice)
+                    .font(.footnote)
+                    .foregroundStyle(Theme.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 4)
             } else if let err = state.localMetalLoadError, !err.isEmpty {
                 Text(err)
                     .font(.footnote)
@@ -565,6 +575,17 @@ struct ChatView: View {
                 attachedImageStrip
             }
 
+            // Photo-disabled hint — shown above the controls row when the
+            // active on-device Metal model can't ingest images. Keeps the
+            // user from tapping the (greyed) camera button and wondering why.
+            if let reason = viewModel.photoDisabledReason {
+                Text(reason)
+                    .font(.caption)
+                    .foregroundStyle(Theme.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 2)
+            }
+
             // Bottom: controls row — +, model pill, send.
             HStack(alignment: .center, spacing: 8) {
                 // Plus: opens the AddToChat sheet
@@ -588,6 +609,10 @@ struct ChatView: View {
 
                 // Camera — opens the system camera and attaches the photo to
                 // this chat (no Vision analysis flow).
+                //
+                // Disabled when the active on-device model is text-only — the
+                // MLX backend would crash feeding it images. Show a one-line
+                // hint so the user knows why the button is grey.
                 Button {
                     viewModel.showCamera = true
                 } label: {
@@ -598,9 +623,16 @@ struct ChatView: View {
                         .background(Theme.surfaceElevated, in: Circle())
                 }
                 .buttonStyle(.plain)
-                .disabled(viewModel.isLoadingChat || viewModel.isProcessing)
+                .disabled(
+                    viewModel.isLoadingChat
+                        || viewModel.isProcessing
+                        || !viewModel.selectedModelSupportsPhotos
+                )
                 .accessibilityLabel("Take photo")
-                .accessibilityHint("Capture a photo to attach to this chat")
+                .accessibilityHint(
+                    viewModel.photoDisabledReason
+                        ?? "Capture a photo to attach to this chat"
+                )
 
                 if hasText {
                     // Send — only when there is real input.

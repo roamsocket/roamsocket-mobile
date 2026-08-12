@@ -111,6 +111,12 @@ public protocol LocalMetalGenerating: Sendable {
 
     /// Model ids currently resident in memory.
     func loadedModelIDs() async -> [String]
+
+    /// True while a multi-GB weight load is in flight. Memory-pressure
+    /// handlers use this to avoid unloading weights out from under a
+    /// load that's about to finish — iOS fires the warning *because* of
+    /// the load.
+    func isLoadInFlight() async -> Bool
 }
 
 /// Process-wide hook so AnyProvCore stays free of the heavy MLX dependency graph.

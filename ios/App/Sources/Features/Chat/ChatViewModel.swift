@@ -121,9 +121,26 @@ final class ChatViewModel: ObservableObject {
     /// Attach a camera photo to the composer. The raw JPEG data is downsampled
     /// via ImageIO off the main thread so a full 12 MP bitmap is never decoded
     /// (critical when a Metal VLM is resident in memory).
+    ///
+    /// On-device Metal VLMs work on small pixel grids (336/384/448/896); a
+    /// 1600 px JPEG only inflates the base64 wire payload (~33% bigger) and
+    /// the MLX vision-tensor allocation without helping the model. Cap
+    /// harder when the active selection is on-device Metal.
+    ///
+    /// Previous cap was 1024 px / 0.7 — that still produced ~150–300 KB JPEGs
+    /// on iPhone-class photos, and three copies lived in RAM at once (raw
+    /// JPEG, base64 String, decoded Data). With a 5 GB VLM resident plus the
+    /// debugger attached (Xcode's MallocStackLogging), that tipped iOS into
+    /// jetsam territory. Cap to 896 px / 0.6 for on-device Metal: matches the
+    /// pixel grid of Gemma 4 / Qwen2-VL / SmolVLM family while keeping the
+    /// JPEG ~80–120 KB.
     func attachCameraImage(_ data: Data) {
+        let isOnDeviceVLM = (state?.selectedModel?.provider == .localMetal)
+            && (state?.selectedModel.map { LocalMetalCatalog.isLikelyVisionHubID($0.modelID) } ?? false)
+        let maxDimension: CGFloat = isOnDeviceVLM ? 896 : 1600
+        let quality: CGFloat = isOnDeviceVLM ? 0.6 : 0.8
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let jpeg = Self.downsampledJPEG(from: data, maxDimension: 1600, quality: 0.8),
+            guard let jpeg = Self.downsampledJPEG(from: data, maxDimension: maxDimension, quality: quality),
                   let thumb = Self.downsampledJPEG(from: data, maxDimension: 320, quality: 0.6)
             else { return }
             let attachment = ChatImageAttachment(jpegData: jpeg, thumbnailData: thumb)
@@ -137,10 +154,43 @@ final class ChatViewModel: ObservableObject {
         attachedImages.removeAll { $0.id == id }
     }
 
+    /// True when the **currently selected** model can ingest attached photos.
+    /// On-device Metal models without a vision tower (Llama, Gemma 3n `-lm-`,
+    /// plain text builds) would crash inside MLX if we tried to feed them
+    /// images. The composer uses this to disable the camera + send-with-photo
+    /// **before** anything is staged, so the user sees a friendly hint instead
+    /// of a crash on Send.
+    var selectedModelSupportsPhotos: Bool {
+        guard let model = state?.selectedModel else { return true }
+        switch model.provider {
+        case .localMetal:
+            return LocalMetalCatalog.isLikelyVisionHubID(model.modelID)
+        default:
+            // Cloud providers encode images in their own request shape — keep
+            // the button enabled. Per-provider vision capability is the
+            // catalog's responsibility, not the composer's.
+            return true
+        }
+    }
+
+    /// Short user-facing reason why the camera button is disabled (empty when
+    /// photos are allowed for the current selection).
+    var photoDisabledReason: String? {
+        guard let model = state?.selectedModel, model.provider == .localMetal,
+              !LocalMetalCatalog.isLikelyVisionHubID(model.modelID)
+        else { return nil }
+        return "\(model.displayName) is a text-only on-device model. Download a Vision model (Gemma 4, Qwen2-VL, SmolVLM) in Settings → On-device (Metal) to attach photos."
+    }
+
     /// Downsample JPEG data straight to the target pixel size with ImageIO, then
     /// re-encode at the given quality. Decodes once at the target resolution
     /// (never a full-size bitmap) and bakes EXIF orientation in.
-    private static func downsampledJPEG(
+    ///
+    /// `nonisolated` so the background queue inside `attachCameraImage` can
+    /// call it without an actor hop. The function only touches
+    /// `CGImageSource*` + `UIImage(cgImage:)` + `jpegData(compressionQuality:)`
+    /// — all safe to invoke off the main actor in iOS 17+.
+    private nonisolated static func downsampledJPEG(
         from data: Data,
         maxDimension: CGFloat,
         quality: CGFloat
@@ -332,12 +382,14 @@ final class ChatViewModel: ObservableObject {
 
         // Snapshot the staged photos onto this exact user turn before clearing
         // the composer. Payload rides the wire; thumbnails render the bubble.
+        //
+        // Use the jpegData-init so `rawBytes` is preserved in-memory. The
+        // on-device Metal path then reads `attachment.bytes` instead of
+        // re-decoding the base64 string — keeps peak RAM to one JPEG copy
+        // instead of three.
         let stagedImages = attachedImages
         let imagePayload: [ProviderChatMessage.ImageAttachment] = stagedImages.map {
-            ProviderChatMessage.ImageAttachment(
-                mimeType: "image/jpeg",
-                base64Data: $0.jpegData.base64EncodedString()
-            )
+            ProviderChatMessage.ImageAttachment(mimeType: "image/jpeg", jpegData: $0.jpegData)
         }
         let displayAttachments: [Attachment] = stagedImages.map {
             Attachment(name: "Camera photo", type: .image, thumbnailData: $0.thumbnailData)
