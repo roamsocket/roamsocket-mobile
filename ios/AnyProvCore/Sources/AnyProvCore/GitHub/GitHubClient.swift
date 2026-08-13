@@ -302,6 +302,43 @@ public struct GitHubClient: Sendable {
         }
     }
 
+    /// One row in a directory listing (Contents API).
+    public struct RepoEntry: Codable, Sendable, Equatable {
+        public let name: String
+        public let path: String
+        public let sha: String
+        public let type: String   // "file" | "dir"
+        public init(name: String, path: String, sha: String, type: String) {
+            self.name = name; self.path = path; self.sha = sha; self.type = type
+        }
+    }
+
+    /// List a directory in a repo. Returns `[]` when the directory doesn't
+    /// exist (404); throws on other failures. Use to enumerate per-chat
+    /// files like `chats/recents/<id>.json`.
+    public func listDirectory(
+        token: String,
+        fullName: String,
+        path: String,
+        ref: String? = nil
+    ) async throws -> [RepoEntry] {
+        var components = URLComponents(string: "https://api.github.com/repos/\(fullName)/contents/\(path)")!
+        if let ref { components.queryItems = [URLQueryItem(name: "ref", value: ref)] }
+        var req = URLRequest(url: components.url!)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        req.setValue("anyprov-code", forHTTPHeaderField: "User-Agent")
+        let (data, response) = try await http.data(for: req)
+        if response.statusCode == 404 { return [] }
+        try expectOK(data, response)
+        do {
+            let entries = try JSONDecoder().decode([RepoEntry].self, from: data)
+            return entries
+        } catch {
+            throw GitHubError.decoding(String(describing: error))
+        }
+    }
+
     /// Fetch a single file from a repo. Returns nil if the file doesn't exist.
     public func getFile(
         token: String,
