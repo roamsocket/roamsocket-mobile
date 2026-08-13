@@ -1541,6 +1541,96 @@ body.platform-darwin .topbar {
   color: var(--text-mute);
   white-space: nowrap;
 }
+
+/* Auto-save hint card (inline under assistant message) */
+.memory-hint {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+  padding: 8px 12px;
+  background: var(--bg-elev-1);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 13px;
+  color: var(--text);
+}
+.memory-hint-icon {
+  flex: 0 0 18px;
+  text-align: center;
+  color: var(--accent);
+  font-weight: 700;
+}
+.memory-hint-body { flex: 1; min-width: 0; }
+.memory-hint-title { font-weight: 600; }
+.memory-hint-preview {
+  color: var(--text-dim);
+  font-size: 12px;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.memory-hint-undo {
+  flex: 0 0 auto;
+  background: rgba(106, 169, 255, 0.12);
+  color: var(--accent);
+  border: 0;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.memory-hint-undo:hover { background: rgba(106, 169, 255, 0.20); }
+
+/* Activity log section in Memory modal */
+.memory-activity-label { margin-top: 22px; }
+.memory-activity-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--border);
+}
+.memory-activity-row:last-child { border-bottom: 0; }
+.memory-activity-icon {
+  text-align: center;
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 14px;
+}
+.memory-activity-kind { font-weight: 600; font-size: 13px; }
+.memory-activity-target { color: var(--text-dim); font-size: 12px; }
+.memory-activity-preview {
+  color: var(--text-dim);
+  font-size: 12px;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.memory-activity-time {
+  color: var(--text-mute);
+  font-size: 11px;
+  margin-top: 2px;
+}
+.memory-activity-undo {
+  background: rgba(106, 169, 255, 0.12);
+  color: var(--accent);
+  border: 0;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.memory-activity-undo:hover { background: rgba(106, 169, 255, 0.20); }
 .memory-settings-input { margin-top: 18px; }
 .settings-switch {
   position: relative;

@@ -6,6 +6,10 @@ export interface ChatMessageRecord {
   role: "user" | "assistant";
   content: string;
   createdAt: number;
+  /** Activity row ids from the local user memory store for memory
+   * mutations the assistant auto-saved while producing this reply. The
+   * chat UI renders each one as an inline "Saved to memory" card. */
+  memoryActivityIDs?: string[];
 }
 
 export interface ChatThread {
@@ -167,6 +171,21 @@ export class HistoryStore {
     for (let i = t.messages.length - 1; i >= 0; i--) {
       if (t.messages[i]!.role === "assistant") {
         t.messages[i]!.content = content;
+        t.updatedAt = Date.now();
+        this.persist();
+        return;
+      }
+    }
+  }
+
+  /** Attach memory-activity ids to the most recent assistant message. */
+  setLastAssistantMemoryActivity(chatId: string, ids: string[]): void {
+    if (ids.length === 0) return;
+    const t = this.get(chatId);
+    if (!t) return;
+    for (let i = t.messages.length - 1; i >= 0; i--) {
+      if (t.messages[i]!.role === "assistant") {
+        t.messages[i]!.memoryActivityIDs = ids;
         t.updatedAt = Date.now();
         this.persist();
         return;
