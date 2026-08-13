@@ -30,7 +30,7 @@ The persistence layer (UserMemoryStore) gets a thin extension: a new `ActivityEn
 
 Mirror the skills/MCP pattern. Add a third sync kind: `memory`.
 
-- **Repo config**: `APC_MEMORY_REPO` (env var on desktop, settings field on iOS). When set, the store syncs on every mutation, last-write-wins by `updatedAt`.
+- **Repo config**: `APC_MEMORY_REPO` (env var on desktop, settings field on iOS). When set, the store syncs on every mutation, last-write-wins by `updatedAt`. Desktop also reads `APC_MEMORY_BRANCH` (default `main`) and `APC_MEMORY_TOKEN` (optional, private repo auth).
 - **Wire**: extend the existing `ClientMessage` / `ServerMessage` unions in `desktop-server/src/protocol.ts` and the mirrored Swift `Protocol.swift` with `memorySync([MemoryEntry])`, `memorySyncRequest`, `memoryUpsert(entry)`, `memoryDelete(id)`. Standard pull / push cycle, identical to skills.
 - **Storage format on disk**: `memory.json` at repo root, `{ entries: [MemoryEntry] }`. Simple, diff-friendly, single-file write per mutation.
 - **Conflict resolution**: last-write-wins on `updatedAt`. Good enough for a private single-user device pair. If you want CRDT later, easy to swap.
