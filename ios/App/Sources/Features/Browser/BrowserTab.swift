@@ -103,12 +103,14 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     private static let agentWorld = WKContentWorld.world(name: "roamsocket.browser.agent")
 
     /// Shared JS: resolves a human-readable label for an element (falling
-    /// back to an inner `<img alt>` or an associated `<label for>`, since
-    /// plenty of real buttons/links — like a site's logo — carry no text of
-    /// their own), plus fuzzy matching so a model-provided hint like
-    /// "Google button" still finds an element merely labeled "Google".
-    /// Tried in order: exact substring either direction, then stopword-
-    /// stripped token overlap. Kept as one constant so `click`/`type` share
+    /// back to an inner `<img alt>`, an associated `<label for>`, or a
+    /// `data-testid` / `data-cy` / `data-qa` test selector since plenty of
+    /// real buttons/links — like a site's logo, an icon-only toolbar button,
+    /// or a Cypress/Testing Library-tagged element — carry no text of their
+    /// own), plus fuzzy matching so a model-provided hint like "Google
+    /// button" still finds an element merely labeled "Google". Tried in
+    /// order: exact substring either direction, then stopword-stripped
+    /// token overlap. Kept as one constant so `click`/`type` share
     /// identical matching behavior.
     private static let matchHelperJS = """
     function __normalize(s) {
@@ -127,6 +129,17 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
       if (!raw && el.id) {
         var labelFor = document.querySelector('label[for="' + el.id + '"]');
         if (labelFor) raw = labelFor.innerText || '';
+      }
+      // Modern frameworks (Cypress, Testing Library, QA pipelines) tag
+      // elements via data-* attributes that carry a human-readable name
+      // even when the element has no visible text. Fall back to those
+      // before giving up to `name`/`id`, which are usually opaque.
+      if (!raw) {
+        raw = el.getAttribute('data-testid')
+          || el.getAttribute('data-cy')
+          || el.getAttribute('data-qa')
+          || el.getAttribute('data-test-id')
+          || '';
       }
       if (!raw) raw = el.getAttribute('name') || el.id || '';
       return raw;
@@ -241,7 +254,14 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         let js = """
         (function () {
           \(Self.matchHelperJS)
-          const candidates = Array.from(document.querySelectorAll('a, button, input, [role="button"], [onclick], summary'));
+          // Includes `[aria-label]` and `[data-testid]` etc. so icon-only
+          // buttons and modern framework-tagged controls are candidates
+          // even when they have no visible text content. Also `[type="submit"]`
+          // so a form's submit button — usually the thing that actually
+          // runs a search — isn't missed just because it has no aria-label.
+          const candidates = Array.from(document.querySelectorAll(
+            'a, button, input, [role="button"], [role="link"], [onclick], [aria-label], [data-testid], [data-cy], [data-qa], [type="submit"], summary'
+          ));
           let match = __bestMatch(candidates, "\(escaped)");
           if (!match) {
             try { match = document.querySelector("\(escaped)"); } catch (e) { match = null; }
@@ -270,7 +290,14 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         let js = """
         (function () {
           \(Self.matchHelperJS)
-          const fields = Array.from(document.querySelectorAll('input, textarea, [contenteditable="true"]'));
+          // Include `[role="textbox"]` / `[role="searchbox"]` for React/Svelte
+          // apps that render `<div contenteditable>`-style inputs with custom
+          // roles, plus the data-* attributes for QA-tagged controls. A
+          // model hint like "search box" should match a `<div role="searchbox">`
+          // that wraps a contenteditable, not just plain `<input>`s.
+          const fields = Array.from(document.querySelectorAll(
+            'input, textarea, [contenteditable="true"], [role="textbox"], [role="searchbox"], [aria-label], [data-testid], [data-cy], [data-qa]'
+          ));
           let field = __bestMatch(fields, "\(escapedHint)");
           if (!field && fields.length === 1) field = fields[0];
           if (!field) {
@@ -543,10 +570,18 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
           \(matchHelperJS)
           var match = null;
           if ("\(kind)" === "click") {
-            var candidates = Array.from(document.querySelectorAll('a, button, input, [role="button"], [onclick], summary'));
+            // Mirror the click() candidate selector list (kept in sync so
+            // the pointer lands on the same element the click will hit —
+            // otherwise the user sees the finger hover over a button that
+            // then does nothing).
+            var candidates = Array.from(document.querySelectorAll(
+              'a, button, input, [role="button"], [role="link"], [onclick], [aria-label], [data-testid], [data-cy], [data-qa], [type="submit"], summary'
+            ));
             match = __bestMatch(candidates, "\(escaped)");
           } else if ("\(kind)" === "type") {
-            var fields = Array.from(document.querySelectorAll('input, textarea, [contenteditable="true"]'));
+            var fields = Array.from(document.querySelectorAll(
+              'input, textarea, [contenteditable="true"], [role="textbox"], [role="searchbox"], [aria-label], [data-testid], [data-cy], [data-qa]'
+            ));
             match = __bestMatch(fields, "\(escaped)");
             if (!match && fields.length === 1) match = fields[0];
           }

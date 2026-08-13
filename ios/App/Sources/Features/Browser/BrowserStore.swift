@@ -54,6 +54,12 @@ final class BrowserStore: ObservableObject {
     /// so the finished banner can show the model's actual last word instead
     /// of a generic "Plan finished".
     @Published var completionSummary: String?
+    /// Why the run ended — `.success` (green), `.blocked` (orange — the agent
+    /// gave up and named the blocker), or `.stopped` (the per-run step cap or
+    /// the user hit Stop). Defaults to `.success` for runs that end before we
+    /// had a chance to ask the model (e.g. cancel before any step ran) so the
+    /// existing copy still fits.
+    @Published var completionOutcome: BrowserAgent.CompletionOutcome = .success
 
     @Published var bookmarks: [BrowserBookmark] = []
     @Published var history: [BrowserHistoryEntry] = []
@@ -241,6 +247,7 @@ final class BrowserStore: ObservableObject {
             // model gets curated live content instead of guessing from stale
             // training data — this is what Chat and Vision already do.
             var webSearchBlock: String?
+            var webSearchEmpty: String?
             if (context?.textSnippet.count ?? 0) < 200 {
                 let query = Self.browserSearchQuery(prompt: goal, context: context)
                 let service = WebSearchService()
@@ -252,6 +259,15 @@ final class BrowserStore: ObservableObject {
                     )
                     if !bundle.hits.isEmpty {
                         webSearchBlock = bundle.promptBlock
+                    } else {
+                        // Surface "we searched, nothing came back" so the
+                        // user knows the "I can't find that" answer wasn't
+                        // a confident guess from the model — the web search
+                        // fallback also came up empty. The first step's
+                        // summary is already formatted for that exact case
+                        // ("No web results for X").
+                        webSearchEmpty = bundle.steps.first?.summary
+                            ?? "No web results for “\(query.prefix(72))”"
                     }
                 } catch {
                     // Search failed — we still have whatever page context was captured.
@@ -271,7 +287,12 @@ final class BrowserStore: ObservableObject {
                     style: appState.apiStyle(for: model.provider)
                 )
                 chatMessages.append(
-                    BrowserChatMessage(role: .assistant, content: reply, searchedWeb: webSearchBlock != nil)
+                    BrowserChatMessage(
+                        role: .assistant,
+                        content: reply,
+                        searchedWeb: webSearchBlock != nil,
+                        webSearchEmpty: webSearchEmpty
+                    )
                 )
                 clearPendingPrompt()
             } catch {
@@ -284,6 +305,7 @@ final class BrowserStore: ObservableObject {
         }
 
         completionSummary = nil
+        completionOutcome = .success
         cancelAutoDismiss()
         isPlanning = true
         // Wait for the page to settle before planning, same reason as Ask mode.
@@ -359,6 +381,7 @@ final class BrowserStore: ObservableObject {
         wasStoppedByUser = false
         pendingPlan = nil
         completionSummary = nil
+        completionOutcome = .success
         cancelAutoDismiss()
         cancelStepDismissals()
         isPlanRunning = true
@@ -390,6 +413,7 @@ final class BrowserStore: ObservableObject {
             cancelStepDismissals()
             runningPlan = nil
             completionSummary = nil
+            completionOutcome = .success
             return
         }
         wasStoppedByUser = true
@@ -424,6 +448,7 @@ final class BrowserStore: ObservableObject {
         cancelStepDismissals()
         runningPlan = nil
         completionSummary = nil
+        completionOutcome = .success
     }
 
     private func cancelAutoDismiss() {
@@ -464,6 +489,7 @@ final class BrowserStore: ObservableObject {
             guard !Task.isCancelled else { return }
             self?.runningPlan = nil
             self?.completionSummary = nil
+            self?.completionOutcome = .success
         }
     }
 
@@ -486,22 +512,38 @@ final class BrowserStore: ObservableObject {
     private func runApprovedSteps(goal: String, initialQueue: [BrowserStep], bulk: Bool) async {
         var queue = initialQueue
         var completed: [BrowserStep] = []
+        // How many step failures we've handed to the re-analysis pipeline
+        // in a row. Bounded so a confused loop can't keep retrying forever —
+        // the model's system prompt says "adapt, don't repeat", but we don't
+        // trust that blindly when it costs the user real LLM round-trips.
+        var consecutiveFailures = 0
+        /// Maximum times we'll re-plan after a failed step before giving up.
+        /// Two retries covers "the page hadn't finished rendering" + "wrong
+        /// hint, try another", which is plenty for the vast majority of
+        /// cases the user hits.
+        let maxConsecutiveFailures = 2
 
         while !queue.isEmpty {
             if Task.isCancelled {
                 if completionSummary == nil || completionSummary?.isEmpty == true {
                     completionSummary = wasStoppedByUser ? "Stopped by you." : "Stopped."
                 }
+                completionOutcome = .stopped
                 break
             }
 
-            var stoppedEarly = false
+            // Why we left the inner loop, if we did. Drives whether we fall
+            // through to re-analysis (a step failed) or exit entirely (cancel,
+            // step cap, too many consecutive failures).
+            enum InnerExit { case none, stepFailed, stepCap, cancelled }
+            var innerExit: InnerExit = .none
 
             for step in queue {
-                if Task.isCancelled { stoppedEarly = true; break }
+                if Task.isCancelled { innerExit = .cancelled; break }
                 if completed.count >= maxStepsPerRun {
                     completionSummary = "Stopped after \(maxStepsPerRun) steps to avoid an endless loop — ask again to continue."
-                    stoppedEarly = true
+                    completionOutcome = .stopped
+                    innerExit = .stepCap
                     break
                 }
                 var currentStep = step
@@ -514,20 +556,44 @@ final class BrowserStore: ObservableObject {
                 scheduleStepDismiss(stepID: currentStep.id)
                 completed.append(currentStep)
                 if !result.ok {
-                    stoppedEarly = true
+                    // Don't bail on the *whole run* — fall through to the
+                    // re-analysis block so the model gets a fresh page
+                    // snapshot plus the failure note and can adapt (different
+                    // hint, scroll to find it, navigate elsewhere, or
+                    // honestly declare done:outcome=blocked). This is the
+                    // change that fixes "click fails → run ends with stale
+                    // success banner".
+                    innerExit = .stepFailed
                     break
                 }
             }
 
-            if stoppedEarly { break }
+            if Task.isCancelled { innerExit = .cancelled }
 
-            if Task.isCancelled {
-                completionSummary = wasStoppedByUser ? "Stopped by you." : "Stopped."
+            if innerExit == .cancelled || innerExit == .stepCap {
                 break
+            }
+            if innerExit == .stepFailed {
+                consecutiveFailures += 1
+                if consecutiveFailures > maxConsecutiveFailures {
+                    completionSummary = "Stopped after several failed steps — the agent couldn't make progress. Try rephrasing or check the page."
+                    completionOutcome = .stopped
+                    break
+                }
+                // Clear any leftover summary so the model's decision below
+                // wins the banner instead of inheriting "Plan finished" from
+                // a previous successful batch.
+                completionSummary = nil
+                completionOutcome = .success
+            } else {
+                // A clean batch (all steps succeeded) resets the counter —
+                // a transient failure shouldn't poison later successes.
+                consecutiveFailures = 0
             }
 
             guard let modelContext = resolveModelContext() else {
                 completionSummary = "Stopped: no model/API key available to plan the next step."
+                completionOutcome = .stopped
                 break
             }
 
@@ -563,11 +629,16 @@ final class BrowserStore: ObservableObject {
                 currentCommentary = decision.commentary
                 if Task.isCancelled {
                     completionSummary = wasStoppedByUser ? "Stopped by you." : "Stopped."
+                    completionOutcome = .stopped
                     queue = []
                     continue
                 }
                 guard !decision.done, !decision.steps.isEmpty else {
                     completionSummary = decision.summary.isEmpty ? "Done." : decision.summary
+                    // The model's own verdict on whether the task was actually
+                    // accomplished. Defaulted to .success when the model is too
+                    // old to send it — see `parseNextStepDecision`.
+                    completionOutcome = decision.outcome
                     queue = []
                     continue
                 }
@@ -579,6 +650,7 @@ final class BrowserStore: ObservableObject {
                     pendingStepsApproval = nil
                     if Task.isCancelled {
                         completionSummary = wasStoppedByUser ? "Stopped by you." : "Stopped."
+                        completionOutcome = .stopped
                         queue = []
                         continue
                     }
@@ -601,9 +673,11 @@ final class BrowserStore: ObservableObject {
                 // banner. Everything else is a real failure.
                 if Task.isCancelled {
                     completionSummary = wasStoppedByUser ? "Stopped by you." : "Stopped."
+                    completionOutcome = .stopped
                 } else {
                     errorMessage = error.localizedDescription
                     completionSummary = "Stopped: couldn't work out the next step."
+                    completionOutcome = .stopped
                 }
                 queue = []
             }

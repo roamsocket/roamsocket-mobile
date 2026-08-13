@@ -751,7 +751,19 @@ struct BrowserHomeView: View {
                         .frame(width: 18)
                         .padding(.top, 1)
                     VStack(alignment: .leading, spacing: 8) {
-                        if message.searchedWeb {
+                        // `webSearchEmpty` takes precedence over the success
+                        // pill — they're mutually exclusive (search either
+                        // returned hits or it didn't) and showing both would
+                        // be contradictory.
+                        if let empty = message.webSearchEmpty {
+                            HStack(spacing: 4) {
+                                Image(systemName: "magnifyingglass.circle")
+                                    .font(.system(size: 10, weight: .medium))
+                                Text(empty)
+                                    .font(.system(size: 10, weight: .medium))
+                            }
+                            .foregroundStyle(Color.orange.opacity(0.85))
+                        } else if message.searchedWeb {
                             HStack(spacing: 4) {
                                 Image(systemName: "magnifyingglass.circle")
                                     .font(.system(size: 10, weight: .medium))
@@ -778,13 +790,35 @@ struct BrowserHomeView: View {
     /// the remaining banner auto-dismisses after ~10s but can also be closed
     /// immediately.
     private func finishedPlanBanner(_ plan: BrowserPlan) -> some View {
-        let failed = plan.steps.contains { $0.status == .failed }
+        let outcome = store.completionOutcome
+        let anyFailedStep = plan.steps.contains { $0.status == .failed }
+        // Three distinct end-states, three distinct banners. The previous
+        // version conflated "the agent gave up and admitted it couldn't
+        // find X" with "the agent actually finished the task" — both showed
+        // a green checkmark, which was misleading.
+        let icon: String
+        let tint: Color
+        let title: String
+        switch outcome {
+        case .success:
+            icon = anyFailedStep ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"
+            tint = anyFailedStep ? Color.orange : Color.green
+            title = anyFailedStep ? "Plan finished with errors" : "Plan finished"
+        case .blocked:
+            icon = "exclamationmark.triangle.fill"
+            tint = Color.orange
+            title = "Couldn't finish the task"
+        case .stopped:
+            icon = "stop.circle.fill"
+            tint = Color.gray
+            title = "Plan stopped"
+        }
         return VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 8) {
-                Image(systemName: failed ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                    .foregroundStyle(failed ? Color.orange : Color.green)
+                Image(systemName: icon)
+                    .foregroundStyle(tint)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(failed ? "Plan stopped early" : "Plan finished")
+                    Text(title)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Theme.textPrimary)
                     if let summary = store.completionSummary, !summary.isEmpty {
