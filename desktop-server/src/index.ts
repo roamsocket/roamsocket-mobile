@@ -41,6 +41,7 @@ import {
   startTunnel,
   stopTunnel,
 } from "./workspace/tunnels.js";
+import { mountProxy } from "./proxy/index.js";
 import {
   currentAccessTunnel,
   ensureAccessTunnel,
@@ -50,6 +51,7 @@ import { promises as fs, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { randomBytes } from "node:crypto";
 import { advertiseServer, lanIPv4Addresses } from "./discovery.js";
 import {
   loadDesktopPrefs,
@@ -93,6 +95,14 @@ export interface RunningServer {
   port: number;
   host: string;
   pairingCode: string;
+  /**
+   * Static proxy bearer — pass this to external CLIs (`Authorization: Bearer …`).
+   * Derived from APC_PROXY_TOKEN env var; falls back to a freshly-generated
+   * random token that stays valid for the life of this process.
+   */
+  proxyToken: string;
+  /** Public base URL the proxy is reachable at (e.g. http://127.0.0.1:4319). */
+  proxyBaseUrl: string;
   /** Rotate the 6-digit pairing code (returns the new one). */
   rotatePairingCode: () => string;
   close: () => Promise<void>;
@@ -195,7 +205,14 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
   const pairing = new PairingManager();
   const syncConfig = await loadSyncConfig();
   const app = express();
-  app.use(express.json({ limit: "2mb" }));
+  // Only parse JSON bodies for the small handful of non-proxy routes — the
+  // proxy in `mountProxy` reads bodies as raw streams itself (so it can
+  // forward SSE / non-JSON shapes verbatim). Skipping `/v1/*` here keeps
+  // the proxy handler from seeing a consumed stream.
+  app.use((req, res, next) => {
+    if (req.path.startsWith("/v1/")) return next();
+    return express.json({ limit: "2mb" })(req, res, next);
+  });
 
   /** Filled after listen — used by pair + tunnel helpers. */
   let boundPort = 0;
@@ -280,6 +297,31 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
       const next = pairing.rotateCode();
       console.log(`[apc] pairing code rotated after pair → ${next}`);
     }
+  });
+
+  // Derive a stable proxy bearer for this process. If APC_PROXY_TOKEN is set
+  // in the env, use it verbatim so users can pin one token across restarts.
+  // Otherwise mint a fresh token — the running process is the trust boundary
+  // and we never persist this anywhere.
+  const proxyToken =
+    (process.env.APC_PROXY_TOKEN ?? "").trim() ||
+    randomBytes(24).toString("hex");
+  // Filled in after listen; banner uses the actual port.
+  let proxyBaseUrl = `http://127.0.0.1:${port}`;
+
+  // OpenAI- / Anthropic-compatible pass-through proxy. External coding CLIs
+  // (Codex, Claude Code, Aider, Cursor CLI, OpenCode) point their base URL at
+  // `http://localhost:4319/v1` and reuse the desktop's stored provider keys.
+  mountProxy(app, {
+    verifyPairToken: (token) => Boolean(pairing.verify(token)),
+    verifyProxyToken: (token) => {
+      if (!token) return false;
+      const env = (process.env.APC_PROXY_TOKEN ?? "").trim();
+      return token === env || token === proxyToken;
+    },
+    onRequest: ({ provider, path, status }) => {
+      console.log(`[proxy] ${provider} ${path} → ${status}`);
+    },
   });
 
   const server = http.createServer(app);
@@ -612,6 +654,7 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
   });
 
   boundPort = (server.address() as { port: number } | null)?.port ?? port;
+  proxyBaseUrl = `http://127.0.0.1:${boundPort}`;
   const pairingCode = pairing.pairingCode;
 
   const advertisement = advertiseServer({
@@ -635,6 +678,8 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
         advertise: shouldAdvertise,
         autoTunnel: shouldAutoTunnel,
         publicUrl: existingTunnel,
+        proxyBaseUrl,
+        proxyToken,
       });
     } else {
       const lan = lanIPv4Addresses();
@@ -646,6 +691,12 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
         console.log(`Tunnel URL: ${existingTunnel}`);
       }
       console.log(`Pairing code: ${pairingCode}${useMock ? "  (MOCK agent)" : ""}`);
+      // Proxy is always on in serve-only mode. Print the URL + bearer so
+      // external CLIs (`roamsocket open <tool>`, or hand-configured Codex /
+      // Aider / Cursor / OpenCode) know where to point.
+      console.log(`Proxy: ${proxyBaseUrl}/v1`);
+      console.log(`Proxy token: ${proxyToken}`);
+      console.log(`Run \`roamsocket open codex|claude|aider|cursor|opencode\` to launch one of them.`);
     }
     if (openCliSettings) {
       console.log("CLI settings: type a command at the prompt (h = help, q = leave menu).\n");
@@ -682,6 +733,8 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
     get pairingCode() {
       return pairing.pairingCode;
     },
+    proxyToken,
+    proxyBaseUrl,
     rotatePairingCode: () => pairing.rotateCode(),
     close: async () => {
       stopAccessTunnel();

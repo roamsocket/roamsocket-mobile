@@ -58,8 +58,41 @@ you need a working C/C++ toolchain (Xcode CLT on macOS, build-essential on Linux
 ```bash
 cd desktop-server
 npm install
-npm run dev              # coding agent TUI + server (Ink)
-# or: APC_MOCK=1 npm run dev   # offline agent, no API key needed
+npm run dev              # headless server + OpenAI/Anthropic proxy (default)
+# or: APC_MOCK=1 npm run dev   # offline mock mode (still serves the proxy)
+```
+
+By default the CLI is headless — no TUI, no agent loop, just the pairing
+server and a pass-through proxy at `http://127.0.0.1:4319/v1` so external
+coding CLIs (Codex, Claude Code, Aider, Cursor CLI, OpenCode) can use the
+desktop's stored provider keys. The banner prints the proxy URL and a
+bearer token on start.
+
+#### Use it with your coding CLI of choice
+
+```bash
+roamsocket open codex    # prints exports + launches Codex
+roamsocket open claude   # ditto for Claude Code
+roamsocket open aider    # ditto for Aider
+roamsocket open cursor   # ditto for Cursor CLI
+roamsocket open opencode # ditto for OpenCode
+
+roamsocket open codex --print   # just print the export lines (no spawn)
+```
+
+Point any other tool at the proxy manually:
+
+```bash
+export OPENAI_BASE_URL='http://127.0.0.1:4319/v1'
+export OPENAI_API_KEY='<proxy token from the banner>'
+export X_ROAMSOCKET_PROVIDER=openai
+codex "fix the bug in src/foo.ts"
+```
+
+#### Legacy Ink TUI (still supported)
+
+```bash
+roamsocket --tui        # in-process coding agent + Ink UI
 ```
 
 The TUI status bar shows model, permission mode, listen port, and the **pairing
@@ -80,10 +113,11 @@ npm run electron:package   # package the app for the current platform
 npm run make               # build distributable installers (.dmg/.exe/.zip)
 ```
 
-Headless server only (no TUI):
+Headless server only (no TUI, no proxy hints) — same as the default, but
+suppresses the inline "Run roamsocket open" hint:
 
 ```bash
-roamsocket --serve-only
+roamsocket --serve-only --no-launch
 ```
 
 ### 2. iOS app

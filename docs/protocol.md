@@ -81,6 +81,78 @@ The phone coding model picker shows these models (not phone-local Metal
 weights, which may not match the desktop store). Provider wire values
 `localMetal` and `local-metal` both mean desktop Metal.
 
+## Provider proxy (`/v1/*`)
+
+The desktop also exposes an **OpenAI- and Anthropic-compatible pass-through
+proxy** on the same port. External coding CLIs (Codex, Claude Code, Aider,
+Cursor CLI, OpenCode, …) point their base URL at
+`http://localhost:4319/v1` and reuse the desktop's stored provider keys —
+no per-tool setup, no re-implementation of the wire formats.
+
+The proxy is a thin pass-through: it authenticates the request, looks up
+the user's API key, then forwards the request (and streams the response)
+to the real provider. Nothing is re-serialized, so tool calls, SSE
+streaming, and the latest model features work as-is.
+
+### Auth
+
+| Token source | Use |
+|---|---|
+| Pairing bearer (from `/pair`) | Same token the iOS app uses for `/session`. |
+| `APC_PROXY_TOKEN` env var | Static bearer you pin for external tools. |
+| Random per-process token | Default. The banner prints it on every start. |
+
+Pass it as `Authorization: Bearer <token>` or `X-Api-Key: <token>`.
+
+### Provider selection
+
+The proxy needs to know which upstream to forward to:
+
+- **`X-RoamSocket-Provider: <id>` request header** (preferred — one URL covers all providers).
+- **Auto-detection** for `/v1/messages` (Anthropic).
+- **`APC_PROXY_PROVIDER` env var** as a fallback.
+
+Recognized provider ids: `openai`, `anthropic`, `groq`, `openrouter`,
+`xai`, `mistral`, `minimax`.
+
+### API key lookup
+
+For the resolved provider, the proxy looks up an API key in this order:
+1. `<PROVIDER>_API_KEY` env var
+2. `APC_PROXY_TOKEN_<PROVIDER>` env var
+3. `secrets.json` in the desktop data dir (written by the legacy `roamsocket --tui` `/keys` command)
+
+### Routes
+
+| Method | Path                  | Forwards to                          |
+|--------|-----------------------|--------------------------------------|
+| `GET`  | `/v1/models`          | Synthesized OpenAI-shaped list       |
+| `POST` | `/v1/chat/completions`| OpenAI-compatible completion         |
+| `POST` | `/v1/completions`     | Legacy OpenAI completions            |
+| `POST` | `/v1/messages`        | Anthropic-compatible messages        |
+| `*`    | `/v1/<anything>`      | Catch-all (audio / images / etc.)    |
+
+### CLI shortcuts
+
+```bash
+# Print the env exports (no tool launched):
+roamsocket open codex --print
+
+# Launch the tool with the right env already set:
+roamsocket open claude
+roamsocket open aider
+roamsocket open cursor
+roamsocket open opencode
+
+# Set a stable token across restarts:
+export APC_PROXY_TOKEN=my-shared-secret
+```
+
+Each tool's env vars are set according to its own conventions (e.g. Codex
+reads `OPENAI_BASE_URL` + `OPENAI_API_KEY`; Claude Code reads
+`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`). The `X_Roamsocket_Provider`
+hint is also set so the proxy knows which upstream to forward to.
+
 ## WebSocket `GET /session?token=…`
 
 Every frame is a JSON object with a `type` discriminator.
