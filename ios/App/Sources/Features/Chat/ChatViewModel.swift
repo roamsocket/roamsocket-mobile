@@ -120,6 +120,31 @@ final class ChatViewModel: ObservableObject {
     /// Client-side web search / research (DuckDuckGo + Wikipedia).
     private let webSearchService = WebSearchService()
 
+    /// Instructions for chat-driven memory auto-save. The model is told to
+    /// emit zero or more self-closing `<memory ... />` tags inline in its
+    /// reply when it identifies a *stable* personal fact worth persisting.
+    /// The client strips the tags from the visible reply, applies the
+    /// mutations to the local memory store, and shows a "Saved to memory"
+    /// card with an Undo button.
+    static let memoryAutoSavePrompt = """
+    You have access to the user's private on-device memory (shown above as "User memory"). You can record new facts about the user, or update / forget existing ones, by emitting self-closing `<memory />` tags anywhere in your reply. The tags are stripped from the visible text automatically and the user sees an undo card for each one.
+
+    Tag format:
+      <memory action="add" category="you|topic|area" title="Profile" summary="…" details="…" />
+      <memory action="forget" target="Verizon" />
+      <memory action="rename" target="Profile" value="About me" />
+      <memory action="set_summary" target="Profile" value="…" />
+      <memory action="set_details" target="Profile" value="A|B|C" />
+
+    Only save STABLE personal facts — identity (name, role, location, relationships), lasting preferences, recurring project / area context, and the user's own explicit "remember that X" requests. Do NOT save:
+      - Transient task info (today's to-do, an open ticket number, what they ate for lunch)
+      - One-off chat content (a joke, a quote, a single specific answer)
+      - Speculative inferences ("you might enjoy X", "you seem like a Y person")
+      - Anything inside a code block or inline code span — those are never parsed
+
+    When unsure, do not emit a tag. It is better to miss a fact than to save noise. Never emit more than one tag per reply unless the user is doing a deliberate batch ("remember that A, B, and C"). Do not narrate that you saved something; the UI surfaces it.
+    """
+
     /// Socratic-tutor instructions injected when Guided Learning is on for a
     /// chat. Conversational (unlike the Study flow's block protocol) so
     /// replies render naturally in chat bubbles.
@@ -572,6 +597,12 @@ final class ChatViewModel: ObservableObject {
             if !mem.isEmpty {
                 systemContext.append("User memory (private, on this device):\n\(mem)")
             }
+            // Only instruct the model to auto-save when the user has opted in
+            // to the "Generate memory from chats" toggle. (Search-only
+            // sessions get read-only access — no auto-mutation.)
+            if state.memoryGenerateFromChats {
+                systemContext.append(Self.memoryAutoSavePrompt)
+            }
         }
 
         if healthEnabled {
@@ -744,20 +775,25 @@ final class ChatViewModel: ObservableObject {
             let thought = parsed.thinking.flatMap { $0.isEmpty ? nil : $0 }
             // Instant heuristic label; refine with on-device model in the background.
             let heuristicSummary = thought.map { ThinkingSummaryGenerator.heuristicSummary(from: $0) }
+            // Strip <memory> tags from the visible reply and apply them to
+            // the on-device memory store when auto-save is enabled.
+            let memoryResult = processMemoryTags(parsed.content)
             if let idx = messages.firstIndex(where: { $0.id == assistantID }) {
-                messages[idx].content = parsed.content
+                messages[idx].content = memoryResult.visible
                 messages[idx].thoughtProcess = thought
                 messages[idx].thoughtSummary = heuristicSummary
                 messages[idx].toolCalls = toolCalls.isEmpty ? nil : toolCalls
                 messages[idx].isStreaming = false
+                messages[idx].memoryActivityIDs = memoryResult.activityIDs.isEmpty ? nil : memoryResult.activityIDs
             } else {
                 messages.append(ChatMessage(
                     id: assistantID,
                     role: .assistant,
-                    content: parsed.content,
+                    content: memoryResult.visible,
                     thoughtProcess: thought,
                     thoughtSummary: heuristicSummary,
-                    toolCalls: toolCalls.isEmpty ? nil : toolCalls
+                    toolCalls: toolCalls.isEmpty ? nil : toolCalls,
+                    memoryActivityIDs: memoryResult.activityIDs.isEmpty ? nil : memoryResult.activityIDs
                 ))
             }
             schedulePersist()
@@ -810,6 +846,53 @@ final class ChatViewModel: ObservableObject {
             }
             schedulePersist()
         }
+    }
+
+    /// Strip `<memory>` tags from `raw` and (when the auto-save toggle is
+    /// on) apply them to the local memory store. Returns the visible text
+    /// and the activity row IDs created in the process (for the inline
+    /// "Saved to memory" UI). Always strips tags so the user never sees
+    /// the raw markup, even when auto-save is off.
+    private func processMemoryTags(_ raw: String) -> (visible: String, activityIDs: [String]) {
+        let parser = MemoryTagParser()
+        let result = parser.push(chunk: raw)
+        let tail = parser.end()
+        let visible = result.text + tail.text
+        guard state?.memoryGenerateFromChats == true else {
+            return (visible, [])
+        }
+        var activityIDs: [String] = []
+        let store = UserMemoryStore.shared
+        let preActivityCount = store.activityList().count
+        for action in result.actions + tail.actions {
+            let parsed: UserMemoryStore.ParsedAction
+            switch action {
+            case let .add(category, title, summary, details):
+                let cat: UserMemoryStore.Category
+                switch category {
+                case .you: cat = .you
+                case .topic: cat = .topic
+                case .area: cat = .area
+                }
+                parsed = .add(category: cat, title: title, summary: summary, details: details)
+            case let .forget(target):
+                parsed = .forget(target: target)
+            case let .rename(target, value):
+                parsed = .rename(target: target, value: value)
+            case let .setSummary(target, value):
+                parsed = .setSummary(target: target, value: value)
+            case let .setDetails(target, value):
+                parsed = .setDetails(target: target, value: value)
+            }
+            _ = store.applyAction(parsed)
+        }
+        // The store appends to its activity array on each successful
+        // mutation. Collect the new row IDs so the message can render
+        // inline "Saved to memory" cards.
+        let allActivity = store.activityList()
+        let new = allActivity.suffix(max(0, allActivity.count - preActivityCount))
+        activityIDs = new.map { $0.id }
+        return (visible, activityIDs)
     }
 
     /// Apply a live web-search / research step onto the streaming assistant bubble.

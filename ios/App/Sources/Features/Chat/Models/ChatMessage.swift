@@ -14,6 +14,10 @@ struct ChatMessage: Identifiable {
     var toolCalls: [ToolCall]?
     var attachments: [Attachment]?
     var connectorContext: [ConnectorContext]?
+    /// Activity row ids from `UserMemoryStore` for memory mutations the
+    /// assistant auto-saved while replying. The chat UI renders each one
+    /// as an inline "Saved to memory" card with an Undo button.
+    var memoryActivityIDs: [String]?
 
     enum Role: String, Equatable {
         case user
@@ -32,7 +36,8 @@ struct ChatMessage: Identifiable {
         thoughtSummary: String? = nil,
         toolCalls: [ToolCall]? = nil,
         attachments: [Attachment]? = nil,
-        connectorContext: [ConnectorContext]? = nil
+        connectorContext: [ConnectorContext]? = nil,
+        memoryActivityIDs: [String]? = nil
     ) {
         self.id = id
         self.role = role
@@ -44,6 +49,7 @@ struct ChatMessage: Identifiable {
         self.toolCalls = toolCalls
         self.attachments = attachments
         self.connectorContext = connectorContext
+        self.memoryActivityIDs = memoryActivityIDs
     }
 }
 
