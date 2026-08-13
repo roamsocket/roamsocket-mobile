@@ -19,6 +19,12 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     @Published var canGoBack = false
     @Published var canGoForward = false
     @Published var loadError: String?
+    /// Best-effort UIImage snapshot of the page, used by the tab switcher to
+    /// render previews. Refreshed lazily every time the switcher opens so we
+    /// don't snapshot during scrolling/interaction. `nil` means "no snapshot
+    /// yet" or "snapshot failed" (e.g. for pages with mixed content or
+    /// canvas-heavy sites that `WKSnapshotConfiguration` can't render).
+    @Published var snapshot: UIImage?
 
     /// Fired when a top-level navigation finishes loading (used by the store
     /// to record history and keep the address bar in sync).
@@ -802,6 +808,37 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         s.replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
             .replacingOccurrences(of: "\n", with: " ")
+    }
+
+    // MARK: - Snapshot (used by the tab switcher)
+
+    /// Take a snapshot of the visible page for the tab switcher grid.
+    /// Best-effort: returns `nil` if the WKWebView snapshot fails (which it
+    /// does for some sites — e.g. those that use canvas or cross-origin
+    /// iframes for the main content). The caller renders a placeholder in
+    /// that case. We use `afterScreenUpdates: false` so we don't force the
+    /// page to re-render before snapshotting — the live `WKWebView` keeps
+    /// animating and the snapshot comes out of its current layer.
+    ///
+    /// `WKSnapshotConfiguration.rect` is interpreted in the WKWebView's own
+    /// coordinate space; `webView.bounds` is what we want since we're
+    /// capturing the visible page (Safari does the same — only the top
+    /// viewport shows up in its switcher).
+    func takeSnapshot() async -> UIImage? {
+        let bounds = webView.bounds
+        guard bounds.width > 0, bounds.height > 0 else { return nil }
+        // Bail out early for empty/new tabs — no point in trying to snapshot
+        // a blank WKWebView, and the caller already shows a Start Page
+        // placeholder for those.
+        guard !urlString.isEmpty else { return nil }
+        let config = WKSnapshotConfiguration()
+        config.afterScreenUpdates = false
+        config.rect = CGRect(origin: .zero, size: bounds.size)
+        return await withCheckedContinuation { (continuation: CheckedContinuation<UIImage?, Never>) in
+            webView.takeSnapshot(with: config) { image, _ in
+                continuation.resume(returning: image)
+            }
+        }
     }
 }
 

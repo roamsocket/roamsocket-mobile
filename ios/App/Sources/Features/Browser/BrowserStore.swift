@@ -157,6 +157,32 @@ final class BrowserStore: ObservableObject {
         showTabsSheet = false
     }
 
+    /// Ask every tab for a fresh page snapshot. Called when the tab switcher
+    /// opens so the preview tiles show the live state, not a stale thumbnail
+    /// from minutes ago. Snapshots are best-effort (WKWebView's
+    /// `takeSnapshot` fails on some sites — canvas-heavy pages, cross-origin
+    /// iframes, etc.); on failure the tab keeps its previous snapshot or
+    /// stays `nil` and the switcher renders a placeholder.
+    ///
+    /// We snapshot every tab including the active one because the active
+    /// tab's snapshot may be slightly out of sync if the user just
+    /// navigated and the switcher opened before the page settled.
+    func refreshAllSnapshots() async {
+        await withTaskGroup(of: Void.self) { group in
+            for tab in tabs {
+                group.addTask { @MainActor in
+                    // Skip empty tabs (Start Page placeholder) — there's
+                    // nothing to snapshot and the switcher draws the
+                    // placeholder card for those instead.
+                    guard !tab.urlString.isEmpty else { return }
+                    if let image = await tab.takeSnapshot() {
+                        tab.snapshot = image
+                    }
+                }
+            }
+        }
+    }
+
     private func handleFinishedLoad(_ tab: BrowserTab) {
         if tab.id == activeTabID { addressText = tab.urlString }
         guard !tab.urlString.isEmpty, tab.urlString.hasPrefix("http") else { return }

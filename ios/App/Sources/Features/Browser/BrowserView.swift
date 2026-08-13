@@ -930,60 +930,33 @@ struct BrowserHomeView: View {
 
     // MARK: - Sheets
 
+    /// Safari-style tab switcher: header with "X Tabs" + Private button on the
+    /// left and Done (✓) on the right, a 2-column grid of tab preview tiles,
+    /// and a "+ New Tab" button at the bottom-left. Tapping a tile switches
+    /// to that tab; the × on each tile closes it.
+    ///
+    /// Why this layout: the old version was a flat `List` of titles — fine for
+    /// power users who read every entry, but it gave no visual sense of
+    /// "which page is in which tab". Safari's grid (preview + small title) is
+    /// the iOS idiom for this and what users expect after using Safari.
     private var tabsSheet: some View {
-        SheetScaffold(
-            title: "Tabs",
-            trailing: AnyView(
-                Button(action: {
-                    store.newTab()
-                    store.showTabsSheet = false
-                }) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Theme.textPrimary)
-                        .frame(width: 40, height: 40)
-                        .background(Theme.surfaceElevated, in: Circle())
-                }
-                .buttonStyle(.plain)
-            ),
-            onClose: { store.showTabsSheet = false }
-        ) {
-            List {
-                ForEach(store.tabs) { tab in
-                    Button {
-                        store.selectTab(tab.id)
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(tab.title.isEmpty ? "New Tab" : tab.title)
-                                    .font(.system(size: 15, weight: .medium))
-                                    .foregroundStyle(Theme.textPrimary)
-                                    .lineLimit(1)
-                                if !tab.urlString.isEmpty {
-                                    Text(tab.urlString)
-                                        .font(.system(size: 12))
-                                        .foregroundStyle(Theme.textTertiary)
-                                        .lineLimit(1)
-                                }
-                            }
-                            Spacer()
-                            if tab.id == store.activeTabID {
-                                Image(systemName: "checkmark")
-                                    .foregroundStyle(Theme.accent)
-                            }
-                        }
-                    }
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        Button(role: .destructive) { store.closeTab(tab.id) } label: {
-                            Label("Close", systemImage: "xmark")
-                        }
-                    }
-                }
-            }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-        }
-        .presentationDetents([.medium, .large])
+        TabsSwitcherSheet(
+            tabs: store.tabs,
+            activeTabID: store.activeTabID,
+            onSelect: { store.selectTab($0) },
+            onCloseTab: { store.closeTab($0) },
+            onNewTab: {
+                store.newTab()
+                store.showTabsSheet = false
+            },
+            onDone: { store.showTabsSheet = false },
+            // The store refreshes snapshots in the background; the sheet
+            // simply renders whatever `tab.snapshot` currently is. We pass
+            // a single fire-and-forget task here so each open of the sheet
+            // kicks off a refresh without blocking the UI.
+            refreshSnapshots: { Task { await store.refreshAllSnapshots() } }
+        )
+        .presentationDetents([.large])
         .presentationBackground(Theme.background)
         .presentationDragIndicator(.visible)
     }

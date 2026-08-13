@@ -117,6 +117,7 @@
 		D7587A96A2194EE6916276DE /* DeviceConnectionHelpSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2E0977C8D358EDB08F7CB9A /* DeviceConnectionHelpSheet.swift */; };
 		DC6DC687994549C8353E56A5 /* VisionViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5865BD07DDF2FB090FEEB8B8 /* VisionViewModel.swift */; };
 		DD168B7BD1267C1A7A2300E4 /* AIThinkingAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DC4F2A2740B259BDBC20BB8 /* AIThinkingAttributes.swift */; };
+		DE16E6AFD28A3676FEFFCE62 /* TabsSwitcherSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F02DD01EAA4645E102288A04 /* TabsSwitcherSheet.swift */; };
 		DECC996885FC87D4A0E0FEA9 /* ManageMemoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25BE60DC817AD0BC7B4B9B31 /* ManageMemoryView.swift */; };
 		DF1D1D086641ED75712DE318 /* ProviderAPIKeyLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ACE6D7C117681CD3BC86593 /* ProviderAPIKeyLinks.swift */; };
 		E08252E5452B485E0FACD9B9 /* VisionPromptStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01040D7178E6CFEAFD28BCE0 /* VisionPromptStore.swift */; };
@@ -291,6 +292,7 @@
 		E7C91CD10546F9AFECAEDF55 /* ModelPickerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelPickerSheet.swift; sourceTree = "<group>"; };
 		ED37FFBC41F72BE5DE0BBFE6 /* RoamSocket.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = RoamSocket.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		EF67BD100D185786F94EA650 /* RoamSocketTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = RoamSocketTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		F02DD01EAA4645E102288A04 /* TabsSwitcherSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabsSwitcherSheet.swift; sourceTree = "<group>"; };
 		FA0507292ED88FCCE1C34063 /* SettingsSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsSync.swift; sourceTree = "<group>"; };
 		FA22EEF171C8C5BF6D6F64F1 /* BrowserStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserStore.swift; sourceTree = "<group>"; };
 		FB7076E7599E22BC9579CACF /* FlashcardDecksListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlashcardDecksListView.swift; sourceTree = "<group>"; };
@@ -465,6 +467,7 @@
 				FA22EEF171C8C5BF6D6F64F1 /* BrowserStore.swift */,
 				97A8944EF43317CCBCDD259F /* BrowserTab.swift */,
 				3B0A0BA661CBE63B23938DD1 /* BrowserView.swift */,
+				F02DD01EAA4645E102288A04 /* TabsSwitcherSheet.swift */,
 			);
 			path = Browser;
 			sourceTree = "<group>";
@@ -954,6 +957,7 @@
 				75FB3E4B9B6EEA0AD821DDC9 /* StudyQuestionParser.swift in Sources */,
 				D6D44B4653CBF2FF5D45AB94 /* StudyScanView.swift in Sources */,
 				C1B329431F390A9F2742F004 /* StudyViewModel.swift in Sources */,
+				DE16E6AFD28A3676FEFFCE62 /* TabsSwitcherSheet.swift in Sources */,
 				612AF9D7E589501B218D9F8C /* Theme.swift in Sources */,
 				BAB981EFCBC3EC5DCAA518DF /* ThinkingBlock.swift in Sources */,
 				C1461CB8D418F81AB7DC7D48 /* ThinkingExtractor.swift in Sources */,
