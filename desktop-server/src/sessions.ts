@@ -3,19 +3,14 @@
  * pending permission requests, and PR creation. One SessionManager exists per
  * connected app; sessions are keyed by id.
  */
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import type {
-  CreateSessionMsg,
-  CreatePrMsg,
-  GitPublishMsg,
-  ServerMessage,
-} from "./protocol.js";
-import { AgentSession } from "./agent/loop.js";
-import { cloneAndBranch, commitAll, compareURL, pushBranch, type RepoSpec } from "./git/github.js";
-import type { ProviderAdapter } from "./providers/index.js";
-import { readProjectConfig } from "./project/config.js";
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import type { CreateSessionMsg, CreatePrMsg, GitPublishMsg, ServerMessage } from './protocol.js';
+import { AgentSession } from './agent/loop.js';
+import { cloneAndBranch, commitAll, compareURL, pushBranch, type RepoSpec } from './git/github.js';
+import type { ProviderAdapter } from './providers/index.js';
+import { readProjectConfig } from './project/config.js';
 
 interface Session {
   id: string;
@@ -23,7 +18,7 @@ interface Session {
   repo: RepoSpec;
   agent: AgentSession;
   abort: AbortController;
-  pendingPermissions: Map<string, (d: "allow" | "deny") => void>;
+  pendingPermissions: Map<string, (d: 'allow' | 'deny') => void>;
 }
 
 /**
@@ -37,7 +32,7 @@ export class SessionManager {
   constructor(
     private readonly emit: (msg: ServerMessage) => void,
     /** Optional adapter override (tests inject the mock). */
-    private readonly adapterOverride?: ProviderAdapter,
+    private readonly adapterOverride?: ProviderAdapter
   ) {}
 
   async create(msg: CreateSessionMsg): Promise<void> {
@@ -49,10 +44,10 @@ export class SessionManager {
     if (existing) {
       this.reattach(existing, msg);
       this.emit({
-        type: "session_created",
+        type: 'session_created',
         sessionId: id,
         workdir: existing.workdir,
-        baseBranch: existing.repo.baseBranch ?? "main",
+        baseBranch: existing.repo.baseBranch ?? 'main',
         workBranch: existing.repo.workBranch,
       });
       // Replay checklist so the phone checklist recovers after reconnect.
@@ -70,20 +65,20 @@ export class SessionManager {
     };
 
     let workdir: string;
-    let baseBranch = repo.baseBranch ?? "main";
+    let baseBranch = repo.baseBranch ?? 'main';
     try {
-      const root = await mkdtemp(path.join(tmpdir(), "apc-"));
-      workdir = path.join(root, "repo");
+      const root = await mkdtemp(path.join(tmpdir(), 'apc-'));
+      workdir = path.join(root, 'repo');
       const cloned = await cloneAndBranch(repo, workdir);
       baseBranch = cloned.baseBranch;
       repo.baseBranch = baseBranch;
     } catch (err) {
-      this.emit({ type: "error", sessionId: id, message: (err as Error).message });
+      this.emit({ type: 'error', sessionId: id, message: (err as Error).message });
       return;
     }
 
     const abort = new AbortController();
-    const pendingPermissions = new Map<string, (d: "allow" | "deny") => void>();
+    const pendingPermissions = new Map<string, (d: 'allow' | 'deny') => void>();
 
     // Read Claude Code–compatible config (global ~/.claude, workspace
     // CLAUDE.md / .claude/, folder hierarchy) and merge into the session.
@@ -91,18 +86,15 @@ export class SessionManager {
     // MCP is surfaced for upcoming tool registration; env vars are warned
     // about (not injected into the process today).
     const project = await readProjectConfig(workdir);
-    const mergedSkills = [
-      ...msg.skills,
-      ...project.skills.map((s) => s.content),
-    ];
+    const mergedSkills = [...msg.skills, ...project.skills.map((s) => s.content)];
     if (project.instructionsMd) {
       mergedSkills.unshift(
-        `# Agent instructions (global / workspace / folder)\n\n${project.instructionsMd}`,
+        `# Agent instructions (global / workspace / folder)\n\n${project.instructionsMd}`
       );
     }
     if (Object.keys(project.env).length > 0) {
       this.emit({
-        type: "error",
+        type: 'error',
         sessionId: id,
         message: `Project config provided ${Object.keys(project.env).length} env var(s); the agent loop does not currently consume them — set them on the desktop shell.`,
       });
@@ -119,15 +111,15 @@ export class SessionManager {
       skills: mergedSkills,
       environment: msg.environment,
       requestPermission: (requestId, tool, summary) =>
-        new Promise<"allow" | "deny">((resolve) => {
+        new Promise<'allow' | 'deny'>((resolve) => {
           pendingPermissions.set(requestId, resolve);
-          this.emit({ type: "permission_request", sessionId: id, requestId, tool, summary });
+          this.emit({ type: 'permission_request', sessionId: id, requestId, tool, summary });
         }),
     });
 
     globalSessions.set(id, { id, workdir, repo, agent, abort, pendingPermissions });
     this.emit({
-      type: "session_created",
+      type: 'session_created',
       sessionId: id,
       workdir,
       baseBranch,
@@ -142,7 +134,7 @@ export class SessionManager {
   private reattach(session: Session, msg: CreateSessionMsg): void {
     // Drop any in-flight permission waiters from the previous socket.
     for (const resolve of session.pendingPermissions.values()) {
-      resolve("deny");
+      resolve('deny');
     }
     session.pendingPermissions.clear();
 
@@ -166,9 +158,9 @@ export class SessionManager {
       emit,
       signal: session.abort.signal,
       requestPermission: (requestId, tool, summary) =>
-        new Promise<"allow" | "deny">((resolve) => {
+        new Promise<'allow' | 'deny'>((resolve) => {
           pendingPermissions.set(requestId, resolve);
-          emit({ type: "permission_request", sessionId, requestId, tool, summary });
+          emit({ type: 'permission_request', sessionId, requestId, tool, summary });
         }),
       model: msg.model,
       permissionMode: msg.permissionMode,
@@ -179,11 +171,11 @@ export class SessionManager {
   async handleUserMessage(
     sessionId: string,
     text: string,
-    model?: import("./protocol.js").ModelSelection,
+    model?: import('./protocol.js').ModelSelection
   ): Promise<void> {
     const session = globalSessions.get(sessionId);
     if (!session) {
-      this.emit({ type: "error", sessionId, message: "Unknown session." });
+      this.emit({ type: 'error', sessionId, message: 'Unknown session.' });
       return;
     }
     // Mid-session model switch from the phone's model picker.
@@ -195,9 +187,9 @@ export class SessionManager {
         emit,
         signal: session.abort.signal,
         requestPermission: (requestId, tool, summary) =>
-          new Promise<"allow" | "deny">((resolve) => {
+          new Promise<'allow' | 'deny'>((resolve) => {
             pendingPermissions.set(requestId, resolve);
-            emit({ type: "permission_request", sessionId: sid, requestId, tool, summary });
+            emit({ type: 'permission_request', sessionId: sid, requestId, tool, summary });
           }),
         model,
       });
@@ -205,11 +197,11 @@ export class SessionManager {
     try {
       await session.agent.handleUserMessage(text);
     } catch (err) {
-      this.emit({ type: "error", sessionId, message: (err as Error).message });
+      this.emit({ type: 'error', sessionId, message: (err as Error).message });
     }
   }
 
-  resolvePermission(sessionId: string, requestId: string, decision: "allow" | "deny"): void {
+  resolvePermission(sessionId: string, requestId: string, decision: 'allow' | 'deny'): void {
     const session = globalSessions.get(sessionId);
     const resolve = session?.pendingPermissions.get(requestId);
     if (resolve) {
@@ -229,7 +221,7 @@ export class SessionManager {
   async createPr(msg: CreatePrMsg): Promise<void> {
     // Backward-compatible: commit + push + open PR URL.
     await this.gitPublish({
-      type: "git_publish",
+      type: 'git_publish',
       sessionId: msg.sessionId,
       message: msg.title,
       commit: true,
@@ -245,14 +237,14 @@ export class SessionManager {
   async gitPublish(msg: GitPublishMsg): Promise<void> {
     const session = globalSessions.get(msg.sessionId);
     if (!session) {
-      this.emit({ type: "error", sessionId: msg.sessionId, message: "Unknown session." });
+      this.emit({ type: 'error', sessionId: msg.sessionId, message: 'Unknown session.' });
       return;
     }
     if (!msg.commit && !msg.push && !msg.openPr) {
       this.emit({
-        type: "error",
+        type: 'error',
         sessionId: msg.sessionId,
-        message: "Nothing to do — pick commit, push, and/or open PR.",
+        message: 'Nothing to do — pick commit, push, and/or open PR.',
       });
       return;
     }
@@ -266,22 +258,22 @@ export class SessionManager {
         const message = msg.message.trim();
         if (!message) {
           this.emit({
-            type: "error",
+            type: 'error',
             sessionId: msg.sessionId,
-            message: "Commit message is required.",
+            message: 'Commit message is required.',
           });
           return;
         }
         const committed = await commitAll(session.workdir, message);
-        steps.push("commit");
-        details.push(committed ? `Committed: ${message}` : "Nothing new to commit.");
+        steps.push('commit');
+        details.push(committed ? `Committed: ${message}` : 'Nothing new to commit.');
         if (!committed && !msg.push && !msg.openPr) {
           this.emit({
-            type: "git_result",
+            type: 'git_result',
             sessionId: msg.sessionId,
-            action: "commit",
+            action: 'commit',
             ok: false,
-            detail: "No changes to commit.",
+            detail: 'No changes to commit.',
           });
           return;
         }
@@ -290,28 +282,28 @@ export class SessionManager {
       // openPr implies a push so the compare URL is meaningful.
       if (msg.push || msg.openPr) {
         url = await pushBranch(session.repo, session.workdir);
-        steps.push("push");
+        steps.push('push');
         details.push(`Pushed ${session.repo.workBranch}.`);
       }
 
       if (msg.openPr) {
         url = url ?? compareURL(session.repo);
-        steps.push("pr");
-        details.push("Open pull request ready.");
-        this.emit({ type: "pr_created", sessionId: msg.sessionId, url });
+        steps.push('pr');
+        details.push('Open pull request ready.');
+        this.emit({ type: 'pr_created', sessionId: msg.sessionId, url });
       }
 
       this.emit({
-        type: "git_result",
+        type: 'git_result',
         sessionId: msg.sessionId,
-        action: steps.join("+") || "none",
+        action: steps.join('+') || 'none',
         ok: true,
-        detail: details.join(" "),
+        detail: details.join(' '),
         url,
       });
     } catch (err) {
       this.emit({
-        type: "error",
+        type: 'error',
         sessionId: msg.sessionId,
         message: (err as Error).message,
       });
@@ -320,5 +312,5 @@ export class SessionManager {
 }
 
 function cryptoRandomId(): string {
-  return "s_" + Math.random().toString(36).slice(2, 10);
+  return 's_' + Math.random().toString(36).slice(2, 10);
 }

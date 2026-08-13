@@ -10,9 +10,9 @@
  *   Info.plist → NSBonjourServices
  *   product.BONJOUR_SERVICE_TYPE
  */
-import os from "node:os";
-import Bonjour from "bonjour-service";
-import { BONJOUR_SERVICE_TYPE } from "./product.js";
+import os from 'node:os';
+import Bonjour from 'bonjour-service';
+import { BONJOUR_SERVICE_TYPE } from './product.js';
 
 /** Bonjour service type (without leading underscore / protocol). */
 export const APC_BONJOUR_TYPE = BONJOUR_SERVICE_TYPE;
@@ -44,18 +44,18 @@ export function advertiseServer(opts: AdvertiseOptions): Advertisement {
 
   try {
     bonjour = new Bonjour();
-    const hostLabel = os.hostname().replace(/\.local$/i, "") || "desktop";
+    const hostLabel = os.hostname().replace(/\.local$/i, '') || 'desktop';
     const serviceName = `${opts.name} (${hostLabel})`.slice(0, 63);
 
     bonjour.publish({
       name: serviceName,
       type: APC_BONJOUR_TYPE,
-      protocol: "tcp",
+      protocol: 'tcp',
       port: opts.port,
       txt: {
         name: opts.name,
         version: opts.version,
-        path: "/",
+        path: '/',
       },
     });
   } catch (err) {
@@ -94,7 +94,7 @@ export function lanIPv4Addresses(): string[] {
   for (const entries of Object.values(ifaces)) {
     if (!entries) continue;
     for (const e of entries) {
-      if (e.family === "IPv4" && !e.internal) out.push(e.address);
+      if (e.family === 'IPv4' && !e.internal) out.push(e.address);
     }
   }
   return out;

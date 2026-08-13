@@ -2,14 +2,10 @@
  * Chat composer + menu catalogs (skills, connectors, plugins) + local toggles.
  * Desktop-local UX parity with Claude’s attach menu — not full MCP auth.
  */
-import type { StorageLike } from "./history-store.js";
-import {
-  BUILTIN_SKILLS,
-  type SkillRecord,
-  skillByIdFromList,
-} from "./skills-store.js";
+import type { StorageLike } from './history-store.js';
+import { BUILTIN_SKILLS, type SkillRecord, skillByIdFromList } from './skills-store.js';
 
-const KEY = "apc.composerTools.v1";
+const KEY = 'apc.composerTools.v1';
 
 export interface ComposerToolsState {
   webSearch: boolean;
@@ -23,7 +19,7 @@ export interface ComposerToolsState {
 }
 
 /** @deprecated Use SkillRecord from skills-store — kept for menu typing. */
-export type SkillCatalogEntry = Pick<SkillRecord, "id" | "name" | "description">;
+export type SkillCatalogEntry = Pick<SkillRecord, 'id' | 'name' | 'description'>;
 
 export interface ConnectorCatalogEntry {
   id: string;
@@ -46,24 +42,24 @@ export const SKILL_CATALOG: SkillCatalogEntry[] = BUILTIN_SKILLS.map((s) => ({
 
 /** Built-in connector list (overridden at runtime by marketplace merge). */
 export const DEFAULT_CONNECTOR_CATALOG: ConnectorCatalogEntry[] = [
-  { id: "cashapp", name: "Cash App" },
-  { id: "figma", name: "Figma" },
-  { id: "gmail", name: "Gmail" },
-  { id: "godaddy", name: "GoDaddy" },
-  { id: "gcal", name: "Google Calendar" },
-  { id: "gdrive", name: "Google Drive" },
-  { id: "granola", name: "Granola", available: false },
-  { id: "github", name: "GitHub" },
+  { id: 'cashapp', name: 'Cash App' },
+  { id: 'figma', name: 'Figma' },
+  { id: 'gmail', name: 'Gmail' },
+  { id: 'godaddy', name: 'GoDaddy' },
+  { id: 'gcal', name: 'Google Calendar' },
+  { id: 'gdrive', name: 'Google Drive' },
+  { id: 'granola', name: 'Granola', available: false },
+  { id: 'github', name: 'GitHub' },
 ];
 
 /** Live connector catalog — marketplace applies updates in place. */
 export let CONNECTOR_CATALOG: ConnectorCatalogEntry[] = [...DEFAULT_CONNECTOR_CATALOG];
 
 export const DEFAULT_PLUGIN_CATEGORIES: PluginCategory[] = [
-  { id: "marketing", label: "Marketing" },
-  { id: "productivity", label: "Productivity" },
-  { id: "engineering", label: "Engineering" },
-  { id: "design", label: "Design" },
+  { id: 'marketing', label: 'Marketing' },
+  { id: 'productivity', label: 'Productivity' },
+  { id: 'engineering', label: 'Engineering' },
+  { id: 'design', label: 'Design' },
 ];
 
 /** Live plugin categories — marketplace applies updates in place. */
@@ -85,7 +81,7 @@ const DEFAULTS: ComposerToolsState = {
   webSearch: true,
   research: false,
   connectors: Object.fromEntries(
-    DEFAULT_CONNECTOR_CATALOG.map((c) => [c.id, c.available === false ? false : true]),
+    DEFAULT_CONNECTOR_CATALOG.map((c) => [c.id, c.available === false ? false : true])
   ),
   recentSkillIds: [],
   activeSkillIds: [],
@@ -93,7 +89,7 @@ const DEFAULTS: ComposerToolsState = {
 
 function defaultConnectorToggles(): Record<string, boolean> {
   return Object.fromEntries(
-    CONNECTOR_CATALOG.map((c) => [c.id, c.available === false ? false : true]),
+    CONNECTOR_CATALOG.map((c) => [c.id, c.available === false ? false : true])
   );
 }
 
@@ -136,7 +132,7 @@ export function saveComposerTools(storage: StorageLike, state: ComposerToolsStat
 export function toggleConnector(
   storage: StorageLike,
   state: ComposerToolsState,
-  id: string,
+  id: string
 ): ComposerToolsState {
   const entry = CONNECTOR_CATALOG.find((c) => c.id === id);
   if (entry?.available === false) return state;
@@ -151,7 +147,7 @@ export function toggleConnector(
 export function setWebSearch(
   storage: StorageLike,
   state: ComposerToolsState,
-  on: boolean,
+  on: boolean
 ): ComposerToolsState {
   const next = { ...state, webSearch: on };
   saveComposerTools(storage, next);
@@ -161,7 +157,7 @@ export function setWebSearch(
 export function setResearch(
   storage: StorageLike,
   state: ComposerToolsState,
-  on: boolean,
+  on: boolean
 ): ComposerToolsState {
   const next = { ...state, research: on };
   saveComposerTools(storage, next);
@@ -171,7 +167,7 @@ export function setResearch(
 export function activateSkill(
   storage: StorageLike,
   state: ComposerToolsState,
-  skillId: string,
+  skillId: string
 ): ComposerToolsState {
   const active = state.activeSkillIds.includes(skillId)
     ? state.activeSkillIds
@@ -184,7 +180,7 @@ export function activateSkill(
 
 export function clearActiveSkills(
   storage: StorageLike,
-  state: ComposerToolsState,
+  state: ComposerToolsState
 ): ComposerToolsState {
   const next = { ...state, activeSkillIds: [] };
   saveComposerTools(storage, next);
@@ -192,31 +188,33 @@ export function clearActiveSkills(
 }
 
 export function skillById(id: string): SkillCatalogEntry | undefined {
-  return skillByIdFromList(BUILTIN_SKILLS, id) ?? SKILL_CATALOG.find((s) => s.id === id || s.name === id);
+  return (
+    skillByIdFromList(BUILTIN_SKILLS, id) ?? SKILL_CATALOG.find((s) => s.id === id || s.name === id)
+  );
 }
 
 /** System-prompt snippets from active tools for the next chat turn. */
 export function composerToolsSystemHints(
   state: ComposerToolsState,
-  resolveSkill?: (id: string) => SkillRecord | SkillCatalogEntry | undefined,
+  resolveSkill?: (id: string) => SkillRecord | SkillCatalogEntry | undefined
 ): string[] {
   const parts: string[] = [];
   if (state.webSearch) {
     parts.push(
-      "Web search is enabled for this chat. When facts may be outdated, say what you would look up and reason carefully.",
+      'Web search is enabled for this chat. When facts may be outdated, say what you would look up and reason carefully.'
     );
   }
   if (state.research) {
     parts.push(
-      "Research mode is on: prefer multi-source analysis, cite assumptions, and structure longer investigations.",
+      'Research mode is on: prefer multi-source analysis, cite assumptions, and structure longer investigations.'
     );
   }
   const enabledConnectors = CONNECTOR_CATALOG.filter(
-    (c) => state.connectors[c.id] && c.available !== false,
+    (c) => state.connectors[c.id] && c.available !== false
   ).map((c) => c.name);
   if (enabledConnectors.length) {
     parts.push(
-      `Enabled connectors (local preference): ${enabledConnectors.join(", ")}. Use them when the user asks for linked accounts; otherwise note when a live MCP connection is required.`,
+      `Enabled connectors (local preference): ${enabledConnectors.join(', ')}. Use them when the user asks for linked accounts; otherwise note when a live MCP connection is required.`
     );
   }
   const resolve = resolveSkill ?? skillById;
@@ -229,12 +227,12 @@ export function composerToolsSystemHints(
         .map((s) => {
           const full = s as SkillRecord;
           const body =
-            "instructions" in full && full.instructions
+            'instructions' in full && full.instructions
               ? full.instructions.slice(0, 6000)
               : s.description;
           return `### /${s.name}\n${body}`;
         })
-        .join("\n\n")}`,
+        .join('\n\n')}`
     );
   }
   return parts;
@@ -243,7 +241,6 @@ export function composerToolsSystemHints(
 export function connectorsWarningCount(state: ComposerToolsState): number {
   // Mirror Claude’s “needs attention” badge when any popular connector is off
   // or Granola-style unavailable is present — use disabled available connectors.
-  return CONNECTOR_CATALOG.filter(
-    (c) => c.available !== false && state.connectors[c.id] === false,
-  ).length;
+  return CONNECTOR_CATALOG.filter((c) => c.available !== false && state.connectors[c.id] === false)
+    .length;
 }

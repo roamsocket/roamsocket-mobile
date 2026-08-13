@@ -10,22 +10,22 @@ export const MARKETPLACE_SCHEMA_VERSION = 1;
  * Host path is the external GitHub location (not product branding).
  */
 export const DEFAULT_MARKETPLACE_URL =
-  "https://raw.githubusercontent.com/roamsocket-ai/roamsocket-marketplace/main/catalog.json";
+  'https://raw.githubusercontent.com/roamsocket-ai/roamsocket-marketplace/main/catalog.json';
 
-export const DEFAULT_MARKETPLACE_SOURCE_ID = "roamsocket-official";
+export const DEFAULT_MARKETPLACE_SOURCE_ID = 'roamsocket-official';
 /** LEGACY default source ids — remapped on load so users keep one official entry. */
-export const LEGACY_MARKETPLACE_SOURCE_IDS = ["roamsocket-official"] as const;
+export const LEGACY_MARKETPLACE_SOURCE_IDS = ['roamsocket-official'] as const;
 
 export type MetalTag =
-  | "recommended"
-  | "best"
-  | "thinking"
-  | "vision"
-  | "new"
-  | "experimental"
-  | "legacy";
+  | 'recommended'
+  | 'best'
+  | 'thinking'
+  | 'vision'
+  | 'new'
+  | 'experimental'
+  | 'legacy';
 
-export type MetalPlatform = "ios" | "desktop";
+export type MetalPlatform = 'ios' | 'desktop';
 
 export interface MarketplaceConnector {
   id: string;
@@ -42,7 +42,7 @@ export interface MarketplaceSkill {
   description: string;
   category?: string;
   author?: string;
-  source?: "official" | "community" | "custom" | string;
+  source?: 'official' | 'community' | 'custom' | string;
   featured?: boolean;
   /** Optional longer instructions for install-from-marketplace flows. */
   instructions?: string;

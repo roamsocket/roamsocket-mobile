@@ -1,8 +1,8 @@
 /**
  * Terminal pairing banner: large digits (Apple-verification style) + ASCII QR.
  */
-import QRCode from "qrcode";
-import { lanIPv4Addresses } from "../discovery.js";
+import QRCode from 'qrcode';
+import { lanIPv4Addresses } from '../discovery.js';
 
 export interface PairBannerInfo {
   serverName: string;
@@ -35,48 +35,42 @@ export function pairPayload(
   host: string,
   port: number,
   code: string,
-  publicUrl?: string | null,
+  publicUrl?: string | null
 ): { host: string; code: string } {
-  const digits = code.replace(/\D/g, "").padStart(6, "0").slice(0, 6);
+  const digits = code.replace(/\D/g, '').padStart(6, '0').slice(0, 6);
   const tunnel = normalizePublicUrl(publicUrl);
   if (tunnel) {
     return { host: tunnel, code: digits };
   }
   const lan = lanIPv4Addresses();
   const display =
-    host === "0.0.0.0" || host === "::" || host === "127.0.0.1"
-      ? lan[0] ?? "127.0.0.1"
-      : host;
+    host === '0.0.0.0' || host === '::' || host === '127.0.0.1' ? (lan[0] ?? '127.0.0.1') : host;
   return { host: `http://${display}:${port}`, code: digits };
 }
 
 /** Prefer a live public tunnel URL when building pair payloads / QR hosts. */
-export function resolvePairHost(
-  host: string,
-  port: number,
-  publicUrl?: string | null,
-): string {
-  return pairPayload(host, port, "000000", publicUrl).host;
+export function resolvePairHost(host: string, port: number, publicUrl?: string | null): string {
+  return pairPayload(host, port, '000000', publicUrl).host;
 }
 
 function normalizePublicUrl(url?: string | null): string | null {
   if (!url) return null;
-  const trimmed = url.trim().replace(/\/+$/, "");
+  const trimmed = url.trim().replace(/\/+$/, '');
   if (!trimmed) return null;
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
   return `https://${trimmed}`;
 }
 
-function boxLine(width: number, char = "─"): string {
+function boxLine(width: number, char = '─'): string {
   return char.repeat(width);
 }
 
 async function printQr(payloadJson: string, intro: string): Promise<void> {
   try {
     const qr = await QRCode.toString(payloadJson, {
-      type: "terminal",
+      type: 'terminal',
       small: true,
-      errorCorrectionLevel: "M",
+      errorCorrectionLevel: 'M',
     });
     console.log(`${intro}\n`);
     console.log(qr);
@@ -84,34 +78,38 @@ async function printQr(payloadJson: string, intro: string): Promise<void> {
     console.log(`QR unavailable (${(err as Error).message}). Payload: ${payloadJson}`);
   }
   console.log(`Payload: ${payloadJson}`);
-  console.log("");
+  console.log('');
 }
 
 /** Print a verification-style code card + QR to stdout. */
 export async function printPairingBanner(info: PairBannerInfo): Promise<void> {
   const payload = pairPayload(info.host, info.port, info.pairingCode, info.publicUrl);
   const payloadJson = JSON.stringify(payload);
-  const digits = info.pairingCode.replace(/\D/g, "").padStart(6, "0").slice(0, 6);
-  const spaced = digits.split("").join("  ");
+  const digits = info.pairingCode.replace(/\D/g, '').padStart(6, '0').slice(0, 6);
+  const spaced = digits.split('').join('  ');
   const usingTunnel = Boolean(normalizePublicUrl(info.publicUrl));
 
   const width = 44;
   const lines: string[] = [];
-  lines.push("");
+  lines.push('');
   lines.push(`┌${boxLine(width)}┐`);
-  lines.push(`│${"RoamSocket — Pairing code".padStart(Math.floor((width + 26) / 2)).padEnd(width)}│`);
-  lines.push(`│${"".padEnd(width)}│`);
+  lines.push(
+    `│${'RoamSocket — Pairing code'.padStart(Math.floor((width + 26) / 2)).padEnd(width)}│`
+  );
+  lines.push(`│${''.padEnd(width)}│`);
   lines.push(`│${spaced.padStart(Math.floor((width + spaced.length) / 2)).padEnd(width)}│`);
-  lines.push(`│${"".padEnd(width)}│`);
-  lines.push(`│${"Enter this code on your phone".padStart(Math.floor((width + 28) / 2)).padEnd(width)}│`);
-  lines.push(`│${"(or scan the QR below)".padStart(Math.floor((width + 22) / 2)).padEnd(width)}│`);
+  lines.push(`│${''.padEnd(width)}│`);
+  lines.push(
+    `│${'Enter this code on your phone'.padStart(Math.floor((width + 28) / 2)).padEnd(width)}│`
+  );
+  lines.push(`│${'(or scan the QR below)'.padStart(Math.floor((width + 22) / 2)).padEnd(width)}│`);
   lines.push(`└${boxLine(width)}┘`);
-  lines.push("");
+  lines.push('');
   lines.push(`${info.serverName} v${info.version}`);
   lines.push(`Listening: http://${info.host}:${info.port}`);
   const lan = lanIPv4Addresses();
   if (lan.length > 0) {
-    lines.push(`LAN: ${lan.map((ip) => `http://${ip}:${info.port}`).join(", ")}`);
+    lines.push(`LAN: ${lan.map((ip) => `http://${ip}:${info.port}`).join(', ')}`);
   }
   if (usingTunnel) {
     lines.push(`Tunnel URL: ${payload.host}`);
@@ -130,19 +128,19 @@ export async function printPairingBanner(info: PairBannerInfo): Promise<void> {
   }
   if (info.advertise) lines.push("Discovery: Bonjour _roamsocket._tcp");
   if (info.autoTunnel && !usingTunnel) {
-    lines.push("Auto tunnel: on (public URL + QR update when ready)");
+    lines.push('Auto tunnel: on (public URL + QR update when ready)');
   } else if (info.autoTunnel && usingTunnel) {
-    lines.push("Auto tunnel: on (QR uses public tunnel URL)");
+    lines.push('Auto tunnel: on (QR uses public tunnel URL)');
   }
-  lines.push("");
+  lines.push('');
 
-  console.log(lines.join("\n"));
+  console.log(lines.join('\n'));
 
   await printQr(
     payloadJson,
     usingTunnel
-      ? "Scan with RoamSocket → Pair server → Scan QR (tunnel URL):"
-      : "Scan with RoamSocket → Pair server → Scan QR:",
+      ? 'Scan with RoamSocket → Pair server → Scan QR (tunnel URL):'
+      : 'Scan with RoamSocket → Pair server → Scan QR:'
   );
 }
 
@@ -161,43 +159,40 @@ export async function printTunnelReadyBanner(info: TunnelReadyInfo): Promise<voi
   }
   lastPrintedTunnelUrl = url;
 
-  const digits = info.pairingCode.replace(/\D/g, "").padStart(6, "0").slice(0, 6);
+  const digits = info.pairingCode.replace(/\D/g, '').padStart(6, '0').slice(0, 6);
   const payload = { host: url, code: digits };
   const payloadJson = JSON.stringify(payload);
 
-  console.log("");
-  console.log("════════════════════════════════════════════════════");
-  console.log("  Public tunnel ready");
+  console.log('');
+  console.log('════════════════════════════════════════════════════');
+  console.log('  Public tunnel ready');
   console.log(`  Tunnel URL: ${url}`);
   console.log(`  Provider:   ${info.provider}`);
-  console.log(`  Pairing:    ${digits.split("").join(" ")}`);
-  console.log("  QR below encodes this tunnel URL (not LAN).");
-  console.log("════════════════════════════════════════════════════");
+  console.log(`  Pairing:    ${digits.split('').join(' ')}`);
+  console.log('  QR below encodes this tunnel URL (not LAN).');
+  console.log('════════════════════════════════════════════════════');
   // Stable log line for scrapers / Electron log viewers.
   console.log(`[apc] access tunnel ready: ${url} (${info.provider})`);
-  console.log("");
+  console.log('');
 
-  await printQr(
-    payloadJson,
-    "Scan with RoamSocket → Pair server → Scan QR (public tunnel):",
-  );
+  await printQr(payloadJson, 'Scan with RoamSocket → Pair server → Scan QR (public tunnel):');
 }
 
 /** Compact re-print of code + QR (e.g. after rotating code or from settings). */
 export async function printPairingCodeOnly(code: string, pairHost: string): Promise<void> {
-  const digits = code.replace(/\D/g, "").padStart(6, "0").slice(0, 6);
+  const digits = code.replace(/\D/g, '').padStart(6, '0').slice(0, 6);
   const host = normalizePublicUrl(pairHost) ?? pairHost.trim();
   const isTunnel = /^https:\/\//i.test(host);
-  console.log(`\n  ★ Pairing code:  ${digits.split("").join(" ")}`);
-  console.log(`  ★ Pair URL:      ${host}${isTunnel ? "  (tunnel)" : ""}\n`);
+  console.log(`\n  ★ Pairing code:  ${digits.split('').join(' ')}`);
+  console.log(`  ★ Pair URL:      ${host}${isTunnel ? '  (tunnel)' : ''}\n`);
   if (isTunnel) {
-    lastPrintedTunnelUrl = host.replace(/\/+$/, "");
+    lastPrintedTunnelUrl = host.replace(/\/+$/, '');
   }
   try {
     const qr = await QRCode.toString(JSON.stringify({ host, code: digits }), {
-      type: "terminal",
+      type: 'terminal',
       small: true,
-      errorCorrectionLevel: "M",
+      errorCorrectionLevel: 'M',
     });
     console.log(qr);
     console.log(`Payload: ${JSON.stringify({ host, code: digits })}\n`);

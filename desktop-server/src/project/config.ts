@@ -15,11 +15,11 @@
  *
  * Also accepts RoamSocket `AGENTS.md` / `.anyprov/` layouts used by this app.
  */
-import { promises as fs } from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
-export type InstructionScope = "user" | "project" | "folder" | "local";
+export type InstructionScope = 'user' | 'project' | 'folder' | 'local';
 
 export interface InstructionSource {
   /** Absolute path to the file. */
@@ -61,7 +61,7 @@ const EMPTY: ProjectConfig = {
 const HOME = os.homedir();
 
 /** Prefer `.claude` then `.anyprov` for product + Claude Code interop. */
-const PROJECT_CONFIG_DIR_NAMES = [".claude", ".anyprov"] as const;
+const PROJECT_CONFIG_DIR_NAMES = ['.claude', '.anyprov'] as const;
 
 /** Max depth for `@path` imports inside instruction files. */
 const MAX_IMPORT_DEPTH = 4;
@@ -79,7 +79,7 @@ export interface ReadProjectConfigOptions {
 /** Read project config for a session workdir and return a merged view. */
 export async function readProjectConfig(
   workdir: string,
-  opts: ReadProjectConfigOptions = {},
+  opts: ReadProjectConfigOptions = {}
 ): Promise<ProjectConfig> {
   const root = path.resolve(workdir);
   const homeDir = opts.homeDir ?? HOME;
@@ -88,26 +88,38 @@ export async function readProjectConfig(
   const seenInstructionPaths = new Set<string>();
   const skillsByName = new Map<string, { name: string; content: string; source: string }>();
   let env: Record<string, string> = {};
-  const mcpByName = new Map<string, ProjectConfig["mcpServers"][number]>();
+  const mcpByName = new Map<string, ProjectConfig['mcpServers'][number]>();
 
   const userConfigDirs = opts.skipUser
     ? []
-    : [path.join(homeDir, ".claude"), path.join(homeDir, ".anyprov")];
+    : [path.join(homeDir, '.claude'), path.join(homeDir, '.anyprov')];
 
   // ── 1. User / global scope ──────────────────────────────────────────────
   for (const dir of userConfigDirs) {
-    await collectInstructionsFromConfigDir(dir, "user", root, instructionSources, seenInstructionPaths);
-    // User-level CLAUDE.md lives directly in ~/.claude/CLAUDE.md
-    await pushInstructionFile(
-      path.join(dir, "CLAUDE.md"),
-      "user",
+    await collectInstructionsFromConfigDir(
+      dir,
+      'user',
       root,
       instructionSources,
-      seenInstructionPaths,
+      seenInstructionPaths
     );
-    await collectRulesDir(path.join(dir, "rules"), "user", root, instructionSources, seenInstructionPaths);
-    await collectSkillsDir(path.join(dir, "skills"), skillsByName);
-    env = { ...env, ...(await readSettingsEnv(path.join(dir, "settings.json"))) };
+    // User-level CLAUDE.md lives directly in ~/.claude/CLAUDE.md
+    await pushInstructionFile(
+      path.join(dir, 'CLAUDE.md'),
+      'user',
+      root,
+      instructionSources,
+      seenInstructionPaths
+    );
+    await collectRulesDir(
+      path.join(dir, 'rules'),
+      'user',
+      root,
+      instructionSources,
+      seenInstructionPaths
+    );
+    await collectSkillsDir(path.join(dir, 'skills'), skillsByName);
+    env = { ...env, ...(await readSettingsEnv(path.join(dir, 'settings.json'))) };
   }
 
   // ── 2. Directory walk: ancestors → workdir (folder + workspace) ─────────
@@ -118,18 +130,17 @@ export async function readProjectConfig(
 
   for (const dir of loadOrder) {
     const isWorkdir = path.resolve(dir) === root;
-    const scope: InstructionScope = isWorkdir ? "project" : "folder";
+    const scope: InstructionScope = isWorkdir ? 'project' : 'folder';
 
     // Root-level instruction files in this directory
-    for (const name of ["AGENTS.md", "Agents.md", "agents.md", "CLAUDE.md", "CLAUDE.local.md"]) {
-      const scopeForFile: InstructionScope =
-        name === "CLAUDE.local.md" ? "local" : scope;
+    for (const name of ['AGENTS.md', 'Agents.md', 'agents.md', 'CLAUDE.md', 'CLAUDE.local.md']) {
+      const scopeForFile: InstructionScope = name === 'CLAUDE.local.md' ? 'local' : scope;
       await pushInstructionFile(
         path.join(dir, name),
         scopeForFile,
         root,
         instructionSources,
-        seenInstructionPaths,
+        seenInstructionPaths
       );
     }
 
@@ -143,28 +154,28 @@ export async function readProjectConfig(
         scope,
         root,
         instructionSources,
-        seenInstructionPaths,
+        seenInstructionPaths
       );
       await collectRulesDir(
-        path.join(confDir, "rules"),
+        path.join(confDir, 'rules'),
         scope,
         root,
         instructionSources,
-        seenInstructionPaths,
+        seenInstructionPaths
       );
-      await collectSkillsDir(path.join(confDir, "skills"), skillsByName);
+      await collectSkillsDir(path.join(confDir, 'skills'), skillsByName);
 
       // settings: project then local (local wins) — only meaningful near workspace
-      env = { ...env, ...(await readSettingsEnv(path.join(confDir, "settings.json"))) };
-      env = { ...env, ...(await readSettingsEnv(path.join(confDir, "settings.local.json"))) };
+      env = { ...env, ...(await readSettingsEnv(path.join(confDir, 'settings.json'))) };
+      env = { ...env, ...(await readSettingsEnv(path.join(confDir, 'settings.local.json'))) };
 
-      for (const mcp of await readMcpJson(path.join(confDir, "mcp.json"))) {
+      for (const mcp of await readMcpJson(path.join(confDir, 'mcp.json'))) {
         mcpByName.set(mcp.name, mcp);
       }
     }
 
     // Project-root `.mcp.json` (Claude Code convention)
-    for (const mcp of await readMcpJson(path.join(dir, ".mcp.json"))) {
+    for (const mcp of await readMcpJson(path.join(dir, '.mcp.json'))) {
       mcpByName.set(mcp.name, mcp);
     }
   }
@@ -172,7 +183,12 @@ export async function readProjectConfig(
   // Expand @imports in instruction bodies (relative to each file)
   const expanded: InstructionSource[] = [];
   for (const src of instructionSources) {
-    const content = await expandImports(src.content, path.dirname(src.path), 0, new Set([src.path]));
+    const content = await expandImports(
+      src.content,
+      path.dirname(src.path),
+      0,
+      new Set([src.path])
+    );
     expanded.push({ ...src, content });
   }
 
@@ -197,7 +213,7 @@ export function formatInstructions(sources: InstructionSource[]): string | null 
     if (!body) continue;
     parts.push(`### ${s.label} (${s.scope})\n\n${body}`);
   }
-  return parts.length > 0 ? parts.join("\n\n") : null;
+  return parts.length > 0 ? parts.join('\n\n') : null;
 }
 
 /**
@@ -205,20 +221,20 @@ export function formatInstructions(sources: InstructionSource[]): string | null 
  */
 export async function describeProjectMemory(
   workdir: string,
-  opts: ReadProjectConfigOptions = {},
+  opts: ReadProjectConfigOptions = {}
 ): Promise<string> {
   const cfg = await readProjectConfig(workdir, opts);
   if (cfg.instructionSources.length === 0 && cfg.skills.length === 0) {
     return [
-      "No instruction files loaded.",
-      "",
-      "RoamSocket looks for Claude Code–compatible memory at:",
-      "  • Global:  ~/.claude/CLAUDE.md, ~/.claude/rules/, ~/.claude/skills/",
-      "  • Project: ./CLAUDE.md, ./AGENTS.md, ./.claude/CLAUDE.md, ./.claude/rules/",
-      "  • Folder:  CLAUDE.md / CLAUDE.local.md walking up from the workdir",
-      "",
-      "Run /init to create a starter AGENTS.md in this workdir.",
-    ].join("\n");
+      'No instruction files loaded.',
+      '',
+      'RoamSocket looks for Claude Code–compatible memory at:',
+      '  • Global:  ~/.claude/CLAUDE.md, ~/.claude/rules/, ~/.claude/skills/',
+      '  • Project: ./CLAUDE.md, ./AGENTS.md, ./.claude/CLAUDE.md, ./.claude/rules/',
+      '  • Folder:  CLAUDE.md / CLAUDE.local.md walking up from the workdir',
+      '',
+      'Run /init to create a starter AGENTS.md in this workdir.',
+    ].join('\n');
   }
 
   const lines: string[] = [];
@@ -229,25 +245,27 @@ export async function describeProjectMemory(
     lines.push(`  • [${s.scope}] ${s.label}  (${chars} chars)`);
   }
   if (cfg.skills.length > 0) {
-    lines.push("");
+    lines.push('');
     lines.push(`Skills (${cfg.skills.length}):`);
     for (const sk of cfg.skills) {
       lines.push(`  • ${sk.name}  ← ${sk.source}`);
     }
   }
   if (Object.keys(cfg.env).length > 0) {
-    lines.push("");
-    lines.push(`Env from settings (${Object.keys(cfg.env).length} keys): ${Object.keys(cfg.env).join(", ")}`);
+    lines.push('');
+    lines.push(
+      `Env from settings (${Object.keys(cfg.env).length} keys): ${Object.keys(cfg.env).join(', ')}`
+    );
   }
   if (cfg.mcpServers.length > 0) {
-    lines.push("");
-    lines.push(`Project MCP servers: ${cfg.mcpServers.map((m) => m.name).join(", ")}`);
+    lines.push('');
+    lines.push(`Project MCP servers: ${cfg.mcpServers.map((m) => m.name).join(', ')}`);
   }
-  lines.push("");
-  lines.push("── Preview (truncated) ──");
-  const preview = (cfg.instructionsMd ?? "").trim();
-  lines.push(preview.length > 6000 ? `${preview.slice(0, 6000)}\n…` : preview || "(empty)");
-  return lines.join("\n");
+  lines.push('');
+  lines.push('── Preview (truncated) ──');
+  const preview = (cfg.instructionsMd ?? '').trim();
+  lines.push(preview.length > 6000 ? `${preview.slice(0, 6000)}\n…` : preview || '(empty)');
+  return lines.join('\n');
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -266,8 +284,7 @@ async function directoryChain(workdir: string, homeDir: string): Promise<string[
   let cur = path.resolve(workdir);
   const home = path.resolve(homeDir);
   const fsRoot = path.parse(cur).root;
-  const underHome =
-    cur === home || cur.startsWith(home + path.sep);
+  const underHome = cur === home || cur.startsWith(home + path.sep);
 
   for (let i = 0; i < 48; i++) {
     out.push(cur);
@@ -291,9 +308,9 @@ async function isDirectory(p: string): Promise<boolean> {
 
 async function readMaybeFile(p: string): Promise<string | null> {
   try {
-    const text = await fs.readFile(p, "utf8");
+    const text = await fs.readFile(p, 'utf8');
     return text.length > MAX_INSTRUCTION_CHARS
-      ? text.slice(0, MAX_INSTRUCTION_CHARS) + "\n\n<!-- truncated -->\n"
+      ? text.slice(0, MAX_INSTRUCTION_CHARS) + '\n\n<!-- truncated -->\n'
       : text;
   } catch {
     return null;
@@ -305,7 +322,7 @@ async function pushInstructionFile(
   scope: InstructionScope,
   workdir: string,
   out: InstructionSource[],
-  seen: Set<string>,
+  seen: Set<string>
 ): Promise<void> {
   const resolved = path.resolve(filePath);
   if (seen.has(resolved)) return;
@@ -328,10 +345,10 @@ async function pushInstructionFile(
 function labelFor(absPath: string, workdir: string): string {
   const home = HOME;
   if (absPath.startsWith(home + path.sep) || absPath === home) {
-    return "~" + absPath.slice(home.length);
+    return '~' + absPath.slice(home.length);
   }
   const rel = path.relative(workdir, absPath);
-  if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) return rel;
+  if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) return rel;
   return absPath;
 }
 
@@ -342,9 +359,9 @@ function stripHtmlComments(text: string): string {
   return parts
     .map((part, i) => {
       if (i % 2 === 1) return part; // code fence
-      return part.replace(/<!--[\s\S]*?-->/g, "");
+      return part.replace(/<!--[\s\S]*?-->/g, '');
     })
-    .join("");
+    .join('');
 }
 
 async function collectInstructionsFromConfigDir(
@@ -352,12 +369,11 @@ async function collectInstructionsFromConfigDir(
   scope: InstructionScope,
   workdir: string,
   out: InstructionSource[],
-  seen: Set<string>,
+  seen: Set<string>
 ): Promise<void> {
   if (!(await isDirectory(confDir))) return;
-  for (const name of ["AGENTS.md", "CLAUDE.md", "CLAUDE.local.md"]) {
-    const scopeForFile: InstructionScope =
-      name === "CLAUDE.local.md" ? "local" : scope;
+  for (const name of ['AGENTS.md', 'CLAUDE.md', 'CLAUDE.local.md']) {
+    const scopeForFile: InstructionScope = name === 'CLAUDE.local.md' ? 'local' : scope;
     await pushInstructionFile(path.join(confDir, name), scopeForFile, workdir, out, seen);
   }
 }
@@ -367,7 +383,7 @@ async function collectRulesDir(
   scope: InstructionScope,
   workdir: string,
   out: InstructionSource[],
-  seen: Set<string>,
+  seen: Set<string>
 ): Promise<void> {
   if (!(await isDirectory(rulesDir))) return;
   const files = await listMarkdownRecursive(rulesDir);
@@ -381,18 +397,18 @@ async function collectRulesDir(
 
 async function listMarkdownRecursive(dir: string): Promise<string[]> {
   const out: string[] = [];
-  let entries: import("node:fs").Dirent[];
+  let entries: import('node:fs').Dirent[];
   try {
     entries = await fs.readdir(dir, { withFileTypes: true });
   } catch {
     return out;
   }
   for (const ent of entries) {
-    if (ent.name.startsWith(".")) continue;
+    if (ent.name.startsWith('.')) continue;
     const full = path.join(dir, ent.name);
     if (ent.isDirectory()) {
       out.push(...(await listMarkdownRecursive(full)));
-    } else if (ent.isFile() && ent.name.endsWith(".md")) {
+    } else if (ent.isFile() && ent.name.endsWith('.md')) {
       out.push(full);
     }
   }
@@ -401,7 +417,7 @@ async function listMarkdownRecursive(dir: string): Promise<string[]> {
 
 async function collectSkillsDir(
   skillsDir: string,
-  byName: Map<string, { name: string; content: string; source: string }>,
+  byName: Map<string, { name: string; content: string; source: string }>
 ): Promise<void> {
   let entries: string[] = [];
   try {
@@ -410,11 +426,11 @@ async function collectSkillsDir(
     return;
   }
   for (const id of entries) {
-    if (id.startsWith(".")) continue;
-    const skillFile = path.join(skillsDir, id, "SKILL.md");
+    if (id.startsWith('.')) continue;
+    const skillFile = path.join(skillsDir, id, 'SKILL.md');
     try {
-      const text = await fs.readFile(skillFile, "utf8");
-      const body = text.replace(/^---\n[\s\S]*?\n---\n*/, "");
+      const text = await fs.readFile(skillFile, 'utf8');
+      const body = text.replace(/^---\n[\s\S]*?\n---\n*/, '');
       // Later scopes (project) override earlier (user) by same skill id.
       byName.set(id, {
         name: id,
@@ -429,12 +445,12 @@ async function collectSkillsDir(
 
 async function readSettingsEnv(p: string): Promise<Record<string, string>> {
   try {
-    const text = await fs.readFile(p, "utf8");
+    const text = await fs.readFile(p, 'utf8');
     const data = JSON.parse(text) as { env?: Record<string, unknown> };
-    if (data && typeof data === "object" && data.env && typeof data.env === "object") {
+    if (data && typeof data === 'object' && data.env && typeof data.env === 'object') {
       const out: Record<string, string> = {};
       for (const [k, v] of Object.entries(data.env)) {
-        if (typeof v === "string") out[k] = v;
+        if (typeof v === 'string') out[k] = v;
       }
       return out;
     }
@@ -455,14 +471,14 @@ interface McpSpec {
   url?: string;
 }
 
-async function readMcpJson(p: string): Promise<ProjectConfig["mcpServers"]> {
+async function readMcpJson(p: string): Promise<ProjectConfig['mcpServers']> {
   try {
-    const text = await fs.readFile(p, "utf8");
+    const text = await fs.readFile(p, 'utf8');
     const data = JSON.parse(text) as McpFile;
     const entries = Object.entries(data.mcpServers ?? {});
     return entries.map(([name, spec]) => ({
       name,
-      type: spec.type ?? "stdio",
+      type: spec.type ?? 'stdio',
       command: spec.command,
       args: spec.args,
       env: spec.env,
@@ -481,7 +497,7 @@ async function expandImports(
   text: string,
   baseDir: string,
   depth: number,
-  stack: Set<string>,
+  stack: Set<string>
 ): Promise<string> {
   if (depth >= MAX_IMPORT_DEPTH) return text;
 
@@ -490,7 +506,7 @@ async function expandImports(
   const out: string[] = [];
 
   for (let i = 0; i < segments.length; i++) {
-    const seg = segments[i] ?? "";
+    const seg = segments[i] ?? '';
     if (i % 2 === 1) {
       out.push(seg);
       continue;
@@ -499,10 +515,10 @@ async function expandImports(
     const re = /(^|[\s(])@([~./A-Za-z0-9_-][^\s)\]}'"]*)/g;
     let last = 0;
     let m: RegExpExecArray | null;
-    let rebuilt = "";
+    let rebuilt = '';
     while ((m = re.exec(seg)) !== null) {
-      const prefix = m[1] ?? "";
-      const ref = m[2] ?? "";
+      const prefix = m[1] ?? '';
+      const ref = m[2] ?? '';
       rebuilt += seg.slice(last, m.index) + prefix;
       last = m.index + m[0].length;
 
@@ -522,25 +538,25 @@ async function expandImports(
         stripHtmlComments(imported),
         path.dirname(resolved),
         depth + 1,
-        nextStack,
+        nextStack
       );
       rebuilt += `\n\n<!-- import ${ref} -->\n${expanded.trim()}\n`;
     }
     rebuilt += seg.slice(last);
     out.push(rebuilt);
   }
-  return out.join("");
+  return out.join('');
 }
 
 function resolveImportPath(ref: string, baseDir: string): string | null {
   let p = ref.trim();
   if (!p) return null;
   // Strip trailing punctuation that often follows @refs in prose
-  p = p.replace(/[.,;:]+$/, "");
-  if (p.startsWith("~/")) {
+  p = p.replace(/[.,;:]+$/, '');
+  if (p.startsWith('~/')) {
     return path.resolve(HOME, p.slice(2));
   }
-  if (p.startsWith("~")) {
+  if (p.startsWith('~')) {
     return path.resolve(HOME, p.slice(1));
   }
   if (path.isAbsolute(p)) return path.resolve(p);
@@ -552,5 +568,5 @@ export const EMPTY_PROJECT_CONFIG: ProjectConfig = EMPTY;
 
 /** @deprecated Prefer USER_CONFIG_DIRS constant usage via readProjectConfig. */
 export function userClaudeDirs(homeDir: string = HOME): string[] {
-  return [path.join(homeDir, ".claude"), path.join(homeDir, ".anyprov")];
+  return [path.join(homeDir, '.claude'), path.join(homeDir, '.anyprov')];
 }

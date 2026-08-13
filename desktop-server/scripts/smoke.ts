@@ -9,52 +9,52 @@
  *
  * Run with: npm run smoke
  */
-import { spawn, spawnSync } from "node:child_process";
-import { mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { WebSocket } from "ws";
+import { spawn, spawnSync } from 'node:child_process';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { WebSocket } from 'ws';
 
 const PORT = Number(process.env.PORT) || 4571;
 const BASE = `http://localhost:${PORT}`;
 
 function git(cwd: string, ...args: string[]): void {
-  const r = spawnSync("git", args, { cwd, encoding: "utf8" });
-  if (r.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${r.stderr}`);
+  const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
+  if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
 }
 
 async function makeOriginRepo(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), "apc-origin-"));
-  git(dir, "init", "-b", "main");
-  git(dir, "config", "user.email", "test@example.com");
-  git(dir, "config", "user.name", "Test");
-  await writeFile(path.join(dir, "README.md"), "# Test repo\n");
-  git(dir, "add", "-A");
-  git(dir, "commit", "-m", "initial");
+  const dir = await mkdtemp(path.join(tmpdir(), 'apc-origin-'));
+  git(dir, 'init', '-b', 'main');
+  git(dir, 'config', 'user.email', 'test@example.com');
+  git(dir, 'config', 'user.name', 'Test');
+  await writeFile(path.join(dir, 'README.md'), '# Test repo\n');
+  git(dir, 'add', '-A');
+  git(dir, 'commit', '-m', 'initial');
   // Allow pushes to this non-bare repo's non-checked-out branches.
-  git(dir, "config", "receive.denyCurrentBranch", "ignore");
+  git(dir, 'config', 'receive.denyCurrentBranch', 'ignore');
   return dir;
 }
 
 function waitForCode(child: ReturnType<typeof spawn>): Promise<string> {
   return new Promise((resolve, reject) => {
-    let buf = "";
+    let buf = '';
     const onData = (d: Buffer) => {
       buf += d.toString();
       const m = buf.match(/Pairing code: (\d{6})/);
       if (m) resolve(m[1]!);
     };
-    child.stdout?.on("data", onData);
-    child.stderr?.on("data", (d) => (buf += d.toString()));
+    child.stdout?.on('data', onData);
+    child.stderr?.on('data', (d) => (buf += d.toString()));
     setTimeout(() => reject(new Error(`Server did not print pairing code.\n${buf}`)), 15000);
   });
 }
 
 async function pair(code: string): Promise<string> {
   const res = await fetch(`${BASE}/pair`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ code, deviceName: "smoke-test" }),
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ code, deviceName: 'smoke-test' }),
   });
   if (!res.ok) throw new Error(`pair failed: ${res.status} ${await res.text()}`);
   const body = (await res.json()) as { token: string };
@@ -69,17 +69,17 @@ async function main(): Promise<void> {
   const origin = await makeOriginRepo();
   // Isolate the server from the developer's real ~/.claude so global settings
   // env vars / skills don't leak into the throwaway smoke repo.
-  const smokeHome = await mkdtemp(path.join(tmpdir(), "apc-smoke-home-"));
+  const smokeHome = await mkdtemp(path.join(tmpdir(), 'apc-smoke-home-'));
 
-  const server = spawn("npx", ["tsx", "src/index.ts"], {
+  const server = spawn('npx', ['tsx', 'src/index.ts'], {
     cwd: process.cwd(),
     env: {
       ...process.env,
       PORT: String(PORT),
-      APC_MOCK: "1",
-      APC_ADVERTISE: "0",
-      APC_AUTO_TUNNEL: "0",
-      APC_CLI_SETTINGS: "0",
+      APC_MOCK: '1',
+      APC_ADVERTISE: '0',
+      APC_AUTO_TUNNEL: '0',
+      APC_CLI_SETTINGS: '0',
       HOME: smokeHome,
     },
   });
@@ -87,89 +87,96 @@ async function main(): Promise<void> {
   try {
     const code = await waitForCode(server);
     const token = await pair(code);
-    console.log("paired, token acquired");
+    console.log('paired, token acquired');
 
     const ws = new WebSocket(`ws://localhost:${PORT}/session?token=${token}`);
     const seen: string[] = [];
     let diffForNotes = false;
-    let prUrl = "";
+    let prUrl = '';
     let goalAchieved = false;
     let goalActive = false;
 
     await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error(`timeout; saw: ${seen.join(", ")}`)), 30000);
+      const timeout = setTimeout(
+        () => reject(new Error(`timeout; saw: ${seen.join(', ')}`)),
+        30000
+      );
 
-      ws.on("open", () => {
+      ws.on('open', () => {
         ws.send(
           JSON.stringify({
-            type: "create_session",
-            sessionId: "smoke",
-            repo: { fullName: origin, workBranch: "apc/smoke-test" },
-            model: { provider: "anthropic", model: "mock", apiKey: "none", effort: "high" },
-            permissionMode: "acceptEdits",
-          }),
+            type: 'create_session',
+            sessionId: 'smoke',
+            repo: { fullName: origin, workBranch: 'apc/smoke-test' },
+            model: { provider: 'anthropic', model: 'mock', apiKey: 'none', effort: 'high' },
+            permissionMode: 'acceptEdits',
+          })
         );
       });
 
-      ws.on("message", (data) => {
+      ws.on('message', (data) => {
         const msg = JSON.parse(data.toString());
         seen.push(msg.type);
-        if (msg.type === "session_created") {
+        if (msg.type === 'session_created') {
           // Exercise /goal: mock agent writes NOTES.md; heuristic evaluator marks met.
-          ws.send(JSON.stringify({
-            type: "user_message",
-            sessionId: "smoke",
-            text: "/goal NOTES.md exists",
-          }));
-        } else if (msg.type === "goal_status") {
-          if (msg.status === "active") goalActive = true;
-          if (msg.status === "achieved") goalAchieved = true;
-        } else if (msg.type === "diff" && msg.path === "NOTES.md") {
+          ws.send(
+            JSON.stringify({
+              type: 'user_message',
+              sessionId: 'smoke',
+              text: '/goal NOTES.md exists',
+            })
+          );
+        } else if (msg.type === 'goal_status') {
+          if (msg.status === 'active') goalActive = true;
+          if (msg.status === 'achieved') goalAchieved = true;
+        } else if (msg.type === 'diff' && msg.path === 'NOTES.md') {
           diffForNotes = true;
-        } else if (msg.type === "session_done") {
+        } else if (msg.type === 'session_done') {
           // Prefer the new git_publish path; create_pr remains a thin wrapper.
-          ws.send(JSON.stringify({
-            type: "git_publish",
-            sessionId: "smoke",
-            message: "Add NOTES.md",
-            commit: true,
-            push: true,
-            openPr: true,
-          }));
-        } else if (msg.type === "pr_created") {
+          ws.send(
+            JSON.stringify({
+              type: 'git_publish',
+              sessionId: 'smoke',
+              message: 'Add NOTES.md',
+              commit: true,
+              push: true,
+              openPr: true,
+            })
+          );
+        } else if (msg.type === 'pr_created') {
           prUrl = msg.url;
           clearTimeout(timeout);
           resolve();
-        } else if (msg.type === "error") {
+        } else if (msg.type === 'error') {
           clearTimeout(timeout);
-          reject(new Error(`server error: ${msg.message} (saw: ${seen.join(", ")})`));
+          reject(new Error(`server error: ${msg.message} (saw: ${seen.join(', ')})`));
         }
       });
-      ws.on("error", reject);
+      ws.on('error', reject);
     });
 
     ws.close();
 
-    assert(seen.includes("session_created"), "session_created received");
-    assert(seen.includes("goal_status"), "goal_status received (/goal)");
-    assert(goalActive, "goal_status active emitted when goal set");
-    assert(goalAchieved, "goal_status achieved after NOTES.md");
-    assert(seen.includes("task_list"), "task_list received (agent checklist)");
-    assert(seen.includes("tool_call"), "tool_call received");
-    assert(seen.includes("tool_result"), "tool_result received");
-    assert(diffForNotes, "diff for NOTES.md received");
-    assert(seen.includes("session_done"), "session_done received");
-    assert(prUrl.length > 0, "pr_created url received");
+    assert(seen.includes('session_created'), 'session_created received');
+    assert(seen.includes('goal_status'), 'goal_status received (/goal)');
+    assert(goalActive, 'goal_status active emitted when goal set');
+    assert(goalAchieved, 'goal_status achieved after NOTES.md');
+    assert(seen.includes('task_list'), 'task_list received (agent checklist)');
+    assert(seen.includes('tool_call'), 'tool_call received');
+    assert(seen.includes('tool_result'), 'tool_result received');
+    assert(diffForNotes, 'diff for NOTES.md received');
+    assert(seen.includes('session_done'), 'session_done received');
+    assert(prUrl.length > 0, 'pr_created url received');
 
-    console.log("\nSMOKE TEST PASSED");
-    console.log("events:", seen.join(" -> "));
-    console.log("pr url:", prUrl);
+    console.log('\nSMOKE TEST PASSED');
+    console.log('events:', seen.join(' -> '));
+    console.log('pr url:', prUrl);
   } finally {
-    server.kill("SIGKILL");
+    server.kill('SIGKILL');
   }
 }
 
 main().catch((err) => {
-  console.error("\nSMOKE TEST FAILED:", err.message);
+  console.error('\nSMOKE TEST FAILED:', err.message);
   process.exit(1);
 });

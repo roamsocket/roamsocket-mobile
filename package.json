@@ -1,5 +1,38 @@
 {
-  "dependencies": {
-    "typescript": "^7.0.2"
+  "name": "roamsocket",
+  "version": "0.2.0",
+  "private": true,
+  "description": "RoamSocket monorepo root. Convenient scripts delegate into ios/ and desktop-server/. See AGENTS.md.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "typecheck": "cd desktop-server && npm run typecheck:server",
+    "typecheck:server": "cd desktop-server && npm run typecheck:server",
+    "typecheck:electron": "cd desktop-server && npm run typecheck:electron",
+    "smoke": "cd desktop-server && npm run smoke",
+    "test:cli": "cd desktop-server && npm run test:cli",
+    "test:metal": "cd desktop-server && npm run test:metal",
+    "test:electron-dom": "cd desktop-server && npm run test:electron-dom",
+    "dev": "cd desktop-server && npm run dev",
+    "build:server": "cd desktop-server && npm run build",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "format:swift": "swiftformat ios/App/Sources ios/AnyProvCore/Sources ios/Shared ios/Widgets",
+    "format:swift:check": "swiftformat --lint ios/App/Sources ios/AnyProvCore/Sources ios/Shared ios/Widgets",
+    "verify": "bash scripts/verify.sh",
+    "verify:ios": "bash scripts/verify.sh --ios",
+    "verify:server": "bash scripts/verify.sh --server",
+    "verify:protocol": "bash scripts/verify.sh --protocol",
+    "xcodegen": "cd ios && xcodegen generate",
+    "swift:test": "cd ios/AnyProvCore && swift test",
+    "swift:build": "cd ios/AnyProvCore && swift build"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "typescript": "^5.7.3"
   }
 }

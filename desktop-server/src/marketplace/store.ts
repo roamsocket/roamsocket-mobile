@@ -2,16 +2,16 @@
  * Multi-source marketplace store: default GitHub catalog + user-added repos.
  * Persists sources + last merged catalog under the product data dir.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import path from "node:path";
-import { productDataPath } from "../product.js";
-import { BUNDLED_MARKETPLACE_CATALOG } from "./defaults.js";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { productDataPath } from '../product.js';
+import { BUNDLED_MARKETPLACE_CATALOG } from './defaults.js';
 import {
   isValidMarketplaceUrl,
   mergeMarketplaceCatalogs,
   normalizeMarketplaceUrl,
   parseMarketplaceCatalog,
-} from "./parse.js";
+} from './parse.js';
 import {
   DEFAULT_MARKETPLACE_SOURCE_ID,
   DEFAULT_MARKETPLACE_URL,
@@ -21,10 +21,10 @@ import {
   type MarketplaceSource,
   type MarketplaceSourcesFile,
   type MarketplaceStatus,
-} from "./types.js";
+} from './types.js';
 
-const SOURCES_FILE = "marketplace-sources.json";
-const CACHE_FILE = "marketplace-cache.json";
+const SOURCES_FILE = 'marketplace-sources.json';
+const CACHE_FILE = 'marketplace-cache.json';
 
 interface CacheFile {
   version: 1;
@@ -47,7 +47,7 @@ function defaultSourceUrl(): string {
   const env = process.env.APC_MARKETPLACE_URL;
   if (env !== undefined) {
     const t = env.trim();
-    if (t.length === 0) return ""; // explicit: no remote default
+    if (t.length === 0) return ''; // explicit: no remote default
     return normalizeMarketplaceUrl(t);
   }
   return DEFAULT_MARKETPLACE_URL;
@@ -57,7 +57,7 @@ export function makeDefaultSource(): MarketplaceSource {
   const url = defaultSourceUrl();
   return {
     id: DEFAULT_MARKETPLACE_SOURCE_ID,
-    name: "RoamSocket Official",
+    name: 'RoamSocket Official',
     url: url || DEFAULT_MARKETPLACE_URL,
     enabled: url.length > 0,
     isDefault: true,
@@ -104,21 +104,21 @@ function loadSourcesFile(): MarketplaceSource[] {
   try {
     const p = sourcesPath();
     if (!existsSync(p)) return ensureDefaultInList([]);
-    const parsed = JSON.parse(readFileSync(p, "utf8")) as Partial<MarketplaceSourcesFile>;
+    const parsed = JSON.parse(readFileSync(p, 'utf8')) as Partial<MarketplaceSourcesFile>;
     const list = Array.isArray(parsed.sources) ? parsed.sources : [];
     return ensureDefaultInList(
       list
-        .filter((s) => s && typeof s === "object" && typeof s.id === "string")
+        .filter((s) => s && typeof s === 'object' && typeof s.id === 'string')
         .map((s) => ({
           id: s.id,
-          name: typeof s.name === "string" && s.name.trim() ? s.name.trim() : s.id,
-          url: typeof s.url === "string" ? s.url : "",
+          name: typeof s.name === 'string' && s.name.trim() ? s.name.trim() : s.id,
+          url: typeof s.url === 'string' ? s.url : '',
           enabled: s.enabled !== false,
           isDefault: !!s.isDefault,
-          lastFetchedAt: typeof s.lastFetchedAt === "number" ? s.lastFetchedAt : undefined,
+          lastFetchedAt: typeof s.lastFetchedAt === 'number' ? s.lastFetchedAt : undefined,
           lastError: s.lastError ?? null,
           catalogName: s.catalogName ?? null,
-        })),
+        }))
     );
   } catch {
     return ensureDefaultInList([]);
@@ -148,15 +148,16 @@ function loadCache(): CacheFile {
         perSource: {},
       };
     }
-    const parsed = JSON.parse(readFileSync(p, "utf8")) as Partial<CacheFile>;
-    const catalog = parseMarketplaceCatalog(parsed.catalog) ?? structuredClone(BUNDLED_MARKETPLACE_CATALOG);
+    const parsed = JSON.parse(readFileSync(p, 'utf8')) as Partial<CacheFile>;
+    const catalog =
+      parseMarketplaceCatalog(parsed.catalog) ?? structuredClone(BUNDLED_MARKETPLACE_CATALOG);
     return {
       version: 1,
-      lastMergedAt: typeof parsed.lastMergedAt === "number" ? parsed.lastMergedAt : null,
+      lastMergedAt: typeof parsed.lastMergedAt === 'number' ? parsed.lastMergedAt : null,
       usingBundledOnly: parsed.usingBundledOnly !== false && !parsed.lastMergedAt,
       catalog,
       perSource:
-        parsed.perSource && typeof parsed.perSource === "object"
+        parsed.perSource && typeof parsed.perSource === 'object'
           ? (parsed.perSource as Record<string, MarketplaceCatalog>)
           : {},
     };
@@ -183,7 +184,7 @@ function saveCache(cache: CacheFile): void {
 
 async function fetchCatalogUrl(url: string, timeoutMs = 20_000): Promise<MarketplaceCatalog> {
   if (!isValidMarketplaceUrl(url)) {
-    throw new Error("Invalid marketplace URL");
+    throw new Error('Invalid marketplace URL');
   }
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -191,8 +192,8 @@ async function fetchCatalogUrl(url: string, timeoutMs = 20_000): Promise<Marketp
     const res = await fetch(url, {
       signal: ctrl.signal,
       headers: {
-        Accept: "application/json",
-        "User-Agent": "RoamSocket-desktop/marketplace",
+        Accept: 'application/json',
+        'User-Agent': 'RoamSocket-desktop/marketplace',
       },
     });
     if (!res.ok) {
@@ -200,7 +201,7 @@ async function fetchCatalogUrl(url: string, timeoutMs = 20_000): Promise<Marketp
     }
     const json: unknown = await res.json();
     const catalog = parseMarketplaceCatalog(json);
-    if (!catalog) throw new Error("catalog.json did not match the marketplace schema");
+    if (!catalog) throw new Error('catalog.json did not match the marketplace schema');
     return catalog;
   } finally {
     clearTimeout(t);
@@ -236,10 +237,12 @@ export class MarketplaceStore {
   addSource(input: { name?: string; url: string; enabled?: boolean }): MarketplaceSource {
     const url = normalizeMarketplaceUrl(input.url);
     if (!isValidMarketplaceUrl(url)) {
-      throw new Error("Enter a valid http(s) catalog URL, or owner/repo, or a GitHub blob/tree link.");
+      throw new Error(
+        'Enter a valid http(s) catalog URL, or owner/repo, or a GitHub blob/tree link.'
+      );
     }
     if (this.sources.some((s) => s.url === url)) {
-      throw new Error("That marketplace URL is already added.");
+      throw new Error('That marketplace URL is already added.');
     }
     const id = `user-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
     const src: MarketplaceSource = {
@@ -258,9 +261,9 @@ export class MarketplaceStore {
 
   removeSource(id: string): void {
     const src = this.sources.find((s) => s.id === id);
-    if (!src) throw new Error("Marketplace not found");
+    if (!src) throw new Error('Marketplace not found');
     if (src.isDefault || isOfficialSourceId(src.id)) {
-      throw new Error("The official marketplace cannot be removed. Disable it instead.");
+      throw new Error('The official marketplace cannot be removed. Disable it instead.');
     }
     this.sources = this.sources.filter((s) => s.id !== id);
     if (this.cache.perSource?.[id]) {
@@ -274,7 +277,7 @@ export class MarketplaceStore {
 
   setSourceEnabled(id: string, enabled: boolean): MarketplaceSource {
     const idx = this.sources.findIndex((s) => s.id === id);
-    if (idx < 0) throw new Error("Marketplace not found");
+    if (idx < 0) throw new Error('Marketplace not found');
     const cur = this.sources[idx]!;
     const next = { ...cur, enabled };
     this.sources = this.sources.map((s, i) => (i === idx ? next : s));
@@ -284,9 +287,9 @@ export class MarketplaceStore {
 
   setSourceUrl(id: string, urlRaw: string): MarketplaceSource {
     const idx = this.sources.findIndex((s) => s.id === id);
-    if (idx < 0) throw new Error("Marketplace not found");
+    if (idx < 0) throw new Error('Marketplace not found');
     const url = normalizeMarketplaceUrl(urlRaw);
-    if (!isValidMarketplaceUrl(url)) throw new Error("Invalid marketplace URL");
+    if (!isValidMarketplaceUrl(url)) throw new Error('Invalid marketplace URL');
     const cur = this.sources[idx]!;
     const next = { ...cur, url, lastError: null };
     this.sources = this.sources.map((s, i) => (i === idx ? next : s));
@@ -339,7 +342,10 @@ export class MarketplaceStore {
     saveSourcesFile(this.sources);
 
     // Always layer bundled first so disabled remotes still have a baseline.
-    const catalogs: MarketplaceCatalog[] = [structuredClone(BUNDLED_MARKETPLACE_CATALOG), ...fetched];
+    const catalogs: MarketplaceCatalog[] = [
+      structuredClone(BUNDLED_MARKETPLACE_CATALOG),
+      ...fetched,
+    ];
     const merged = mergeMarketplaceCatalogs(catalogs);
 
     this.cache = {
@@ -362,17 +368,17 @@ export class MarketplaceStore {
 function deriveNameFromUrl(url: string): string {
   try {
     const u = new URL(url);
-    const parts = u.pathname.split("/").filter(Boolean);
+    const parts = u.pathname.split('/').filter(Boolean);
     // raw.githubusercontent.com/owner/repo/...
-    if (u.hostname.includes("githubusercontent.com") && parts.length >= 2) {
+    if (u.hostname.includes('githubusercontent.com') && parts.length >= 2) {
       return `${parts[0]}/${parts[1]}`;
     }
-    if (u.hostname === "github.com" && parts.length >= 2) {
+    if (u.hostname === 'github.com' && parts.length >= 2) {
       return `${parts[0]}/${parts[1]}`;
     }
     return u.hostname;
   } catch {
-    return "Marketplace";
+    return 'Marketplace';
   }
 }
 
@@ -388,5 +394,5 @@ export function resetMarketplaceStoreForTests(): void {
   singleton = null;
 }
 
-export { metalModelsForPlatform } from "./parse.js";
-export { emptyCatalog } from "./types.js";
+export { metalModelsForPlatform } from './parse.js';
+export { emptyCatalog } from './types.js';

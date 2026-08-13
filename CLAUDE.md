@@ -13,6 +13,7 @@ Prefer **correctness over drive-by refactors**. Match existing patterns in the f
 1. `AGENTS.md` — architecture map, invariants, verification commands  
 2. `docs/protocol.md` — if the task touches app ↔ server messaging  
 3. `ios/README.md` or `desktop-server/README.md` for area-specific detail  
+4. `.research/` — version-controlled research notes (e.g. `provider-response-quirks.md` for iOS chat parser work). **Read the relevant file before editing that area.**  
 
 ## Default working style
 
@@ -28,9 +29,11 @@ Configured in `.claude/settings.json` (path used by some agent CLIs):
 
 | Hook | When | What |
 |------|------|------|
-| `PostToolUse` on Edit/Write/MultiEdit | After file edits | Runs `.claude/hooks/post-edit-xcodegen.sh` |
+| `SessionStart` | Every new session | Runs `.claude/hooks/session-start-context.sh` — prints branch, last commit, dirty files, toolchain versions, deps state, key paths |
+| `PostToolUse` on Edit/Write/MultiEdit | After file edits | Runs `.claude/hooks/post-edit-xcodegen.sh` when `ios/project.yml` changes |
+| `PostToolUse` on Edit/Write/MultiEdit | After file edits | Runs `.claude/hooks/post-edit-format.sh` — Biome-formats edited TS/JS/JSON files (no-op if Biome not installed) |
 
-That hook regenerates the Xcode project when iOS sources / `project.yml` change so new Swift files show up in Xcode without a manual step. If xcodegen is missing, install with `brew install xcodegen`.
+The xcodegen hook regenerates the Xcode project when iOS sources / `project.yml` change so new Swift files show up in Xcode without a manual step. If xcodegen is missing, install with `brew install xcodegen`.
 
 ## Where to work (quick)
 
@@ -80,6 +83,17 @@ Symptom: file exists on disk but Xcode doesn't compile it. Cause: XcodeGen. Fix:
 `Info.plist` allows cleartext/local networking for LAN `http`/`ws` to the desktop server. Don't tighten ATS casually during feature work; note it for any store-bound change.
 
 ## Preferred verification
+
+One-shot (recommended when wrapping up):
+
+```bash
+npm run verify            # all checks
+npm run verify:ios        # iOS only
+npm run verify:server     # server only
+npm run verify:protocol   # protocol triple sanity only
+```
+
+Or run individual checks:
 
 ```bash
 # Protocol / agent offline

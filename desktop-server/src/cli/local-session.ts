@@ -8,14 +8,14 @@
  * not start a new turn until the aborted turn has settled (no signal rebind
  * mid-flight).
  */
-import { randomUUID } from "node:crypto";
-import path from "node:path";
-import { AgentSession } from "../agent/loop.js";
-import { readProjectConfig } from "../project/config.js";
-import { mockAdapter } from "../providers/index.js";
-import type { ModelSelection, PermissionMode, ServerMessage } from "../protocol.js";
+import { randomUUID } from 'node:crypto';
+import path from 'node:path';
+import { AgentSession } from '../agent/loop.js';
+import { readProjectConfig } from '../project/config.js';
+import { mockAdapter } from '../providers/index.js';
+import type { ModelSelection, PermissionMode, ServerMessage } from '../protocol.js';
 
-export type PermissionDecision = "allow" | "deny";
+export type PermissionDecision = 'allow' | 'deny';
 
 export interface LocalSessionOptions {
   workdir: string;
@@ -45,8 +45,8 @@ export class LocalCliSession {
   private pendingPermissions = new Map<string, (d: PermissionDecision) => void>();
   private model: ModelSelection;
   private permissionMode: PermissionMode;
-  private readonly onMessage: LocalSessionOptions["onMessage"];
-  private readonly onPermission: LocalSessionOptions["onPermission"];
+  private readonly onMessage: LocalSessionOptions['onMessage'];
+  private readonly onPermission: LocalSessionOptions['onPermission'];
   private readonly mock: boolean;
   private skills: string[] = [];
   /** True while a turn is in-flight (including after interrupt until drain). */
@@ -59,7 +59,7 @@ export class LocalCliSession {
     opts: LocalSessionOptions,
     agent: AgentSession,
     abort: AbortController,
-    skills: string[],
+    skills: string[]
   ) {
     this.sessionId = opts.sessionId ?? randomUUID();
     this.workdir = path.resolve(opts.workdir);
@@ -84,15 +84,15 @@ export class LocalCliSession {
       // placeholder agent replaced immediately below
       null as unknown as AgentSession,
       abort,
-      skills,
+      skills
     );
     session.agent = session.buildAgent();
     session.onMessage({
-      type: "session_created",
+      type: 'session_created',
       sessionId,
       workdir,
-      baseBranch: "local",
-      workBranch: "local",
+      baseBranch: 'local',
+      workBranch: 'local',
     });
     return session;
   }
@@ -151,21 +151,21 @@ export class LocalCliSession {
       // Agent loop returns without session_done when signal is aborted.
       if (this.abort.signal.aborted) {
         this.onMessage({
-          type: "session_done",
+          type: 'session_done',
           sessionId: this.sessionId,
-          stopReason: "interrupted",
+          stopReason: 'interrupted',
         });
       }
     } catch (err) {
       this.onMessage({
-        type: "error",
+        type: 'error',
         sessionId: this.sessionId,
         message: (err as Error).message,
       });
       this.onMessage({
-        type: "session_done",
+        type: 'session_done',
         sessionId: this.sessionId,
-        stopReason: "error",
+        stopReason: 'error',
       });
     } finally {
       if (gen === this.turnGen) {
@@ -188,7 +188,7 @@ export class LocalCliSession {
       /* already aborted */
     }
     for (const resolve of this.pendingPermissions.values()) {
-      resolve("deny");
+      resolve('deny');
     }
     this.pendingPermissions.clear();
   }
@@ -221,11 +221,11 @@ export class LocalCliSession {
     this.skills = await loadSkills(this.workdir);
     this.agent = this.buildAgent();
     this.onMessage({
-      type: "session_created",
+      type: 'session_created',
       sessionId: this.sessionId,
       workdir: this.workdir,
-      baseBranch: "local",
-      workBranch: "local",
+      baseBranch: 'local',
+      workBranch: 'local',
     });
   }
 
@@ -248,7 +248,7 @@ export class LocalCliSession {
       workdir: this.workdir,
       model: this.model,
       permissionMode: this.permissionMode,
-      surface: "cli",
+      surface: 'cli',
       skills: this.skills,
       signal: this.abort.signal,
       adapter: this.mock ? mockAdapter : undefined,
@@ -262,17 +262,17 @@ export class LocalCliSession {
     sessionId: string,
     requestId: string,
     tool: string,
-    summary: string,
+    summary: string
   ): Promise<PermissionDecision> {
     return new Promise<PermissionDecision>((resolve) => {
       // If already aborted, deny immediately (do not hang the agent).
       if (this.abort.signal.aborted) {
-        resolve("deny");
+        resolve('deny');
         return;
       }
       this.pendingPermissions.set(requestId, resolve);
       this.onMessage({
-        type: "permission_request",
+        type: 'permission_request',
         sessionId,
         requestId,
         tool,
@@ -295,7 +295,7 @@ async function loadSkills(workdir: string): Promise<string[]> {
     const skills = project.skills.map((s) => s.content);
     if (project.instructionsMd) {
       skills.unshift(
-        `# Agent instructions (global / workspace / folder)\n\n${project.instructionsMd}`,
+        `# Agent instructions (global / workspace / folder)\n\n${project.instructionsMd}`
       );
     }
     return skills;

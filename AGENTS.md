@@ -101,15 +101,39 @@ Default port: **4319**.
    ```bash
    cd ios && xcodegen generate
    ```
-   Or: `ios/scripts/watch-xcode.sh --once`
+   Or: `ios/scripts/watch-xcode.sh --once`. The `.claude/hooks/post-edit-xcodegen.sh` hook does this automatically when `project.yml` is edited.
 3. **Do not commit** `ios/build/`, `desktop-server/out/`, `desktop-server/.vite/`, `node_modules/`, or secrets.
 4. **Secrets:** keys/tokens on iOS go in Keychain (`KeychainSecretStore`). Server holds provider/GitHub tokens only for the session (Electron may use safeStorage for UI-entered keys). Never log full API keys.
 5. **Theme:** cool blue-grey shared with Electron. Tokens live in:
    - `ios/App/Sources/DesignSystem/Theme.swift`
    - `desktop-server/src/renderer/styles.css` (`:root` CSS variables)  
    Accent is `#6aa9ff`, not terracotta. Keep them aligned when changing UI colors.
+6. **Formatting/lint baseline is enforced.** Before opening a PR, run the
+   repo-wide checks (see [Commands](#commands)):
+   - TypeScript: `npm run lint` / `npm run format` (Biome)
+   - Swift: `npm run format:swift` (SwiftFormat) — also runs on save via IDE
+   CI runs the same checks; agents should not skip them.
+
+## Agent-facing docs & research
+
+When you're about to touch one of these areas, **read the linked file first**:
+
+| Area | Read first |
+|------|------------|
+| Wire protocol | `docs/protocol.md` (canonical human-readable spec) |
+| iOS chat parser / streaming quirks | `.research/provider-response-quirks.md` — sourced catalog of provider-specific leaks (`<think>`, DeepSeek full-width `｜…｜`, Qwen3 missing-open, etc.) the iOS `ThinkingExtractor` must handle |
+| Desktop server CLI/TUI slash commands | `desktop-server/src/cli/commands.ts` (single source of truth) |
+| Skills / MCP / marketplace | `desktop-server/src/marketplace/` + iOS `AnyProvCore/Marketplace` |
+
+Treat `.research/` as a curated, version-controlled knowledge base. Add new findings
+there with sources, not in scattered `.md` files at the repo root.
 
 ## Commands
+
+> **Root convenience:** the root `package.json` exposes `lint`, `format`,
+> `typecheck`, `test:cli`, `smoke`, `format:swift`, and `xcodegen` scripts that
+> delegate to the right subdir. Prefer those over `cd`-ing in — they work from
+> any worktree and match what CI runs.
 
 ### Desktop server
 
@@ -154,6 +178,21 @@ swift test                        # protocol + provider tests
 # optional continuous regen while adding files
 ./ios/scripts/watch-xcode.sh
 ```
+
+### Format / lint (run before opening a PR)
+
+```bash
+# TS/JS (Biome) — checks root and desktop-server
+npm run lint
+npm run format
+
+# Swift (SwiftFormat) — checks ios/
+npm run format:swift
+npm run format:swift:check     # CI mode: non-zero exit on diff
+```
+
+Local hooks auto-format on save when the agent supports `PostToolUse` (see
+`.claude/settings.json`). CI runs `npm run lint` and `npm run format:swift:check`.
 
 ### Marketing site (Cloudflare Workers)
 
@@ -214,7 +253,22 @@ npm run deploy       # requires wrangler login
 - Don't add a second theme or terracotta accents without an explicit product decision.
 - Don't invent protocol fields on one side only.
 
+## Common agent mistakes
+
+Real things agents get wrong in this repo. Don't repeat them:
+
+1. **Adding a Swift file then opening Xcode without `xcodegen generate`.** The file won't be in the target. The PostToolUse hook only catches `project.yml` edits, not new Swift files — run the script yourself.
+2. **Editing `ios/RoamSocket.xcodeproj` by hand.** It's generated. Edit `project.yml`.
+3. **Renaming a protocol field on only one side.** The TS schema, Swift Codable, and `docs/protocol.md` must all change in the same PR. See [Critical invariants](#critical-invariants).
+4. **Logging a full API key or token.** Use the redaction helper; never `console.log(providerKey)`.
+5. **Treating `AGENTS.md` / `CLAUDE.md` as documentation only.** They are checked into the repo on purpose — every agent reads them. If you discover a non-obvious invariant, add it.
+6. **Writing a "research notes" `.md` at the repo root.** Put it under `.research/` so it shows up in `AGENTS.md`'s research table.
+
 ## Verification checklist before claiming done
+
+Run `npm run verify` (or the narrower `verify:ios` / `verify:server` /
+`verify:protocol`) for a one-shot check. For deeper dives, run individual
+commands:
 
 | Change area | Verify |
 |-------------|--------|

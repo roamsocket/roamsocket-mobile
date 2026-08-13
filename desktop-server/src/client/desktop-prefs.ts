@@ -1,10 +1,10 @@
 /**
  * Desktop UI prefs (memory, default effort) — localStorage, not secrets.
  */
-import type { StorageLike } from "./history-store.js";
-import type { Effort } from "./providers-meta.js";
+import type { StorageLike } from './history-store.js';
+import type { Effort } from './providers-meta.js';
 
-const KEY = "apc.desktopPrefs.v1";
+const KEY = 'apc.desktopPrefs.v1';
 
 export interface DesktopUiPrefs {
   /** Search past chats for relevant context. */
@@ -18,30 +18,27 @@ export interface DesktopUiPrefs {
 const DEFAULTS: DesktopUiPrefs = {
   memorySearchChats: true,
   memoryGenerateFromChats: true,
-  defaultEffort: "high",
+  defaultEffort: 'high',
 };
 
-export const EFFORT_GUIDE: Record<
-  Effort,
-  { label: string; summary: string; detail: string }
-> = {
+export const EFFORT_GUIDE: Record<Effort, { label: string; summary: string; detail: string }> = {
   low: {
-    label: "Low",
-    summary: "Faster replies",
+    label: 'Low',
+    summary: 'Faster replies',
     detail:
-      "Minimal deliberation. Best for quick questions, simple edits, and when latency matters more than depth.",
+      'Minimal deliberation. Best for quick questions, simple edits, and when latency matters more than depth.',
   },
   medium: {
-    label: "Medium",
-    summary: "Balanced",
+    label: 'Medium',
+    summary: 'Balanced',
     detail:
-      "Solid default for everyday coding and chat. Weighs trade-offs without spending a long time planning.",
+      'Solid default for everyday coding and chat. Weighs trade-offs without spending a long time planning.',
   },
   high: {
-    label: "High",
-    summary: "Thorough reasoning",
+    label: 'High',
+    summary: 'Thorough reasoning',
     detail:
-      "More careful multi-step reasoning. Prefer for hard bugs, architecture, refactors, and tasks with many tools.",
+      'More careful multi-step reasoning. Prefer for hard bugs, architecture, refactors, and tasks with many tools.',
   },
 };
 
@@ -52,12 +49,11 @@ export function loadDesktopUiPrefs(storage: StorageLike): DesktopUiPrefs {
     const parsed = JSON.parse(raw) as Partial<DesktopUiPrefs>;
     return {
       memorySearchChats: parsed.memorySearchChats ?? DEFAULTS.memorySearchChats,
-      memoryGenerateFromChats:
-        parsed.memoryGenerateFromChats ?? DEFAULTS.memoryGenerateFromChats,
+      memoryGenerateFromChats: parsed.memoryGenerateFromChats ?? DEFAULTS.memoryGenerateFromChats,
       defaultEffort:
-        parsed.defaultEffort === "low" ||
-        parsed.defaultEffort === "medium" ||
-        parsed.defaultEffort === "high"
+        parsed.defaultEffort === 'low' ||
+        parsed.defaultEffort === 'medium' ||
+        parsed.defaultEffort === 'high'
           ? parsed.defaultEffort
           : DEFAULTS.defaultEffort,
     };

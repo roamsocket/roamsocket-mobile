@@ -3,7 +3,7 @@
  * Colors / icons / labels change by PR state (open, draft, merged, closed).
  */
 
-export type GitHubPrState = "open" | "draft" | "merged" | "closed" | "unknown";
+export type GitHubPrState = 'open' | 'draft' | 'merged' | 'closed' | 'unknown';
 
 export interface ParsedPrUrl {
   url: string;
@@ -34,7 +34,7 @@ export interface PrChipModel {
 export function parseGitHubPrUrl(url: string): ParsedPrUrl | null {
   try {
     const u = new URL(url.trim());
-    if (!/github\.com$/i.test(u.hostname.replace(/^www\./, ""))) return null;
+    if (!/github\.com$/i.test(u.hostname.replace(/^www\./, ''))) return null;
     // /owner/repo/pull/123
     const m = u.pathname.match(/^\/([^/]+)\/([^/]+)\/pull\/(\d+)/i);
     if (!m) return null;
@@ -61,11 +61,11 @@ export function prStateFromGitHub(json: {
   merged?: boolean;
   merged_at?: string | null;
 }): GitHubPrState {
-  if (json.merged === true || json.merged_at) return "merged";
-  if (json.state === "closed") return "closed";
-  if (json.draft === true) return "draft";
-  if (json.state === "open") return "open";
-  return "unknown";
+  if (json.merged === true || json.merged_at) return 'merged';
+  if (json.state === 'closed') return 'closed';
+  if (json.draft === true) return 'draft';
+  if (json.state === 'open') return 'open';
+  return 'unknown';
 }
 
 export function prChipFromParts(opts: {
@@ -78,9 +78,9 @@ export function prChipFromParts(opts: {
   repo?: string | null;
 }): PrChipModel {
   const parsed = parseGitHubPrUrl(opts.url);
-  const state = opts.state ?? "open";
+  const state = opts.state ?? 'open';
   const number = opts.number ?? parsed?.number ?? null;
-  const repoLabel = opts.repoLabel ?? parsed?.repoLabel ?? "repo";
+  const repoLabel = opts.repoLabel ?? parsed?.repoLabel ?? 'repo';
   const { stateLabel, toneClass, icon } = prStatePresentation(state);
   return {
     url: parsed?.url ?? opts.url,
@@ -102,16 +102,16 @@ export function prStatePresentation(state: GitHubPrState): {
   icon: string;
 } {
   switch (state) {
-    case "merged":
-      return { stateLabel: "Merged", toneClass: "pr-merged", icon: "⑂" };
-    case "closed":
-      return { stateLabel: "Closed", toneClass: "pr-closed", icon: "⊗" };
-    case "draft":
-      return { stateLabel: "Draft", toneClass: "pr-draft", icon: "◌" };
-    case "open":
-      return { stateLabel: "Open", toneClass: "pr-open", icon: "⑂" };
+    case 'merged':
+      return { stateLabel: 'Merged', toneClass: 'pr-merged', icon: '⑂' };
+    case 'closed':
+      return { stateLabel: 'Closed', toneClass: 'pr-closed', icon: '⊗' };
+    case 'draft':
+      return { stateLabel: 'Draft', toneClass: 'pr-draft', icon: '◌' };
+    case 'open':
+      return { stateLabel: 'Open', toneClass: 'pr-open', icon: '⑂' };
     default:
-      return { stateLabel: "PR", toneClass: "pr-unknown", icon: "⑂" };
+      return { stateLabel: 'PR', toneClass: 'pr-unknown', icon: '⑂' };
   }
 }
 
@@ -120,7 +120,7 @@ export function prStatePresentation(state: GitHubPrState): {
  */
 export async function fetchGitHubPrState(
   url: string,
-  token?: string | null,
+  token?: string | null
 ): Promise<{
   state: GitHubPrState;
   branch: string | null;
@@ -131,8 +131,8 @@ export async function fetchGitHubPrState(
   const parsed = parseGitHubPrUrl(url);
   if (!parsed) return null;
   const headers: Record<string, string> = {
-    accept: "application/vnd.github+json",
-    "user-agent": "RoamSocket-desktop",
+    accept: 'application/vnd.github+json',
+    'user-agent': 'RoamSocket-desktop',
   };
   if (token) headers.authorization = `Bearer ${token}`;
   const res = await fetch(parsed.apiUrl, { headers });
