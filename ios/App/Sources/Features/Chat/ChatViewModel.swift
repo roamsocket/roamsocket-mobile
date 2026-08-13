@@ -263,31 +263,31 @@ final class ChatViewModel: ObservableObject {
     }
 
     /// True when the **currently selected** model can ingest attached photos.
-    /// On-device Metal models without a vision tower (Llama, Gemma 3n `-lm-`,
-    /// plain text builds) would crash inside MLX if we tried to feed them
-    /// images. The composer uses this to disable the camera + send-with-photo
-    /// **before** anything is staged, so the user sees a friendly hint instead
-    /// of a crash on Send.
+    ///
+    /// Routes through `AppState.modelSupportsVision(_:)` so the gate stays
+    /// in sync with the canonical `VisionCapability` heuristics (and with
+    /// the custom-provider `supportsVision` toggle the user can flip in
+    /// Settings). On-device Metal models are **never** vision-capable in
+    /// this build — even when the hub id looks like a Vision model — to
+    /// keep the in-process MLX path off the vision hot path. When per-model
+    /// vision metadata lands on `AIModel`, this collapses to a single
+    /// `model.capabilities.contains(.vision)` check.
     var selectedModelSupportsPhotos: Bool {
-        guard let model = state?.selectedModel else { return true }
-        switch model.provider {
-        case .localMetal:
-            return LocalMetalCatalog.isLikelyVisionHubID(model.modelID)
-        default:
-            // Cloud providers encode images in their own request shape — keep
-            // the button enabled. Per-provider vision capability is the
-            // catalog's responsibility, not the composer's.
-            return true
-        }
+        guard let model = state?.selectedModel else { return false }
+        return state?.modelSupportsVision(model) ?? false
     }
 
     /// Short user-facing reason why the camera button is disabled (empty when
     /// photos are allowed for the current selection).
     var photoDisabledReason: String? {
-        guard let model = state?.selectedModel, model.provider == .localMetal,
-              !LocalMetalCatalog.isLikelyVisionHubID(model.modelID)
-        else { return nil }
-        return "\(model.displayName) is a text-only on-device model. Download a Vision model (Gemma 4, Qwen2-VL, SmolVLM) in Settings → On-device (Metal) to attach photos."
+        guard let model = state?.selectedModel else {
+            return "Pick a vision-capable model to attach photos."
+        }
+        if state?.modelSupportsVision(model) ?? false { return nil }
+        if model.provider == .localMetal {
+            return "Vision uses cloud APIs in this build. Switch to a vision-capable provider in Settings → Models to attach photos."
+        }
+        return "\(model.provider.displayName) doesn't ship a vision model in this catalog. Try Anthropic, OpenAI, or Google."
     }
 
     /// Downsample JPEG data straight to the target pixel size with ImageIO, then
