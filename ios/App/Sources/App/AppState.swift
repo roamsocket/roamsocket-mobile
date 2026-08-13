@@ -20,6 +20,13 @@ final class AppState: ObservableObject {
     let settingsSync = SettingsSync()
     let browserStore = BrowserStore()
 
+    /// Single source of truth for chat history + projects. `RootView` creates
+    /// the store via `@StateObject` and calls `setChatHistory(...)` on first
+    /// appear so SettingsSync (which lives here) can read/write the same
+    /// instance for GitHub push + restore.
+    private(set) var chatHistory: ChatHistoryStore?
+    private var historyForwardCancellable: AnyCancellable?
+
     /// Your GitHub OAuth app client id for Device Flow. Replace before shipping;
     /// can also be provided at runtime via Settings.
     @AppStorage("githubClientID") var githubClientID: String = ""
@@ -1860,5 +1867,152 @@ final class AppState: ObservableObject {
         UserDefaults.standard.set(mcpRepoURL, forKey: mcpRepoKey)
         UserDefaults.standard.set(mcpRepoBranch, forKey: mcpBranchKey)
         if selectedEnvironment == nil { selectedEnvironment = environments.first }
+    }
+
+    // MARK: - Chat history injection
+
+    /// RootView calls this once with its `@StateObject` ChatHistoryStore so
+    /// settings sync can read/write the same instance.
+    func setChatHistory(_ history: ChatHistoryStore) {
+        guard chatHistory == nil else { return }
+        chatHistory = history
+        // Forward inner store changes so views observing AppState (e.g. the
+        // sync status screen) refresh when recents / projects mutate.
+        historyForwardCancellable = history.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+    }
+
+    // MARK: - Memory sync
+
+    /// Build a memory snapshot from the current on-device store.
+    func memorySnapshotForSync() -> MemorySnapshot {
+        MemorySnapshot(entries: UserMemoryStore.shared.list())
+    }
+
+    /// Merge an incoming memory snapshot into the local store. Per-entry
+    /// rule: keep the row with the newer `updatedAt`; on ties keep the
+    /// local copy. This is merge, not replace — the user may have edited a
+    /// row locally between pushes.
+    func applyMemorySnapshot(_ snapshot: MemorySnapshot) {
+        let store = UserMemoryStore.shared
+        for incoming in snapshot.entries {
+            if let local = store.entry(id: incoming.id) {
+                if incoming.updatedAt > local.updatedAt {
+                    store.upsert(
+                        id: incoming.id,
+                        category: incoming.category,
+                        title: incoming.title,
+                        summary: incoming.summary,
+                        details: incoming.details
+                    )
+                }
+            } else {
+                store.upsert(
+                    id: incoming.id,
+                    category: incoming.category,
+                    title: incoming.title,
+                    summary: incoming.summary,
+                    details: incoming.details
+                )
+            }
+        }
+    }
+
+    // MARK: - Chats sync
+
+    /// Build a chats snapshot from the current store. Incognito chats are
+    /// filtered out (their whole point is local-only) and blank drafts are
+    /// dropped so the repo doesn't store empty rows. Returns nil if the
+    /// chat history store hasn't been wired up yet (sync UI calls this on
+    /// user action; the wire-up happens on first RootView appear).
+    func chatsSnapshotForSync() -> ChatsSnapshot? {
+        guard let history = chatHistory else { return nil }
+        let recents = history.recents.filter { !$0.isIncognito && !$0.messages.isEmpty }
+        let projectChats = history.projectChats
+            .mapValues { rows in
+                rows.filter { !$0.messages.isEmpty }
+            }
+        return ChatsSnapshot(
+            recents: recents,
+            projects: history.projects,
+            projectChats: projectChats
+        )
+    }
+
+    /// Merge an incoming chats snapshot into the local store. Per-row rule:
+    /// keep the row with the newer timestamp (`lastMessageAt` for chats,
+    /// `updatedAt` for projects). Recents are merged by chat id; project
+    /// chats by (projectID, chatID). Incognito rows in the incoming snapshot
+    /// are ignored — never restored. Returns false if the local store
+    /// hasn't been wired up yet.
+    @discardableResult
+    func applyChatsSnapshot(_ snapshot: ChatsSnapshot) -> Bool {
+        guard let history = chatHistory else { return false }
+        mergeRecents(snapshot.recents, into: history)
+        mergeProjects(snapshot.projects, into: history)
+        mergeProjectChats(snapshot.projectChats, into: history)
+        return true
+    }
+
+    private func mergeRecents(_ incoming: [ChatHistoryItem], into history: ChatHistoryStore) {
+        // Incognito never crosses devices.
+        let incoming = incoming.filter { !$0.isIncognito }
+        var local = history.recents
+        var indexByID: [UUID: Int] = [:]
+        for (i, item) in local.enumerated() { indexByID[item.id] = i }
+        for row in incoming {
+            if let idx = indexByID[row.id] {
+                if row.lastMessageAt > local[idx].lastMessageAt {
+                    local[idx] = row
+                }
+            } else {
+                local.append(row)
+                indexByID[row.id] = local.count - 1
+            }
+        }
+        // Keep the sidebar ordering: starred first, then newest activity.
+        history.recents = local.sorted { a, b in
+            if a.isStarred != b.isStarred { return a.isStarred && !b.isStarred }
+            return a.lastMessageAt > b.lastMessageAt
+        }
+    }
+
+    private func mergeProjects(_ incoming: [ProjectItem], into history: ChatHistoryStore) {
+        var local = history.projects
+        var indexByID: [UUID: Int] = [:]
+        for (i, p) in local.enumerated() { indexByID[p.id] = i }
+        for row in incoming {
+            if let idx = indexByID[row.id] {
+                if row.updatedAt > local[idx].updatedAt {
+                    local[idx] = row
+                }
+            } else {
+                local.append(row)
+                indexByID[row.id] = local.count - 1
+            }
+        }
+        history.projects = local
+    }
+
+    private func mergeProjectChats(_ incoming: [UUID: [ProjectChatItem]], into history: ChatHistoryStore) {
+        var local = history.projectChats
+        for (projectID, incomingRows) in incoming {
+            var rows = local[projectID] ?? []
+            var indexByID: [UUID: Int] = [:]
+            for (i, c) in rows.enumerated() { indexByID[c.id] = i }
+            for row in incomingRows {
+                if let idx = indexByID[row.id] {
+                    if row.lastMessageAt > rows[idx].lastMessageAt {
+                        rows[idx] = row
+                    }
+                } else {
+                    rows.append(row)
+                    indexByID[row.id] = rows.count - 1
+                }
+            }
+            local[projectID] = rows
+        }
+        history.projectChats = local
     }
 }
