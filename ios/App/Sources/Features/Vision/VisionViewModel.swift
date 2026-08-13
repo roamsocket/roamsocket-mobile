@@ -302,6 +302,16 @@ final class VisionViewModel: ObservableObject {
 
     func bind(state: AppState) {
         self.state = state
+        // Honor the user's vision default first, but only when the current
+        // selection isn't already a vision-capable model (a per-session manual
+        // pick — or a chat-defaulted pick that happens to be vision-capable —
+        // must survive). Falls through to the heuristic pick below if the
+        // default is unset / stale / not vision-capable.
+        if let def = state.defaultModel(for: .vision),
+           state.modelSupportsVision(def),
+           selectedModel?.id != def.id {
+            selectedModel = def
+        }
         // Keep selection vision-capable: replace text-only picks when a VLM is available.
         let preferred = VisionCapability.preferredVisionModel(
             from: state.allModels,
@@ -1030,10 +1040,14 @@ final class VisionViewModel: ObservableObject {
         selectedModel = model
 
         if model.provider == .localMetal {
-            // Always pin the *vision* model as the selected Metal model before
-            // load — previously we loaded whatever chat had selected first,
-            // briefly double-resident and often the wrong weights.
-            if state.selectedModel?.id != model.id {
+            // Only re-pin `state.selectedModel` when the current selection is
+            // *also* a phone-local Metal model — otherwise we'd silently
+            // change the user's chat selection just because they opened the
+            // camera. The only time we need to swap is the RAM-conflict case
+            // (two on-device Metal models trying to share a single MLX
+            // container at once).
+            let currentIsMetal = state.selectedModel?.provider == .localMetal
+            if currentIsMetal, state.selectedModel?.id != model.id {
                 state.selectedModel = model
             }
             await state.ensureSelectedLocalMetalLoaded()

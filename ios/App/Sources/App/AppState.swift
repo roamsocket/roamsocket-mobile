@@ -1767,6 +1767,149 @@ final class AppState: ObservableObject {
         selectedRepo != nil && modelSelectionForSession() != nil && serverToken != nil
     }
 
+    // MARK: - Default model per conversation type
+
+    /// A conversation lane the user wants a different default model for.
+    /// Chat = standard chat composer (all providers).
+    /// Code = coding agent (only providers the desktop agent can drive).
+    /// Vision = camera / image analysis (vision-capable models).
+    enum DefaultModelKind: String, CaseIterable, Identifiable, Codable, Sendable {
+        case chat, code, vision
+
+        var id: String { rawValue }
+
+        /// Storage key for `UserDefaults` (`@AppStorage` only takes `String` / primitives).
+        var storageKey: String {
+            switch self {
+            case .chat:   return "defaultChatModelID.v1"
+            case .code:   return "defaultCodeModelID.v1"
+            case .vision: return "defaultVisionModelID.v1"
+            }
+        }
+
+        var title: String {
+            switch self {
+            case .chat:   return "Chat"
+            case .code:   return "Code"
+            case .vision: return "Vision"
+            }
+        }
+
+        var subtitle: String {
+            switch self {
+            case .chat:   return "Default model for the chat composer."
+            case .code:   return "Default model for new coding sessions (desktop agent)."
+            case .vision: return "Default model for camera + image analysis."
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .chat:   return "bubble.left.and.bubble.right.fill"
+            case .code:   return "chevron.left.forwardslash.chevron.right"
+            case .vision: return "eye.fill"
+            }
+        }
+    }
+
+    /// Stored ids for each lane. Empty string = "no default set".
+    /// We don't use `@AppStorage` directly on a dict because we want a stable
+    /// string-id representation that survives custom-provider slugs and re-installs
+    /// of an on-device Metal model (we re-resolve to a live `AIModel` at use time).
+    private static func defaultModelIDKey(_ kind: DefaultModelKind) -> String { kind.storageKey }
+
+    @AppStorage("defaultChatModelID.v1") private var defaultChatModelID: String = ""
+    @AppStorage("defaultCodeModelID.v1") private var defaultCodeModelID: String = ""
+    @AppStorage("defaultVisionModelID.v1") private var defaultVisionModelID: String = ""
+
+    /// Raw stored id for a lane. Empty means "no default".
+    func defaultModelID(for kind: DefaultModelKind) -> String {
+        switch kind {
+        case .chat:   return defaultChatModelID
+        case .code:   return defaultCodeModelID
+        case .vision: return defaultVisionModelID
+        }
+    }
+
+    /// Persist a new default for a lane. `nil` clears the default.
+    func setDefaultModelID(_ id: String?, for kind: DefaultModelKind) {
+        let trimmed = id?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        switch kind {
+        case .chat:   defaultChatModelID = trimmed
+        case .code:   defaultCodeModelID = trimmed
+        case .vision: defaultVisionModelID = trimmed
+        }
+    }
+
+    /// Resolve the stored default id to a live `AIModel` if it's still usable
+    /// for this lane. The stored value is just an id — it can become stale
+    /// (model uninstalled, provider key removed, hidden via swipe, etc.), so we
+    /// always re-verify at lookup time.
+    ///
+    /// Lookup rules per lane:
+    /// - `chat`: any visible model in `providerResults` (excludes hidden).
+    /// - `code`: visible model that ALSO `supportsCodingAgent`; for phone Metal
+    ///   we still allow it (the desktop list isn't always loaded yet, and the
+    ///   agent host will reject if the hub id isn't installed).
+    /// - `vision`: visible model that ALSO supports vision input.
+    func defaultModel(for kind: DefaultModelKind) -> AIModel? {
+        let raw = defaultModelID(for: kind)
+        guard !raw.isEmpty else { return nil }
+        // Search the live chat pool first, then desktop Metal inventory.
+        let pool = allModels + desktopMetalModels
+        guard let model = pool.first(where: { $0.id == raw }) else { return nil }
+        guard !isModelHidden(model) else { return nil }
+        switch kind {
+        case .chat:
+            return model
+        case .code:
+            guard model.provider.supportsCodingAgent else { return nil }
+            return model
+        case .vision:
+            guard modelSupportsVision(model) else { return nil }
+            return model
+        }
+    }
+
+    /// Returns the default for the lane if one is set and currently usable.
+    /// Convenience used by the Settings UI ("Default model for Chat: Opus 4.5").
+    func defaultModelDisplayName(for kind: DefaultModelKind) -> String? {
+        guard let model = defaultModel(for: kind) else { return nil }
+        return displayName(for: model)
+    }
+
+    /// Apply the default for a lane to `selectedModel`, but only when the
+    /// current selection doesn't already satisfy the lane's requirements
+    /// (per-chat / per-session overrides must survive). Returns the model
+    /// that ended up as `selectedModel` after the call (either the existing
+    /// one, the default we just applied, or `nil`).
+    @discardableResult
+    func applyDefault(for kind: DefaultModelKind) -> AIModel? {
+        // If current selection already satisfies this lane, leave it alone.
+        if let current = selectedModel, modelMeetsLane(current, kind: kind) {
+            return current
+        }
+        guard let def = defaultModel(for: kind) else {
+            return selectedModel
+        }
+        if selectedModel?.id != def.id {
+            selectedModel = def
+        }
+        return def
+    }
+
+    /// Whether `model` is a valid selection for this lane.
+    func modelMeetsLane(_ model: AIModel, kind: DefaultModelKind) -> Bool {
+        switch kind {
+        case .chat:
+            return true
+        case .code:
+            return model.provider.supportsCodingAgent
+        case .vision:
+            return modelSupportsVision(model)
+        }
+    }
+
     // MARK: - Model aliases
 
     /// Stable key for the alias table — survives custom provider slugs.

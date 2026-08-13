@@ -18,6 +18,7 @@ struct AppSettingsView: View {
     @State private var showLocalMetal = false
     @State private var showLightweightTasks = false
     @State private var showVoiceSettings = false
+    @State private var defaultModelKind: AppState.DefaultModelKind?
     @State private var syncInFlight = false
     @State private var syncMessage: String?
     @State private var syncError: String?
@@ -48,6 +49,7 @@ struct AppSettingsView: View {
                 ScrollView {
                     VStack(spacing: 16) {
                         accountSection
+                        defaultModelSection
                         appearanceSection
                         chatSection
                         effortSection
@@ -116,6 +118,13 @@ struct AppSettingsView: View {
         }
         .sheet(isPresented: $showVoiceSettings) {
             VoiceSettingsView()
+                .environmentObject(state)
+        }
+        .sheet(item: $defaultModelKind) { kind in
+            // Default model picker for one lane. The sheet resolves the stored
+            // id, lets the user pick a new model (writes the new id on tap),
+            // offers "Use currently selected model", and "Clear default".
+            DefaultModelSheet(kind: kind)
                 .environmentObject(state)
         }
     }
@@ -373,6 +382,75 @@ struct AppSettingsView: View {
                 .foregroundStyle(Theme.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    // MARK: - Default model per lane
+
+    /// Lets the user pin a separate default model for chat, code, and vision.
+    /// Each row opens `DefaultModelSheet` scoped to that lane's provider pool
+    /// (chat: all providers, code: coding-agent only, vision: vision-capable).
+    private var defaultModelSection: some View {
+        settingsCard(header: "Default model") {
+            ForEach(Array(AppState.DefaultModelKind.allCases.enumerated()), id: \.element.id) { idx, kind in
+                Button {
+                    defaultModelKind = kind
+                } label: {
+                    defaultModelRow(kind: kind)
+                }
+                .buttonStyle(.plain)
+                if idx < AppState.DefaultModelKind.allCases.count - 1 {
+                    Divider().background(Theme.separator)
+                }
+            }
+        }
+    }
+
+    private func defaultModelRow(kind: AppState.DefaultModelKind) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: kind.systemImage)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(kind.title)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(Theme.textPrimary)
+                Text(defaultModelSubtitle(for: kind))
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.textTertiary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            Text(defaultModelTrailing(for: kind))
+                .font(.system(size: 15))
+                .foregroundStyle(Theme.textSecondary)
+                .lineLimit(1)
+            Image(systemName: "chevron.right")
+                .font(.system(size: 14, weight: .regular))
+                .foregroundStyle(Theme.textSecondary)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .contentShape(Rectangle())
+    }
+
+    /// One-line subtitle for the default row: short label when set, hint copy
+    /// when not set so the row reads as actionable.
+    private func defaultModelSubtitle(for kind: AppState.DefaultModelKind) -> String {
+        switch kind {
+        case .chat:   return "Used when you start a new chat"
+        case .code:   return "Used when you open Code"
+        case .vision: return "Used when you open Vision"
+        }
+    }
+
+    /// Trailing value for the default row: friendly name when a valid default
+    /// exists, "Not set" when there's no usable pick, "Unavailable" when the
+    /// stored id no longer resolves (e.g. provider key removed, model hidden).
+    private func defaultModelTrailing(for kind: AppState.DefaultModelKind) -> String {
+        if let name = state.defaultModelDisplayName(for: kind) { return name }
+        if state.defaultModelID(for: kind).isEmpty { return "Not set" }
+        return "Unavailable"
     }
 
     // MARK: - Appearance

@@ -937,6 +937,15 @@ final class ChatViewModel: ObservableObject {
         loadChatTask?.cancel()
         persistTask?.cancel()
         history = store
+        // Apply the user's chat default first, but only when the current
+        // selection doesn't already satisfy the chat lane (which it always
+        // does — chat has no filter — so this is effectively a no-op unless
+        // the user has explicitly cleared `selectedModel`). It still matters
+        // because a future lane (e.g. "incognito") could narrow this and we
+        // want the same call site to keep working.
+        if let state {
+            state.applyDefault(for: .chat)
+        }
         let currentModel = state?.selectedModel
         let item = store.startNewChat(selectedModel: currentModel)
         activeChatID = item.id

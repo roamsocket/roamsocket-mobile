@@ -586,6 +586,14 @@ struct CodeHomeView: View {
                 .zIndex(1)
         }
         .toolbar(.hidden, for: .navigationBar)
+        .onAppear {
+            // Apply the user's code default if the current selection isn't a
+            // coding-capable model (or isn't set at all). Per-chat / per-session
+            // overrides already set `selectedModel` to a valid coding model and
+            // are left alone. This runs synchronously so the "Pick a model"
+            // hint under the start button reflects the default on first render.
+            state.applyDefault(for: .code)
+        }
         .task {
             // Refresh desktop reachability whenever Code home is shown.
             // Coalesces with launch reconnect via AppState.reconnectTask.
