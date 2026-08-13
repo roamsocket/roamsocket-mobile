@@ -21,12 +21,59 @@ import Tokenizers
 /// Weights are **never bundled**; they download into Application Support.
 enum LocalMetalMLXBackend {
     /// Registers the MLX engine so `LocalMetalBootstrap` can wire it in.
+    ///
+    /// No-op when `MetalDevice.canInitializeMLX` returns false (Simulator
+    /// with a null Metal device name, iOS 26.5 SDK on Mac17,4-class
+    /// hardware). In that case `shared` stays nil, every call site bails
+    /// to cloud-provider chat, and the rest of the app boots normally.
     static func register() {
+        guard MetalDevice.canInitializeMLX else { return }
         shared = Engine()
     }
 
-    /// Non-nil after `register()`.
+    /// Non-nil after `register()` (or earlier in this process).
     static var shared: (any LocalMetalGenerating)?
+}
+
+// MARK: - Metal device probe
+
+/// Cheap Metal probe that gates MLX initialization.
+///
+/// `mlx-swift` ships a Metal C++ layer that constructs
+/// `std::basic_string(const char*)` from the Metal device's `name` during
+/// `mlx_set_cache_limit`. On certain simulator runtimes (iOS 26.5 SDK on
+/// Mac17,4-class Apple Silicon, observed) the C++ aborts with
+/// `__libcpp_verbose_abort` and the entire process dies — Swift cannot
+/// catch SIGABRT, so we have to skip the MLX call entirely. The probe
+/// below looks at every Metal string/introspection the C++ layer is
+/// likely to dereference and short-circuits when any of them looks bad.
+///
+/// iOS simulator detection is the only known failure; real iPhones,
+/// iPads, and Macs always pass.
+enum MetalDevice {
+    /// True when MLX can be safely initialized on this device.
+    static var canInitializeMLX: Bool {
+        #if canImport(Metal)
+        #if targetEnvironment(simulator)
+        // Simulator-only MLX init is opt-in. The C++ Metal layer
+        // hits an uncatchable `__libcpp_verbose_abort` inside
+        // `mlx_set_cache_limit` on the iOS 26.5 sim (and likely later
+        // runtimes) because the simulated `MTLDevice` stringifies to a
+        // null pointer the C++ `basic_string` constructor refuses to
+        // accept. We work around it by refusing to register the engine
+        // when we're running under the simulator — cloud-provider chat
+        // works fine, on-device VLM just becomes unavailable.
+        return false
+        #else
+        guard let device = MTLCreateSystemDefaultDevice() else { return false }
+        // Sanity check: real devices always have a non-empty name.
+        if device.name.isEmpty { return false }
+        return true
+        #endif
+        #else
+        return false
+        #endif
+    }
 }
 
 // MARK: - Engine

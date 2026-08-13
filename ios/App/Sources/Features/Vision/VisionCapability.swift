@@ -5,6 +5,13 @@ import AnyProvCore
 enum VisionCapability {
     /// Whether this catalog model is likely to accept multimodal (image + text) turns.
     ///
+    /// **Vision is an API-only feature in this build.** On-device Metal is
+    /// excluded entirely, so even hub ids that look like Vision models
+    /// (gemma-4, qwen-vl, smolvlm, …) won't enable the camera/gallery
+    /// buttons — those chips still appear in Settings and the model picker
+    /// as downloadable weights, but the chat composer treats them as
+    /// text-only until on-device vision ships.
+    ///
     /// - Parameter providerMarkedVisionCapable: When true (custom provider toggle),
     ///   every non-excluded model from that provider is treated as vision-capable.
     static func supportsVision(
@@ -17,12 +24,9 @@ enum VisionCapability {
         // Apple Foundation Model is text-only in this client.
         if model.provider == .appleFoundation { return false }
 
-        // On-device Metal VLMs (Gemma 4, Qwen-VL, SmolVLM, …).
-        // Prefer catalog Vision tags + shared hub-id heuristics so downloads
-        // marked Vision in Settings always appear in Vision mode.
-        if model.provider == .localMetal {
-            return isLikelyLocalVLM(model.modelID)
-        }
+        // On-device Metal never runs the vision path. See the long-form
+        // note above; this is the single switch.
+        if model.provider == .localMetal { return false }
 
         let id = model.modelID.lowercased()
 
