@@ -41,6 +41,12 @@ final class BrowserStore: ObservableObject {
     /// checking a row of checkboxes) into a single approval instead of
     /// asking again after every individual one — this can hold 1 or more.
     @Published var pendingStepsApproval: [BrowserStep]?
+    /// Short user-facing commentary the model chose to include alongside
+    /// its most recent next-step decision. Rendered as a soft line in the
+    /// running banner so the user understands what the AI is thinking /
+    /// about to do, beyond the bare step description. Cleared whenever a
+    /// new decision arrives or the run settles.
+    @Published var currentCommentary: String?
 
     @Published var lastGranularity: BrowserApprovalGranularity
     @Published var errorMessage: String?
@@ -89,6 +95,12 @@ final class BrowserStore: ObservableObject {
     /// finished banner to show "Stopped by you" instead of a generic done
     /// summary.
     private var wasStoppedByUser = false
+    /// Snapshot of the prompt text the user just submitted, so we can keep
+    /// `promptText` visible in the input (greyed out + pulsing) while the
+    /// agent is thinking instead of clearing it the moment they hit send.
+    /// Cleared whenever the run settles (success or failure) so the user
+    /// can type a new prompt without manually backspacing.
+    var pendingPromptText: String?
 
     init() {
         let raw = UserDefaults.standard.string(forKey: granularityKey)
@@ -204,7 +216,12 @@ final class BrowserStore: ObservableObject {
             return
         }
 
-        promptText = ""
+        // Keep `promptText` visible (greyed-out with a pulsing light wave)
+        // so the user sees what they asked for while the agent works — the
+        // text is cleared on completion/failure instead of immediately on
+        // submit. `pendingPromptText` snapshots what was sent so we know
+        // what to clear after the run lands.
+        pendingPromptText = goal
         errorMessage = nil
 
         guard promptMode == .act else {
@@ -256,10 +273,12 @@ final class BrowserStore: ObservableObject {
                 chatMessages.append(
                     BrowserChatMessage(role: .assistant, content: reply, searchedWeb: webSearchBlock != nil)
                 )
+                clearPendingPrompt()
             } catch {
                 // Don't leave an unanswered question stranded in the transcript.
                 chatMessages.removeLast()
                 errorMessage = error.localizedDescription
+                clearPendingPrompt()
             }
             return
         }
@@ -282,13 +301,28 @@ final class BrowserStore: ObservableObject {
                 style: appState.apiStyle(for: model.provider)
             )
             pendingPlan = plan
+            // Keep promptText visible (greyed, pulsing) while the user
+            // reviews the plan card. Cleared on approve/deny or once a run
+            // finishes — see `denyPendingPlan`, `beginRun`, and the run
+            // loop's tail.
         } catch {
             errorMessage = error.localizedDescription
+            clearPendingPrompt()
         }
     }
 
     func denyPendingPlan() {
         pendingPlan = nil
+        clearPendingPrompt()
+    }
+
+    /// Clears the prompt text + pending snapshot once the run has settled.
+    /// Called from every natural endpoint (plan approved/denied, run finished,
+    /// run stopped, Ask answer returned, error). Keeps the input ready for
+    /// the next question instead of leaving the user with stale text.
+    private func clearPendingPrompt() {
+        pendingPromptText = nil
+        promptText = ""
     }
 
     /// Ends the Ask-mode conversation (header X in the browser chat panel).
@@ -524,6 +558,9 @@ final class BrowserStore: ObservableObject {
                     pageUnchangedHint: pageIsUnchanged
                 )
                 isDecidingNextStep = false
+                // Publish whatever commentary the model chose to include,
+                // so the running banner can show it alongside the spinner.
+                currentCommentary = decision.commentary
                 if Task.isCancelled {
                     completionSummary = wasStoppedByUser ? "Stopped by you." : "Stopped."
                     queue = []
@@ -575,6 +612,11 @@ final class BrowserStore: ObservableObject {
         isPlanRunning = false
         isDecidingNextStep = false
         runningPlanTask = nil
+        currentCommentary = nil
+        // Run has settled (success, error, or stop) — clear the prompt
+        // input so the user can type a new question. The greyed/pulsing
+        // text gave them something to look at while the agent worked.
+        clearPendingPrompt()
         scheduleAutoDismiss()
     }
 

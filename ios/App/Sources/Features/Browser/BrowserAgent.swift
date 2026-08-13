@@ -114,6 +114,13 @@ enum BrowserAgent {
         let summary: String
         /// Empty iff `done` is true.
         let steps: [BrowserStep]
+        /// Short user-facing commentary the model can include alongside its
+        /// decision (e.g. "I'll click the Sign in button now", "The page
+        /// didn't load — let me try again", "Found it on the second try").
+        /// Optional — the model is told it can include it but doesn't have
+        /// to. When present, the running banner shows it as a soft grey
+        /// line so the user understands what the AI is doing/thinking.
+        let commentary: String?
     }
 
     private static func nextStepSystemPrompt() -> String {
@@ -132,8 +139,8 @@ enum BrowserAgent {
         things stand, and a "steps" array describing what to do next.
 
         Respond with ONLY minified JSON, no prose, no markdown fences, matching one of:
-        {"done": false, "summary": "<brief status>", "steps": [{"kind":"<\(allowedKinds)>","target":"<url, element hint, or direction/seconds>","value":"<text to type, or null>","description":"<one plain-language sentence a non-technical user can approve>"}]}
-        {"done": true, "summary": "<one sentence describing what was actually accomplished>", "steps": []}
+        {"done": false, "summary": "<brief status>", "commentary": "<one short user-facing sentence explaining what you're about to do and why, in plain English — or null>", "steps": [{"kind":"<\(allowedKinds)>","target":"<url, element hint, or direction/seconds>","value":"<text to type, or null>","description":"<one plain-language sentence a non-technical user can approve>"}]}
+        {"done": true, "summary": "<one sentence describing what was actually accomplished>", "commentary": "<one short user-facing sentence, or null>", "steps": []}
 
         Normally "steps" should have exactly one entry. You may include several \
         entries at once ONLY when they are clearly mechanical repeats of the same \
@@ -185,6 +192,22 @@ enum BrowserAgent {
         - When you see the hint "page-unchanged-since-last-step": trust it. The \
         page is not changing. The right move is "done": true with a summary of \
         what you found, not another wait or scroll.
+
+        User-facing commentary:
+        - You may include a "commentary" field in your response — a single \
+        short sentence (max ~120 chars) in plain English that the user can \
+        read alongside the action. This is OPTIONAL but very welcome; it \
+        tells the user what you're about to do or why you're choosing this \
+        path, in the tone of a thoughtful assistant.
+        - Examples of good commentary: "The Sign in link is at the top \
+        right — I'll click it now.", "That search didn't find it — let me \
+        try a different phrase.", "The page is taking a moment to load, so \
+        I'll wait a second before reading it.", "Found it! The first \
+        result matches what you asked about."
+        - Do NOT include commentary that restates the action's "description" \
+        field — those are different audiences. Description is for the \
+        approval card; commentary is for the live "what is the AI doing \
+        right now" display.
         """
     }
 
@@ -327,9 +350,15 @@ enum BrowserAgent {
             throw PlanError(message: "The model didn't return a next-step decision I could parse.")
         }
         let summary = (obj["summary"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let commentary = (obj["commentary"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let done = obj["done"] as? Bool ?? false
         if done {
-            return NextStepDecision(done: true, summary: summary.isEmpty ? "Done." : summary, steps: [])
+            return NextStepDecision(
+                done: true,
+                summary: summary.isEmpty ? "Done." : summary,
+                steps: [],
+                commentary: (commentary?.isEmpty == false ? commentary : nil)
+            )
         }
         // Tolerant of either "steps": [...] (the documented contract) or a
         // single "step": {...} object, in case the model reverts to the
@@ -357,7 +386,12 @@ enum BrowserAgent {
         guard !steps.isEmpty else {
             throw PlanError(message: "The model's next step was missing or used an unsupported action.")
         }
-        return NextStepDecision(done: false, summary: summary, steps: steps)
+        return NextStepDecision(
+            done: false,
+            summary: summary,
+            steps: steps,
+            commentary: (commentary?.isEmpty == false ? commentary : nil)
+        )
     }
 
     /// Tolerant JSON parsing: models sometimes wrap JSON in prose or code

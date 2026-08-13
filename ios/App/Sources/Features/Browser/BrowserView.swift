@@ -185,19 +185,33 @@ struct BrowserHomeView: View {
                 .foregroundStyle(Theme.accent)
                 .frame(width: 20)
 
-            TextField(
-                store.promptMode == .ask ? "Ask about this page…" : "Ask AI to do something on this page…",
-                text: $store.promptText,
-                axis: .vertical
-            )
-            .font(.system(size: 15))
-            .foregroundStyle(Theme.textPrimary)
-            .lineLimit(1...3)
-            .focused($promptFocused)
-            .submitLabel(.send)
-            .onSubmit(submitPrompt)
+            // While the agent is busy, the text the user just sent stays
+            // visible (greyed-out, non-editable) with a pulsing rainbow
+            // light wave sliding across it so it's clear the AI is thinking.
+            // The store clears `promptText` once the run lands, so the field
+            // is automatically ready for the next question.
+            let isBusy = store.isPlanning || store.isAsking || store.isPlanRunning
+            ZStack(alignment: .leading) {
+                TextField(
+                    store.promptMode == .ask ? "Ask about this page…" : "Ask AI to do something on this page…",
+                    text: $store.promptText,
+                    axis: .vertical
+                )
+                .font(.system(size: 15))
+                .foregroundStyle(isBusy ? Theme.textTertiary : Theme.textPrimary)
+                .lineLimit(1...3)
+                .focused($promptFocused)
+                .submitLabel(.send)
+                .onSubmit(submitPrompt)
+                .disabled(isBusy)
 
-            if store.isPlanning || store.isAsking || store.isPlanRunning {
+                if isBusy {
+                    ShimmerOverlay()
+                        .allowsHitTesting(false)
+                }
+            }
+
+            if isBusy {
                 // The send button morphs into a stop button while the agent
                 // is busy. Plan / plan-running → `stopRun()` actually cancels
                 // the in-flight task; Ask (talking to the model about the
@@ -236,6 +250,56 @@ struct BrowserHomeView: View {
         .padding(2)
         .background(Theme.surfaceElevated, in: Capsule())
         .accessibilityLabel("Prompt mode: \(store.promptMode.title)")
+    }
+
+    /// Pulsing rainbow light wave that slides across the prompt bar's text
+    /// field while the agent is thinking. Built on `TimelineView` so the
+    /// animation runs on the display link and stays in sync with the rest
+    /// of the UI (vs. a `withAnimation` loop that drifts when the view
+    /// re-renders). The mask matches the field's text shape so the wave
+    /// only "lights up" the actual characters, not the empty area.
+    private struct ShimmerOverlay: View {
+        /// How long one full pass of the wave takes. Long enough to feel
+        /// contemplative, short enough that the user doesn't forget the AI
+        /// is still working. 1.6s matches the cursor halo's pulse cycle
+        /// elsewhere in the browser so the two animations feel coherent.
+        private let cycleSeconds: Double = 1.6
+
+        var body: some View {
+            TimelineView(.animation) { context in
+                let t = context.date.timeIntervalSinceReferenceDate
+                let phase = (t.truncatingRemainder(dividingBy: cycleSeconds)) / cycleSeconds
+                // Sliding band: bright in the middle, transparent at edges.
+                let bandStart = CGFloat(phase) - 0.3
+                let bandEnd = CGFloat(phase) + 0.3
+                LinearGradient(
+                    stops: [
+                        .init(color: Color.white.opacity(0), location: max(0, bandStart)),
+                        .init(color: Color.white.opacity(0.85), location: phase),
+                        .init(color: Color.white.opacity(0), location: min(1, bandEnd))
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .blendMode(.plusLighter)
+                // Subtle pulse in opacity so the wave "breathes" instead of
+                // sliding with constant intensity. 0.65 baseline, ±0.15.
+                .opacity(0.5 + 0.25 * sin(t * .pi / (cycleSeconds / 2)))
+                // Rainbow tint behind the white wave — gives the band a
+                // colorful cast instead of a pure-white wash.
+                .background(
+                    LinearGradient(
+                        gradient: Gradient(colors: [
+                            Color(red: 1.0, green: 0.37, blue: 0.64).opacity(0.15),
+                            Color(red: 0.48, green: 0.99, blue: 0.83).opacity(0.15),
+                            Color(red: 0.61, green: 0.55, blue: 1.0).opacity(0.15)
+                        ]),
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+            }
+        }
     }
 
     private func modeToggleButton(_ mode: BrowserPromptMode) -> some View {
@@ -499,28 +563,40 @@ struct BrowserHomeView: View {
     }
 
     private func runningPlanBanner(_ plan: BrowserPlan) -> some View {
-        HStack(spacing: 10) {
-            ProgressView()
-                .tint(Theme.accent)
-            Text(currentStepLabel(plan))
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.textSecondary)
-                .lineLimit(1)
-            Spacer(minLength: 0)
-            // Prominent stop button so the user has an obvious escape hatch
-            // when the agent is mid-step or mid-decision. Tap cancels the
-            // in-flight run; the banner transitions to its finished state
-            // with a "Stopped by you" summary.
-            Button(action: { store.stopRun() }) {
-                Text("Stop")
-                    .font(.system(size: 11, weight: .semibold))
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                ProgressView()
+                    .tint(Theme.accent)
+                Text(currentStepLabel(plan))
+                    .font(.system(size: 13))
                     .foregroundStyle(Theme.textSecondary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(Theme.surfaceElevated, in: Capsule())
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                // Prominent stop button so the user has an obvious escape hatch
+                // when the agent is mid-step or mid-decision. Tap cancels the
+                // in-flight run; the banner transitions to its finished state
+                // with a "Stopped by you" summary.
+                Button(action: { store.stopRun() }) {
+                    Text("Stop")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.textSecondary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Theme.surfaceElevated, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Stop the running plan")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Stop the running plan")
+            // Optional user-facing commentary from the model — only shown
+            // when the model chose to include one. Soft grey so it reads
+            // as a hint, not an action.
+            if let commentary = store.currentCommentary, !commentary.isEmpty {
+                Text(commentary)
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(Theme.textTertiary)
+                    .lineLimit(3)
+                    .padding(.leading, 30) // align under the spinner column
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
