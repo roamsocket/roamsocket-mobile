@@ -130,6 +130,7 @@
 		F042D35A715047253BA9DFE4 /* ModelCrashReportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 676F31426E0DFDEE0859E13C /* ModelCrashReportView.swift */; };
 		F3649AABF9F076C8898DD0C6 /* Connector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A686953A3229060A966B5FCF /* Connector.swift */; };
 		F577080BC15C9E21A75A8764 /* VisionCameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EA229245167DD022667D914 /* VisionCameraView.swift */; };
+		F6C467520C39224F2E833FA7 /* ImageProcessingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65333BFE135A88DA6311828F /* ImageProcessingTests.swift */; };
 		F6FCD1F9DF6ADC03F9D7501B /* NewEnvironmentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC28AE42DBE39E5AA846CC1F /* NewEnvironmentView.swift */; };
 		F9E8DF2572A2D1F050C2207C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 92139FD1C2399BF1338D4E31 /* Assets.xcassets */; };
 		FA1031175F29909D11D63CB3 /* InstalledSkillsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC12826EFD9A460234DD7350 /* InstalledSkillsView.swift */; };
@@ -217,6 +218,7 @@
 		60589C5D2806263CE8A5DCB1 /* SkillMarketplaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillMarketplaceView.swift; sourceTree = "<group>"; };
 		60FF1C1103A89972C557F418 /* SessionConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionConfig.swift; sourceTree = "<group>"; };
 		6390D6DD178A7A4FF3154EA6 /* LightweightTaskRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LightweightTaskRunner.swift; sourceTree = "<group>"; };
+		65333BFE135A88DA6311828F /* ImageProcessingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageProcessingTests.swift; sourceTree = "<group>"; };
 		676F31426E0DFDEE0859E13C /* ModelCrashReportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelCrashReportView.swift; sourceTree = "<group>"; };
 		69BDCD0BC19BF1ED12547639 /* SessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionView.swift; sourceTree = "<group>"; };
 		6A3031F186BD8C45C56036C9 /* EnvironmentConnectionPill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvironmentConnectionPill.swift; sourceTree = "<group>"; };
@@ -354,6 +356,7 @@
 		2CF95D99925B487757550DF3 /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				65333BFE135A88DA6311828F /* ImageProcessingTests.swift */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -962,6 +965,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				997739F602DACF0DBAE97A74 /* ImageProcessing.swift in Sources */,
+				F6C467520C39224F2E833FA7 /* ImageProcessingTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1103,6 +1107,7 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				DEVELOPMENT_TEAM = 4JBMBNGPK7;
+				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -1186,6 +1191,7 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				DEVELOPMENT_TEAM = 4JBMBNGPK7;
+				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
