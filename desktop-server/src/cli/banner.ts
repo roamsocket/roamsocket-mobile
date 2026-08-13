@@ -15,6 +15,10 @@ export interface PairBannerInfo {
   autoTunnel?: boolean;
   /** Public tunnel URL (https://…) when already known at print time. */
   publicUrl?: string | null;
+  /** Local proxy base URL (`http://127.0.0.1:<port>`) for external CLIs. */
+  proxyBaseUrl?: string;
+  /** Static bearer for /v1/* — random per-process unless APC_PROXY_TOKEN is set. */
+  proxyToken?: string;
 }
 
 export interface TunnelReadyInfo {
@@ -115,8 +119,14 @@ export async function printPairingBanner(info: PairBannerInfo): Promise<void> {
   }
   lines.push(`Pair URL: ${payload.host}`);
   // Keep this exact prefix for smoke tests / log scrapers.
-  lines.push(`Pairing code: ${digits}${info.mock ? '  (MOCK agent)' : ''}`);
-  if (info.advertise) lines.push('Discovery: Bonjour _roamsocket._tcp');
+  lines.push(`Pairing code: ${digits}${info.mock ? "  (MOCK agent)" : ""}`);
+  if (info.proxyBaseUrl) {
+    // External CLIs (Codex / Claude Code / Aider / Cursor / OpenCode) point at this.
+    lines.push(`Proxy:      ${info.proxyBaseUrl}/v1`);
+    if (info.proxyToken) lines.push(`Proxy key:  ${info.proxyToken}`);
+    lines.push(`Launch one: roamsocket open codex|claude|aider|cursor|opencode`);
+  }
+  if (info.advertise) lines.push("Discovery: Bonjour _roamsocket._tcp");
   if (info.autoTunnel && !usingTunnel) {
     lines.push('Auto tunnel: on (public URL + QR update when ready)');
   } else if (info.autoTunnel && usingTunnel) {

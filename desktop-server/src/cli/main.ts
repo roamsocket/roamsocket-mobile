@@ -1,9 +1,15 @@
 /**
- * RoamSocket CLI entry: companion server + coding agent TUI (default on TTY).
+ * RoamSocket CLI entry.
  *
- *   roamsocket                 # server + Ink agent UI
- *   roamsocket --serve-only    # headless server (legacy)
- *   APC_MOCK=1 roamsocket      # offline mock agent
+ *   roamsocket                       # headless companion + OpenAI/Anthropic proxy (default)
+ *   roamsocket --tui                 # legacy Ink coding agent UI (still supported)
+ *   roamsocket open <tool>           # print exports + launch Codex/Claude/Aider/Cursor/OpenCode
+ *   roamsocket --serve-only          # alias for the default (server + proxy, no UI)
+ *   APC_MOCK=1 roamsocket            # offline mock agent (TUI only)
+ *
+ * The default flipped to headless so external coding CLIs can use the
+ * desktop's stored keys via the local proxy on the same port. The TUI is
+ * still reachable via `--tui` for users who want the in-process agent loop.
  */
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -20,7 +26,16 @@ import {
   resolveModelSelection,
   updateCliSecrets,
 } from './secrets.js';
-import { App, createMessageBus, createPermissionBridge } from './tui/App.js';
+import {
+  App,
+  createMessageBus,
+  createPermissionBridge,
+} from './tui/App.js';
+import {
+  defaultToolFromEnv,
+  isSupportedTool,
+  launchTool,
+} from './open/index.js';
 
 export interface CliMainOptions {
   argv?: string[];
@@ -28,48 +43,63 @@ export interface CliMainOptions {
   forceServeOnly?: boolean;
   /** Skip TUI even on TTY (tests). */
   forceNoTui?: boolean;
+  /** Force TUI on (overrides the headless default). */
+  forceTui?: boolean;
 }
 
 function printHelp(): void {
-  console.log(`RoamSocket — coding agent CLI + desktop companion server
+  console.log(`RoamSocket — desktop companion + OpenAI/Anthropic proxy for external coding CLIs
 
 Usage:
-  roamsocket [options]
+  roamsocket                         Headless server + proxy (default; iOS app can pair)
+  roamsocket --tui                   Launch the legacy Ink coding agent UI in this terminal
+  roamsocket open <tool>             Print exports + launch an external coding CLI
+                                       (codex, claude, aider, cursor, opencode)
+  roamsocket --serve-only            Headless server only (no TUI, no auto-launch)
 
 Options:
   --serve-only       Headless server only (no agent TUI)
+  --tui              Force the legacy Ink agent UI
   --cwd <path>       Working directory for the local agent (default: .)
   --provider <id>    Provider (anthropic, openai, groq, …)
   --model <id>       Model id
   --mock             Offline mock agent (same as APC_MOCK=1)
+  --no-launch        Don't auto-launch a tool even if APC_OPEN_IN is set
   --help, -h         Show this help
 
 Environment:
-  PORT               Listen port (default 4319)
-  APC_MOCK=1         Mock agent
-  APC_HOST           Bind address
+  PORT                 Listen port (default 4319)
+  APC_MOCK=1           Mock agent
+  APC_HOST             Bind address
+  APC_OPEN_IN=<tool>   Auto-launch this tool after the server is up
+                         (codex | claude | aider | cursor | opencode)
+  APC_PROXY_TOKEN=<…>  Static bearer for /v1/* (else a random token is minted)
+  APC_PROXY_PROVIDER   Default upstream when X-RoamSocket-Provider isn't sent
   ANTHROPIC_API_KEY / OPENAI_API_KEY / …   Provider keys
 
-On a TTY, starts the pairing server and opens the coding agent UI.
-The iOS app can still pair with the same process. Sessions are independent
-(terminal works in cwd; phone clones GitHub repos).
-
-Slash commands (type / for completions): /help /mobile /pair /goal /model
-  /metal /permission /keys /effort /context /doctor /init /memory /diff /review /quit
+The default is headless so external coding CLIs can use the desktop's keys
+through http://localhost:4319/v1. The iOS app pairs the same way as before.
+The Ink TUI is reachable via --tui for users who want the in-process agent.
 `);
 }
 
 function parseArgs(argv: string[]) {
   let serveOnly = false;
+  let tui = false;
+  let noLaunch = false;
   let cwd = process.cwd();
   let provider: string | undefined;
   let model: string | undefined;
   let mock = process.env.APC_MOCK === '1';
   let help = false;
+  let openTool: string | undefined;
+  const openArgs: string[] = [];
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === '--serve-only') serveOnly = true;
+    else if (a === '--tui') tui = true;
+    else if (a === '--no-launch') noLaunch = true;
     else if (a === '--mock') mock = true;
     else if (a === '--help' || a === '-h') help = true;
     else if (a === '--cwd') {
@@ -84,10 +114,15 @@ function parseArgs(argv: string[]) {
       model = argv[++i];
     } else if (a.startsWith('--model=')) {
       model = a.slice('--model='.length);
+    } else if (a === 'open') {
+      openTool = argv[++i];
+      // Everything after the tool name is forwarded to it.
+      openArgs.push(...argv.slice(i + 1));
+      break;
     }
   }
 
-  return { serveOnly, cwd, provider, model, mock, help };
+  return { serveOnly, tui, noLaunch, cwd, provider, model, mock, help, openTool, openArgs };
 }
 
 /**
@@ -129,19 +164,75 @@ export async function main(opts: CliMainOptions = {}): Promise<void> {
     return;
   }
 
+  // `roamsocket open <tool>` is its own flow — start the server, print the
+  // exports, spawn the tool. Doesn't touch the TUI or model selection.
+  if (args.openTool !== undefined) {
+    if (!isSupportedTool(args.openTool)) {
+      console.error(
+        `Unknown tool "${args.openTool}". Supported: codex, claude, aider, cursor, opencode.`,
+      );
+      process.exitCode = 2;
+      return;
+    }
+    let server: RunningServer;
+    try {
+      server = await startServer({
+        silent: false,
+        cliSettings: false,
+        mock: args.mock,
+      });
+    } catch (err) {
+      console.error("Failed to start server:", err);
+      process.exitCode = 1;
+      return;
+    }
+    const printOnly = args.openArgs.includes("--print");
+    const pid = launchTool({
+      tool: args.openTool,
+      baseUrl: server.proxyBaseUrl,
+      bearer: server.proxyToken,
+      ...(args.model ? { model: args.model } : {}),
+      printOnly,
+      extraArgs: args.openArgs.filter((a) => a !== "--print"),
+    });
+    // --print: the user just wants the env lines; close the server and exit.
+    if (printOnly) {
+      await server.close();
+      return;
+    }
+    // Spawned a real tool — forward signals so it dies when the user hits ^C.
+    if (pid !== null) {
+      const child = { pid };
+      const stop = async () => {
+        try {
+          process.kill(child.pid, "SIGTERM");
+        } catch {
+          /* already gone */
+        }
+        await server.close();
+      };
+      process.on("SIGINT", () => void stop().then(() => process.exit(0)));
+      process.on("SIGTERM", () => void stop().then(() => process.exit(0)));
+    }
+    return;
+  }
+
   if (args.mock) {
     process.env.APC_MOCK = '1';
   }
 
-  if (args.provider || args.model) {
-    updateCliSecrets({
-      ...(args.provider ? { provider: args.provider } : {}),
-      ...(args.model ? { model: args.model } : {}),
-    });
-  }
-
   const isTty = Boolean(process.stdin.isTTY && process.stdout.isTTY);
-  const serveOnly = opts.forceServeOnly || args.serveOnly || opts.forceNoTui || !isTty;
+  // Default: headless server + proxy. The TUI is opt-in via --tui. We keep
+  // the legacy `APC_TUI=auto` knob so muscle-memory workflows survive.
+  const legacyAutoTui = process.env.APC_TUI === 'auto';
+  const wantsTui =
+    opts.forceTui === true ||
+    args.tui ||
+    (legacyAutoTui && isTty);
+  const serveOnly =
+    opts.forceServeOnly ||
+    args.serveOnly ||
+    (!wantsTui && !opts.forceTui);
 
   if (serveOnly) {
     await startServer({
@@ -149,6 +240,15 @@ export async function main(opts: CliMainOptions = {}): Promise<void> {
       cliSettings: isTty && process.env.APC_CLI_SETTINGS !== '0',
       mock: args.mock,
     });
+    // If APC_OPEN_IN is set we just remind the user to run `roamsocket open
+    // <tool>` — keeping the auto-launch on the dedicated subcommand keeps the
+    // default command easy to reason about (no surprise child process).
+    if (!args.noLaunch) {
+      const tool = defaultToolFromEnv();
+      if (tool) {
+        console.log(`\n[apc] APC_OPEN_IN=${tool} set — run \`roamsocket open ${tool}\` to launch it.`);
+      }
+    }
     return;
   }
 
