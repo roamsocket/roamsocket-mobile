@@ -112,16 +112,62 @@ public struct ProviderChatMessage: Codable, Sendable, Hashable {
         /// MIME type, e.g. `image/jpeg` or `image/png`.
         public let mimeType: String
         /// Raw base64 (no data-URL prefix).
+        ///
+        /// Always populated on the **wire** (HTTP providers require base64). For
+        /// in-process callers that just want the bytes (e.g. on-device Metal
+        /// VLMs), prefer `rawBytes` so we don't keep three copies of the same
+        /// image alive in RAM during the forward pass.
         public let base64Data: String
+        /// Decoded JPEG/PNG bytes when we already have them in-memory. Storing
+        /// both representations here lets in-process consumers skip a
+        /// `Data(base64Encoded:)` round-trip and a base64 String allocation.
+        public let rawBytes: Data?
 
-        public init(mimeType: String, base64Data: String) {
+        public init(mimeType: String, base64Data: String, rawBytes: Data? = nil) {
             self.mimeType = mimeType
             self.base64Data = base64Data
+            self.rawBytes = rawBytes
+        }
+
+        /// Convenience for chat senders that already hold the JPEG `Data`.
+        /// Computes the base64 String on demand (HTTP wire format) but keeps
+        /// the raw bytes in `rawBytes` so the in-process Metal path can avoid
+        /// re-decoding from base64.
+        public init(mimeType: String, jpegData: Data) {
+            self.mimeType = mimeType
+            self.base64Data = jpegData.base64EncodedString()
+            self.rawBytes = jpegData
         }
 
         /// `data:{mime};base64,{data}` for OpenAI-compatible `image_url` payloads.
         public var dataURL: String {
             "data:\(mimeType);base64,\(base64Data)"
+        }
+
+        /// The image bytes, preferring the in-memory copy when present. Lets
+        /// the on-device VLM path skip a base64 round-trip on every photo.
+        public var bytes: Data {
+            if let rawBytes, !rawBytes.isEmpty { return rawBytes }
+            return Data(base64Encoded: base64Data) ?? Data()
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case mimeType, base64Data, rawBytes
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            mimeType = try c.decode(String.self, forKey: .mimeType)
+            base64Data = try c.decode(String.self, forKey: .base64Data)
+            rawBytes = try c.decodeIfPresent(Data.self, forKey: .rawBytes)
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(mimeType, forKey: .mimeType)
+            try c.encode(base64Data, forKey: .base64Data)
+            // rawBytes is in-memory only — never ship over the wire (it would
+            // duplicate base64Data and balloon the encoded transcript).
         }
     }
 

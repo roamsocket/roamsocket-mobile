@@ -36,12 +36,24 @@ struct CameraCapture: UIViewControllerRepresentable {
             didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
         ) {
             parent.isPresented = false
-            // The picker only exposes a UIImage; encode to JPEG data once (a
-            // single full-bitmap pass) so the VM can downsample via ImageIO
-            // instead of decoding the 12 MP frame multiple times.
-            guard let image = info[.originalImage] as? UIImage,
-                  let data = image.jpegData(compressionQuality: 1.0)
-            else { return }
+            // The picker only exposes a UIImage; encode to JPEG data once at
+            // medium quality so the VM can downsample via ImageIO instead of
+            // decoding the 12 MP frame multiple times. Quality 1.0 here used
+            // to ship a ~5 MB JPEG only to be re-decoded and re-encoded
+            // moments later — a multi-MB allocator spike on top of a multi-GB
+            // Metal VLM. 0.92 is visually indistinguishable for the resize
+            // step that follows.
+            //
+            // autoreleasepool scopes the UIImage + intermediate JPEG buffer so
+            // they get reclaimed before the (smaller, encoded) `data` is
+            // handed to the VM. Without this, the 12 MP bitmap would linger
+            // until the next runloop drain — a real OOM risk next to a
+            // resident VLM.
+            let payload: Data? = autoreleasepool {
+                guard let image = info[.originalImage] as? UIImage else { return nil }
+                return image.jpegData(compressionQuality: 0.92)
+            }
+            guard let data = payload else { return }
             parent.onCapture(data)
         }
 

@@ -3,6 +3,9 @@ import CoreImage
 #if canImport(UIKit)
 import UIKit
 #endif
+#if canImport(Metal)
+import Metal
+#endif
 import AnyProvCore
 import MLX
 import MLXLLM
@@ -38,6 +41,33 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
     /// (they crash with NSGenericException).
     private let hubClient: HubClient
 
+    /// `true` while a `loadContainer` is in flight. The memory-warning
+    /// observer checks this so it doesn't yank the weights out from under a
+    /// load that's about to finish — iOS fires the warning *because* of the
+    /// load, not because we have free RAM to reclaim.
+    private let loadInFlight = LoadFlag()
+
+    /// Wired-memory admission control. Tickets let MLX suspend an allocation
+    /// when the device can't admit more instead of letting the process grow
+    /// past iOS jetsam limits.
+    private static let wiredTicket: MLX.WiredMemoryTicket = {
+        // 4 GB reservation is enough for a Gemma 4 4-bit vision tower plus
+        // its forward-pass scratch, but well under iOS jetsam thresholds on
+        // 8 GB-class devices. Reservation tickets participate in admission
+        // without keeping the wired limit elevated while idle.
+        //
+        // Module-qualified `MLX.WiredSumPolicy` because mlx-swift-lm
+        // re-exports the type through multiple umbrella headers (MLXLLM,
+        // MLXVLM, MLXLMCommon) and Swift's type-resolution path can't pick
+        // a single symbol without an explicit module prefix.
+        let policy: any WiredMemoryPolicy = MLX.WiredSumPolicy()
+        return MLX.WiredMemoryTicket(
+            size: 4 * 1024 * 1024 * 1024,
+            policy: policy,
+            kind: .reservation
+        )
+    }()
+
     init() {
         // Must match LocalMetalModelStore / LocalMetalPaths so downloads appear
         // in Settings, chat picker, and Vision. Falls back to legacy AnyProvCode
@@ -48,6 +78,46 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
         let hubCache = HubCache(cacheDirectory: dir)
         self.hubCache = hubCache
         self.hubClient = HubClient(cache: hubCache)
+
+        applySafeMemoryLimits()
+    }
+
+    /// Cap MLX's buffer cache + memory limit before any model load runs.
+    ///
+    /// Without these caps, MLX's pool grows unbounded up to Metal's
+    /// `recommendedMaxWorkingSetSize` (often 6–8 GB on iPhone 16 Pro). That
+    /// collides with iOS jetsam the moment we try to load a 5 GB VLM,
+    /// especially with Xcode's MallocStackLogging overhead.
+    ///
+    /// - **Cache limit**: 64 MB. The docs explicitly recommend "small cache
+    ///   sizes (e.g. 2 MB) perform just as well" for inference; 64 MB is
+    ///   plenty of headroom for KV cache + intermediates.
+    /// - **Memory limit**: half of Metal's recommended working set, floored
+    ///   at 2 GB and capped at 4 GB. MLX's default is 1.5× the working set,
+    ///   which is dangerously close to the iOS process limit.
+    private func applySafeMemoryLimits() {
+        // Cache: cap to 64 MB. The MLX docs call this out by name — buffer
+        // pool size is independent of inference correctness.
+        MLX.Memory.cacheLimit = 64 * 1024 * 1024
+
+        // Memory: half of Metal's recommended working set, clamped.
+        let workingSet = Self.metalRecommendedWorkingSetBytes()
+        if workingSet > 0 {
+            let target = max(2 * 1024 * 1024 * 1024, min(4 * 1024 * 1024 * 1024, workingSet / 2))
+            MLX.Memory.memoryLimit = target
+        }
+    }
+
+    /// Metal's `recommendedMaxWorkingSetSize`, or 0 if Metal is unavailable.
+    /// On iPhone 16 Pro (8 GB) this is typically ~5.5 GB.
+    private static func metalRecommendedWorkingSetBytes() -> Int {
+        #if canImport(Metal)
+        guard let device = MTLCreateSystemDefaultDevice() else { return 0 }
+        let value = device.recommendedMaxWorkingSetSize
+        return value > 0 ? Int(value) : 0
+        #else
+        return 0
+        #endif
     }
 
     // MARK: LocalMetalGenerating
@@ -64,8 +134,13 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
         }
 
         let hasImages = messages.contains(where: \.hasImages)
-        let useVLM = hasImages || Self.isLikelyVLM(modelID)
-        if hasImages && !Self.isLikelyVLM(modelID) {
+        // Drive the factory off the model id, never off the message — a
+        // text-only hub id must NEVER be loaded via VLMModelFactory, even
+        // when the message has no images. Loading the wrong factory on a
+        // multi-GB weight can crash the MLX runtime (e.g. Gemma 3n `-lm-`
+        // text builds, plain Llama, etc.).
+        let isVLM = Self.isLikelyVLM(modelID)
+        if hasImages && !isVLM {
             throw ProviderError.transport(
                 "This on-device model does not support vision. Download a Vision model (Gemma 4, Qwen2-VL, SmolVLM, …) from Settings → On-device (Metal)."
             )
@@ -75,7 +150,7 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
         let container = try await loadContainer(
             id: modelID,
             keepInMemory: true,
-            preferVLM: useVLM,
+            preferVLM: isVLM,
             progress: { _ in }
         )
         let params = generateParameters(effort: effort)
@@ -112,6 +187,14 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
             switch last.role {
             case .user:
                 if last.hasImages {
+                    // VLM forward passes are RAM-heavy. Clear Metal's
+                    // intermediate buffer cache **before** decoding the
+                    // images + running the forward pass — eviction after
+                    // the fact is too late when we're already on the edge
+                    // of the device's RAM budget (Xcode + MallocStackLogging
+                    // + view-debugging dylib all add overhead on top of the
+                    // resident multi-GB vision tower).
+                    MLX.Memory.clearCache()
                     let images = try Self.userInputImages(from: last.images)
                     let prompt = last.content.trimmingCharacters(in: .whitespacesAndNewlines)
                     let output = try await session.respond(
@@ -120,9 +203,12 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
                         videos: [],
                         audios: []
                     )
-                    // Drop intermediate Metal buffers from the VLM forward pass
-                    // so the next capture / UI update isn't fighting for RAM.
-                    Memory.clearCache()
+                    // Post-forward cleanup: drop the Metal buffer cache AND
+                    // evict this container so the next photo capture (or
+                    // backgrounded app resuming) is not fighting a pinned
+                    // multi-GB vision tower for memory.
+                    MLX.Memory.clearCache()
+                    await cache.remove(modelID)
                     return try nonEmpty(output)
                 }
                 let output = try await session.respond(to: last.content)
@@ -133,13 +219,17 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
                 return try nonEmpty(output)
             }
         } catch let error as ProviderError {
-            Memory.clearCache()
+            MLX.Memory.clearCache()
             throw error
         } catch is CancellationError {
-            Memory.clearCache()
+            MLX.Memory.clearCache()
             throw CancellationError()
         } catch {
-            Memory.clearCache()
+            MLX.Memory.clearCache()
+            // VLM-specific failure: the vision tower tends to OOM before the
+            // text-only path. Evict the container so we don't repeatedly crash
+            // trying to feed it more images.
+            await cache.remove(modelID)
             // A raw (non-transport, non-cancellation) failure means the runtime
             // itself blew up mid-generation (OOM, Metal shader error, …).
             // Persist a crash report so the next launch can offer the logs and
@@ -406,12 +496,12 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
     func unloadFromMemory(modelID: String) async {
         await cache.remove(modelID)
         // Free Metal/MLX intermediate buffers held by the runtime.
-        Memory.clearCache()
+        MLX.Memory.clearCache()
     }
 
     func unloadAllFromMemory() async {
         await cache.removeAll()
-        Memory.clearCache()
+        MLX.Memory.clearCache()
     }
 
     func isDownloaded(modelID: String) async -> Bool {
@@ -449,6 +539,10 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
         await cache.ids()
     }
 
+    func isLoadInFlight() async -> Bool {
+        await loadInFlight.get()
+    }
+
     // MARK: - Load
 
     private func loadContainer(
@@ -462,6 +556,39 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
             return cached
         }
 
+        // Mark the load as in-flight so the memory-warning observer doesn't
+        // yank the model out from under us while the weights are still being
+        // mmap'd. iOS fires `didReceiveMemoryWarning` *because* of the load,
+        // not because we have free RAM to reclaim.
+        await loadInFlight.set(true)
+        defer {
+            Task { [loadInFlight] in await loadInFlight.set(false) }
+        }
+
+        // Wired-memory admission: when a multi-GB load can't fit alongside
+        // the rest of the app, MLX suspends instead of letting the process
+        // grow past iOS jetsam limits. The reservation ticket also keeps
+        // the limit from being clobbered by a concurrent download.
+        //
+        // Bind the closure result so `loadContainer`'s own return is
+        // satisfied — the compiler can't see through `withWiredLimit`'s
+        // closure to infer it.
+        return try await MLX.WiredMemoryTicket.withWiredLimit(Self.wiredTicket) {
+            try await loadContainerInner(
+                id: id,
+                keepInMemory: keepInMemory,
+                preferVLM: preferVLM,
+                progress: progress
+            )
+        }
+    }
+
+    private func loadContainerInner(
+        id: String,
+        keepInMemory: Bool,
+        preferVLM: Bool,
+        progress: @escaping @Sendable (Double) -> Void
+    ) async throws -> ModelContainer {
         // Single-flight: selection preload + first chat send must not both load
         // the same multi-GB model into RAM.
         do {
@@ -857,14 +984,33 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
         from attachments: [ProviderChatMessage.ImageAttachment]
     ) throws -> [UserInput.Image] {
         try attachments.map { attachment in
-            guard let data = Data(base64Encoded: attachment.base64Data), !data.isEmpty else {
+            // Prefer the in-memory raw bytes (set by the VM via the
+            // jpegData-init convenience) — avoids a base64 round-trip per
+            // photo. Fall back to decoding the base64 wire string for
+            // transcripts replayed from disk.
+            let data = attachment.bytes
+            guard !data.isEmpty else {
                 throw ProviderError.transport("Could not decode the captured photo for on-device vision.")
             }
-            // Prefer CIImage; re-encode via UIImage when the JPEG has awkward
-            // EXIF/orientation that CIImage(data:) rejects.
+            // Fast path: CIImage handles most JPEGs without ever materializing
+            // a full UIImage bitmap (which doubles RAM during decode).
             if let ciImage = CIImage(data: data) {
                 return .ciImage(ciImage)
             }
+            // CIImage rejects some HEIC + awkward-EXIF photos. Fall back to a
+            // CGImageSource-backed CGImage (still single-decode) before we
+            // resort to a full UIImage decode + JPEG re-encode, which is the
+            // most expensive path and the one most likely to OOM next to a
+            // resident VLM.
+            #if canImport(ImageIO)
+            if let source = CGImageSourceCreateWithData(data as CFData, nil),
+               let cgImage = CGImageSourceCreateImageAtIndex(source, 0, [
+                kCGImageSourceShouldCacheImmediately: true
+               ] as CFDictionary)
+            {
+                return .ciImage(CIImage(cgImage: cgImage))
+            }
+            #endif
             #if canImport(UIKit)
             if let ui = UIImage(data: data),
                let jpeg = ui.jpegData(compressionQuality: 0.9),
@@ -1115,6 +1261,15 @@ private actor DownloadProgressBroker {
 }
 
 // MARK: - Container cache
+
+/// Single-bool flag actor used to gate memory-pressure eviction. Held by
+/// the engine so the warning observer can ask whether a multi-GB load is
+/// currently in flight before unloading weights.
+private actor LoadFlag {
+    private var value = false
+    func set(_ newValue: Bool) { value = newValue }
+    func get() -> Bool { value }
+}
 
 private actor ContainerCache {
     private var containers: [String: ModelContainer] = [:]

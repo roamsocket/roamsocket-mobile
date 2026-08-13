@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import Combine
+import MLX
 import AnyProvCore
 
 /// Root observable app state: secrets, model catalog, environments, GitHub
@@ -43,6 +44,12 @@ final class AppState: ObservableObject {
     @Published var localMetalLoadProgress: Double = 0
     /// Last error from loading the selected local model into memory (if any).
     @Published var localMetalLoadError: String?
+    /// Soft notice shown after iOS memory pressure forced us to unload an
+    /// on-device Metal model. Distinct from `localMetalLoadError` so the
+    /// load-error banner can stay scoped to actual load failures, and so
+    /// the memory-unload notice doesn't get cleared the next time we
+    /// touch `localMetalLoadError`.
+    @Published var memoryUnloadNotice: String?
 
     private var localMetalSyncTask: Task<Void, Never>?
     private var localMetalSyncGeneration = 0
@@ -400,6 +407,80 @@ final class AppState: ObservableObject {
         Task { await attemptServerReconnect() }
         // Official + user marketplaces: connectors, skill listings, plugins, Metal.
         Task { await MarketplaceStore.shared.refresh() }
+        observeMemoryPressure()
+    }
+
+    /// Drop any resident on-device Metal container when iOS signals memory
+    /// pressure. A 5 GB vision tower plus a freshly captured photo plus the
+    /// OS debugger overhead is enough to jetsam the app; giving the
+    /// container back proactively lets us survive a warning instead of
+    /// losing the process.
+    ///
+    /// Important: if a load is in flight, iOS fires the warning *because* of
+    /// the load. Unloading now would kill a load that's about to finish. In
+    /// that case we just clear the Metal buffer cache and let the load ride.
+    ///
+    /// We also debounce: the **first** warning in a quiet period only
+    /// triggers `Memory.clearCache()`. We only unload if iOS escalates
+    /// with a second warning within a short window. That avoids the case
+    /// where a single photo capture (which briefly allocates a UIImage
+    /// bitmap) trips the warning for one frame and we throw away 5 GB of
+    /// weights.
+    private func observeMemoryPressure() {
+        NotificationCenter.default
+            .publisher(for: UIApplication.didReceiveMemoryWarningNotification)
+            .sink { [weak self] _ in
+                self?.handleMemoryWarning()
+            }
+            .store(in: &bag)
+    }
+
+    /// Last time iOS fired a memory warning. Used to debounce — we only
+    /// unload the resident model if iOS escalates with a *second* warning
+    /// within `memoryWarningDebounce` seconds.
+    private var lastMemoryWarning: Date?
+    /// Threshold below which we treat two warnings as part of the same
+    /// escalation. Past the threshold a single warning is enough to unload.
+    private let memoryWarningDebounce: TimeInterval = 5
+
+    private func handleMemoryWarning() {
+        LocalMetalBootstrap.ensureRegistered()
+        guard let engine = LocalMetalRuntime.engine else { return }
+        Task { [weak self] in
+            guard let self else { return }
+
+            // Case 1: load is mid-flight. iOS is warning because of the load,
+            // not because we have headroom to reclaim. Just clear the MLX
+            // buffer pool so the rest of the system has more room, and let
+            // the load finish.
+            if await engine.isLoadInFlight() {
+                MLX.Memory.clearCache()
+                self.lastMemoryWarning = Date()
+                return
+            }
+
+            // Case 2: nothing is loading. Debounce: only unload if iOS
+            // escalates within the debounce window.
+            let now = Date()
+            let isEscalation = self.lastMemoryWarning.map { now.timeIntervalSince($0) < self.memoryWarningDebounce } ?? false
+            self.lastMemoryWarning = now
+            if !isEscalation {
+                // Single warning — likely transient (camera bitmap, image
+                // decode, etc.). Just reclaim MLX buffer pool.
+                MLX.Memory.clearCache()
+                return
+            }
+
+            // Escalation confirmed. Give back the multi-GB vision tower.
+            await engine.unloadAllFromMemory()
+            self.memoryUnloadNotice = "On-device model unloaded to free up memory. Next chat will reload it."
+            // One-shot: clear after 8 s so the banner doesn't linger across
+            // backgrounding/resuming the app.
+            try? await Task.sleep(nanoseconds: 8 * 1_000_000_000)
+            if !Task.isCancelled {
+                self.memoryUnloadNotice = nil
+            }
+        }
     }
 
     // MARK: - Desktop pairing persistence + auto-reconnect

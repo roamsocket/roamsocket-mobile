@@ -358,7 +358,8 @@ final class BrowserStore: ObservableObject {
         guard let planID = runningPlan?.id else { return }
         stepDismissTasks[stepID]?.cancel()
         let task = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: (self?.stepAutoDismissSeconds ?? 5) * 1_000_000_000)
+            let delay = self?.stepAutoDismissSeconds ?? 0
+            try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
             guard !Task.isCancelled else { return }
             guard let self, var plan = self.runningPlan, plan.id == planID else { return }
             plan.steps.removeAll { $0.id == stepID }

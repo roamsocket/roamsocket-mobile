@@ -153,6 +153,16 @@ struct ChatView: View {
                 viewModel.attachCameraImage(data)
             }
         }
+        .sheet(isPresented: $viewModel.showGallery) {
+            // selectionLimit mirrors ChatViewModel.maxAttachedImages so the
+            // picker can't return more than the composer would accept.
+            GalleryPicker(
+                isPresented: $viewModel.showGallery,
+                selectionLimit: ChatViewModel.maxAttachedImages
+            ) { payloads in
+                viewModel.attachGalleryImages(payloads)
+            }
+        }
         .sheet(isPresented: $viewModel.showConnectorsView) {
             ConnectorsView(viewModel: viewModel)
         }
@@ -542,6 +552,16 @@ struct ChatView: View {
                     style: .card
                 )
                 .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if let notice = state.memoryUnloadNotice, !notice.isEmpty {
+                // Soft notice after iOS forced us to unload a multi-GB
+                // vision tower. Distinct from `localMetalLoadError` so it
+                // doesn't get cleared by the next load attempt and reads
+                // as informational, not as an error.
+                Text(notice)
+                    .font(.footnote)
+                    .foregroundStyle(Theme.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 4)
             } else if let err = state.localMetalLoadError, !err.isEmpty {
                 Text(err)
                     .font(.footnote)
@@ -593,6 +613,17 @@ struct ChatView: View {
                 attachedImageStrip
             }
 
+            // Photo-disabled hint — shown above the controls row when the
+            // active on-device Metal model can't ingest images. Keeps the
+            // user from tapping the (greyed) camera button and wondering why.
+            if let reason = viewModel.photoDisabledReason {
+                Text(reason)
+                    .font(.caption)
+                    .foregroundStyle(Theme.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 2)
+            }
+
             // Bottom: controls row — +, model pill, send.
             HStack(alignment: .center, spacing: 8) {
                 // Plus: opens the AddToChat sheet
@@ -616,6 +647,10 @@ struct ChatView: View {
 
                 // Camera — opens the system camera and attaches the photo to
                 // this chat (no Vision analysis flow).
+                //
+                // Disabled when the active on-device model is text-only — the
+                // MLX backend would crash feeding it images. Show a one-line
+                // hint so the user knows why the button is grey.
                 Button {
                     viewModel.showCamera = true
                 } label: {
@@ -626,9 +661,47 @@ struct ChatView: View {
                         .background(Theme.surfaceElevated, in: Circle())
                 }
                 .buttonStyle(.plain)
-                .disabled(viewModel.isLoadingChat || viewModel.isProcessing)
+                .disabled(
+                    viewModel.isLoadingChat
+                        || viewModel.isProcessing
+                        || !viewModel.selectedModelSupportsPhotos
+                )
                 .accessibilityLabel("Take photo")
-                .accessibilityHint("Capture a photo to attach to this chat")
+                .accessibilityHint(
+                    viewModel.photoDisabledReason
+                        ?? "Capture a photo to attach to this chat"
+                )
+
+                // Gallery — opens PHPicker (system Photos) and attaches the
+                // selected photos. Same vision-disabled rules as the camera
+                // button: a text-only on-device model would crash inside MLX
+                // if we fed it images, so we grey it out with the same hint.
+                //
+                // Also greyed when the composer is already at the staged-photo
+                // cap so the user knows why before tapping.
+                Button {
+                    viewModel.showGallery = true
+                } label: {
+                    Image(systemName: "photo.on.rectangle.angled")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                        .frame(width: 36, height: 36)
+                        .background(Theme.surfaceElevated, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(
+                    viewModel.isLoadingChat
+                        || viewModel.isProcessing
+                        || !viewModel.selectedModelSupportsPhotos
+                        || viewModel.attachedImages.count >= ChatViewModel.maxAttachedImages
+                )
+                .accessibilityLabel("Pick photos from library")
+                .accessibilityHint(
+                    viewModel.photoDisabledReason
+                        ?? (viewModel.attachedImages.count >= ChatViewModel.maxAttachedImages
+                            ? "Maximum \(ChatViewModel.maxAttachedImages) photos per message"
+                            : "Choose photos to attach to this chat")
+                )
 
                 if hasText {
                     // Send — only when there is real input.
