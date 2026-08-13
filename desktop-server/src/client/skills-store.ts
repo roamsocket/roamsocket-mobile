@@ -2,9 +2,9 @@
  * Local skills catalog + user overrides (edit / uninstall / share).
  * Built-ins ship with Claude-like stubs; edits persist in localStorage.
  */
-import type { StorageLike } from "./history-store.js";
+import type { StorageLike } from './history-store.js';
 
-const KEY = "apc.skills.v1";
+const KEY = 'apc.skills.v1';
 
 export interface SkillRecord {
   id: string;
@@ -27,9 +27,9 @@ export interface SkillRecord {
 /** Default built-in skills (Claude-like). */
 export const BUILTIN_SKILLS: SkillRecord[] = [
   {
-    id: "apa-formatting",
-    name: "apa-formatting",
-    description: "APA citations and paper structure",
+    id: 'apa-formatting',
+    name: 'apa-formatting',
+    description: 'APA citations and paper structure',
     instructions: `# APA Formatting
 
 Help the user write papers following APA 7th edition: title page, running head, in-text citations, and reference lists.
@@ -38,16 +38,16 @@ Help the user write papers following APA 7th edition: title page, running head, 
 - "format this in APA"
 - "APA citations for …"
 `,
-    author: "You",
-    lastUpdated: "2026-06-01",
-    trigger: "Slash command + auto",
+    author: 'You',
+    lastUpdated: '2026-06-01',
+    trigger: 'Slash command + auto',
     share: false,
     builtin: true,
   },
   {
-    id: "canvas-design",
-    name: "canvas-design",
-    description: "Canvas / visual layout guidance",
+    id: 'canvas-design',
+    name: 'canvas-design',
+    description: 'Canvas / visual layout guidance',
     instructions: `# Canvas Design
 
 Guide layout, hierarchy, and visual composition for slides, posters, and canvas tools.
@@ -56,16 +56,16 @@ Guide layout, hierarchy, and visual composition for slides, posters, and canvas 
 - "design a canvas for …"
 - "improve this layout"
 `,
-    author: "You",
-    lastUpdated: "2026-05-12",
-    trigger: "Slash command + auto",
+    author: 'You',
+    lastUpdated: '2026-05-12',
+    trigger: 'Slash command + auto',
     share: false,
     builtin: true,
   },
   {
-    id: "doc-coauthoring",
-    name: "doc-coauthoring",
-    description: "Collaborative document drafting",
+    id: 'doc-coauthoring',
+    name: 'doc-coauthoring',
+    description: 'Collaborative document drafting',
     instructions: `# Doc Coauthoring
 
 Draft and revise long-form docs with clear sections, comments, and change proposals.
@@ -74,16 +74,16 @@ Draft and revise long-form docs with clear sections, comments, and change propos
 - "coauthor this draft"
 - "revise section 2"
 `,
-    author: "You",
-    lastUpdated: "2026-04-20",
-    trigger: "Slash command + auto",
+    author: 'You',
+    lastUpdated: '2026-04-20',
+    trigger: 'Slash command + auto',
     share: false,
     builtin: true,
   },
   {
-    id: "frontend-design-css",
-    name: "frontend-design-css",
-    description: "Premium HTML Landing Page Generator",
+    id: 'frontend-design-css',
+    name: 'frontend-design-css',
+    description: 'Premium HTML Landing Page Generator',
     instructions: `# Landing — Premium HTML Landing Page Generator
 
 > Distinct from \`product-team/skills/landing-page-generator/\`. That skill outputs Next.js TSX components optimized for conversion / lead-gen. THIS skill outputs a single self-contained \`.html\` file optimized for premium visual experience with GSAP animations. Pick by use case.
@@ -107,16 +107,16 @@ Generate a polished, self-contained \`.html\` landing page from a text prompt or
 
 In **Claude Code CLI**: write the file to disk at the specified path. In chat: return the full HTML in a fenced block.
 `,
-    author: "You",
-    lastUpdated: "2026-07-01",
-    trigger: "Slash command + auto",
+    author: 'You',
+    lastUpdated: '2026-07-01',
+    trigger: 'Slash command + auto',
     share: true,
     builtin: true,
   },
   {
-    id: "internal-comms",
-    name: "internal-comms",
-    description: "Internal status and announcements",
+    id: 'internal-comms',
+    name: 'internal-comms',
+    description: 'Internal status and announcements',
     instructions: `# Internal Comms
 
 Write crisp status updates, all-hands notes, and team announcements.
@@ -125,17 +125,17 @@ Write crisp status updates, all-hands notes, and team announcements.
 - "write a status update"
 - "announce …"
 `,
-    author: "You",
-    lastUpdated: "2026-03-10",
-    trigger: "Slash command + auto",
+    author: 'You',
+    lastUpdated: '2026-03-10',
+    trigger: 'Slash command + auto',
     share: false,
     builtin: true,
   },
   {
-    id: "mcp-builder",
-    name: "mcp-builder",
+    id: 'mcp-builder',
+    name: 'mcp-builder',
     description:
-      "Guide for creating high-quality MCP (Model Context Protocol) servers that enable LLMs to interact with external systems",
+      'Guide for creating high-quality MCP (Model Context Protocol) servers that enable LLMs to interact with external systems',
     instructions: `# MCP Builder
 
 Guide for creating high-quality MCP (Model Context Protocol) servers that enable LLMs to interact with external tools and data sources.
@@ -150,16 +150,16 @@ Guide for creating high-quality MCP (Model Context Protocol) servers that enable
 - "add tools for …"
 - "/mcp-builder"
 `,
-    author: "You",
-    lastUpdated: "2026-06-15",
-    trigger: "Slash command + auto",
+    author: 'You',
+    lastUpdated: '2026-06-15',
+    trigger: 'Slash command + auto',
     share: false,
     builtin: true,
   },
   {
-    id: "morning",
-    name: "morning",
-    description: "Daily brief and prioritization",
+    id: 'morning',
+    name: 'morning',
+    description: 'Daily brief and prioritization',
     instructions: `# Morning
 
 Produce a focused daily brief: top 3 priorities, calendar risks, and one stretch goal.
@@ -168,16 +168,16 @@ Produce a focused daily brief: top 3 priorities, calendar risks, and one stretch
 - "morning brief"
 - "what should I focus on today"
 `,
-    author: "You",
-    lastUpdated: "2026-02-01",
-    trigger: "Slash command + auto",
+    author: 'You',
+    lastUpdated: '2026-02-01',
+    trigger: 'Slash command + auto',
     share: false,
     builtin: true,
   },
   {
-    id: "skill-creator",
-    name: "skill-creator",
-    description: "Author new agent skills",
+    id: 'skill-creator',
+    name: 'skill-creator',
+    description: 'Author new agent skills',
     instructions: `# Skill Creator
 
 Help the user design SKILL.md files: name, description, triggers, and instructions.
@@ -186,16 +186,16 @@ Help the user design SKILL.md files: name, description, triggers, and instructio
 - "create a skill"
 - "skill for …"
 `,
-    author: "You",
-    lastUpdated: "2026-05-01",
-    trigger: "Slash command + auto",
+    author: 'You',
+    lastUpdated: '2026-05-01',
+    trigger: 'Slash command + auto',
     share: false,
     builtin: true,
   },
   {
-    id: "theme-factory",
-    name: "theme-factory",
-    description: "UI theme tokens and palettes",
+    id: 'theme-factory',
+    name: 'theme-factory',
+    description: 'UI theme tokens and palettes',
     instructions: `# Theme Factory
 
 Generate cohesive color tokens, typography scales, and CSS variables for product UI.
@@ -204,9 +204,9 @@ Generate cohesive color tokens, typography scales, and CSS variables for product
 - "make a theme"
 - "palette for …"
 `,
-    author: "You",
-    lastUpdated: "2026-01-18",
-    trigger: "Slash command + auto",
+    author: 'You',
+    lastUpdated: '2026-01-18',
+    trigger: 'Slash command + auto',
     share: false,
     builtin: true,
   },
@@ -271,7 +271,7 @@ export class SkillsStore {
 
   update(
     id: string,
-    patch: Partial<Pick<SkillRecord, "name" | "description" | "instructions" | "share" | "trigger">>,
+    patch: Partial<Pick<SkillRecord, 'name' | 'description' | 'instructions' | 'share' | 'trigger'>>
   ): SkillRecord | null {
     const current = this.get(id);
     if (!current) return null;
@@ -282,9 +282,7 @@ export class SkillsStore {
     if (current.builtin) {
       this.data.overrides[id] = { ...this.data.overrides[id], ...next };
     } else {
-      this.data.custom = this.data.custom.map((s) =>
-        s.id === id ? { ...s, ...next } : s,
-      );
+      this.data.custom = this.data.custom.map((s) => (s.id === id ? { ...s, ...next } : s));
     }
     this.persist();
     return this.get(id) ?? null;
@@ -311,16 +309,16 @@ export class SkillsStore {
       input.name
         .trim()
         .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-|-$/g, "") || `skill_${Date.now()}`;
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '') || `skill_${Date.now()}`;
     const rec: SkillRecord = {
       id,
       name: input.name.trim() || id,
       description: input.description.trim(),
       instructions: input.instructions.trim(),
-      author: "You",
+      author: 'You',
       lastUpdated: new Date().toISOString().slice(0, 10),
-      trigger: "Slash command + auto",
+      trigger: 'Slash command + auto',
       share: false,
       builtin: false,
     };
@@ -332,22 +330,19 @@ export class SkillsStore {
   /** Short hover preview text. */
   previewText(id: string, max = 180): string {
     const s = this.get(id);
-    if (!s) return "";
-    const body = (s.description || s.instructions).replace(/\s+/g, " ").trim();
-    return body.length > max ? body.slice(0, max - 1) + "…" : body;
+    if (!s) return '';
+    const body = (s.description || s.instructions).replace(/\s+/g, ' ').trim();
+    return body.length > max ? body.slice(0, max - 1) + '…' : body;
   }
 }
 
 /** Slash token as shown in composer, e.g. /mcp-builder */
-export function skillSlashToken(skill: Pick<SkillRecord, "name">): string {
-  return `/${skill.name.replace(/^\//, "")}`;
+export function skillSlashToken(skill: Pick<SkillRecord, 'name'>): string {
+  return `/${skill.name.replace(/^\//, '')}`;
 }
 
-export function skillByIdFromList(
-  list: SkillRecord[],
-  id: string,
-): SkillRecord | undefined {
-  const key = id.replace(/^\//, "").toLowerCase();
+export function skillByIdFromList(list: SkillRecord[], id: string): SkillRecord | undefined {
+  const key = id.replace(/^\//, '').toLowerCase();
   return list.find((s) => s.id === key || s.name.toLowerCase() === key);
 }
 

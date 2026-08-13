@@ -2,16 +2,16 @@
  * Interactive CLI settings for headless mode (`npm start` on a TTY).
  * Covers the same permission / connection controls as the Electron settings UI.
  */
-import * as readline from "node:readline/promises";
-import { stdin as input, stdout as output } from "node:process";
+import * as readline from 'node:readline/promises';
+import { stdin as input, stdout as output } from 'node:process';
 import {
   loadDesktopPrefs,
   saveDesktopPrefs,
   type DesktopPrefs,
   type TunnelProviderPref,
   desktopPrefsPath,
-} from "../desktop-config.js";
-import { printPairingCodeOnly } from "./banner.js";
+} from '../desktop-config.js';
+import { printPairingCodeOnly } from './banner.js';
 
 export interface CliSettingsContext {
   getPairingCode: () => string;
@@ -21,7 +21,7 @@ export interface CliSettingsContext {
 }
 
 function yn(v: boolean): string {
-  return v ? "on" : "off";
+  return v ? 'on' : 'off';
 }
 
 export async function runSettingsMenu(ctx: CliSettingsContext): Promise<void> {
@@ -54,19 +54,19 @@ export async function runSettingsMenu(ctx: CliSettingsContext): Promise<void> {
   };
 
   printMenu();
-  console.log("Type a number (or q) and press Enter. Server stays online.\n");
+  console.log('Type a number (or q) and press Enter. Server stays online.\n');
 
   const loop = async (): Promise<void> => {
     while (true) {
       let answer: string;
       try {
-        answer = (await rl.question("settings> ")).trim().toLowerCase();
+        answer = (await rl.question('settings> ')).trim().toLowerCase();
       } catch {
         break;
       }
       if (!answer) continue;
-      if (answer === "q" || answer === "quit" || answer === "exit") break;
-      if (answer === "h" || answer === "help" || answer === "?") {
+      if (answer === 'q' || answer === 'quit' || answer === 'exit') break;
+      if (answer === 'h' || answer === 'help' || answer === '?') {
         console.log(`
 Permissions:
   LAN discovery — phones can find this desktop on the same Wi‑Fi.
@@ -81,60 +81,68 @@ LAN discovery take effect for new connections immediately via env prefs.
       }
 
       switch (answer) {
-        case "1":
+        case '1':
           prefs.allowLanDiscovery = !prefs.allowLanDiscovery;
           saveDesktopPrefs(prefs);
-          console.log(`LAN discovery → ${yn(prefs.allowLanDiscovery)} (restart server to re-advertise)`);
+          console.log(
+            `LAN discovery → ${yn(prefs.allowLanDiscovery)} (restart server to re-advertise)`
+          );
           break;
-        case "2":
+        case '2':
           prefs.autoTunnelOnPair = !prefs.autoTunnelOnPair;
           saveDesktopPrefs(prefs);
           console.log(`Auto tunnel after pair → ${yn(prefs.autoTunnelOnPair)}`);
           break;
-        case "3": {
-          const order: TunnelProviderPref[] = ["auto", "cloudflare", "ngrok", "localtunnel", "bore"];
+        case '3': {
+          const order: TunnelProviderPref[] = [
+            'auto',
+            'cloudflare',
+            'ngrok',
+            'localtunnel',
+            'bore',
+          ];
           const i = order.indexOf(prefs.tunnelProvider);
           prefs.tunnelProvider = order[(i + 1) % order.length]!;
           saveDesktopPrefs(prefs);
           console.log(`Tunnel provider → ${prefs.tunnelProvider}`);
           break;
         }
-        case "4":
+        case '4':
           prefs.showPairingCodePopup = !prefs.showPairingCodePopup;
           saveDesktopPrefs(prefs);
           console.log(`Show pairing code on start → ${yn(prefs.showPairingCodePopup)}`);
           break;
-        case "5":
+        case '5':
           prefs.rotateCodeAfterPair = !prefs.rotateCodeAfterPair;
           saveDesktopPrefs(prefs);
           console.log(`Rotate code after pair → ${yn(prefs.rotateCodeAfterPair)}`);
           break;
-        case "6":
+        case '6':
           await printPairingCodeOnly(ctx.getPairingCode(), ctx.getPairHost());
           break;
-        case "7":
+        case '7':
           if (ctx.rotateCode) {
             const code = ctx.rotateCode();
             console.log(`New pairing code: ${code}`);
             await printPairingCodeOnly(code, ctx.getPairHost());
           } else {
-            console.log("Rotate not available.");
+            console.log('Rotate not available.');
           }
           break;
-        case "8":
+        case '8':
           prefs = loadDesktopPrefs();
           printMenu();
           break;
-        case "m":
-        case "menu":
+        case 'm':
+        case 'menu':
           printMenu();
           break;
         default:
-          console.log("Unknown command. Type h for help, m for menu, q to leave.");
+          console.log('Unknown command. Type h for help, m for menu, q to leave.');
       }
     }
     rl.close();
-    console.log("Settings menu closed. Server still running.\n");
+    console.log('Settings menu closed. Server still running.\n');
   };
 
   // Don't block startServer's return — run menu in background.
@@ -143,8 +151,8 @@ LAN discovery take effect for new connections immediately via env prefs.
 
 export function summarizePrefs(prefs: DesktopPrefs): string {
   return [
-    `lan-discovery=${prefs.allowLanDiscovery ? "on" : "off"}`,
-    `auto-tunnel=${prefs.autoTunnelOnPair ? "on" : "off"}`,
+    `lan-discovery=${prefs.allowLanDiscovery ? 'on' : 'off'}`,
+    `auto-tunnel=${prefs.autoTunnelOnPair ? 'on' : 'off'}`,
     `provider=${prefs.tunnelProvider}`,
-  ].join(" ");
+  ].join(' ');
 }

@@ -2,14 +2,14 @@
  * Interactive Metal / MLX model browser for the coding agent TUI.
  * Family list → model list; download / use / delete without leaving the app.
  */
-import React, { useEffect, useMemo, useState } from "react";
-import { Box, Text, useInput } from "ink";
+import React, { useEffect, useMemo, useState } from 'react';
+import { Box, Text, useInput } from 'ink';
 import {
   getMetalBrowserSnapshot,
   type MetalBrowserFamily,
   type MetalBrowserModel,
-} from "../metal-cli.js";
-import { theme } from "./theme.js";
+} from '../metal-cli.js';
+import { theme } from './theme.js';
 
 export interface MetalBrowserProps {
   width: number;
@@ -29,15 +29,13 @@ export interface MetalBrowserProps {
 }
 
 type RootItem =
-  | { kind: "runtime" }
-  | { kind: "on_device_header" }
-  | { kind: "model"; model: MetalBrowserModel }
-  | { kind: "section"; title: string }
-  | { kind: "family"; family: MetalBrowserFamily };
+  | { kind: 'runtime' }
+  | { kind: 'on_device_header' }
+  | { kind: 'model'; model: MetalBrowserModel }
+  | { kind: 'section'; title: string }
+  | { kind: 'family'; family: MetalBrowserFamily };
 
-type View =
-  | { level: "root"; cursor: number }
-  | { level: "family"; family: string; cursor: number };
+type View = { level: 'root'; cursor: number } | { level: 'family'; family: string; cursor: number };
 
 function clamp(i: number, n: number): number {
   if (n <= 0) return 0;
@@ -57,44 +55,44 @@ export function MetalBrowser({
   onDelete,
   onInstallRuntime,
 }: MetalBrowserProps) {
-  const [view, setView] = useState<View>({ level: "root", cursor: 0 });
+  const [view, setView] = useState<View>({ level: 'root', cursor: 0 });
 
   const snap = useMemo(() => getMetalBrowserSnapshot(), [refreshKey]);
 
   const rootItems = useMemo((): RootItem[] => {
-    const items: RootItem[] = [{ kind: "runtime" }];
+    const items: RootItem[] = [{ kind: 'runtime' }];
     if (snap.onDevice.length > 0) {
-      items.push({ kind: "on_device_header" });
+      items.push({ kind: 'on_device_header' });
       for (const m of snap.onDevice) {
-        items.push({ kind: "model", model: m });
+        items.push({ kind: 'model', model: m });
       }
     }
-    const featured = snap.families.filter((f) => f.group === "featured");
-    const more = snap.families.filter((f) => f.group === "more");
-    const experimental = snap.families.filter((f) => f.group === "experimental");
-    const legacy = snap.families.filter((f) => f.group === "legacy");
+    const featured = snap.families.filter((f) => f.group === 'featured');
+    const more = snap.families.filter((f) => f.group === 'more');
+    const experimental = snap.families.filter((f) => f.group === 'experimental');
+    const legacy = snap.families.filter((f) => f.group === 'legacy');
 
     if (featured.length) {
-      items.push({ kind: "section", title: "Featured" });
-      for (const f of featured) items.push({ kind: "family", family: f });
+      items.push({ kind: 'section', title: 'Featured' });
+      for (const f of featured) items.push({ kind: 'family', family: f });
     }
     if (more.length) {
-      items.push({ kind: "section", title: "More models" });
-      for (const f of more) items.push({ kind: "family", family: f });
+      items.push({ kind: 'section', title: 'More models' });
+      for (const f of more) items.push({ kind: 'family', family: f });
     }
     if (experimental.length) {
-      items.push({ kind: "section", title: "Experimental" });
-      for (const f of experimental) items.push({ kind: "family", family: f });
+      items.push({ kind: 'section', title: 'Experimental' });
+      for (const f of experimental) items.push({ kind: 'family', family: f });
     }
     if (legacy.length) {
-      items.push({ kind: "section", title: "Legacy" });
-      for (const f of legacy) items.push({ kind: "family", family: f });
+      items.push({ kind: 'section', title: 'Legacy' });
+      for (const f of legacy) items.push({ kind: 'family', family: f });
     }
     return items;
   }, [snap]);
 
   const familyModels = useMemo((): MetalBrowserModel[] => {
-    if (view.level !== "family") return [];
+    if (view.level !== 'family') return [];
     const fam = snap.families.find((f) => f.name === view.family);
     return fam?.models ?? [];
   }, [snap, view]);
@@ -104,64 +102,63 @@ export function MetalBrowser({
       rootItems
         .map((item, index) => ({ item, index }))
         .filter(
-          ({ item }) =>
-            item.kind === "runtime" || item.kind === "family" || item.kind === "model",
+          ({ item }) => item.kind === 'runtime' || item.kind === 'family' || item.kind === 'model'
         ),
-    [rootItems],
+    [rootItems]
   );
 
   // Keep cursor valid when the list refreshes after download/delete.
   useEffect(() => {
-    if (view.level === "root") {
+    if (view.level === 'root') {
       const max = Math.max(0, selectableRoot.length - 1);
-      if (view.cursor > max) setView({ level: "root", cursor: max });
+      if (view.cursor > max) setView({ level: 'root', cursor: max });
     } else {
       const max = Math.max(0, familyModels.length - 1);
       if (view.cursor > max) {
-        setView({ level: "family", family: view.family, cursor: max });
+        setView({ level: 'family', family: view.family, cursor: max });
       }
     }
   }, [view, selectableRoot.length, familyModels.length]);
 
-  const selectedRoot = selectableRoot[view.level === "root" ? view.cursor : -1];
+  const selectedRoot = selectableRoot[view.level === 'root' ? view.cursor : -1];
   const selectedModel =
-    view.level === "family"
-      ? familyModels[view.cursor] ?? null
-      : selectedRoot?.item.kind === "model"
+    view.level === 'family'
+      ? (familyModels[view.cursor] ?? null)
+      : selectedRoot?.item.kind === 'model'
         ? selectedRoot.item.model
         : null;
 
   useInput((input, key) => {
     // Ctrl+C is handled by App (quit). Ignore here so both hooks don't fight.
-    if (key.ctrl && input === "c") return;
+    if (key.ctrl && input === 'c') return;
 
-    if (input === "q" || (key.escape && view.level === "root")) {
+    if (input === 'q' || (key.escape && view.level === 'root')) {
       onClose();
       return;
     }
 
-    if (key.escape || key.leftArrow || input === "h") {
-      if (view.level === "family") {
+    if (key.escape || key.leftArrow || input === 'h') {
+      if (view.level === 'family') {
         // Restore cursor near this family on root
         const famIdx = selectableRoot.findIndex(
-          (r) => r.item.kind === "family" && r.item.family.name === view.family,
+          (r) => r.item.kind === 'family' && r.item.family.name === view.family
         );
-        setView({ level: "root", cursor: famIdx >= 0 ? famIdx : 0 });
+        setView({ level: 'root', cursor: famIdx >= 0 ? famIdx : 0 });
       } else {
         onClose();
       }
       return;
     }
 
-    if (key.upArrow || input === "k") {
-      if (view.level === "root") {
+    if (key.upArrow || input === 'k') {
+      if (view.level === 'root') {
         setView({
-          level: "root",
+          level: 'root',
           cursor: clamp(view.cursor - 1, selectableRoot.length),
         });
       } else {
         setView({
-          level: "family",
+          level: 'family',
           family: view.family,
           cursor: clamp(view.cursor - 1, familyModels.length),
         });
@@ -169,15 +166,15 @@ export function MetalBrowser({
       return;
     }
 
-    if (key.downArrow || input === "j") {
-      if (view.level === "root") {
+    if (key.downArrow || input === 'j') {
+      if (view.level === 'root') {
         setView({
-          level: "root",
+          level: 'root',
           cursor: clamp(view.cursor + 1, selectableRoot.length),
         });
       } else {
         setView({
-          level: "family",
+          level: 'family',
           family: view.family,
           cursor: clamp(view.cursor + 1, familyModels.length),
         });
@@ -185,54 +182,54 @@ export function MetalBrowser({
       return;
     }
 
-    if (input === "i") {
+    if (input === 'i') {
       onInstallRuntime();
       return;
     }
 
-    if (input === "d" && selectedModel) {
+    if (input === 'd' && selectedModel) {
       if (!selectedModel.downloaded) {
         onDownload(selectedModel.hubID, selectedModel.displayName);
       }
       return;
     }
 
-    if (input === "c" && busyLabel) {
+    if (input === 'c' && busyLabel) {
       onCancelDownload();
       return;
     }
 
-    if (input === "u" && selectedModel) {
+    if (input === 'u' && selectedModel) {
       if (selectedModel.downloaded) {
         onUse(selectedModel.hubID, selectedModel.displayName);
       }
       return;
     }
 
-    if ((input === "x" || input === "X") && selectedModel) {
+    if ((input === 'x' || input === 'X') && selectedModel) {
       if (selectedModel.downloaded) {
         onDelete(selectedModel.hubID, selectedModel.displayName);
       }
       return;
     }
 
-    if (key.return || key.rightArrow || input === "l") {
-      if (view.level === "root" && selectedRoot) {
+    if (key.return || key.rightArrow || input === 'l') {
+      if (view.level === 'root' && selectedRoot) {
         const it = selectedRoot.item;
-        if (it.kind === "runtime") {
+        if (it.kind === 'runtime') {
           onInstallRuntime();
           return;
         }
-        if (it.kind === "family") {
-          setView({ level: "family", family: it.family.name, cursor: 0 });
+        if (it.kind === 'family') {
+          setView({ level: 'family', family: it.family.name, cursor: 0 });
           return;
         }
-        if (it.kind === "model") {
+        if (it.kind === 'model') {
           activateModel(it.model);
           return;
         }
       }
-      if (view.level === "family" && selectedModel) {
+      if (view.level === 'family' && selectedModel) {
         activateModel(selectedModel);
       }
     }
@@ -249,7 +246,7 @@ export function MetalBrowser({
   const bodyH = Math.max(4, height - headerLines - footerLines);
 
   let body: React.ReactNode;
-  if (view.level === "root") {
+  if (view.level === 'root') {
     body = (
       <RootList
         items={rootItems}
@@ -269,31 +266,22 @@ export function MetalBrowser({
         activeHubID={activeHubID}
         bodyH={bodyH}
         width={width}
-        blurb={snap.families.find((f) => f.name === view.family)?.blurb ?? ""}
+        blurb={snap.families.find((f) => f.name === view.family)?.blurb ?? ''}
       />
     );
   }
 
-  const title =
-    view.level === "root"
-      ? "Metal models"
-      : `Metal · ${view.family}`;
+  const title = view.level === 'root' ? 'Metal models' : `Metal · ${view.family}`;
 
   return (
     <Box flexDirection="column" width={width} height={height} overflow="hidden">
-      <Box
-        borderStyle="single"
-        borderColor={theme.border}
-        paddingX={1}
-        flexShrink={0}
-        width="100%"
-      >
+      <Box borderStyle="single" borderColor={theme.border} paddingX={1} flexShrink={0} width="100%">
         <Text>
           <Text color={theme.accent} bold>
             {title}
           </Text>
           <Text color={theme.muted}>
-            {" "}
+            {' '}
             · {snap.onDevice.length} on device · {snap.storageLabel}
           </Text>
         </Text>
@@ -317,11 +305,11 @@ export function MetalBrowser({
         <Text color={theme.muted}>
           {selectedModel
             ? detailLine(selectedModel, activeHubID)
-            : view.level === "root" && selectedRoot?.item.kind === "runtime"
-              ? "Enter / i — install or reinstall managed Python + mlx-lm"
-              : view.level === "root" && selectedRoot?.item.kind === "family"
+            : view.level === 'root' && selectedRoot?.item.kind === 'runtime'
+              ? 'Enter / i — install or reinstall managed Python + mlx-lm'
+              : view.level === 'root' && selectedRoot?.item.kind === 'family'
                 ? `Enter — browse ${selectedRoot.item.family.name} (${selectedRoot.item.family.models.length} models)`
-                : "Select a family or model"}
+                : 'Select a family or model'}
         </Text>
       </Box>
     </Box>
@@ -330,12 +318,12 @@ export function MetalBrowser({
 
 function detailLine(m: MetalBrowserModel, activeHubID: string | null): string {
   const bits = [
-    m.downloaded ? "✓ downloaded" : "not downloaded",
+    m.downloaded ? '✓ downloaded' : 'not downloaded',
     m.approxSize,
-    activeHubID === m.hubID ? "active" : "",
+    activeHubID === m.hubID ? 'active' : '',
     m.hubID,
   ].filter(Boolean);
-  return bits.join(" · ");
+  return bits.join(' · ');
 }
 
 function shortPath(p: string): string {
@@ -386,15 +374,15 @@ function RootList({
 
 function rowKey(item: RootItem, abs: number): string {
   switch (item.kind) {
-    case "runtime":
-      return "runtime";
-    case "on_device_header":
-      return "on_device";
-    case "section":
+    case 'runtime':
+      return 'runtime';
+    case 'on_device_header':
+      return 'on_device';
+    case 'section':
       return `sec-${item.title}`;
-    case "family":
+    case 'family':
       return `fam-${item.family.name}`;
-    case "model":
+    case 'model':
       return `mod-${item.model.hubID}`;
     default:
       return String(abs);
@@ -412,59 +400,53 @@ function RootRow({
   activeHubID: string | null;
   width: number;
 }) {
-  const marker = active ? "› " : "  ";
+  const marker = active ? '› ' : '  ';
   const color = active ? theme.accent : theme.text;
 
-  if (item.kind === "runtime") {
+  if (item.kind === 'runtime') {
     return (
       <Text color={active ? theme.accent : theme.warning} bold={active} wrap="truncate">
         {marker}Runtime — install / reinstall Python + mlx-lm
       </Text>
     );
   }
-  if (item.kind === "on_device_header") {
+  if (item.kind === 'on_device_header') {
     return (
       <Text color={theme.muted} bold>
         On this device
       </Text>
     );
   }
-  if (item.kind === "section") {
+  if (item.kind === 'section') {
     return (
       <Text color={theme.muted} bold>
         {item.title}
       </Text>
     );
   }
-  if (item.kind === "family") {
+  if (item.kind === 'family') {
     const f = item.family;
     const mark =
       f.downloadedCount === f.models.length && f.models.length > 0
-        ? "✓"
+        ? '✓'
         : f.downloadedCount > 0
-          ? "◑"
-          : "·";
+          ? '◑'
+          : '·';
     return (
       <Text color={color} bold={active} wrap="truncate">
         {marker}
         {mark} {f.name}
         <Text color={theme.muted}>
-          {" "}
-          · {f.models.length} model{f.models.length === 1 ? "" : "s"}
-          {f.downloadedCount > 0 ? ` · ${f.downloadedCount}↓` : ""}
+          {' '}
+          · {f.models.length} model{f.models.length === 1 ? '' : 's'}
+          {f.downloadedCount > 0 ? ` · ${f.downloadedCount}↓` : ''}
         </Text>
       </Text>
     );
   }
   // model (on-device section)
   return (
-    <ModelRow
-      model={item.model}
-      active={active}
-      activeHubID={activeHubID}
-      indent
-      width={width}
-    />
+    <ModelRow model={item.model} active={active} activeHubID={activeHubID} indent width={width} />
   );
 }
 
@@ -527,9 +509,9 @@ function ModelRow({
   width: number;
 }) {
   void width;
-  const marker = active ? "› " : "  ";
-  const pad = indent ? "  " : "";
-  const dl = model.downloaded ? "✓" : "·";
+  const marker = active ? '› ' : '  ';
+  const pad = indent ? '  ' : '';
+  const dl = model.downloaded ? '✓' : '·';
   const isActive = activeHubID === model.hubID;
   return (
     <Text
@@ -541,10 +523,10 @@ function ModelRow({
       {marker}
       {dl} {model.displayName}
       <Text color={theme.muted}>
-        {model.approxSize ? ` · ${model.approxSize}` : ""}
-        {isActive ? " · active" : ""}
-        {model.tags.includes("thinking") ? " · thinking" : ""}
-        {model.tags.includes("best") ? " · best" : ""}
+        {model.approxSize ? ` · ${model.approxSize}` : ''}
+        {isActive ? ' · active' : ''}
+        {model.tags.includes('thinking') ? ' · thinking' : ''}
+        {model.tags.includes('best') ? ' · best' : ''}
       </Text>
     </Text>
   );

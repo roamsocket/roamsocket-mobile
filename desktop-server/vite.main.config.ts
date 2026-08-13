@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig } from 'vite';
 
 // Main process config. We bundle all runtime deps into main.cjs so the
 // packaged app doesn't need a full node_modules. Only `electron` and Node
@@ -14,14 +14,14 @@ import { defineConfig } from "vite";
 export default defineConfig({
   build: {
     lib: {
-      entry: "src/electron/main.ts",
-      formats: ["cjs"],
+      entry: 'src/electron/main.ts',
+      formats: ['cjs'],
     },
     rollupOptions: {
-      external: ["electron", /^node:/, "bufferutil", "utf-8-validate"],
+      external: ['electron', /^node:/, 'bufferutil', 'utf-8-validate'],
       output: {
-        entryFileNames: "[name].cjs",
-        chunkFileNames: "[name].cjs",
+        entryFileNames: '[name].cjs',
+        chunkFileNames: '[name].cjs',
       },
     },
   },

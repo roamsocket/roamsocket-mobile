@@ -14,16 +14,7 @@
   "bugs": {
     "url": "https://github.com/roamsocket/roamsocket-mobile/issues"
   },
-  "keywords": [
-    "roamsocket",
-    "coding-agent",
-    "websocket",
-    "ios",
-    "cli",
-    "ai",
-    "github",
-    "pairing"
-  ],
+  "keywords": ["roamsocket", "coding-agent", "websocket", "ios", "cli", "ai", "github", "pairing"],
   "engines": {
     "node": ">=20"
   },
@@ -41,12 +32,7 @@
     "roamsocket-server": "bin/roamsocket.js",
     "anyprov-code-server": "bin/roamsocket.js"
   },
-  "files": [
-    "bin",
-    "dist/src",
-    "README.md",
-    "LICENSE"
-  ],
+  "files": ["bin", "dist/src", "README.md", "LICENSE"],
   "publishConfig": {
     "access": "public"
   },

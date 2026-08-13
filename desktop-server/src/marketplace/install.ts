@@ -3,8 +3,8 @@
  * Pure functions that take a `SkillsStore`-like object so they're testable
  * without a real localStorage.
  */
-import type { SkillRecord } from "../client/skills-store.js";
-import type { MarketplaceCatalog, MarketplacePlugin, MarketplaceSkill } from "./types.js";
+import type { SkillRecord } from '../client/skills-store.js';
+import type { MarketplaceCatalog, MarketplacePlugin, MarketplaceSkill } from './types.js';
 
 /** Minimal subset of SkillsStore needed for install — enables unit testing. */
 export interface InstallTarget {
@@ -35,7 +35,7 @@ export function isMarketplaceSkillInstalled(store: InstallTarget, skillId: strin
  */
 export function installMarketplaceSkill(
   store: InstallTarget,
-  skill: MarketplaceSkill,
+  skill: MarketplaceSkill
 ): SkillRecord {
   if (isMarketplaceSkillInstalled(store, skill.id)) {
     throw new Error(`Skill “${skill.name}” is already installed.`);
@@ -61,7 +61,7 @@ export interface PluginInstallResult {
 export function installMarketplacePlugin(
   store: InstallTarget,
   plugin: MarketplacePlugin,
-  catalog: MarketplaceCatalog,
+  catalog: MarketplaceCatalog
 ): PluginInstallResult {
   const result: PluginInstallResult = { installed: 0, skipped: 0, missing: 0, errors: [] };
   const ids = plugin.skillIds ?? [];
@@ -92,7 +92,7 @@ export function installMarketplacePlugin(
  */
 export function resolvePluginSkills(
   plugin: MarketplacePlugin,
-  catalog: MarketplaceCatalog,
+  catalog: MarketplaceCatalog
 ): { available: MarketplaceSkill[]; missing: string[] } {
   const available: MarketplaceSkill[] = [];
   const missing: string[] = [];

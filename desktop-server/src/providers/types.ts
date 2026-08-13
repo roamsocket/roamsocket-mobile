@@ -3,8 +3,8 @@
  * normalized conversation to its own API and yields a normalized event stream
  * so the agent loop stays provider-agnostic.
  */
-import type { ProviderId } from "../protocol.js";
-import type { Tool } from "../tools/index.js";
+import type { ProviderId } from '../protocol.js';
+import type { Tool } from '../tools/index.js';
 
 export interface NormalizedToolCall {
   id: string;
@@ -13,9 +13,9 @@ export interface NormalizedToolCall {
 }
 
 export type NormalizedMessage =
-  | { role: "user"; text: string }
-  | { role: "assistant"; text: string; toolCalls: NormalizedToolCall[] }
-  | { role: "tool"; toolCallId: string; name: string; output: string; ok: boolean };
+  | { role: 'user'; text: string }
+  | { role: 'assistant'; text: string; toolCalls: NormalizedToolCall[] }
+  | { role: 'tool'; toolCallId: string; name: string; output: string; ok: boolean };
 
 export interface CompletionRequest {
   model: string;
@@ -23,15 +23,20 @@ export interface CompletionRequest {
   system: string;
   messages: NormalizedMessage[];
   tools: Tool[];
-  effort: "low" | "medium" | "high";
+  effort: 'low' | 'medium' | 'high';
 }
 
 export type ProviderEvent =
-  | { kind: "text"; text: string }
-  | { kind: "tool_call"; call: NormalizedToolCall }
+  | { kind: 'text'; text: string }
+  | { kind: 'tool_call'; call: NormalizedToolCall }
   /** Local (Metal/MLX) model loading or generating progress. */
-  | { kind: "model_status"; status: "loading" | "generating" | "done"; hubID?: string; message?: string }
-  | { kind: "done"; stopReason: string };
+  | {
+      kind: 'model_status';
+      status: 'loading' | 'generating' | 'done';
+      hubID?: string;
+      message?: string;
+    }
+  | { kind: 'done'; stopReason: string };
 
 export interface ProviderAdapter {
   id: ProviderId;

@@ -5,21 +5,21 @@
  * user has actually connected (token pasted, or OAuth completed) becomes
  * usable through the same two tools.
  */
-import type { Tool, ToolResult } from "./types.js";
-import { truncate } from "./types.js";
-import { listConnectorDefinitions } from "../connectors/catalog.js";
-import { isConnectorConnected, resolveAuthHeader } from "../connectors/store.js";
+import type { Tool, ToolResult } from './types.js';
+import { truncate } from './types.js';
+import { listConnectorDefinitions } from '../connectors/catalog.js';
+import { isConnectorConnected, resolveAuthHeader } from '../connectors/store.js';
 
 export const listConnectorsTool: Tool = {
-  name: "list_connectors",
+  name: 'list_connectors',
   description:
-    "List the connectors (linked accounts/services) the user has connected in RoamSocket Settings → Connectors. " +
-    "Call this before connector_request to see which connector ids are actually usable right now.",
-  inputSchema: { type: "object", properties: {}, additionalProperties: false },
-  summarize: () => "Listing connected connectors",
+    'List the connectors (linked accounts/services) the user has connected in RoamSocket Settings → Connectors. ' +
+    'Call this before connector_request to see which connector ids are actually usable right now.',
+  inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  summarize: () => 'Listing connected connectors',
   async execute(): Promise<ToolResult> {
     const rows = listConnectorDefinitions()
-      .filter((d) => d.authType !== "unsupported")
+      .filter((d) => d.authType !== 'unsupported')
       .map((d) => ({
         id: d.id,
         name: d.name,
@@ -31,7 +31,7 @@ export const listConnectorsTool: Tool = {
       return {
         ok: true,
         output:
-          "No connectors are connected. Tell the user to connect one in Settings → Connectors, then try again.",
+          'No connectors are connected. Tell the user to connect one in Settings → Connectors, then try again.',
       };
     }
     return { ok: true, output: JSON.stringify(rows, null, 2) };
@@ -39,38 +39,41 @@ export const listConnectorsTool: Tool = {
 };
 
 export const connectorRequestTool: Tool = {
-  name: "connector_request",
+  name: 'connector_request',
   description:
     "Make an authenticated HTTP request to a connected connector's API (e.g. github, figma, godaddy, gmail, gcal, gdrive). " +
     "Call list_connectors first to see which ids are connected. `path` is relative to the connector's base API URL.",
   inputSchema: {
-    type: "object",
+    type: 'object',
     properties: {
-      connectorId: { type: "string", description: "Connector id, e.g. \"github\"." },
-      method: { type: "string", enum: ["GET", "POST", "PUT", "PATCH", "DELETE"], default: "GET" },
-      path: { type: "string", description: "Path relative to the connector's base URL, e.g. \"/user\"." },
-      query: { type: "object", description: "Optional query parameters." },
-      body: { description: "Optional JSON request body." },
+      connectorId: { type: 'string', description: 'Connector id, e.g. "github".' },
+      method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], default: 'GET' },
+      path: {
+        type: 'string',
+        description: 'Path relative to the connector\'s base URL, e.g. "/user".',
+      },
+      query: { type: 'object', description: 'Optional query parameters.' },
+      body: { description: 'Optional JSON request body.' },
     },
-    required: ["connectorId", "path"],
+    required: ['connectorId', 'path'],
     additionalProperties: false,
   },
   summarize(input) {
-    const id = String(input.connectorId ?? "?");
-    const method = String(input.method ?? "GET");
-    const p = String(input.path ?? "");
+    const id = String(input.connectorId ?? '?');
+    const method = String(input.method ?? 'GET');
+    const p = String(input.path ?? '');
     return `${method} ${id}${p}`;
   },
   async execute(input): Promise<ToolResult> {
-    const connectorId = String(input.connectorId ?? "");
-    const method = String(input.method ?? "GET").toUpperCase();
-    const relPath = String(input.path ?? "");
+    const connectorId = String(input.connectorId ?? '');
+    const method = String(input.method ?? 'GET').toUpperCase();
+    const relPath = String(input.path ?? '');
     const query = (input.query as Record<string, unknown> | undefined) ?? undefined;
     const body = input.body;
 
-    const { connectorDefinition } = await import("../connectors/catalog.js");
+    const { connectorDefinition } = await import('../connectors/catalog.js');
     const def = connectorDefinition(connectorId);
-    if (!def || def.authType === "unsupported") {
+    if (!def || def.authType === 'unsupported') {
       return {
         ok: false,
         output: def
@@ -79,7 +82,7 @@ export const connectorRequestTool: Tool = {
       };
     }
     const authResult = await resolveAuthHeader(connectorId);
-    if ("error" in authResult) {
+    if ('error' in authResult) {
       return { ok: false, output: authResult.error };
     }
     if (!def.baseUrl) {
@@ -98,8 +101,8 @@ export const connectorRequestTool: Tool = {
         method,
         headers: {
           ...authResult.header,
-          Accept: "application/json",
-          ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+          Accept: 'application/json',
+          ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
         },
         body: body !== undefined ? JSON.stringify(body) : undefined,
       });

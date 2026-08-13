@@ -5,26 +5,22 @@
  *   roamsocket --serve-only    # headless server (legacy)
  *   APC_MOCK=1 roamsocket      # offline mock agent
  */
-import path from "node:path";
-import { pathToFileURL } from "node:url";
-import React from "react";
-import { render } from "ink";
-import { startServer, type RunningServer } from "../index.js";
-import { currentAccessTunnel } from "../workspace/access-tunnel.js";
-import type { ServerMessage } from "../protocol.js";
-import { LocalCliSession } from "./local-session.js";
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import React from 'react';
+import { render } from 'ink';
+import { startServer, type RunningServer } from '../index.js';
+import { currentAccessTunnel } from '../workspace/access-tunnel.js';
+import type { ServerMessage } from '../protocol.js';
+import { LocalCliSession } from './local-session.js';
 import {
   defaultPermissionMode,
   hasAnyKey,
   loadCliSecrets,
   resolveModelSelection,
   updateCliSecrets,
-} from "./secrets.js";
-import {
-  App,
-  createMessageBus,
-  createPermissionBridge,
-} from "./tui/App.js";
+} from './secrets.js';
+import { App, createMessageBus, createPermissionBridge } from './tui/App.js';
 
 export interface CliMainOptions {
   argv?: string[];
@@ -68,26 +64,26 @@ function parseArgs(argv: string[]) {
   let cwd = process.cwd();
   let provider: string | undefined;
   let model: string | undefined;
-  let mock = process.env.APC_MOCK === "1";
+  let mock = process.env.APC_MOCK === '1';
   let help = false;
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
-    if (a === "--serve-only") serveOnly = true;
-    else if (a === "--mock") mock = true;
-    else if (a === "--help" || a === "-h") help = true;
-    else if (a === "--cwd") {
+    if (a === '--serve-only') serveOnly = true;
+    else if (a === '--mock') mock = true;
+    else if (a === '--help' || a === '-h') help = true;
+    else if (a === '--cwd') {
       cwd = path.resolve(argv[++i] ?? cwd);
-    } else if (a.startsWith("--cwd=")) {
-      cwd = path.resolve(a.slice("--cwd=".length));
-    } else if (a === "--provider") {
+    } else if (a.startsWith('--cwd=')) {
+      cwd = path.resolve(a.slice('--cwd='.length));
+    } else if (a === '--provider') {
       provider = argv[++i];
-    } else if (a.startsWith("--provider=")) {
-      provider = a.slice("--provider=".length);
-    } else if (a === "--model") {
+    } else if (a.startsWith('--provider=')) {
+      provider = a.slice('--provider='.length);
+    } else if (a === '--model') {
       model = argv[++i];
-    } else if (a.startsWith("--model=")) {
-      model = a.slice("--model=".length);
+    } else if (a.startsWith('--model=')) {
+      model = a.slice('--model='.length);
     }
   }
 
@@ -102,27 +98,25 @@ export async function runOneShot(opts: {
   text: string;
   workdir: string;
   mock?: boolean;
-  permissionMode?: "acceptEdits" | "ask" | "plan";
+  permissionMode?: 'acceptEdits' | 'ask' | 'plan';
   onMessage?: (msg: ServerMessage) => void;
 }): Promise<{ messages: ServerMessage[]; ok: boolean }> {
   const messages: ServerMessage[] = [];
-  const mock = opts.mock ?? process.env.APC_MOCK === "1";
+  const mock = opts.mock ?? process.env.APC_MOCK === '1';
   const model = resolveModelSelection({ mock });
   const session = await LocalCliSession.create({
     workdir: opts.workdir,
     model,
-    permissionMode: opts.permissionMode ?? "acceptEdits",
+    permissionMode: opts.permissionMode ?? 'acceptEdits',
     mock,
     onMessage: (msg) => {
       messages.push(msg);
       opts.onMessage?.(msg);
     },
-    onPermission: async () => "allow",
+    onPermission: async () => 'allow',
   });
   await session.send(opts.text);
-  const hasAssistant = messages.some(
-    (m) => m.type === "assistant_delta" || m.type === "tool_call",
-  );
+  const hasAssistant = messages.some((m) => m.type === 'assistant_delta' || m.type === 'tool_call');
   return { messages, ok: hasAssistant };
 }
 
@@ -136,7 +130,7 @@ export async function main(opts: CliMainOptions = {}): Promise<void> {
   }
 
   if (args.mock) {
-    process.env.APC_MOCK = "1";
+    process.env.APC_MOCK = '1';
   }
 
   if (args.provider || args.model) {
@@ -147,13 +141,12 @@ export async function main(opts: CliMainOptions = {}): Promise<void> {
   }
 
   const isTty = Boolean(process.stdin.isTTY && process.stdout.isTTY);
-  const serveOnly =
-    opts.forceServeOnly || args.serveOnly || opts.forceNoTui || !isTty;
+  const serveOnly = opts.forceServeOnly || args.serveOnly || opts.forceNoTui || !isTty;
 
   if (serveOnly) {
     await startServer({
       silent: false,
-      cliSettings: isTty && process.env.APC_CLI_SETTINGS !== "0",
+      cliSettings: isTty && process.env.APC_CLI_SETTINGS !== '0',
       mock: args.mock,
     });
     return;
@@ -167,13 +160,13 @@ export async function main(opts: CliMainOptions = {}): Promise<void> {
       mock: args.mock,
     });
   } catch (err) {
-    console.error("Failed to start server:", err);
+    console.error('Failed to start server:', err);
     process.exitCode = 1;
     return;
   }
 
   const secrets = loadCliSecrets();
-  const mock = args.mock || process.env.APC_MOCK === "1";
+  const mock = args.mock || process.env.APC_MOCK === '1';
   const model = resolveModelSelection({
     provider: args.provider,
     model: args.model,
@@ -184,8 +177,8 @@ export async function main(opts: CliMainOptions = {}): Promise<void> {
 
   if (!mock && !hasAnyKey(secrets) && !model.apiKey) {
     console.error(
-      "No API key found. Set ANTHROPIC_API_KEY (or another provider key),\n" +
-        "use /keys in the TUI, or run with --mock / APC_MOCK=1.",
+      'No API key found. Set ANTHROPIC_API_KEY (or another provider key),\n' +
+        'use /keys in the TUI, or run with --mock / APC_MOCK=1.'
     );
   }
 
@@ -224,7 +217,7 @@ export async function main(opts: CliMainOptions = {}): Promise<void> {
         await server.close();
       },
     }),
-    { alternateScreen: true },
+    { alternateScreen: true }
   );
 
   await ink.waitUntilExit();

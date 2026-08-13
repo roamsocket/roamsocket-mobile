@@ -3,63 +3,63 @@
  * Pure DOM helpers used by main.ts renderProjectDetail.
  */
 
-import type { ProjectItem, ProjectsStore } from "../client/projects-store.js";
+import type { ProjectItem, ProjectsStore } from '../client/projects-store.js';
 import {
   memoryPlaceholderAt,
   memoryTextFromEditor,
   MEMORY_EMPTY_STATE_MARKER,
-} from "../client/projects-store.js";
-import { relativeTime } from "../client/code-sessions-store.js";
+} from '../client/projects-store.js';
+import { relativeTime } from '../client/code-sessions-store.js';
 
 type ElFn = <K extends keyof HTMLElementTagNameMap>(
   tag: K,
   attrs?: Record<string, string>,
-  children?: (string | Node)[],
+  children?: (string | Node)[]
 ) => HTMLElementTagNameMap[K];
 
 export function openInstructionsModal(
   project: ProjectItem,
   projects: ProjectsStore,
   el: ElFn,
-  onSaved: () => void,
+  onSaved: () => void
 ): void {
-  const backdrop = el("div", { class: "modal-backdrop project-modal-backdrop" });
-  const modal = el("div", { class: "modal project-modal" });
+  const backdrop = el('div', { class: 'modal-backdrop project-modal-backdrop' });
+  const modal = el('div', { class: 'modal project-modal' });
 
-  const head = el("div", { class: "project-modal-head" });
-  head.append(el("h3", {}, ["Set project instructions"]));
-  const closeX = el("button", { class: "modal-x", type: "button", "aria-label": "Close" }, ["×"]);
+  const head = el('div', { class: 'project-modal-head' });
+  head.append(el('h3', {}, ['Set project instructions']));
+  const closeX = el('button', { class: 'modal-x', type: 'button', 'aria-label': 'Close' }, ['×']);
   head.append(closeX);
   modal.append(head);
 
   modal.append(
-    el("p", { class: "settings-hint" }, [
+    el('p', { class: 'settings-hint' }, [
       `Provide relevant instructions for chats within ${project.name}. This works alongside profile instructions and the selected model style.`,
-    ]),
+    ])
   );
 
-  const ta = el("textarea", {
-    class: "project-modal-textarea",
-    rows: "8",
+  const ta = el('textarea', {
+    class: 'project-modal-textarea',
+    rows: '8',
     placeholder:
-      "Think step by step and show reasoning for complex problems. Use specific examples.",
+      'Think step by step and show reasoning for complex problems. Use specific examples.',
   }) as HTMLTextAreaElement;
-  ta.value = project.instructions || "";
+  ta.value = project.instructions || '';
   modal.append(ta);
 
-  const actions = el("div", { class: "project-modal-actions" });
-  const cancel = el("button", { class: "ghost-btn", type: "button" }, ["Cancel"]);
-  const save = el("button", { class: "primary-btn", type: "button" }, ["Save instructions"]);
+  const actions = el('div', { class: 'project-modal-actions' });
+  const cancel = el('button', { class: 'ghost-btn', type: 'button' }, ['Cancel']);
+  const save = el('button', { class: 'primary-btn', type: 'button' }, ['Save instructions']);
   actions.append(cancel, save);
   modal.append(actions);
 
   const close = () => backdrop.remove();
-  closeX.addEventListener("click", close);
-  cancel.addEventListener("click", close);
-  backdrop.addEventListener("click", (e) => {
+  closeX.addEventListener('click', close);
+  cancel.addEventListener('click', close);
+  backdrop.addEventListener('click', (e) => {
     if (e.target === backdrop) close();
   });
-  save.addEventListener("click", () => {
+  save.addEventListener('click', () => {
     projects.setInstructions(project.id, ta.value);
     // Keep description in sync when empty so cards still have a blurb option
     close();
@@ -75,35 +75,34 @@ export function openMemoryModal(
   project: ProjectItem,
   projects: ProjectsStore,
   el: ElFn,
-  onSaved: () => void,
+  onSaved: () => void
 ): void {
-  const backdrop = el("div", { class: "modal-backdrop project-modal-backdrop" });
-  const modal = el("div", { class: "modal project-modal project-memory-modal" });
+  const backdrop = el('div', { class: 'modal-backdrop project-modal-backdrop' });
+  const modal = el('div', { class: 'modal project-modal project-memory-modal' });
 
-  const head = el("div", { class: "project-modal-head" });
-  head.append(el("h3", {}, ["Manage project memory"]));
-  const closeX = el("button", { class: "modal-x", type: "button", "aria-label": "Close" }, ["×"]);
+  const head = el('div', { class: 'project-modal-head' });
+  head.append(el('h3', {}, ['Manage project memory']));
+  const closeX = el('button', { class: 'modal-x', type: 'button', 'aria-label': 'Close' }, ['×']);
   head.append(closeX);
   modal.append(head);
 
   modal.append(
-    el("p", { class: "settings-hint" }, [
-      "Project memory is private to you on this device. It is used as context for chats in this project. Only you can see it.",
-    ]),
+    el('p', { class: 'settings-hint' }, [
+      'Project memory is private to you on this device. It is used as context for chats in this project. Only you can see it.',
+    ])
   );
 
-  const body = el("div", { class: "project-memory-body" });
-  const content = el("div", { class: "project-memory-content" });
-  content.contentEditable = "true";
+  const body = el('div', { class: 'project-memory-body' });
+  const content = el('div', { class: 'project-memory-content' });
+  content.contentEditable = 'true';
   content.spellcheck = true;
   const startedEmpty = !project.memory.trim();
   let userEditedBody = false;
   if (!startedEmpty) {
     content.innerText = project.memory;
   } else {
-    content.dataset.emptyChrome = "1";
-    content.innerHTML =
-      `<p><strong>Purpose &amp; context</strong></p><p class="muted">${MEMORY_EMPTY_STATE_MARKER}. Use the box below to add facts, or chat in this project and generate memory later.</p>`;
+    content.dataset.emptyChrome = '1';
+    content.innerHTML = `<p><strong>Purpose &amp; context</strong></p><p class="muted">${MEMORY_EMPTY_STATE_MARKER}. Use the box below to add facts, or chat in this project and generate memory later.</p>`;
   }
   body.append(content);
   modal.append(body);
@@ -112,11 +111,11 @@ export function openMemoryModal(
     userEditedBody = true;
     delete content.dataset.emptyChrome;
   };
-  content.addEventListener("input", markEdited);
-  content.addEventListener("focus", () => {
+  content.addEventListener('input', markEdited);
+  content.addEventListener('focus', () => {
     // Clear chrome on first focus so typing does not append to placeholder
-    if (content.dataset.emptyChrome === "1" && !userEditedBody) {
-      content.innerHTML = "";
+    if (content.dataset.emptyChrome === '1' && !userEditedBody) {
+      content.innerHTML = '';
       delete content.dataset.emptyChrome;
     }
   });
@@ -128,11 +127,11 @@ export function openMemoryModal(
     });
 
   // Adjust field with cycling placeholders
-  const adjustRow = el("div", { class: "memory-adjust-row" });
-  const input = el("input", {
-    class: "memory-adjust-input",
-    type: "text",
-    autocomplete: "off",
+  const adjustRow = el('div', { class: 'memory-adjust-row' });
+  const input = el('input', {
+    class: 'memory-adjust-input',
+    type: 'text',
+    autocomplete: 'off',
   }) as HTMLInputElement;
   let phIndex = 0;
   let cycling = true;
@@ -144,19 +143,23 @@ export function openMemoryModal(
   applyPh();
   const timer = window.setInterval(applyPh, 3200);
 
-  const send = el("button", {
-    class: "memory-adjust-send",
-    type: "button",
-    title: "Apply",
-    "aria-label": "Apply memory adjustment",
-  }, ["→"]);
+  const send = el(
+    'button',
+    {
+      class: 'memory-adjust-send',
+      type: 'button',
+      title: 'Apply',
+      'aria-label': 'Apply memory adjustment',
+    },
+    ['→']
+  );
 
   const applyCmd = () => {
     const cmd = input.value.trim();
     if (!cmd) return;
     // Save freeform body edits first — never persist empty-state chrome
     const bodyText = readPersistableBody();
-    const current = projects.get(project.id)?.memory.trim() ?? "";
+    const current = projects.get(project.id)?.memory.trim() ?? '';
     if (bodyText !== current) {
       projects.setMemory(project.id, bodyText);
     }
@@ -164,31 +167,31 @@ export function openMemoryModal(
     content.innerText = next;
     userEditedBody = true;
     delete content.dataset.emptyChrome;
-    input.value = "";
+    input.value = '';
     onSaved();
   };
 
-  input.addEventListener("focus", () => {
+  input.addEventListener('focus', () => {
     cycling = false;
   });
-  input.addEventListener("blur", () => {
+  input.addEventListener('blur', () => {
     if (!input.value.trim()) {
       cycling = true;
       applyPh();
     }
   });
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
       e.preventDefault();
       applyCmd();
     }
   });
-  send.addEventListener("click", applyCmd);
+  send.addEventListener('click', applyCmd);
   adjustRow.append(input, send);
   modal.append(adjustRow);
 
-  const actions = el("div", { class: "project-modal-actions" });
-  const done = el("button", { class: "primary-btn", type: "button" }, ["Done"]);
+  const actions = el('div', { class: 'project-modal-actions' });
+  const done = el('button', { class: 'primary-btn', type: 'button' }, ['Done']);
   actions.append(done);
   modal.append(actions);
 
@@ -203,9 +206,9 @@ export function openMemoryModal(
     backdrop.remove();
     onSaved();
   };
-  closeX.addEventListener("click", close);
-  done.addEventListener("click", close);
-  backdrop.addEventListener("click", (e) => {
+  closeX.addEventListener('click', close);
+  done.addEventListener('click', close);
+  backdrop.addEventListener('click', (e) => {
     if (e.target === backdrop) close();
   });
 
@@ -216,12 +219,12 @@ export function openMemoryModal(
 
 export function memoryPreview(project: ProjectItem): string {
   const m = memoryTextFromEditor(project.memory, { startedEmpty: true, userEdited: true });
-  if (!m) return "Project memory will show here after a few chats.";
-  return m.length > 140 ? m.slice(0, 137) + "…" : m;
+  if (!m) return 'Project memory will show here after a few chats.';
+  return m.length > 140 ? m.slice(0, 137) + '…' : m;
 }
 
 export function memoryMeta(project: ProjectItem): string {
-  if (!project.memoryUpdatedAt) return "Only you";
+  if (!project.memoryUpdatedAt) return 'Only you';
   return `Only you · Updated ${relativeTime(project.memoryUpdatedAt)}`;
 }
 
@@ -244,10 +247,10 @@ const CONNECTORS: Array<{
   iconClass: string;
   icon: string;
 }> = [
-  { id: "github", label: "GitHub", iconClass: "ctx-brand-github", icon: "⌘" },
-  { id: "figma", label: "Figma", iconClass: "ctx-brand-figma", icon: "◇" },
-  { id: "godaddy", label: "GoDaddy", iconClass: "ctx-brand-godaddy", icon: "G" },
-  { id: "drive", label: "Drive", iconClass: "ctx-brand-drive", icon: "△" },
+  { id: 'github', label: 'GitHub', iconClass: 'ctx-brand-github', icon: '⌘' },
+  { id: 'figma', label: 'Figma', iconClass: 'ctx-brand-figma', icon: '◇' },
+  { id: 'godaddy', label: 'GoDaddy', iconClass: 'ctx-brand-godaddy', icon: 'G' },
+  { id: 'drive', label: 'Drive', iconClass: 'ctx-brand-drive', icon: '△' },
 ];
 
 /**
@@ -255,14 +258,10 @@ const CONNECTORS: Array<{
  * Connector rows open a flyout (left when near the right edge) with
  * "Search resources or paste URL" + document list.
  */
-export function openContextAddMenu(
-  anchor: HTMLElement,
-  el: ElFn,
-  cb: ContextMenuCallbacks,
-): void {
-  document.querySelectorAll(".context-add-menu, .context-submenu").forEach((n) => n.remove());
+export function openContextAddMenu(anchor: HTMLElement, el: ElFn, cb: ContextMenuCallbacks): void {
+  document.querySelectorAll('.context-add-menu, .context-submenu').forEach((n) => n.remove());
 
-  const menu = el("div", { class: "context-add-menu", role: "menu" });
+  const menu = el('div', { class: 'context-add-menu', role: 'menu' });
   const rect = anchor.getBoundingClientRect();
   const menuW = 228;
   // Align under +; keep on-screen (menu lives on the right rail)
@@ -278,66 +277,64 @@ export function openContextAddMenu(
     menu.remove();
     activeSub?.remove();
     activeSub = null;
-    document.removeEventListener("mousedown", onDoc);
-    document.removeEventListener("keydown", onKey);
+    document.removeEventListener('mousedown', onDoc);
+    document.removeEventListener('keydown', onKey);
   };
 
   const hideSub = () => {
     activeSub?.remove();
     activeSub = null;
-    activeRow?.classList.remove("is-open");
+    activeRow?.classList.remove('is-open');
     activeRow = null;
   };
 
   const makeResourceFlyout = (connectorId: string): HTMLElement => {
-    const sub = el("div", {
-      class: "context-submenu",
-      "data-connector": connectorId,
-      role: "menu",
+    const sub = el('div', {
+      class: 'context-submenu',
+      'data-connector': connectorId,
+      role: 'menu',
     });
-    const search = el("input", {
-      class: "context-sub-search",
-      type: "search",
-      placeholder: "Search resources or paste URL",
-      autocomplete: "off",
+    const search = el('input', {
+      class: 'context-sub-search',
+      type: 'search',
+      placeholder: 'Search resources or paste URL',
+      autocomplete: 'off',
     }) as HTMLInputElement;
-    const list = el("div", { class: "context-sub-list" });
+    const list = el('div', { class: 'context-sub-list' });
 
     const paint = (q: string) => {
-      list.innerHTML = "";
+      list.innerHTML = '';
       const raw = q.trim();
       const query = raw.toLowerCase();
       if (/^https?:\/\//i.test(raw)) {
-        const row = el("button", { class: "context-sub-item", type: "button" });
-        row.append(el("span", { class: "ctx-doc-ico" }, ["🔗"]));
+        const row = el('button', { class: 'context-sub-item', type: 'button' });
+        row.append(el('span', { class: 'ctx-doc-ico' }, ['🔗']));
         row.append(
-          el("span", { class: "ctx-sub-title" }, [
+          el('span', { class: 'ctx-sub-title' }, [
             raw.length > 48 ? `Paste URL: ${raw.slice(0, 45)}…` : `Paste URL: ${raw}`,
-          ]),
+          ])
         );
-        row.addEventListener("click", () => {
+        row.addEventListener('click', () => {
           closeAll();
           cb.onPasteUrl(raw);
         });
         list.append(row);
       }
       const hits = cb.artifactSuggestions.filter(
-        (s) => !query || s.title.toLowerCase().includes(query),
+        (s) => !query || s.title.toLowerCase().includes(query)
       );
       if (hits.length === 0 && !/^https?:\/\//i.test(raw)) {
         list.append(
-          el("div", { class: "context-sub-empty" }, [
-            query
-              ? "No matches"
-              : "No saved resources yet — upload a file or add text content.",
-          ]),
+          el('div', { class: 'context-sub-empty' }, [
+            query ? 'No matches' : 'No saved resources yet — upload a file or add text content.',
+          ])
         );
       }
       for (const s of hits.slice(0, 14)) {
-        const row = el("button", { class: "context-sub-item", type: "button" });
-        row.append(el("span", { class: "ctx-doc-ico" }, ["📄"]));
-        row.append(el("span", { class: "ctx-sub-title" }, [s.title]));
-        row.addEventListener("click", () => {
+        const row = el('button', { class: 'context-sub-item', type: 'button' });
+        row.append(el('span', { class: 'ctx-doc-ico' }, ['📄']));
+        row.append(el('span', { class: 'ctx-sub-title' }, [s.title]));
+        row.addEventListener('click', () => {
           closeAll();
           cb.onPickArtifact(s.title, s.content);
         });
@@ -345,18 +342,18 @@ export function openContextAddMenu(
       }
     };
 
-    search.addEventListener("input", () => paint(search.value));
-    search.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && /^https?:\/\//i.test(search.value.trim())) {
+    search.addEventListener('input', () => paint(search.value));
+    search.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && /^https?:\/\//i.test(search.value.trim())) {
         closeAll();
         cb.onPasteUrl(search.value.trim());
       }
       e.stopPropagation();
     });
-    sub.addEventListener("mousedown", (e) => e.stopPropagation());
-    sub.addEventListener("click", (e) => e.stopPropagation());
+    sub.addEventListener('mousedown', (e) => e.stopPropagation());
+    sub.addEventListener('click', (e) => e.stopPropagation());
     sub.append(search, list);
-    paint("");
+    paint('');
     queueMicrotask(() => search.focus());
     return sub;
   };
@@ -387,18 +384,18 @@ export function openContextAddMenu(
     if (activeRow === row && activeSub) return;
     hideSub();
     activeRow = row;
-    row.classList.add("is-open");
+    row.classList.add('is-open');
     activeSub = makeResourceFlyout(connectorId);
     positionFlyout(row, activeSub);
   };
 
   const addActionItem = (icon: string, label: string, action: () => void, iconClass?: string) => {
-    const row = el("button", { class: "context-menu-item", type: "button", role: "menuitem" });
-    const ico = el("span", { class: `ctx-ico${iconClass ? ` ${iconClass}` : ""}` }, [icon]);
+    const row = el('button', { class: 'context-menu-item', type: 'button', role: 'menuitem' });
+    const ico = el('span', { class: `ctx-ico${iconClass ? ` ${iconClass}` : ''}` }, [icon]);
     row.append(ico);
-    row.append(el("span", { class: "ctx-label" }, [label]));
-    row.addEventListener("mouseenter", () => hideSub());
-    row.addEventListener("click", (e) => {
+    row.append(el('span', { class: 'ctx-label' }, [label]));
+    row.addEventListener('mouseenter', () => hideSub());
+    row.addEventListener('click', (e) => {
       e.stopPropagation();
       closeAll();
       action();
@@ -406,22 +403,22 @@ export function openContextAddMenu(
     menu.append(row);
   };
 
-  addActionItem("📎", "Upload from device", () => cb.onUploadFile());
-  addActionItem("⎘", "Add text content", () => cb.onAddText(), "ctx-ico-text");
-  menu.append(el("div", { class: "context-menu-sep" }));
+  addActionItem('📎', 'Upload from device', () => cb.onUploadFile());
+  addActionItem('⎘', 'Add text content', () => cb.onAddText(), 'ctx-ico-text');
+  menu.append(el('div', { class: 'context-menu-sep' }));
 
   for (const c of CONNECTORS) {
-    const row = el("button", {
-      class: "context-menu-item has-sub",
-      type: "button",
-      role: "menuitem",
-      "aria-haspopup": "true",
+    const row = el('button', {
+      class: 'context-menu-item has-sub',
+      type: 'button',
+      role: 'menuitem',
+      'aria-haspopup': 'true',
     });
-    row.append(el("span", { class: `ctx-ico ${c.iconClass}` }, [c.icon]));
-    row.append(el("span", { class: "ctx-label" }, [c.label]));
-    row.append(el("span", { class: "ctx-chev" }, ["›"]));
-    row.addEventListener("mouseenter", () => showConnector(row, c.id));
-    row.addEventListener("click", (e) => {
+    row.append(el('span', { class: `ctx-ico ${c.iconClass}` }, [c.icon]));
+    row.append(el('span', { class: 'ctx-label' }, [c.label]));
+    row.append(el('span', { class: 'ctx-chev' }, ['›']));
+    row.addEventListener('mouseenter', () => showConnector(row, c.id));
+    row.addEventListener('click', (e) => {
       e.stopPropagation();
       showConnector(row, c.id);
     });
@@ -434,10 +431,10 @@ export function openContextAddMenu(
     closeAll();
   };
   const onKey = (e: KeyboardEvent) => {
-    if (e.key === "Escape") closeAll();
+    if (e.key === 'Escape') closeAll();
   };
-  document.addEventListener("mousedown", onDoc);
-  document.addEventListener("keydown", onKey);
+  document.addEventListener('mousedown', onDoc);
+  document.addEventListener('keydown', onKey);
   document.body.append(menu);
 }
 
@@ -445,51 +442,51 @@ export function openAddTextContextModal(
   projectId: string,
   projects: ProjectsStore,
   el: ElFn,
-  onSaved: () => void,
+  onSaved: () => void
 ): void {
-  const backdrop = el("div", { class: "modal-backdrop project-modal-backdrop" });
-  const modal = el("div", { class: "modal project-modal" });
-  const head = el("div", { class: "project-modal-head" });
-  head.append(el("h3", {}, ["Add text content"]));
-  const closeX = el("button", { class: "modal-x", type: "button" }, ["×"]);
+  const backdrop = el('div', { class: 'modal-backdrop project-modal-backdrop' });
+  const modal = el('div', { class: 'modal project-modal' });
+  const head = el('div', { class: 'project-modal-head' });
+  head.append(el('h3', {}, ['Add text content']));
+  const closeX = el('button', { class: 'modal-x', type: 'button' }, ['×']);
   head.append(closeX);
   modal.append(head);
   modal.append(
-    el("p", { class: "settings-hint" }, [
-      "Paste notes, briefs, or excerpts to use as project context.",
-    ]),
+    el('p', { class: 'settings-hint' }, [
+      'Paste notes, briefs, or excerpts to use as project context.',
+    ])
   );
-  const title = el("input", {
-    class: "project-modal-input",
-    type: "text",
-    placeholder: "Title",
+  const title = el('input', {
+    class: 'project-modal-input',
+    type: 'text',
+    placeholder: 'Title',
   }) as HTMLInputElement;
-  const ta = el("textarea", {
-    class: "project-modal-textarea",
-    rows: "8",
-    placeholder: "Paste or type content…",
+  const ta = el('textarea', {
+    class: 'project-modal-textarea',
+    rows: '8',
+    placeholder: 'Paste or type content…',
   }) as HTMLTextAreaElement;
   modal.append(title, ta);
-  const actions = el("div", { class: "project-modal-actions" });
-  const cancel = el("button", { class: "ghost-btn", type: "button" }, ["Cancel"]);
-  const save = el("button", { class: "primary-btn", type: "button" }, ["Add to project"]);
+  const actions = el('div', { class: 'project-modal-actions' });
+  const cancel = el('button', { class: 'ghost-btn', type: 'button' }, ['Cancel']);
+  const save = el('button', { class: 'primary-btn', type: 'button' }, ['Add to project']);
   actions.append(cancel, save);
   modal.append(actions);
   const close = () => backdrop.remove();
-  closeX.addEventListener("click", close);
-  cancel.addEventListener("click", close);
-  save.addEventListener("click", () => {
+  closeX.addEventListener('click', close);
+  cancel.addEventListener('click', close);
+  save.addEventListener('click', () => {
     const body = ta.value.trim();
     if (!body) return;
     projects.addContextItem(projectId, {
-      kind: "text",
+      kind: 'text',
       title: title.value.trim() || body.slice(0, 48),
       content: body,
     });
     close();
     onSaved();
   });
-  backdrop.addEventListener("click", (e) => {
+  backdrop.addEventListener('click', (e) => {
     if (e.target === backdrop) close();
   });
   backdrop.append(modal);

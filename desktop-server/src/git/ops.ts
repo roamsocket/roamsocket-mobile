@@ -4,10 +4,10 @@
  * git operator; the iOS app sends edits over the WebSocket and this module
  * does the actual `git commit` / `git push`.
  */
-import { spawn } from "node:child_process";
-import { promises as fs } from "node:fs";
-import path from "node:path";
-import { productDataPath } from "../product.js";
+import { spawn } from 'node:child_process';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { productDataPath } from '../product.js';
 
 export interface RepoConfig {
   url: string;
@@ -18,22 +18,22 @@ export class GitOpsError extends Error {}
 
 function run(cwd: string, args: string[], env: Record<string, string> = {}): Promise<string> {
   return new Promise((resolve, reject) => {
-    const proc = spawn("git", args, {
+    const proc = spawn('git', args, {
       cwd,
       env: {
         ...process.env,
-        GIT_TERMINAL_PROMPT: "0",
+        GIT_TERMINAL_PROMPT: '0',
         ...env,
       },
     });
-    let stdout = "";
-    let stderr = "";
-    proc.stdout.on("data", (d) => (stdout += d.toString()));
-    proc.stderr.on("data", (d) => (stderr += d.toString()));
-    proc.on("error", reject);
-    proc.on("close", (code) => {
+    let stdout = '';
+    let stderr = '';
+    proc.stdout.on('data', (d) => (stdout += d.toString()));
+    proc.stderr.on('data', (d) => (stderr += d.toString()));
+    proc.on('error', reject);
+    proc.on('close', (code) => {
       if (code !== 0) {
-        reject(new GitOpsError(`git ${args.join(" ")} exited ${code}: ${stderr}`));
+        reject(new GitOpsError(`git ${args.join(' ')} exited ${code}: ${stderr}`));
       } else {
         resolve(stdout.trimEnd());
       }
@@ -42,7 +42,7 @@ function run(cwd: string, args: string[], env: Record<string, string> = {}): Pro
 }
 
 export function defaultRoot(): string {
-  return productDataPath("sync");
+  return productDataPath('sync');
 }
 
 export async function ensureDir(p: string): Promise<string> {
@@ -51,9 +51,9 @@ export async function ensureDir(p: string): Promise<string> {
 }
 
 export function repoNameFromUrl(url: string): string {
-  const cleaned = url.trim().replace(/\/+$/, "");
-  const last = cleaned.split("/").pop() ?? "repo";
-  return last.replace(/\.git$/, "");
+  const cleaned = url.trim().replace(/\/+$/, '');
+  const last = cleaned.split('/').pop() ?? 'repo';
+  return last.replace(/\.git$/, '');
 }
 
 export function localDirFor(repoUrl: string, root: string = defaultRoot()): string {
@@ -62,11 +62,11 @@ export function localDirFor(repoUrl: string, root: string = defaultRoot()): stri
 
 async function injectToken(url: string, token: string | undefined): Promise<string> {
   if (!token) return url;
-  if (!url.startsWith("https://") && !url.startsWith("http://")) return url;
+  if (!url.startsWith('https://') && !url.startsWith('http://')) return url;
   try {
     const u = new URL(url);
     if (u.username && u.password) return url; // already authenticated
-    u.username = "x-access-token";
+    u.username = 'x-access-token';
     u.password = token;
     return u.toString();
   } catch {
@@ -76,7 +76,7 @@ async function injectToken(url: string, token: string | undefined): Promise<stri
 
 async function isRepo(dir: string): Promise<boolean> {
   try {
-    const stat = await fs.stat(path.join(dir, ".git"));
+    const stat = await fs.stat(path.join(dir, '.git'));
     return stat.isDirectory() || stat.isFile();
   } catch {
     return false;
@@ -88,17 +88,17 @@ export async function pullOrClone(config: RepoConfig, token?: string): Promise<s
   const authed = await injectToken(config.url, token);
   const env = tokenEnv(token);
   if (!(await isRepo(dir))) {
-    await run(path.dirname(dir), ["clone", "--branch", config.branch, authed, dir], env);
+    await run(path.dirname(dir), ['clone', '--branch', config.branch, authed, dir], env);
     return dir;
   }
   // Make sure the branch exists locally; create from origin/branch if missing.
   try {
-    await run(dir, ["checkout", config.branch], env);
+    await run(dir, ['checkout', config.branch], env);
   } catch {
-    await run(dir, ["checkout", "-b", config.branch, `origin/${config.branch}`], env);
+    await run(dir, ['checkout', '-b', config.branch, `origin/${config.branch}`], env);
   }
-  await run(dir, ["fetch", "origin"], env);
-  await run(dir, ["reset", "--hard", `origin/${config.branch}`], env);
+  await run(dir, ['fetch', 'origin'], env);
+  await run(dir, ['reset', '--hard', `origin/${config.branch}`], env);
   return dir;
 }
 
@@ -107,10 +107,10 @@ function tokenEnv(token?: string): Record<string, string> {
   // Inject the token as a credential helper so it never lands in the
   // remote URL or on disk. Mirrors the helper used in git/github.ts.
   return {
-    GIT_ASKPASS: "/bin/echo",
-    GIT_TERMINAL_PROMPT: "0",
-    GIT_CONFIG_COUNT: "1",
-    GIT_CONFIG_KEY_0: "credential.helper",
+    GIT_ASKPASS: '/bin/echo',
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: 'credential.helper',
     GIT_CONFIG_VALUE_0: `!f() { echo username=x-access-token; echo password=${token}; }; f`,
   };
 }
@@ -130,29 +130,29 @@ export async function commitAndPush(opts: CommitOptions): Promise<string> {
   const dir = localDirFor(opts.config.url);
   const env = tokenEnv(opts.token);
 
-  await run(dir, ["config", "user.name", opts.author.name], env);
-  await run(dir, ["config", "user.email", opts.author.email], env);
-  await run(dir, ["add", "-A"], env);
-  await run(dir, ["commit", "-m", opts.message, "--allow-empty"], env);
+  await run(dir, ['config', 'user.name', opts.author.name], env);
+  await run(dir, ['config', 'user.email', opts.author.email], env);
+  await run(dir, ['add', '-A'], env);
+  await run(dir, ['commit', '-m', opts.message, '--allow-empty'], env);
 
   try {
-    await run(dir, ["push", "origin", opts.config.branch], env);
+    await run(dir, ['push', 'origin', opts.config.branch], env);
   } catch (err) {
-    await run(dir, ["pull", "--rebase", "origin", opts.config.branch], env);
-    await run(dir, ["push", "origin", opts.config.branch], env);
+    await run(dir, ['pull', '--rebase', 'origin', opts.config.branch], env);
+    await run(dir, ['push', 'origin', opts.config.branch], env);
   }
-  return await run(dir, ["rev-parse", "HEAD"], env);
+  return await run(dir, ['rev-parse', 'HEAD'], env);
 }
 
 export async function writeFile(
   repoUrl: string,
   relativePath: string,
-  content: string,
+  content: string
 ): Promise<string> {
   const dir = localDirFor(repoUrl);
   const target = path.join(dir, relativePath);
   await fs.mkdir(path.dirname(target), { recursive: true });
-  await fs.writeFile(target, content, "utf8");
+  await fs.writeFile(target, content, 'utf8');
   return target;
 }
 

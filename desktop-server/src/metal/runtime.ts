@@ -10,13 +10,13 @@
  *  - mlx-lm not installed
  *  - model not downloaded
  */
-import { spawn } from "node:child_process";
-import { existsSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { getMetalStore } from "./store.js";
-import { METAL_PROVIDER_ID } from "./catalog.js";
-import { readManagedPythonPath } from "./paths.js";
+import { spawn } from 'node:child_process';
+import { existsSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { getMetalStore } from './store.js';
+import { METAL_PROVIDER_ID } from './catalog.js';
+import { readManagedPythonPath } from './paths.js';
 
 export interface MetalRuntimeStatus {
   providerId: typeof METAL_PROVIDER_ID;
@@ -32,7 +32,7 @@ export interface MetalRuntimeStatus {
 
 export interface MetalGenerateRequest {
   hubID: string;
-  messages: Array<{ role: "user" | "assistant" | "system"; content: string }>;
+  messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>;
   maxTokens?: number;
 }
 
@@ -43,7 +43,7 @@ export interface MetalGenerateResult {
 }
 
 /** Progress while weights load / tokens generate (desktop chat + agent UI). */
-export type MetalGeneratePhase = "loading" | "generating";
+export type MetalGeneratePhase = 'loading' | 'generating';
 
 export interface MetalGenerateProgress {
   phase: MetalGeneratePhase;
@@ -111,10 +111,10 @@ function candidatePythons(): string[] {
   if (managed) out.push(managed);
   // Common locations on Apple Silicon
   out.push(
-    "python3",
-    "/usr/bin/python3",
-    "/opt/homebrew/bin/python3",
-    `${os.homedir()}/.local/bin/python3`,
+    'python3',
+    '/usr/bin/python3',
+    '/opt/homebrew/bin/python3',
+    `${os.homedir()}/.local/bin/python3`
   );
   return [...new Set(out)];
 }
@@ -123,29 +123,29 @@ async function runPython(
   python: string,
   code: string,
   stdin?: string,
-  timeoutMs = 120_000,
+  timeoutMs = 120_000
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const child = spawn(python, ["-c", code], {
-      stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, PYTHONUNBUFFERED: "1" },
+    const child = spawn(python, ['-c', code], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, PYTHONUNBUFFERED: '1' },
     });
-    let stdout = "";
-    let stderr = "";
+    let stdout = '';
+    let stderr = '';
     const timer = setTimeout(() => {
-      child.kill("SIGKILL");
+      child.kill('SIGKILL');
     }, timeoutMs);
-    child.stdout.on("data", (d) => {
+    child.stdout.on('data', (d) => {
       stdout += String(d);
     });
-    child.stderr.on("data", (d) => {
+    child.stderr.on('data', (d) => {
       stderr += String(d);
     });
-    child.on("error", (err) => {
+    child.on('error', (err) => {
       clearTimeout(timer);
       resolve({ code: 1, stdout, stderr: String(err.message) });
     });
-    child.on("close", (code) => {
+    child.on('close', (code) => {
       clearTimeout(timer);
       resolve({ code, stdout, stderr });
     });
@@ -164,7 +164,7 @@ export async function resolveMetalPython(): Promise<string | null> {
     const probe = await runPython(py, MLX_PROBE, undefined, 15_000);
     if (probe.code === 0) {
       try {
-        const line = probe.stdout.trim().split("\n").pop() ?? "";
+        const line = probe.stdout.trim().split('\n').pop() ?? '';
         const json = JSON.parse(line) as { ok?: boolean };
         if (json.ok) {
           cachedPython = py;
@@ -187,7 +187,7 @@ export function resetMetalPythonCache(): void {
 export async function getMetalRuntimeStatus(): Promise<MetalRuntimeStatus> {
   const platform = process.platform;
   const arch = process.arch;
-  const supported = platform === "darwin" && (arch === "arm64" || arch === "x64");
+  const supported = platform === 'darwin' && (arch === 'arm64' || arch === 'x64');
   if (!supported) {
     return {
       providerId: METAL_PROVIDER_ID,
@@ -196,9 +196,9 @@ export async function getMetalRuntimeStatus(): Promise<MetalRuntimeStatus> {
       arch,
       supported: false,
       runtimeReady: false,
-      runtimeLabel: "unavailable",
+      runtimeLabel: 'unavailable',
       pythonPath: null,
-      detail: "On-device Metal chat requires macOS (Apple Silicon preferred).",
+      detail: 'On-device Metal chat requires macOS (Apple Silicon preferred).',
     };
   }
 
@@ -211,10 +211,10 @@ export async function getMetalRuntimeStatus(): Promise<MetalRuntimeStatus> {
       arch,
       supported: true,
       runtimeReady: false,
-      runtimeLabel: "mlx-lm missing",
+      runtimeLabel: 'mlx-lm missing',
       pythonPath: null,
       detail:
-        "Metal runtime is not ready. Use Settings → On-device Metal → Install Python + mlx-lm, or Manage models. Models can still be downloaded without the runtime.",
+        'Metal runtime is not ready. Use Settings → On-device Metal → Install Python + mlx-lm, or Manage models. Models can still be downloaded without the runtime.',
     };
   }
 
@@ -225,7 +225,7 @@ export async function getMetalRuntimeStatus(): Promise<MetalRuntimeStatus> {
     arch,
     supported: true,
     runtimeReady: true,
-    runtimeLabel: "mlx-lm",
+    runtimeLabel: 'mlx-lm',
     pythonPath: python,
     detail: `mlx-lm ready via ${python}. Available for desktop chat and coding agent.`,
   };
@@ -238,7 +238,7 @@ export async function getMetalRuntimeStatus(): Promise<MetalRuntimeStatus> {
  */
 export async function metalGenerate(
   req: MetalGenerateRequest,
-  onProgress?: (p: MetalGenerateProgress) => void,
+  onProgress?: (p: MetalGenerateProgress) => void
 ): Promise<MetalGenerateResult> {
   const status = await getMetalRuntimeStatus();
   if (!status.supported) {
@@ -246,15 +246,15 @@ export async function metalGenerate(
   }
   if (!status.runtimeReady || !status.pythonPath) {
     throw new Error(
-      "Metal runtime is not available. Install mlx-lm: `pip install mlx-lm` (Apple Silicon macOS). " +
-        "Download models in Settings → On-device Metal, then use them for chat or coding.",
+      'Metal runtime is not available. Install mlx-lm: `pip install mlx-lm` (Apple Silicon macOS). ' +
+        'Download models in Settings → On-device Metal, then use them for chat or coding.'
     );
   }
 
   const store = getMetalStore();
   if (!store.isDownloaded(req.hubID)) {
     throw new Error(
-      `Model not downloaded: ${req.hubID}. Open Settings → On-device Metal, download the model, then try again.`,
+      `Model not downloaded: ${req.hubID}. Open Settings → On-device Metal, download the model, then try again.`
     );
   }
   const modelPath = store.pathFor(req.hubID);
@@ -270,45 +270,45 @@ export async function metalGenerate(
 
   // Immediate UI signal before the Python process even starts.
   onProgress?.({
-    phase: "loading",
-    message: "Starting Metal runtime…",
+    phase: 'loading',
+    message: 'Starting Metal runtime…',
     hubID: req.hubID,
   });
 
   // Write script to temp file for reliability with longer code
-  const tmp = mkdtempSync(path.join(os.tmpdir(), "apc-metal-"));
-  const scriptPath = path.join(tmp, "generate.py");
+  const tmp = mkdtempSync(path.join(os.tmpdir(), 'apc-metal-'));
+  const scriptPath = path.join(tmp, 'generate.py');
   try {
     writeFileSync(scriptPath, MLX_GENERATE);
     const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>(
       (resolve) => {
         const child = spawn(status.pythonPath!, [scriptPath], {
-          stdio: ["pipe", "pipe", "pipe"],
-          env: { ...process.env, PYTHONUNBUFFERED: "1" },
+          stdio: ['pipe', 'pipe', 'pipe'],
+          env: { ...process.env, PYTHONUNBUFFERED: '1' },
         });
-        let stdout = "";
-        let stderr = "";
-        let stderrBuf = "";
-        const timer = setTimeout(() => child.kill("SIGKILL"), 300_000);
-        child.stdout.on("data", (d) => {
+        let stdout = '';
+        let stderr = '';
+        let stderrBuf = '';
+        const timer = setTimeout(() => child.kill('SIGKILL'), 300_000);
+        child.stdout.on('data', (d) => {
           stdout += String(d);
         });
-        child.stderr.on("data", (d) => {
+        child.stderr.on('data', (d) => {
           const chunk = String(d);
           stderr += chunk;
           stderrBuf += chunk;
           // Parse NDJSON phase lines as they arrive
-          const lines = stderrBuf.split("\n");
-          stderrBuf = lines.pop() ?? "";
+          const lines = stderrBuf.split('\n');
+          stderrBuf = lines.pop() ?? '';
           for (const line of lines) {
             const trimmed = line.trim();
-            if (!trimmed.startsWith("{")) continue;
+            if (!trimmed.startsWith('{')) continue;
             try {
               const j = JSON.parse(trimmed) as { phase?: string; message?: string };
-              if (j.phase === "loading" || j.phase === "generating") {
+              if (j.phase === 'loading' || j.phase === 'generating') {
                 onProgress?.({
                   phase: j.phase,
-                  message: typeof j.message === "string" ? j.message : undefined,
+                  message: typeof j.message === 'string' ? j.message : undefined,
                   hubID: req.hubID,
                 });
               }
@@ -317,32 +317,32 @@ export async function metalGenerate(
             }
           }
         });
-        child.on("error", (err) => {
+        child.on('error', (err) => {
           clearTimeout(timer);
           resolve({ code: 1, stdout, stderr: err.message });
         });
-        child.on("close", (code) => {
+        child.on('close', (code) => {
           clearTimeout(timer);
           resolve({ code, stdout, stderr });
         });
         child.stdin.write(payload);
         child.stdin.end();
-      },
+      }
     );
 
     if (result.code !== 0) {
       const err = result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`;
       throw new Error(`Metal generate failed: ${err.slice(0, 800)}`);
     }
-    const line = result.stdout.trim().split("\n").pop() ?? "";
+    const line = result.stdout.trim().split('\n').pop() ?? '';
     let json: { ok?: boolean; text?: string; error?: string };
     try {
       json = JSON.parse(line);
     } catch {
       throw new Error(`Metal generate returned invalid JSON: ${line.slice(0, 200)}`);
     }
-    if (!json.ok || typeof json.text !== "string") {
-      throw new Error(json.error || "Metal generate failed with no text");
+    if (!json.ok || typeof json.text !== 'string') {
+      throw new Error(json.error || 'Metal generate failed with no text');
     }
     return { text: json.text, hubID: req.hubID, modelPath };
   } finally {

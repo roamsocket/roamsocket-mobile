@@ -1,4 +1,4 @@
-import type { StorageLike } from "./history-store.js";
+import type { StorageLike } from './history-store.js';
 
 export interface ArtifactItem {
   id: string;
@@ -11,7 +11,7 @@ export interface ArtifactItem {
   createdAt: number;
 }
 
-const KEY = "apc.artifacts.v1";
+const KEY = 'apc.artifacts.v1';
 /** Capture long assistant replies / fenced code as artifacts (≥ 10 lines or has ```). */
 const MIN_LINES = 10;
 
@@ -22,19 +22,19 @@ function uid(): string {
 export function shouldCaptureAsArtifact(content: string): boolean {
   const trimmed = content.trim();
   if (!trimmed) return false;
-  if (trimmed.includes("```")) return true;
+  if (trimmed.includes('```')) return true;
   return trimmed.split(/\r?\n/).length >= MIN_LINES;
 }
 
 export function titleFromContent(content: string): string {
   const fence = content.match(/```(\w+)?\n([\s\S]*?)```/);
   if (fence) {
-    const lang = fence[1] ? `${fence[1]} ` : "";
-    const first = (fence[2] ?? "").trim().split(/\r?\n/)[0] ?? "";
+    const lang = fence[1] ? `${fence[1]} ` : '';
+    const first = (fence[2] ?? '').trim().split(/\r?\n/)[0] ?? '';
     const snippet = first.slice(0, 40);
     return snippet ? `${lang}code: ${snippet}` : `${lang}code block`.trim();
   }
-  const first = content.trim().split(/\r?\n/)[0] ?? "Artifact";
+  const first = content.trim().split(/\r?\n/)[0] ?? 'Artifact';
   return first.length > 48 ? `${first.slice(0, 45)}…` : first;
 }
 
@@ -73,7 +73,7 @@ export class ArtifactsStore {
 
   add(
     content: string,
-    opts?: { sourceChatId?: string; sourceMessageId?: string; title?: string },
+    opts?: { sourceChatId?: string; sourceMessageId?: string; title?: string }
   ): ArtifactItem | null {
     if (!shouldCaptureAsArtifact(content)) return null;
     // Prefer updating an existing capture from the same message over duplicates.

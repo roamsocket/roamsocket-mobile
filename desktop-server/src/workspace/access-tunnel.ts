@@ -11,7 +11,7 @@ import {
   stopTunnel,
   type TunnelInfo,
   type TunnelProvider,
-} from "./tunnels.js";
+} from './tunnels.js';
 
 let tunnelId: string | null = null;
 let portBound: number | null = null;
@@ -44,7 +44,7 @@ export async function ensureAccessTunnel(opts: {
   force?: boolean;
 }): Promise<TunnelInfo> {
   const waitMs = opts.waitMs ?? 45_000;
-  const provider = opts.provider ?? "auto";
+  const provider = opts.provider ?? 'auto';
 
   if (opts.force) {
     stopAccessTunnel();
@@ -59,8 +59,8 @@ export async function ensureAccessTunnel(opts: {
 
   const existing = currentAccessTunnel();
   if (existing && !opts.force) {
-    if (existing.status === "up" && existing.url) return existing;
-    if (existing.status === "starting" || (existing.status === "up" && !existing.url)) {
+    if (existing.status === 'up' && existing.url) return existing;
+    if (existing.status === 'starting' || (existing.status === 'up' && !existing.url)) {
       return waitForUrl(existing.id, waitMs);
     }
     // error / stopped — fall through and restart
@@ -82,14 +82,14 @@ export async function ensureAccessTunnel(opts: {
         return (
           currentAccessTunnel() ?? {
             ...started,
-            status: "stopped" as const,
-            error: "Superseded by a newer tunnel restart.",
+            status: 'stopped' as const,
+            error: 'Superseded by a newer tunnel restart.',
           }
         );
       }
       tunnelId = started.id;
-      if (started.url && started.status === "up") return started;
-      if (started.status === "error") return started;
+      if (started.url && started.status === 'up') return started;
+      if (started.status === 'error') return started;
       return waitForUrl(started.id, waitMs);
     } finally {
       if (gen === generation) inFlight = null;
@@ -117,15 +117,15 @@ async function waitForUrl(id: string, waitMs: number): Promise<TunnelInfo> {
       return {
         id,
         port: portBound ?? 0,
-        provider: "unknown",
-        status: "error",
-        error: "Tunnel process disappeared.",
+        provider: 'unknown',
+        status: 'error',
+        error: 'Tunnel process disappeared.',
       };
     }
     if (live.url) {
-      return { ...live, status: live.status === "starting" ? "up" : live.status };
+      return { ...live, status: live.status === 'starting' ? 'up' : live.status };
     }
-    if (live.status === "error" || live.status === "stopped") return live;
+    if (live.status === 'error' || live.status === 'stopped') return live;
     await new Promise((r) => setTimeout(r, 250));
   }
   const live = listTunnels().find((t) => t.id === id);
@@ -133,9 +133,9 @@ async function waitForUrl(id: string, waitMs: number): Promise<TunnelInfo> {
     live ?? {
       id,
       port: portBound ?? 0,
-      provider: "unknown",
-      status: "error",
-      error: "Timed out waiting for a public tunnel URL.",
+      provider: 'unknown',
+      status: 'error',
+      error: 'Timed out waiting for a public tunnel URL.',
     }
   );
 }

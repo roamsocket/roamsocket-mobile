@@ -5,10 +5,17 @@
  * Each `.mcp.json` has:
  *   { "mcpServers": { "<server-name>": { type, command?, args?, env?, ... } } }
  */
-import { promises as fs } from "node:fs";
-import path from "node:path";
-import { commitAndPush, deleteFile, localDirFor, pullOrClone, writeFile, type RepoConfig } from "../git/ops.js";
-import type { MCPServer } from "../protocol.js";
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import {
+  commitAndPush,
+  deleteFile,
+  localDirFor,
+  pullOrClone,
+  writeFile,
+  type RepoConfig,
+} from '../git/ops.js';
+import type { MCPServer } from '../protocol.js';
 
 interface McpFile {
   mcpServers?: Record<string, McpServerSpec>;
@@ -24,7 +31,7 @@ interface McpServerSpec {
 
 async function readMcpFile(dir: string, id: string): Promise<MCPServer | null> {
   try {
-    const text = await fs.readFile(path.join(dir, id, ".mcp.json"), "utf8");
+    const text = await fs.readFile(path.join(dir, id, '.mcp.json'), 'utf8');
     const data = JSON.parse(text) as McpFile;
     const entries = Object.entries(data.mcpServers ?? {});
     const first = entries[0];
@@ -33,8 +40,8 @@ async function readMcpFile(dir: string, id: string): Promise<MCPServer | null> {
     return {
       id,
       name,
-      description: spec.description ?? "",
-      command: spec.command ?? "",
+      description: spec.description ?? '',
+      command: spec.command ?? '',
       args: spec.args ?? [],
       env: spec.env ?? {},
       isEnabled: spec.isEnabled ?? true,
@@ -47,17 +54,17 @@ async function readMcpFile(dir: string, id: string): Promise<MCPServer | null> {
 function renderMcpFile(server: MCPServer): string {
   const spec: McpServerSpec = {};
   if (server.command && server.command.length > 0) {
-    spec.type = "stdio";
+    spec.type = 'stdio';
     spec.command = server.command;
     if (server.args?.length) spec.args = server.args;
   } else {
-    spec.type = "http";
+    spec.type = 'http';
   }
   if (server.env && Object.keys(server.env).length > 0) spec.env = server.env;
   if (server.description) spec.description = server.description;
   spec.isEnabled = server.isEnabled;
   const file: McpFile = { mcpServers: { [server.name]: spec } };
-  return JSON.stringify(file, null, 2) + "\n";
+  return JSON.stringify(file, null, 2) + '\n';
 }
 
 export async function listMCPServers(repoUrl: string): Promise<MCPServer[]> {
@@ -77,10 +84,7 @@ export async function listMCPServers(repoUrl: string): Promise<MCPServer[]> {
   return out;
 }
 
-export async function syncMCPRepo(
-  config: RepoConfig,
-  token?: string,
-): Promise<MCPServer[]> {
+export async function syncMCPRepo(config: RepoConfig, token?: string): Promise<MCPServer[]> {
   await pullOrClone(config, token);
   return await listMCPServers(config.url);
 }
@@ -89,7 +93,7 @@ export async function upsertMCPServer(
   server: MCPServer,
   config: RepoConfig,
   token: string | undefined,
-  author: { name: string; email: string },
+  author: { name: string; email: string }
 ): Promise<string> {
   await pullOrClone(config, token);
   const json = renderMcpFile(server);
@@ -106,7 +110,7 @@ export async function removeMCPServer(
   id: string,
   config: RepoConfig,
   token: string | undefined,
-  author: { name: string; email: string },
+  author: { name: string; email: string }
 ): Promise<string | null> {
   await pullOrClone(config, token);
   await deleteFile(config.url, `${id}/.mcp.json`);

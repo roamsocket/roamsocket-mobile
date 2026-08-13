@@ -6,7 +6,7 @@
  * shared secret proven over the LAN. Tokens are held in memory for the life
  * of the process.
  */
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 
 export interface PairedDevice {
   token: string;
@@ -16,11 +16,11 @@ export interface PairedDevice {
 
 function randomCode(): string {
   // 6 digits, easy to type on a phone.
-  return String(randomBytes(4).readUInt32BE(0) % 1_000_000).padStart(6, "0");
+  return String(randomBytes(4).readUInt32BE(0) % 1_000_000).padStart(6, '0');
 }
 
 function randomToken(): string {
-  return randomBytes(32).toString("hex");
+  return randomBytes(32).toString('hex');
 }
 
 /** Constant-time string comparison to avoid leaking the code via timing. */

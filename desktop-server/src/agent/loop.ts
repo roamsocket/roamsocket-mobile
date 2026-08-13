@@ -11,17 +11,26 @@
  * `/goal` support: when a session has an active completion condition, each
  * finished turn is evaluated; if not met, another turn starts automatically.
  */
-import { randomUUID } from "node:crypto";
-import type { ModelSelection, PermissionMode, ServerMessage, EnvironmentConfig } from "../protocol.js";
+import { randomUUID } from 'node:crypto';
+import type {
+  ModelSelection,
+  PermissionMode,
+  ServerMessage,
+  EnvironmentConfig,
+} from '../protocol.js';
 import {
   TOOLS,
   MUTATING_TOOLS,
   applyTaskUpdate,
   formatTaskChecklist,
   type AgentTask,
-} from "../tools/index.js";
-import { diffFiles } from "../git/github.js";
-import { getAgentAdapter, type NormalizedMessage, type ProviderAdapter } from "../providers/index.js";
+} from '../tools/index.js';
+import { diffFiles } from '../git/github.js';
+import {
+  getAgentAdapter,
+  type NormalizedMessage,
+  type ProviderAdapter,
+} from '../providers/index.js';
 import {
   type ActiveGoal,
   type AchievedGoal,
@@ -32,7 +41,7 @@ import {
   goalContinuePrompt,
   goalKickoffPrompt,
   parseGoalCommand,
-} from "./goal.js";
+} from './goal.js';
 
 const BASE_SYSTEM_PROMPT_PHONE = `You are a coding agent running on the user's desktop in a cloned Git repository.
 Work directly in the repository using the provided tools. Make focused, correct changes.
@@ -68,7 +77,7 @@ Do not stop early with a plan-only reply while a goal is active.`;
 const MAX_ROUNDS = 24;
 
 /** Where the agent is being driven from — affects system prompt wording only. */
-export type AgentSurface = "phone" | "cli";
+export type AgentSurface = 'phone' | 'cli';
 
 export interface AgentDeps {
   sessionId: string;
@@ -77,7 +86,11 @@ export interface AgentDeps {
   permissionMode: PermissionMode;
   emit: (msg: ServerMessage) => void;
   /** Ask the app to allow a mutating tool; resolves with the decision. */
-  requestPermission: (requestId: string, tool: string, summary: string) => Promise<"allow" | "deny">;
+  requestPermission: (
+    requestId: string,
+    tool: string,
+    summary: string
+  ) => Promise<'allow' | 'deny'>;
   signal: AbortSignal;
   /** Override the provider adapter (tests inject the mock). */
   adapter?: ProviderAdapter;
@@ -126,7 +139,7 @@ export class AgentSession {
   emitTaskList(): void {
     if (this.agentTasks.length === 0) return;
     this.deps.emit({
-      type: "task_list",
+      type: 'task_list',
       sessionId: this.deps.sessionId,
       tasks: this.agentTasks,
     });
@@ -135,7 +148,7 @@ export class AgentSession {
   /** Re-send active (or last achieved) goal status after reconnect. */
   emitGoalStatusReplay(): void {
     if (this.activeGoal) {
-      this.emitGoalStatus("active", {
+      this.emitGoalStatus('active', {
         condition: this.activeGoal.condition,
         reason: this.activeGoal.lastReason,
         turnsEvaluated: this.activeGoal.turnsEvaluated,
@@ -144,7 +157,7 @@ export class AgentSession {
       return;
     }
     if (this.achievedGoal) {
-      this.emitGoalStatus("achieved", {
+      this.emitGoalStatus('achieved', {
         condition: this.achievedGoal.condition,
         turnsEvaluated: this.achievedGoal.turnsEvaluated,
         startedAt: this.achievedGoal.startedAt,
@@ -158,9 +171,9 @@ export class AgentSession {
    * when the app re-opens an existing session. Keeps workdir + conversation.
    */
   rebind(next: {
-    emit: AgentDeps["emit"];
+    emit: AgentDeps['emit'];
     signal: AbortSignal;
-    requestPermission: AgentDeps["requestPermission"];
+    requestPermission: AgentDeps['requestPermission'];
     model?: ModelSelection;
     permissionMode?: PermissionMode;
     environment?: EnvironmentConfig;
@@ -196,16 +209,15 @@ export class AgentSession {
   }
 
   private buildSystemPrompt(): string {
-    let prompt =
-      this.deps.surface === "cli" ? BASE_SYSTEM_PROMPT_CLI : BASE_SYSTEM_PROMPT_PHONE;
+    let prompt = this.deps.surface === 'cli' ? BASE_SYSTEM_PROMPT_CLI : BASE_SYSTEM_PROMPT_PHONE;
 
     if (this.deps.skills && this.deps.skills.length > 0) {
-      prompt += "\n\n## Active Skills\n\n";
-      prompt += "The following skills are active and should guide your approach:\n\n";
+      prompt += '\n\n## Active Skills\n\n';
+      prompt += 'The following skills are active and should guide your approach:\n\n';
 
       for (const skillContent of this.deps.skills) {
         prompt += skillContent;
-        prompt += "\n\n";
+        prompt += '\n\n';
       }
     }
 
@@ -220,7 +232,7 @@ export class AgentSession {
       turnsEvaluated?: number;
       startedAt?: number;
       endedAt?: number;
-    } = {},
+    } = {}
   ): void {
     const sessionId = this.deps.sessionId;
     const startedAt = fields.startedAt;
@@ -236,7 +248,7 @@ export class AgentSession {
       endedAt,
     });
     this.deps.emit({
-      type: "goal_status",
+      type: 'goal_status',
       sessionId,
       status,
       condition: fields.condition,
@@ -256,50 +268,50 @@ export class AgentSession {
     const sessionId = this.deps.sessionId;
     const cmd = parseGoalCommand(text);
 
-    if (cmd?.kind === "status") {
+    if (cmd?.kind === 'status') {
       if (this.activeGoal) {
-        this.emitGoalStatus("active", {
+        this.emitGoalStatus('active', {
           condition: this.activeGoal.condition,
           reason: this.activeGoal.lastReason,
           turnsEvaluated: this.activeGoal.turnsEvaluated,
           startedAt: this.activeGoal.startedAt,
         });
       } else if (this.achievedGoal) {
-        this.emitGoalStatus("achieved", {
+        this.emitGoalStatus('achieved', {
           condition: this.achievedGoal.condition,
           turnsEvaluated: this.achievedGoal.turnsEvaluated,
           startedAt: this.achievedGoal.startedAt,
           endedAt: this.achievedGoal.endedAt,
         });
       } else {
-        this.emitGoalStatus("none");
+        this.emitGoalStatus('none');
       }
-      this.deps.emit({ type: "session_done", sessionId, stopReason: "goal_status" });
+      this.deps.emit({ type: 'session_done', sessionId, stopReason: 'goal_status' });
       return;
     }
 
-    if (cmd?.kind === "clear") {
+    if (cmd?.kind === 'clear') {
       if (!this.activeGoal) {
-        this.emitGoalStatus("none", { condition: undefined });
+        this.emitGoalStatus('none', { condition: undefined });
         // Explicit "No goal set" is already the none message.
       } else {
         const condition = this.activeGoal.condition;
         this.activeGoal = null;
-        this.emitGoalStatus("cleared", { condition });
+        this.emitGoalStatus('cleared', { condition });
       }
-      this.deps.emit({ type: "session_done", sessionId, stopReason: "goal_cleared" });
+      this.deps.emit({ type: 'session_done', sessionId, stopReason: 'goal_cleared' });
       return;
     }
 
     let kickoff = text;
-    if (cmd?.kind === "set") {
+    if (cmd?.kind === 'set') {
       this.activeGoal = {
         condition: cmd.condition,
         startedAt: Date.now(),
         turnsEvaluated: 0,
       };
       this.achievedGoal = null;
-      this.emitGoalStatus("active", {
+      this.emitGoalStatus('active', {
         condition: cmd.condition,
         turnsEvaluated: 0,
         startedAt: this.activeGoal.startedAt,
@@ -317,7 +329,7 @@ export class AgentSession {
       if (this.deps.signal.aborted) return;
 
       if (!this.activeGoal) {
-        this.deps.emit({ type: "session_done", sessionId, stopReason: "end_turn" });
+        this.deps.emit({ type: 'session_done', sessionId, stopReason: 'end_turn' });
         return;
       }
 
@@ -344,18 +356,18 @@ export class AgentSession {
         const turns = this.activeGoal.turnsEvaluated;
         const startedAt = this.activeGoal.startedAt;
         this.activeGoal = null;
-        this.emitGoalStatus("achieved", {
+        this.emitGoalStatus('achieved', {
           condition,
           reason: evaluation.reason,
           turnsEvaluated: turns,
           startedAt,
           endedAt,
         });
-        this.deps.emit({ type: "session_done", sessionId, stopReason: "goal_achieved" });
+        this.deps.emit({ type: 'session_done', sessionId, stopReason: 'goal_achieved' });
         return;
       }
 
-      this.emitGoalStatus("active", {
+      this.emitGoalStatus('active', {
         condition: this.activeGoal.condition,
         reason: evaluation.reason,
         turnsEvaluated: this.activeGoal.turnsEvaluated,
@@ -364,11 +376,11 @@ export class AgentSession {
 
       if (this.activeGoal.turnsEvaluated >= MAX_GOAL_TURNS) {
         this.deps.emit({
-          type: "error",
+          type: 'error',
           sessionId,
           message: `Goal stopped after ${MAX_GOAL_TURNS} evaluation turns without meeting the condition.`,
         });
-        this.deps.emit({ type: "session_done", sessionId, stopReason: "goal_max_turns" });
+        this.deps.emit({ type: 'session_done', sessionId, stopReason: 'goal_max_turns' });
         return;
       }
 
@@ -381,15 +393,15 @@ export class AgentSession {
    * (caller decides based on goal state).
    */
   private async runAgentTurn(userText: string): Promise<void> {
-    this.messages.push({ role: "user", text: userText });
+    this.messages.push({ role: 'user', text: userText });
     const sessionId = this.deps.sessionId;
 
     for (let round = 0; round < MAX_ROUNDS; round++) {
       if (this.deps.signal.aborted) return;
 
-      let assistantText = "";
+      let assistantText = '';
       const toolCalls: { id: string; name: string; input: Record<string, unknown> }[] = [];
-      let stopReason = "end_turn";
+      let stopReason = 'end_turn';
 
       const stream = this.adapter.stream(
         {
@@ -400,30 +412,30 @@ export class AgentSession {
           tools: Object.values(TOOLS),
           effort: this.deps.model.effort,
         },
-        this.deps.signal,
+        this.deps.signal
       );
 
       for await (const ev of stream) {
-        if (ev.kind === "text") {
+        if (ev.kind === 'text') {
           assistantText += ev.text;
-          this.deps.emit({ type: "assistant_delta", sessionId, text: ev.text });
-        } else if (ev.kind === "model_status") {
+          this.deps.emit({ type: 'assistant_delta', sessionId, text: ev.text });
+        } else if (ev.kind === 'model_status') {
           this.deps.emit({
-            type: "model_status",
+            type: 'model_status',
             sessionId,
             status: ev.status,
             hubID: ev.hubID,
             message: ev.message,
           });
-        } else if (ev.kind === "tool_call") {
+        } else if (ev.kind === 'tool_call') {
           toolCalls.push(ev.call);
-        } else if (ev.kind === "done") {
+        } else if (ev.kind === 'done') {
           stopReason = ev.stopReason;
         }
       }
 
       // Record the assistant turn (text + any tool calls).
-      this.messages.push({ role: "assistant", text: assistantText, toolCalls });
+      this.messages.push({ role: 'assistant', text: assistantText, toolCalls });
 
       if (toolCalls.length === 0) {
         void stopReason;
@@ -435,7 +447,7 @@ export class AgentSession {
         const tool = TOOLS[call.name];
         const summary = tool ? tool.summarize(call.input) : `${call.name}`;
         this.deps.emit({
-          type: "tool_call",
+          type: 'tool_call',
           sessionId,
           callId: call.id,
           tool: call.name,
@@ -458,13 +470,13 @@ export class AgentSession {
                 }
               : undefined,
           };
-          if (gated && this.deps.permissionMode === "plan") {
-            result = { ok: true, output: "[plan mode] change described but not executed." };
-          } else if (gated && this.deps.permissionMode === "ask") {
+          if (gated && this.deps.permissionMode === 'plan') {
+            result = { ok: true, output: '[plan mode] change described but not executed.' };
+          } else if (gated && this.deps.permissionMode === 'ask') {
             const requestId = randomUUID();
             const decision = await this.deps.requestPermission(requestId, call.name, summary);
-            if (decision === "deny") {
-              result = { ok: false, output: "Denied by user." };
+            if (decision === 'deny') {
+              result = { ok: false, output: 'Denied by user.' };
             } else {
               result = await tool.execute(call.input, baseCtx);
             }
@@ -474,14 +486,14 @@ export class AgentSession {
 
           // Apply checklist state after a successful update_tasks call and
           // push a full snapshot so the phone checklist stays live.
-          if (call.name === "update_tasks" && result.ok) {
+          if (call.name === 'update_tasks' && result.ok) {
             this.agentTasks = applyTaskUpdate(this.agentTasks, call.input);
             result = {
               ok: true,
               output: formatTaskChecklist(this.agentTasks),
             };
             this.deps.emit({
-              type: "task_list",
+              type: 'task_list',
               sessionId,
               tasks: this.agentTasks,
             });
@@ -489,14 +501,14 @@ export class AgentSession {
         }
 
         this.deps.emit({
-          type: "tool_result",
+          type: 'tool_result',
           sessionId,
           callId: call.id,
           ok: result.ok,
           output: result.output,
         });
         this.messages.push({
-          role: "tool",
+          role: 'tool',
           toolCallId: call.id,
           name: call.name,
           output: result.output,
@@ -505,11 +517,11 @@ export class AgentSession {
       }
 
       // Emit per-file diffs after this round's mutations.
-      if (this.deps.permissionMode !== "plan") {
+      if (this.deps.permissionMode !== 'plan') {
         try {
           for (const d of await diffFiles(this.deps.workdir)) {
             this.deps.emit({
-              type: "diff",
+              type: 'diff',
               sessionId,
               path: d.path,
               patch: d.patch,
@@ -524,7 +536,7 @@ export class AgentSession {
     }
 
     this.deps.emit({
-      type: "error",
+      type: 'error',
       sessionId,
       message: `Stopped after ${MAX_ROUNDS} rounds.`,
     });

@@ -14,12 +14,12 @@ import {
   statSync,
   createWriteStream,
   renameSync,
-} from "node:fs";
-import { pipeline } from "node:stream/promises";
-import { Readable } from "node:stream";
-import path from "node:path";
-import { productDataPath } from "../product.js";
-import os from "node:os";
+} from 'node:fs';
+import { pipeline } from 'node:stream/promises';
+import { Readable } from 'node:stream';
+import path from 'node:path';
+import { productDataPath } from '../product.js';
+import os from 'node:os';
 import {
   familyNameForHub,
   findMetalEntry,
@@ -27,7 +27,7 @@ import {
   sectionForEntry,
   type MetalCatalogEntry,
   type MetalSection,
-} from "./catalog.js";
+} from './catalog.js';
 
 export interface MetalDownloadProgress {
   hubID: string;
@@ -51,11 +51,11 @@ interface StoreFile {
 }
 
 function defaultRoot(): string {
-  return productDataPath("metal-models");
+  return productDataPath('metal-models');
 }
 
 function safeDirName(hubID: string): string {
-  return hubID.replace(/[^\w.-]+/g, "__");
+  return hubID.replace(/[^\w.-]+/g, '__');
 }
 
 export class MetalModelStore {
@@ -65,7 +65,7 @@ export class MetalModelStore {
 
   constructor(root = defaultRoot()) {
     this.root = root;
-    this.indexPath = path.join(root, "index.json");
+    this.indexPath = path.join(root, 'index.json');
     mkdirSync(root, { recursive: true });
     this.load();
   }
@@ -76,7 +76,7 @@ export class MetalModelStore {
         this.models = [];
         return;
       }
-      const parsed = JSON.parse(readFileSync(this.indexPath, "utf8")) as StoreFile;
+      const parsed = JSON.parse(readFileSync(this.indexPath, 'utf8')) as StoreFile;
       this.models = Array.isArray(parsed.models) ? parsed.models : [];
     } catch {
       this.models = [];
@@ -105,8 +105,11 @@ export class MetalModelStore {
     const names = readdirSync(dir);
     // HF snapshot typically has config.json + weights
     return (
-      names.includes("config.json") ||
-      names.some((n) => n.endsWith(".safetensors") || n.endsWith(".npz") || n === "model.safetensors.index.json")
+      names.includes('config.json') ||
+      names.some(
+        (n) =>
+          n.endsWith('.safetensors') || n.endsWith('.npz') || n === 'model.safetensors.index.json'
+      )
     );
   }
 
@@ -176,18 +179,16 @@ export class MetalModelStore {
   async download(
     hubID: string,
     onProgress?: (p: MetalDownloadProgress) => void,
-    signal?: AbortSignal,
+    signal?: AbortSignal
   ): Promise<DownloadedMetalModel> {
     const dest = this.pathFor(hubID);
     mkdirSync(dest, { recursive: true });
-    onProgress?.({ hubID, fraction: 0, status: "Listing files…" });
+    onProgress?.({ hubID, fraction: 0, status: 'Listing files…' });
 
     const tree = await listRepoFiles(hubID, signal);
-    const files = tree.filter((f) => f.type === "file" && !f.path.includes(".git"));
+    const files = tree.filter((f) => f.type === 'file' && !f.path.includes('.git'));
     if (files.length === 0) {
-      throw new Error(
-        `No files found for ${hubID} on Hugging Face. Check the hub id or network.`,
-      );
+      throw new Error(`No files found for ${hubID} on Hugging Face. Check the hub id or network.`);
     }
 
     const toFetch = selectModelFiles(files);
@@ -217,7 +218,7 @@ export class MetalModelStore {
     try {
       for (const file of toFetch) {
         if (signal?.aborted) {
-          throw new Error("Download cancelled");
+          throw new Error('Download cancelled');
         }
         const target = path.join(dest, file.path);
         mkdirSync(path.dirname(target), { recursive: true });
@@ -247,7 +248,7 @@ export class MetalModelStore {
           const got = statSync(target).size;
           if (got !== expected) {
             throw new Error(
-              `Incomplete download of ${file.path}: got ${got} bytes, expected ${expected}.`,
+              `Incomplete download of ${file.path}: got ${got} bytes, expected ${expected}.`
             );
           }
           bytesDone += expected;
@@ -265,17 +266,23 @@ export class MetalModelStore {
 
     if (!this.looksLikeModelDir(dest)) {
       throw new Error(
-        `Download finished but ${hubID} does not look like a complete MLX model (missing config/weights).`,
+        `Download finished but ${hubID} does not look like a complete MLX model (missing config/weights).`
       );
     }
 
-    onProgress?.({ hubID, fraction: 1, status: "Ready", bytesDownloaded: bytesDone, bytesTotal: totalBytes || bytesDone });
+    onProgress?.({
+      hubID,
+      fraction: 1,
+      status: 'Ready',
+      bytesDownloaded: bytesDone,
+      bytesTotal: totalBytes || bytesDone,
+    });
     return this.markDownloaded(hubID, dest);
   }
 }
 
 interface HFTreeEntry {
-  type: "file" | "directory";
+  type: 'file' | 'directory';
   path: string;
   size?: number;
 }
@@ -288,14 +295,17 @@ function selectModelFiles(files: HFTreeEntry[]): HFTreeEntry[] {
     const base = path.basename(f.path);
     if (skipName.test(base)) return false;
     if (skipExt.test(base)) return false;
-    if (f.path.includes(".git/")) return false;
+    if (f.path.includes('.git/')) return false;
     // Keep model weights, configs, tokenizer pieces, chat templates.
     if (/\.(safetensors|json|txt|model|jinja|tiktoken)$/i.test(base)) return true;
-    if (/^(config|tokenizer|special_tokens|generation_config|vocab|merges|added_tokens)/i.test(base)) {
+    if (
+      /^(config|tokenizer|special_tokens|generation_config|vocab|merges|added_tokens)/i.test(base)
+    ) {
       return true;
     }
-    if (base.includes("tokenizer") || base.includes("vocab") || base.includes("merges")) return true;
-    if (f.path.endsWith(".safetensors") || f.path.endsWith(".json")) return true;
+    if (base.includes('tokenizer') || base.includes('vocab') || base.includes('merges'))
+      return true;
+    if (f.path.endsWith('.safetensors') || f.path.endsWith('.json')) return true;
     return false;
   });
   // Prefer larger / weight files last? Keep hub order but put small configs first
@@ -314,12 +324,12 @@ async function listRepoFiles(hubID: string, signal?: AbortSignal): Promise<HFTre
   const res = await fetch(url, {
     signal,
     headers: {
-      "user-agent": "RoamSocket-desktop/1.0 (metal-store)",
-      accept: "application/json",
+      'user-agent': 'RoamSocket-desktop/1.0 (metal-store)',
+      accept: 'application/json',
     },
   });
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
+    const body = await res.text().catch(() => '');
     throw new Error(`Hugging Face tree failed ${res.status} for ${hubID}: ${body.slice(0, 200)}`);
   }
   const json = (await res.json()) as HFTreeEntry[];
@@ -334,24 +344,24 @@ async function downloadFileStreaming(
   filePath: string,
   dest: string,
   signal?: AbortSignal,
-  onBytes?: (written: number) => void,
+  onBytes?: (written: number) => void
 ): Promise<void> {
   const encodedPath = filePath
-    .split("/")
+    .split('/')
     .map((seg) => encodeURIComponent(seg))
-    .join("/");
+    .join('/');
   const url = `https://huggingface.co/${hubID}/resolve/main/${encodedPath}?download=true`;
   const res = await fetch(url, {
     signal,
     headers: {
-      "user-agent": "RoamSocket-desktop/1.0 (metal-store)",
+      'user-agent': 'RoamSocket-desktop/1.0 (metal-store)',
     },
-    redirect: "follow",
+    redirect: 'follow',
   });
   if (!res.ok || !res.body) {
-    const body = await res.text().catch(() => "");
+    const body = await res.text().catch(() => '');
     throw new Error(
-      `Failed to download ${filePath}: HTTP ${res.status}${body ? ` — ${body.slice(0, 160)}` : ""}`,
+      `Failed to download ${filePath}: HTTP ${res.status}${body ? ` — ${body.slice(0, 160)}` : ''}`
     );
   }
 
@@ -360,11 +370,13 @@ async function downloadFileStreaming(
     if (existsSync(partial)) rmSync(partial, { force: true });
     if (existsSync(dest)) rmSync(dest, { force: true });
 
-    const nodeStream = Readable.fromWeb(res.body as import("stream/web").ReadableStream, { signal });
+    const nodeStream = Readable.fromWeb(res.body as import('stream/web').ReadableStream, {
+      signal,
+    });
     let written = 0;
     let lastReport = 0;
-    nodeStream.on("data", (chunk: Buffer | string) => {
-      written += typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length;
+    nodeStream.on('data', (chunk: Buffer | string) => {
+      written += typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.length;
       // Throttle progress so multi‑GB files don't flood the renderer.
       if (written - lastReport >= 512 * 1024 || lastReport === 0) {
         lastReport = written;
