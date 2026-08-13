@@ -49,7 +49,11 @@ struct DefaultModelSheet: View {
     /// Models visible in the picker for this lane, with provider filter applied.
     private var results: [ModelCatalog.ProviderResult] {
         switch kind {
-        case .chat:
+        case .chat, .lightweight:
+            // Lightweight uses the same chat-side provider pool — phone Metal,
+            // custom OpenAI-compatible endpoints, all built-ins. Apple Intelligence
+            // is offered as a separate "use on-device system model" row at the top
+            // of the sheet so it sits next to a status pill users can read.
             return state.providerResults
         case .code:
             // Same rules as ModelPickerSheet(codingOnly: true): exclude phone
@@ -97,7 +101,7 @@ struct DefaultModelSheet: View {
     private func filteredModels(in result: ModelCatalog.ProviderResult) -> [AIModel] {
         let visible = state.visibleModels(in: result)
         switch kind {
-        case .chat:
+        case .chat, .lightweight:
             return visible
         case .code:
             return visible.filter { $0.provider.supportsCodingAgent }
@@ -118,6 +122,13 @@ struct DefaultModelSheet: View {
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 4, trailing: 0))
+                }
+
+                if kind == .lightweight {
+                    appleIntelligenceRow
+                        .listRowBackground(Theme.surface)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 8, trailing: 0))
                 }
 
                 if state.isLoadingModels
@@ -195,6 +206,46 @@ struct DefaultModelSheet: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    /// Lightweight-only row: lets the user pin Apple Intelligence as the
+    /// default without picking any model id. Mirrors the shape of `modelRow`
+    /// so the sheet reads as a single, consistent picker surface.
+    private var appleIntelligenceRow: some View {
+        let isCurrent = state.defaultLightweightUsesAppleFoundation
+        return Button {
+            state.setDefaultModelID(AppState.appleFoundationSentinelID, for: .lightweight)
+            dismiss()
+        } label: {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Apple Intelligence")
+                        .font(.system(size: 15, weight: isCurrent ? .semibold : .regular))
+                        .foregroundStyle(Theme.textPrimary)
+                    Text(LightweightTaskRunner.appleFoundationStatusLine)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textTertiary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                if isCurrent {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundStyle(Theme.accent)
+                } else {
+                    Image(systemName: "circle")
+                        .font(.system(size: 18))
+                        .foregroundStyle(Theme.textTertiary)
+                }
+            }
+            .padding(.vertical, 10)
+            .padding(.horizontal, 16)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!LightweightTaskRunner.appleFoundationAvailable)
+        .opacity(LightweightTaskRunner.appleFoundationAvailable ? 1 : 0.45)
     }
 
     // MARK: - Provider sections
@@ -353,7 +404,7 @@ struct DefaultModelSheet: View {
 
     private var emptyStateMessage: String {
         switch kind {
-        case .chat:
+        case .chat, .lightweight:
             return "Add an API key in Settings, pick Apple Intelligence when available, or download an on-device Metal model (Settings → On-device)."
         case .code:
             return "Coding runs on your paired desktop. Add an API key for Anthropic, OpenAI, OpenRouter, xAI, or Mistral in Settings, or install Metal models on the desktop."
@@ -366,60 +417,76 @@ struct DefaultModelSheet: View {
 
     @ViewBuilder
     private var actionsFooter: some View {
+        // The actions card sits in its own section with a colored background;
+        // an inset separator between the rows keeps the card readable without
+        // a stray top divider that previously cut into nothing. Icons share
+        // a fixed leading slot so the title text aligns vertically.
         VStack(spacing: 0) {
-            Divider().background(Theme.separator)
-
             if let current = state.selectedModel,
                state.modelMeetsLane(current, kind: kind) {
-                Button {
+                footerActionRow(
+                    systemImage: "checkmark.circle",
+                    tint: Theme.accent,
+                    title: "Use currently selected model",
+                    subtitle: state.displayName(for: current)
+                ) {
                     state.setDefaultModelID(current.id, for: kind)
                     dismiss()
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "checkmark.circle")
-                            .font(.system(size: 16))
-                            .foregroundStyle(Theme.accent)
-                            .frame(width: 24)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Use currently selected model")
-                                .font(.system(size: 15, weight: .medium))
-                                .foregroundStyle(Theme.textPrimary)
-                            Text(state.displayName(for: current))
-                                .font(.system(size: 12))
-                                .foregroundStyle(Theme.textTertiary)
-                                .lineLimit(1)
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.vertical, 10)
-                    .padding(.horizontal, 16)
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
 
                 Divider().background(Theme.separator)
             }
 
-            Button(role: .destructive) {
+            footerActionRow(
+                systemImage: "xmark.circle",
+                tint: .red,
+                title: "Clear default",
+                subtitle: nil,
+                isDestructive: true
+            ) {
                 state.setDefaultModelID(nil, for: kind)
                 dismiss()
-            } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: "xmark.circle")
-                        .font(.system(size: 16))
-                        .foregroundStyle(.red)
-                        .frame(width: 24)
-                    Text("Clear default")
-                        .font(.system(size: 15, weight: .medium))
-                    Spacer(minLength: 0)
-                }
-                .padding(.vertical, 10)
-                .padding(.horizontal, 16)
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
             .disabled(state.defaultModelID(for: kind).isEmpty)
             .opacity(state.defaultModelID(for: kind).isEmpty ? 0.4 : 1)
         }
+    }
+
+    /// One row of the actions footer. The icon lives in a fixed-size square so
+    /// it stays vertically centered with the (title + optional subtitle) stack
+    /// regardless of which is taller — that's what fixed the X glyph floating
+    /// above the "Clear default" baseline.
+    private func footerActionRow(
+        systemImage: String,
+        tint: Color,
+        title: String,
+        subtitle: String?,
+        isDestructive: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(role: isDestructive ? .destructive : nil, action: action) {
+            HStack(alignment: .center, spacing: 12) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 16))
+                    .foregroundStyle(tint)
+                    .frame(width: 24, height: 24)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(Theme.textPrimary)
+                    if let subtitle, !subtitle.isEmpty {
+                        Text(subtitle)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.textTertiary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 10)
+            .padding(.horizontal, 16)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
