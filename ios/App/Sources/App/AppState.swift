@@ -1402,7 +1402,7 @@ final class AppState: ObservableObject {
         } else {
             hiddenModelKeys.insert(key)
             if selectedModel?.id == model.id {
-                selectedModel = allModels.first
+                autoPickSelectionIfNeeded()
             }
         }
         saveHiddenModels()
@@ -1426,7 +1426,7 @@ final class AppState: ObservableObject {
             }
             await refreshModels()
             if selectedModel == nil {
-                selectedModel = allModels.first
+                autoPickSelectionIfNeeded()
             }
             return "Deleted on-device model from disk."
         }
@@ -1435,7 +1435,7 @@ final class AppState: ObservableObject {
         modelAliases.removeValue(forKey: Self.aliasKey(provider: model.provider, modelID: model.modelID))
         saveModelAliases()
         if selectedModel?.id == model.id {
-            selectedModel = allModels.first
+            autoPickSelectionIfNeeded()
         }
         objectWillChange.send()
         return "Removed from model list."
@@ -1551,13 +1551,16 @@ final class AppState: ObservableObject {
                         selectedModel = updated
                     }
                 } else {
-                    selectedModel = allModels.first
+                    // Selection listed but no usable key — fall through to
+                    // the default-aware picker so a chat default wins over
+                    // whatever happens to be first in the catalog.
+                    autoPickSelectionIfNeeded()
                 }
             } else {
-                selectedModel = allModels.first
+                autoPickSelectionIfNeeded()
             }
         } else {
-            selectedModel = allModels.first
+            autoPickSelectionIfNeeded()
         }
         // Ensure RAM matches selection after catalog refresh (e.g. new download).
         await ensureSelectedLocalMetalLoaded()
@@ -1962,24 +1965,49 @@ final class AppState: ObservableObject {
         return displayName(for: model)
     }
 
-    /// Apply the default for a lane to `selectedModel`, but only when the
-    /// current selection doesn't already satisfy the lane's requirements
-    /// (per-chat / per-session overrides must survive). Returns the model
-    /// that ended up as `selectedModel` after the call (either the existing
-    /// one, the default we just applied, or `nil`).
+    /// Apply the default for a lane to `selectedModel`. Behavior depends on the
+    /// lane's filter strength:
+    ///
+    /// - **Chat** (`modelMeetsLane` always returns `true`): the chat default
+    ///   ALWAYS wins over the current `selectedModel` when a default is set.
+    ///   Otherwise any model passes the filter, and a leftover Apple
+    ///   Intelligence pick from a previous session would silently block the
+    ///   user's chat default from ever applying. Per-chat overrides survive
+    ///   through `ChatViewModel.restoreSelectedModel` (which runs *after*
+    ///   `beginNewChat` when reopening a saved chat).
+    /// - **Code / Vision / Lightweight**: the current selection wins unless
+    ///   it doesn't satisfy the lane filter — the filter is the signal, the
+    ///   default only kicks in when the existing pick is unusable.
     @discardableResult
     func applyDefault(for kind: DefaultModelKind) -> AIModel? {
-        // If current selection already satisfies this lane, leave it alone.
-        if let current = selectedModel, modelMeetsLane(current, kind: kind) {
-            return current
-        }
-        guard let def = defaultModel(for: kind) else {
+        switch kind {
+        case .chat:
+            // Chat has no provider filter, so `selectedModel` carries no
+            // implicit "the user wanted this lane" signal — honor the chat
+            // default unconditionally when one is set.
+            if let def = defaultModel(for: .chat) {
+                if selectedModel?.id != def.id {
+                    selectedModel = def
+                }
+                return def
+            }
+            // No default set — leave whatever's selected alone (could be nil,
+            // could be a leftover pick).
             return selectedModel
+        case .code, .vision, .lightweight:
+            // Filtered lanes: keep the current selection unless it doesn't
+            // satisfy the lane, in which case fall back to the default.
+            if let current = selectedModel, modelMeetsLane(current, kind: kind) {
+                return current
+            }
+            guard let def = defaultModel(for: kind) else {
+                return selectedModel
+            }
+            if selectedModel?.id != def.id {
+                selectedModel = def
+            }
+            return def
         }
-        if selectedModel?.id != def.id {
-            selectedModel = def
-        }
-        return def
     }
 
     /// Whether `model` is a valid selection for this lane.
@@ -1996,6 +2024,34 @@ final class AppState: ObservableObject {
             // and never reaches this path — it's a separate "no-id" branch.
             return true
         }
+    }
+
+    /// Centralised "pick a model when the current selection is unusable" path.
+    /// All the catalog-refresh / hide / delete / clear sites used to write
+    /// `selectedModel = allModels.first` directly — which silently chose
+    /// Apple Foundation (it's the first provider in `providerResults`) even
+    /// when the user had explicitly set a chat default. Going through this
+    /// helper keeps the preference order consistent everywhere:
+    ///
+    /// 1. If `selectedModel` still resolves to a live, non-hidden entry,
+    ///    keep it (in-session override).
+    /// 2. Else if the chat default resolves to a live model, use that.
+    /// 3. Else fall back to `allModels.first` (legacy behavior).
+    ///
+    /// The "current resolves" check is intentionally lenient — the in-session
+    /// override always wins. Per-chat overrides are layered on top via
+    /// `ChatViewModel.restoreSelectedModel` when a saved chat is reopened.
+    func autoPickSelectionIfNeeded() {
+        if let current = selectedModel,
+           !isModelHidden(current),
+           allModels.contains(where: { $0.id == current.id }) {
+            return
+        }
+        if let def = defaultModel(for: .chat), !isModelHidden(def) {
+            selectedModel = def
+            return
+        }
+        selectedModel = allModels.first
     }
 
     // MARK: - Model aliases
