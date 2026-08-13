@@ -115,6 +115,9 @@ final class VoiceSettingsStore: ObservableObject {
         didSet { UserDefaults.standard.set(freeNeuralVoiceID, forKey: Keys.freeNeuralVoiceID) }
     }
 
+    /// Phrase spoken when the user taps the Play button next to a voice in Settings.
+    nonisolated static let previewText = "RoamSocket helps me chat and code quickly, securely and anywhere I go."
+
     private init() {
         let defaults = UserDefaults.standard
         if let raw = defaults.string(forKey: Keys.engine),

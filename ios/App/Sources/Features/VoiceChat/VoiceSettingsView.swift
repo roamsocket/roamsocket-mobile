@@ -13,6 +13,8 @@ struct VoiceSettingsView: View {
     @State private var elevenVoices: [ElevenLabsVoice] = VoiceSettingsStore.elevenLabsPresetVoices
     @State private var loadingEleven = false
     @State private var elevenError: String?
+    @State private var previewingID: String?
+    @StateObject private var previewSynth = SpeechSynthesisService()
 
     private var credentials: VoiceTTSCredentials {
         VoiceTTSCredentials(
@@ -76,7 +78,8 @@ struct VoiceSettingsView: View {
                     voiceRow(
                         title: eng.title,
                         subtitle: eng.subtitle + availabilityNote(for: eng),
-                        selected: settings.engine == eng
+                        selected: settings.engine == eng,
+                        previewAction: PreviewAction(id: "engine.\(eng.rawValue)", engine: eng)
                     ) {
                         settings.engine = eng
                     }
@@ -137,7 +140,12 @@ struct VoiceSettingsView: View {
                     voiceRow(
                         title: voice.name,
                         subtitle: voice.displaySubtitle,
-                        selected: settings.freeNeuralVoiceID == voice.id
+                        selected: settings.freeNeuralVoiceID == voice.id,
+                        previewAction: PreviewAction(
+                            id: "freeNeural.\(voice.id)",
+                            engine: .freeNeural,
+                            voiceOverride: voice.id
+                        )
                     ) {
                         settings.freeNeuralVoiceID = voice.id
                     }
@@ -158,7 +166,12 @@ struct VoiceSettingsView: View {
                     voiceRow(
                         title: voice.name,
                         subtitle: voice.id,
-                        selected: settings.openAIVoice == voice.id
+                        selected: settings.openAIVoice == voice.id,
+                        previewAction: PreviewAction(
+                            id: "openAI.voice.\(voice.id)",
+                            engine: .openAI,
+                            voiceOverride: voice.id
+                        )
                     ) {
                         settings.openAIVoice = voice.id
                     }
@@ -174,7 +187,12 @@ struct VoiceSettingsView: View {
                     voiceRow(
                         title: model.name,
                         subtitle: model.id,
-                        selected: settings.openAIModel == model.id
+                        selected: settings.openAIModel == model.id,
+                        previewAction: PreviewAction(
+                            id: "openAI.model.\(model.id)",
+                            engine: .openAI,
+                            modelOverride: model.id
+                        )
                     ) {
                         settings.openAIModel = model.id
                     }
@@ -222,7 +240,12 @@ struct VoiceSettingsView: View {
                     voiceRow(
                         title: voice.name,
                         subtitle: [voice.category, voice.id].compactMap { $0 }.joined(separator: " · "),
-                        selected: settings.elevenLabsVoiceID == voice.id
+                        selected: settings.elevenLabsVoiceID == voice.id,
+                        previewAction: PreviewAction(
+                            id: "elevenLabs.voice.\(voice.id)",
+                            engine: .elevenLabs,
+                            voiceOverride: voice.id
+                        )
                     ) {
                         settings.elevenLabsVoiceID = voice.id
                     }
@@ -238,7 +261,12 @@ struct VoiceSettingsView: View {
                     voiceRow(
                         title: model.name,
                         subtitle: model.id,
-                        selected: settings.elevenLabsModel == model.id
+                        selected: settings.elevenLabsModel == model.id,
+                        previewAction: PreviewAction(
+                            id: "elevenLabs.model.\(model.id)",
+                            engine: .elevenLabs,
+                            modelOverride: model.id
+                        )
                     ) {
                         settings.elevenLabsModel = model.id
                     }
@@ -287,7 +315,11 @@ struct VoiceSettingsView: View {
                 voiceRow(
                     title: "Auto system voice",
                     subtitle: systemAutoSubtitle,
-                    selected: settings.voiceIdentifier.isEmpty
+                    selected: settings.voiceIdentifier.isEmpty,
+                    previewAction: PreviewAction(
+                        id: "system.auto",
+                        engine: settings.engine == .personal ? .personal : .system
+                    )
                 ) {
                     settings.voiceIdentifier = ""
                 }
@@ -297,7 +329,12 @@ struct VoiceSettingsView: View {
                     voiceRow(
                         title: voice.name,
                         subtitle: "\(voice.language) · \(voice.qualityLabel)",
-                        selected: settings.voiceIdentifier == voice.identifier
+                        selected: settings.voiceIdentifier == voice.identifier,
+                        previewAction: PreviewAction(
+                            id: "system.\(voice.identifier)",
+                            engine: voice.isPersonalVoiceClone ? .personal : .system,
+                            voiceOverride: voice.identifier
+                        )
                     ) {
                         settings.voiceIdentifier = voice.identifier
                     }
@@ -398,32 +435,101 @@ struct VoiceSettingsView: View {
         title: String,
         subtitle: String,
         selected: Bool,
+        previewAction: PreviewAction? = nil,
         action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title)
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(Theme.textPrimary)
-                        .multilineTextAlignment(.leading)
-                    Text(subtitle)
-                        .font(.system(size: 13))
-                        .foregroundStyle(Theme.textSecondary)
-                        .multilineTextAlignment(.leading)
+        HStack(spacing: 0) {
+            Button(action: action) {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(title)
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(Theme.textPrimary)
+                            .multilineTextAlignment(.leading)
+                        Text(subtitle)
+                            .font(.system(size: 13))
+                            .foregroundStyle(Theme.textSecondary)
+                            .multilineTextAlignment(.leading)
+                    }
+                    Spacer(minLength: 8)
+                    if selected {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(Theme.accent)
+                            .font(.system(size: 20))
+                    }
                 }
-                Spacer(minLength: 8)
-                if selected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(Theme.accent)
-                        .font(.system(size: 20))
-                }
+                .padding(.leading, 16)
+                .padding(.trailing, previewAction == nil ? 16 : 12)
+                .padding(.vertical, 12)
+                .contentShape(Rectangle())
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+
+            if let previewAction {
+                previewButton(for: previewAction)
+            }
+        }
+    }
+
+    /// Describes how to preview a row. Pass `nil` to omit the play button.
+    struct PreviewAction: Equatable {
+        /// Stable id used to track which row is currently playing.
+        let id: String
+        /// Engine path used for playback (see `SpeechSynthesisService.preview`).
+        let engine: VoiceSpeechEngine
+        /// Specific voice/model to try before falling back to the user's selection.
+        let voiceOverride: String?
+        let modelOverride: String?
+
+        init(
+            id: String,
+            engine: VoiceSpeechEngine,
+            voiceOverride: String? = nil,
+            modelOverride: String? = nil
+        ) {
+            self.id = id
+            self.engine = engine
+            self.voiceOverride = voiceOverride
+            self.modelOverride = modelOverride
+        }
+    }
+
+    private func previewButton(for action: PreviewAction) -> some View {
+        let isPlaying = previewingID == action.id && previewSynth.isSpeaking
+        return Button {
+            handlePreview(action)
+        } label: {
+            Image(systemName: isPlaying ? "stop.circle.fill" : "play.circle")
+                .font(.system(size: 22))
+                .foregroundStyle(isPlaying ? Theme.accent : Theme.textSecondary)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .padding(.trailing, 4)
+        .accessibilityLabel(isPlaying ? "Stop preview" : "Play preview")
+    }
+
+    private func handlePreview(_ action: PreviewAction) {
+        if previewingID == action.id && previewSynth.isSpeaking {
+            previewSynth.stop()
+            previewingID = nil
+            return
+        }
+        previewingID = action.id
+        Task {
+            await previewSynth.preview(
+                engine: action.engine,
+                settings: settings,
+                credentials: credentials,
+                voiceOverride: action.voiceOverride,
+                modelOverride: action.modelOverride
+            )
+            await MainActor.run {
+                if previewingID == action.id { previewingID = nil }
+            }
+        }
     }
 
     private func refreshElevenLabsVoicesIfPossible() async {

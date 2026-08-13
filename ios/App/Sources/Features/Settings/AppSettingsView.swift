@@ -724,7 +724,7 @@ struct AppSettingsView: View {
                         .foregroundStyle(Theme.textPrimary)
                         .frame(width: 28)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Connectors, skills, plugins, Metal")
+                        Text("Manage repositories")
                             .font(.system(size: 17, weight: .regular))
                             .foregroundStyle(Theme.textPrimary)
                         Text("Official catalog + your GitHub marketplace repos")

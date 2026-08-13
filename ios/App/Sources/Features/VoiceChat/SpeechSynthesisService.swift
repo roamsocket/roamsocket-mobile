@@ -149,12 +149,21 @@ final class SpeechSynthesisService: NSObject, ObservableObject {
 
     // MARK: - System speech
 
-    private func speakSystem(_ text: String, settings: VoiceSettingsStore) async {
+    private func speakSystem(
+        _ text: String,
+        settings: VoiceSettingsStore,
+        voiceOverride: String? = nil
+    ) async {
         let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { return }
 
         let utterance = AVSpeechUtterance(string: cleaned)
-        utterance.voice = settings.resolvedSystemVoice()
+        if let id = voiceOverride, !id.isEmpty,
+           let explicit = AVSpeechSynthesisVoice(identifier: id) {
+            utterance.voice = explicit
+        } else {
+            utterance.voice = settings.resolvedSystemVoice()
+        }
         utterance.rate = settings.speechRateForUtterance
         utterance.pitchMultiplier = 1.0
         utterance.preUtteranceDelay = 0.05
@@ -191,6 +200,88 @@ final class SpeechSynthesisService: NSObject, ObservableObject {
         if let cont = continuation {
             continuation = nil
             cont.resume()
+        }
+    }
+
+    // MARK: - Preview (settings "Play" button)
+
+    /// Speak a preview phrase using the selected engine, without touching the
+    /// user's persisted voice/model preferences. Used by the settings rows.
+    /// Optional overrides let a row preview *its* voice without committing the
+    /// selection to the store.
+    func preview(
+        text: String = VoiceSettingsStore.previewText,
+        engine: VoiceSpeechEngine,
+        settings: VoiceSettingsStore,
+        credentials: VoiceTTSCredentials,
+        voiceOverride: String? = nil,
+        modelOverride: String? = nil
+    ) async {
+        let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return }
+
+        stop()
+        lastError = nil
+
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers, .allowBluetoothA2DP])
+            try session.setActive(true, options: .notifyOthersOnDeactivation)
+        } catch {
+            lastError = error.localizedDescription
+        }
+
+        do {
+            switch engine {
+            case .elevenLabs:
+                let data = try await NeuralTTSService.synthesizeElevenLabs(
+                    text: cleaned,
+                    apiKey: credentials.elevenLabsKey,
+                    voiceID: voiceOverride ?? settings.elevenLabsVoiceID,
+                    modelID: modelOverride ?? settings.elevenLabsModel
+                )
+                await playMP3(data)
+
+            case .openAI:
+                let data = try await NeuralTTSService.synthesizeOpenAI(
+                    text: cleaned,
+                    apiKey: credentials.openAIKey,
+                    voice: voiceOverride ?? settings.openAIVoice,
+                    model: modelOverride ?? settings.openAIModel,
+                    speed: settings.openAISpeed
+                )
+                await playMP3(data)
+
+            case .freeNeural:
+                let data = try await EdgeFreeTTSService.synthesize(
+                    text: cleaned,
+                    voiceID: voiceOverride ?? settings.freeNeuralVoiceID,
+                    ratePercent: settings.freeNeuralRatePercent
+                )
+                await playMP3(data)
+
+            case .personal:
+                await preparePersonalVoiceIfNeeded(preferPersonal: true)
+                await speakSystem(cleaned, settings: settings, voiceOverride: voiceOverride)
+
+            case .system:
+                await speakSystem(cleaned, settings: settings, voiceOverride: voiceOverride)
+
+            case .auto:
+                // Not a preview target; preview the resolved path instead.
+                let resolved = settings.resolvedEngine(credentials: credentials)
+                await preview(
+                    text: cleaned,
+                    engine: resolved,
+                    settings: settings,
+                    credentials: credentials,
+                    voiceOverride: voiceOverride,
+                    modelOverride: modelOverride
+                )
+            }
+            lastError = nil
+        } catch {
+            lastError = error.localizedDescription
         }
     }
 }
