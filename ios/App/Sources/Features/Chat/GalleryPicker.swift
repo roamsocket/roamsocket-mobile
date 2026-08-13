@@ -50,8 +50,8 @@ struct GalleryPicker: UIViewControllerRepresentable {
             self.parent = parent
         }
 
-        func pickerController(
-            _ controller: PHPickerViewController,
+        func picker(
+            _ picker: PHPickerViewController,
             didFinishPicking results: [PHPickerResult]
         ) {
             parent.isPresented = false
@@ -85,20 +85,31 @@ struct GalleryPicker: UIViewControllerRepresentable {
                     "public.heic",
                     "public.image",
                 ]
-                let chosen = preferred.first { identifiers.contains($0) }
+                guard let chosen = preferred.first(where: identifiers.contains)
                     ?? identifiers.first
+                else { continue }
+                let typeID: String = chosen
 
-                guard let typeID = chosen else { continue }
                 group.enter()
                 DispatchQueue.global(qos: .userInitiated).async {
                     autoreleasepool {
-                        provider.loadDataRepresentation(forTypeIdentifier: typeID) { data, _ in
+                        // Explicit `(Data?, Error?) -> Void` closure type so
+                        // the compiler can pick the right overload of
+                        // `loadDataRepresentation` — there are variants
+                        // with and without a `Progress` argument and Swift
+                        // can't disambiguate when `typeID` flows through an
+                        // optional unwrap.
+                        let completion: (Data?, (any Error)?) -> Void = { data, _ in
                             defer { group.leave() }
                             guard let data, !data.isEmpty else { return }
                             lock.lock()
                             payloads.append(data)
                             lock.unlock()
                         }
+                        provider.loadDataRepresentation(
+                            forTypeIdentifier: typeID,
+                            completionHandler: completion
+                        )
                     }
                 }
             }

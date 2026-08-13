@@ -19,6 +19,7 @@
 		232952957769112968A5A015 /* ModelPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7C91CD10546F9AFECAEDF55 /* ModelPickerSheet.swift */; };
 		24856603C8786315B3E43605 /* UserMemoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6988A4059DBA7C6CB7C9083 /* UserMemoryStore.swift */; };
 		298A9D9CCA4A0F0AB506A716 /* LocalMetalMLXBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 588702516D0496BBC9A698CB /* LocalMetalMLXBackend.swift */; };
+		2C3B1915498EF2DE0712660D /* ImageProcessing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1527859F8C93DC72EBCFD9F2 /* ImageProcessing.swift */; };
 		2C667CF02D91B02A5DAC5D81 /* WebSearchService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 471E0875DF99071BF74BD76E /* WebSearchService.swift */; };
 		2CCDE50E6E0936B1AC08C5F9 /* CodeEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCB8BAB31F912B0EA456AFF5 /* CodeEditorView.swift */; };
 		2E320ED6B96273F7A1412890 /* Highlightr in Frameworks */ = {isa = PBXBuildFile; productRef = CB852AFD1FB4E15CD8E98225 /* Highlightr */; };
@@ -83,6 +84,7 @@
 		975EBCE0B6BF23BF231C1C8C /* NewSessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82FC70BD52C9A49A33BFACE6 /* NewSessionView.swift */; };
 		97D13AEE0AFADB4D4367D733 /* AddToChatSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2AD82A2DBDD5F7EDE716636 /* AddToChatSheet.swift */; };
 		9908E3AA9D2E0F8F5E0D6213 /* HealthKitService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26154A8C1130ED5DEBC3EBF6 /* HealthKitService.swift */; };
+		997739F602DACF0DBAE97A74 /* ImageProcessing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1527859F8C93DC72EBCFD9F2 /* ImageProcessing.swift */; };
 		9C739E43424BF449F722BFD5 /* CustomTextSkillEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF9AD9584C979837931C1242 /* CustomTextSkillEditor.swift */; };
 		9CC3BE6C5F7A875DBC81191B /* BrowserTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97A8944EF43317CCBCDD259F /* BrowserTab.swift */; };
 		9E1FE29136A3C6963F8CEDFB /* Components.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5396ACA2D6321A437473CAD7 /* Components.swift */; };
@@ -142,6 +144,13 @@
 			remoteGlobalIDString = AE7AD6F92FE74F95266560CC;
 			remoteInfo = RoamSocketWidgets;
 		};
+		B751F7B8F11FFF91F6FB7554 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 97E8A7B01B8E7FFCB2FD6D06 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 433F44E10AA687B6E118389D;
+			remoteInfo = RoamSocket;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -169,6 +178,7 @@
 		08EF66148B760142391C499D /* RenameChatSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenameChatSheet.swift; sourceTree = "<group>"; };
 		0F205CCF00C10D6CA6FAF197 /* SkillDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillDetailView.swift; sourceTree = "<group>"; };
 		122D73711B783A293FCCA9E5 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
+		1527859F8C93DC72EBCFD9F2 /* ImageProcessing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageProcessing.swift; sourceTree = "<group>"; };
 		16BE332D27423E93B6592767 /* NeuralTTSService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NeuralTTSService.swift; sourceTree = "<group>"; };
 		1F90DB94C3BF91EA0A18CB26 /* EnvironmentPickerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvironmentPickerSheet.swift; sourceTree = "<group>"; };
 		25BB8C5338F7DF305283B5CA /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModel.swift; sourceTree = "<group>"; };
@@ -270,6 +280,7 @@
 		E78B36E3B1625307D58DDCC4 /* AppSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettingsView.swift; sourceTree = "<group>"; };
 		E7C91CD10546F9AFECAEDF55 /* ModelPickerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelPickerSheet.swift; sourceTree = "<group>"; };
 		ED37FFBC41F72BE5DE0BBFE6 /* RoamSocket.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = RoamSocket.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		EF67BD100D185786F94EA650 /* RoamSocketTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = RoamSocketTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		FA0507292ED88FCCE1C34063 /* SettingsSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsSync.swift; sourceTree = "<group>"; };
 		FA22EEF171C8C5BF6D6F64F1 /* BrowserStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserStore.swift; sourceTree = "<group>"; };
 		FB7076E7599E22BC9579CACF /* FlashcardDecksListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlashcardDecksListView.swift; sourceTree = "<group>"; };
@@ -340,6 +351,13 @@
 			path = Repositories;
 			sourceTree = "<group>";
 		};
+		2CF95D99925B487757550DF3 /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
 		3522513E53C5705E14068618 /* Packages */ = {
 			isa = PBXGroup;
 			children = (
@@ -402,6 +420,7 @@
 				25BB8C5338F7DF305283B5CA /* ChatViewModel.swift */,
 				54E6B70D6D9963ABFF34F70B /* ConnectorsView.swift */,
 				8BAED357FB143CAA4A585022 /* GalleryPicker.swift */,
+				1527859F8C93DC72EBCFD9F2 /* ImageProcessing.swift */,
 				9CDA789F62DF1F26F2CAF00E /* IncognitoChatSheet.swift */,
 				FF4F2321A25F5FD7563850FD /* MessageActionsSheet.swift */,
 				034F6306CDB313273AFEFBB1 /* ThinkingBlock.swift */,
@@ -515,6 +534,7 @@
 			isa = PBXGroup;
 			children = (
 				ED37FFBC41F72BE5DE0BBFE6 /* RoamSocket.app */,
+				EF67BD100D185786F94EA650 /* RoamSocketTests.xctest */,
 				5B7F136843010C797697514A /* RoamSocketWidgets.appex */,
 			);
 			name = Products;
@@ -632,6 +652,7 @@
 			children = (
 				B06724B6CAF0E3252DE862FC /* Assets.xcassets */,
 				5BD3320CC18FA4E39B89BC9B /* Sources */,
+				2CF95D99925B487757550DF3 /* Tests */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -686,6 +707,24 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		428FB3697FC15B721C2BC61F /* RoamSocketTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 24A7EFC368B0FE4B276756EB /* Build configuration list for PBXNativeTarget "RoamSocketTests" */;
+			buildPhases = (
+				9F58185220B7665D0947355A /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				B0861CDA1A24716A24C1DB73 /* PBXTargetDependency */,
+			);
+			name = RoamSocketTests;
+			packageProductDependencies = (
+			);
+			productName = RoamSocketTests;
+			productReference = EF67BD100D185786F94EA650 /* RoamSocketTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		433F44E10AA687B6E118389D /* RoamSocket */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 02BB864A86EA782C051AF567 /* Build configuration list for PBXNativeTarget "RoamSocket" */;
@@ -743,6 +782,9 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
+					428FB3697FC15B721C2BC61F = {
+						DevelopmentTeam = 4JBMBNGPK7;
+					};
 					433F44E10AA687B6E118389D = {
 						DevelopmentTeam = 4JBMBNGPK7;
 					};
@@ -774,6 +816,7 @@
 			projectRoot = "";
 			targets = (
 				433F44E10AA687B6E118389D /* RoamSocket */,
+				428FB3697FC15B721C2BC61F /* RoamSocketTests */,
 				AE7AD6F92FE74F95266560CC /* RoamSocketWidgets */,
 			);
 		};
@@ -843,6 +886,7 @@
 				93BFF170E4B5AD70F4AF7E92 /* GalleryPicker.swift in Sources */,
 				0DBC945A4F7EA9E196F7106D /* GitHubLinkView.swift in Sources */,
 				9908E3AA9D2E0F8F5E0D6213 /* HealthKitService.swift in Sources */,
+				2C3B1915498EF2DE0712660D /* ImageProcessing.swift in Sources */,
 				EA4AE35CEECAC53D1DD38A3E /* IncognitoChatSheet.swift in Sources */,
 				FA1031175F29909D11D63CB3 /* InstalledSkillsView.swift in Sources */,
 				A674EF03137640F7CB3FD496 /* KeychainSecretStore.swift in Sources */,
@@ -913,6 +957,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		9F58185220B7665D0947355A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				997739F602DACF0DBAE97A74 /* ImageProcessing.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		B1CD484571065C941307F21A /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -929,6 +981,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		B0861CDA1A24716A24C1DB73 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 433F44E10AA687B6E118389D /* RoamSocket */;
+			targetProxy = B751F7B8F11FFF91F6FB7554 /* PBXContainerItemProxy */;
+		};
 		C72AC10EA3DA06120EB4906B /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = AE7AD6F92FE74F95266560CC /* RoamSocketWidgets */;
@@ -1040,6 +1097,26 @@
 			};
 			name = Debug;
 		};
+		661E2E0461942F57CA6E7ADC /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = 4JBMBNGPK7;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = app.roamsocket.app.tests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/RoamSocket.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/RoamSocket";
+			};
+			name = Release;
+		};
 		77BD131A1CC7E84426A10EE5 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1103,6 +1180,26 @@
 			};
 			name = Debug;
 		};
+		8482D3DA861E569D88482A5B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = 4JBMBNGPK7;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = app.roamsocket.app.tests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/RoamSocket.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/RoamSocket";
+			};
+			name = Debug;
+		};
 		D8AF1E4C73750F2441BBFB62 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1158,6 +1255,15 @@
 			buildConfigurations = (
 				2CD650506FF6900645DB652F /* Debug */,
 				D8AF1E4C73750F2441BBFB62 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		24A7EFC368B0FE4B276756EB /* Build configuration list for PBXNativeTarget "RoamSocketTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				8482D3DA861E569D88482A5B /* Debug */,
+				661E2E0461942F57CA6E7ADC /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
