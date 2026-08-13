@@ -291,21 +291,32 @@ struct SheetScaffold<Content: View>: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ZStack {
+            // Center the title in the space *between* the close button and the
+            // trailing slot, not the full width. Otherwise long titles like
+            // "Default model for Lightweight" render under the close button.
+            HStack(spacing: 8) {
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                        .frame(width: 44, height: 44)
+                        .background(Theme.surfaceElevated, in: Circle())
+                }
+                .buttonStyle(.plain)
+
                 Text(title)
                     .font(.system(size: 22, weight: .semibold))
                     .foregroundStyle(Theme.textPrimary)
-                HStack {
-                    Button(action: onClose) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(Theme.textPrimary)
-                            .frame(width: 44, height: 44)
-                            .background(Theme.surfaceElevated, in: Circle())
-                    }
-                    .buttonStyle(.plain)
-                    Spacer()
-                    if let trailing { trailing }
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .frame(maxWidth: .infinity)
+
+                if let trailing {
+                    trailing
+                } else {
+                    // Reserve space so the title stays centered even when the
+                    // trailing slot is empty.
+                    Color.clear.frame(width: 44, height: 44)
                 }
             }
             .padding(.horizontal, 16)
