@@ -183,6 +183,43 @@ struct BrowserHistoryEntry: Identifiable, Codable, Equatable {
     }
 }
 
+/// A single turn in the browser's Ask-mode conversation about the current page.
+struct BrowserChatMessage: Identifiable, Equatable {
+    enum Role: Equatable {
+        case user
+        case assistant
+    }
+
+    let id: UUID
+    let role: Role
+    /// Raw assistant text may include `…` tags; the UI peels them
+    /// before display and before feeding them back as history.
+    var content: String
+    /// True when this assistant reply was supplemented with live web search.
+    var searchedWeb: Bool
+    let createdAt: Date
+
+    init(
+        id: UUID = UUID(),
+        role: Role,
+        content: String,
+        searchedWeb: Bool = false,
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.role = role
+        self.content = content
+        self.searchedWeb = searchedWeb
+        self.createdAt = createdAt
+    }
+
+    /// User-facing copy of the turn (thinking tags stripped) — sent back to
+    /// the model as history so follow-ups keep conversational context.
+    var visibleContent: String {
+        ThinkingExtractor.plainVisibleText(from: content)
+    }
+}
+
 /// Normalizes whatever the user typed in the address/prompt bar into a URL:
 /// bare domains get `https://` prefixed, anything else falls back to a search.
 enum BrowserAddressResolver {

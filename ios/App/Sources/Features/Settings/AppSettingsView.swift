@@ -70,10 +70,10 @@ struct AppSettingsView: View {
         .presentationDragIndicator(.visible)
         .task {
             // Pull the latest skills + MCP from the desktop every time the
-            // settings sheet appears. The server's reply lands in the
-            // SkillsMCPClient and updates the local caches.
+            // settings sheet appears. The server's replies are applied to the
+            // local caches and the SkillManager / MCPManager.
             if state.serverToken != nil {
-                await state.skillsMCPClient.refreshAll(over: state.serverClient)
+                await state.refreshSkillsAndMCP()
             }
             // Honor the caller's entry focus on first presentation only,
             // so re-opens don't keep shoving the user back into the

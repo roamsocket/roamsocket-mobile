@@ -485,6 +485,22 @@ final class AppState: ObservableObject {
 
     // MARK: - Desktop pairing persistence + auto-reconnect
 
+    /// Paired desktop endpoint + token, or nil when not paired.
+    var connectedPair: (endpoint: ServerClient.Endpoint, token: String)? {
+        guard let endpoint = serverEndpoint, let token = serverToken else { return nil }
+        return (endpoint, token)
+    }
+
+    /// Pull the latest skills + MCP servers from the paired desktop and apply
+    /// them to the local managers so Settings / Connectors show live data
+    /// even outside a coding session.
+    func refreshSkillsAndMCP() async {
+        guard let token = serverToken, let endpoint = serverEndpoint else { return }
+        await skillsMCPClient.refreshAll(endpoint: endpoint, token: token)
+        skillManager.apply(skills: skillsMCPClient.cachedSkills)
+        mcpManager.apply(servers: skillsMCPClient.cachedMCPServers)
+    }
+
     /// Persist a successful pair so cold launch can reconnect.
     /// Call this with the address the user paired against (LAN or tunnel URL).
     /// A following `applyRemoteEndpoint` may add the other path without wiping this one.

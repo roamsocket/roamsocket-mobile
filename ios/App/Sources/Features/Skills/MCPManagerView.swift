@@ -38,10 +38,13 @@ struct ConnectorManagerView: View {
                                 for index in indexSet {
                                     let server = state.mcpManager.configuredServers[index]
                                     Task {
-                                        try? await state.skillsMCPClient.deleteMCPServer(
-                                            id: server.id,
-                                            over: state.serverClient
-                                        )
+                                        if let pair = state.connectedPair {
+                                            try? await state.skillsMCPClient.deleteMCPServer(
+                                                id: server.id,
+                                                endpoint: pair.endpoint,
+                                                token: pair.token
+                                            )
+                                        }
                                     }
                                 }
                             }

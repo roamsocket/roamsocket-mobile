@@ -5,6 +5,7 @@ enum SidebarDestination: Hashable {
     case chats
     case vision
     case study
+    case classes
     case scanQuestions
     case projects
     case artifacts
@@ -105,11 +106,17 @@ struct SidebarView: View {
     private var navList: some View {
         VStack(spacing: 2) {
             if studyMode {
+                SidebarRow(systemImage: "book.closed", title: "Classes") {
+                    onSelect(.classes)
+                }
                 SidebarRow(systemImage: "camera.viewfinder", title: "Scan questions") {
                     onSelect(.scanQuestions)
                 }
                 SidebarRow(systemImage: "square.stack.3d.up", title: "Decks") {
                     onSelect(.study)
+                }
+                SidebarRow(systemImage: "square.stack.3d.up.badge.plus", title: "Artifacts") {
+                    onSelect(.artifacts)
                 }
             } else {
                 SidebarRow(systemImage: "bubble.left.and.bubble.right", title: "Chats") {

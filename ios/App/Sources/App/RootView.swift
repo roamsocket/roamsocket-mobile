@@ -9,7 +9,7 @@ import UIKit
 ///  * A left-edge sidebar lists top-level destinations (Chats, Vision,
 ///    Projects, Artifacts, Code) plus a Recents list and a settings entry.
 ///    A Study toggle in the header swaps those links for Study destinations
-///    (Scan questions, Decks).
+///    (Classes, Scan questions, Decks, Artifacts).
 ///  * Settings is reachable from the toolbar gear and the sidebar.
 struct RootView: View {
     @EnvironmentObject var state: AppState
@@ -57,6 +57,10 @@ struct RootView: View {
                             FlashcardDecksListView()
                         case .studyDeck(let deckID):
                             FlashcardDeckDetailView(deckID: deckID)
+                        case .classes:
+                            ClassesListView()
+                        case .classDetail(let classID):
+                            ClassDetailView(classID: classID)
                         case .browser:
                             BrowserHomeView(store: state.browserStore, onOpenSidebar: { setSidebarOpen(true) })
                         case .projectDetail(let project):
@@ -343,6 +347,11 @@ struct RootView: View {
             history.forgetActiveIfOnExit()
             path = [.study]
             setSidebarOpen(false)
+        case .classes:
+            history.discardActiveIfBlank()
+            history.forgetActiveIfOnExit()
+            path = [.classes]
+            setSidebarOpen(false)
         case .scanQuestions:
             history.discardActiveIfBlank()
             history.forgetActiveIfOnExit()
@@ -421,6 +430,8 @@ enum RootRoute: Hashable {
     case code
     case study
     case studyDeck(UUID)
+    case classes
+    case classDetail(UUID)
     case browser
     case projectDetail(ProjectItem)
     case projectChat(ProjectItem, ProjectChatItem)

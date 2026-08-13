@@ -20,8 +20,9 @@ final class BrowserStore: ObservableObject {
     @Published var isPlanning = false
     /// Model is answering a question in Ask mode (page untouched).
     @Published var isAsking = false
-    /// The model's plain-prose answer to an Ask-mode question.
-    @Published var chatReply: String?
+    /// The Ask-mode conversation about the current page. Grows with follow-up
+    /// questions; each turn is grounded in a fresh snapshot of the live page.
+    @Published var chatMessages: [BrowserChatMessage] = []
     /// True while the approved plan is actively executing steps.
     @Published var isPlanRunning = false
     /// A freshly proposed plan awaiting Approve/Deny — nothing has executed yet.
@@ -177,6 +178,7 @@ final class BrowserStore: ObservableObject {
     /// produces `pendingPlan` for approval (also nothing executes).
     func submitPrompt(appState: AppState) async {
         self.appState = appState
+        guard !isAsking, !isPlanning else { return }
         let goal = promptText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !goal.isEmpty else { return }
         guard let model = appState.selectedModel else {
@@ -193,21 +195,57 @@ final class BrowserStore: ObservableObject {
         errorMessage = nil
 
         guard promptMode == .act else {
-            chatReply = nil
             isAsking = true
             defer { isAsking = false }
-            let context = await activeTab?.captureContext()
+
+            let userMessage = BrowserChatMessage(role: .user, content: goal)
+            chatMessages.append(userMessage)
+
+            // Poll until the page actually renders text before snapshotting —
+            // heavy JS sites (ESPN, etc.) report "loading" done long before
+            // their content is painted, which used to hand the model an
+            // empty page it then told the user about.
+            var context = await captureContextForPage()
+
+            // Fall back to a web search when the page snapshot is thin so the
+            // model gets curated live content instead of guessing from stale
+            // training data — this is what Chat and Vision already do.
+            var webSearchBlock: String?
+            if (context?.textSnippet.count ?? 0) < 200 {
+                let query = Self.browserSearchQuery(prompt: goal, context: context)
+                let service = WebSearchService()
+                do {
+                    let bundle = try await service.search(
+                        userMessage: query,
+                        mode: .webSearch,
+                        onStep: { _ in }
+                    )
+                    if !bundle.hits.isEmpty {
+                        webSearchBlock = bundle.promptBlock
+                    }
+                } catch {
+                    // Search failed — we still have whatever page context was captured.
+                }
+            }
+
             do {
-                chatReply = try await BrowserAgent.chatAboutPage(
+                let reply = try await BrowserAgent.chatAboutPage(
                     prompt: goal,
                     context: context,
+                    webSearchBlock: webSearchBlock,
+                    history: chatHistoryMessages(),
                     model: model,
                     apiKey: apiKey,
                     catalog: appState.catalog,
                     customBaseURL: appState.baseURL(for: model.provider),
                     style: appState.apiStyle(for: model.provider)
                 )
+                chatMessages.append(
+                    BrowserChatMessage(role: .assistant, content: reply, searchedWeb: webSearchBlock != nil)
+                )
             } catch {
+                // Don't leave an unanswered question stranded in the transcript.
+                chatMessages.removeLast()
                 errorMessage = error.localizedDescription
             }
             return
@@ -216,7 +254,8 @@ final class BrowserStore: ObservableObject {
         completionSummary = nil
         cancelAutoDismiss()
         isPlanning = true
-        let context = await activeTab?.captureContext()
+        // Wait for the page to settle before planning, same reason as Ask mode.
+        let context = await captureContextForPage()
         defer { isPlanning = false }
 
         do {
@@ -237,6 +276,11 @@ final class BrowserStore: ObservableObject {
 
     func denyPendingPlan() {
         pendingPlan = nil
+    }
+
+    /// Ends the Ask-mode conversation (header X in the browser chat panel).
+    func clearChat() {
+        chatMessages.removeAll()
     }
 
     /// Approve and run every step in the plan now (they run in order and
@@ -524,6 +568,34 @@ final class BrowserStore: ObservableObject {
         }
     }
 
+    /// Snapshot the active page, polling until visible text actually appears.
+    /// `WKWebView.isLoading` flips to false when the network load finishes,
+    /// well before SPA-heavy sites (ESPN, news, scoreboards) paint their
+    /// content — so we re-capture every ~0.6s up to `budget` seconds rather
+    /// than handing the model a blank page it then describes as "empty".
+    private func captureContextForPage(budget: TimeInterval = 15) async -> BrowserPageContext? {
+        guard let tab = activeTab else { return nil }
+        await waitForLoadSettled(tab)
+        let start = Date()
+        var context = await tab.captureContext()
+        while context.textSnippet.isEmpty, Date().timeIntervalSince(start) < budget {
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            context = await tab.captureContext()
+        }
+        return context
+    }
+
+    /// Prior Ask-mode turns, ready to send back to the model so follow-up
+    /// questions keep conversational context. The current turn is excluded
+    /// (it is sent separately with a fresh page snapshot).
+    private func chatHistoryMessages() -> [ProviderChatMessage] {
+        chatMessages.dropLast().map { message in
+            let role: ProviderChatMessage.Role = message.role == .assistant ? .assistant : .user
+            let content = message.role == .assistant ? message.visibleContent : message.content
+            return ProviderChatMessage(role: role, content: content)
+        }
+    }
+
     // MARK: - Persistence
 
     private func loadBookmarks() {
@@ -552,5 +624,21 @@ final class BrowserStore: ObservableObject {
 
     private func saveGranularity() {
         UserDefaults.standard.set(lastGranularity.rawValue, forKey: granularityKey)
+    }
+
+    /// Constructs a web search query from the page title/host + user's question
+    /// so the fallback search is grounded in the current browsing context.
+    private static func browserSearchQuery(prompt: String, context: BrowserPageContext?) -> String {
+        var parts: [String] = []
+        if let context, !context.title.isEmpty, !context.title.lowercased().contains("new tab") {
+            let title = context.title
+                .replacingOccurrences(of: #"\s*[\|\-–—].*$"#, with: "", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !title.isEmpty {
+                parts.append(title)
+            }
+        }
+        parts.append(prompt)
+        return parts.joined(separator: " ")
     }
 }

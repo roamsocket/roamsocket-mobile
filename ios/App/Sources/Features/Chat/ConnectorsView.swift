@@ -44,6 +44,12 @@ struct ConnectorsView: View {
                     await marketplace.refresh()
                 }
                 viewModel.applyMarketplaceConnectors(marketplace.connectors)
+                // Pull live configured MCP connectors from the desktop so the
+                // "Configured (synced)" section reflects the current repo even
+                // when no coding session has run yet.
+                if state.serverToken != nil {
+                    await state.refreshSkillsAndMCP()
+                }
             }
         }
     }
@@ -85,11 +91,7 @@ struct ConnectorsView: View {
                         Toggle("", isOn: Binding(
                             get: { viewModel.selectedConnectors.contains(item.id) },
                             set: { on in
-                                if on {
-                                    viewModel.selectedConnectors.insert(item.id)
-                                } else {
-                                    viewModel.selectedConnectors.remove(item.id)
-                                }
+                                viewModel.setConnector(item.id, enabled: on)
                             }
                         ))
                         .toggleStyle(SwitchToggleStyle(tint: Theme.accent))

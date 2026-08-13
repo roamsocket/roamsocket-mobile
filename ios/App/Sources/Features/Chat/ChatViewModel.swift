@@ -59,6 +59,13 @@ final class ChatViewModel: ObservableObject {
     // Per-chat feature toggles (live in the Add-to-Chat sheet).
     @Published var webSearchEnabled: Bool = false
     @Published var researchEnabled: Bool = false
+
+    /// Study mode (sidebar graduation-cap toggle, key `studyMode.v1`): every
+    /// send is forced to attach live web sources so answers always carry
+    /// citations.
+    var studyModeEnabled: Bool {
+        UserDefaults.standard.bool(forKey: "studyMode.v1")
+    }
     @Published var healthEnabled: Bool = false
     @Published var locationEnabled: Bool = false
     @Published var connectorDiscoveryEnabled: Bool = true
@@ -263,11 +270,10 @@ final class ChatViewModel: ObservableObject {
         return "\(model.displayName) is a text-only on-device model. Download a Vision model (Gemma 4, Qwen2-VL, SmolVLM) in Settings → On-device (Metal) to attach photos."
     }
 
-    /// Downsample image data straight to the target pixel size with ImageIO.
-    /// Thin shim over `ImageProcessing` — kept as a static method so the
-    /// `attachEncodedImages` call sites read naturally and the implementation
-    /// can be unit-tested without spinning up the VM.
-    private nonisolated static func downsampledJPEG(
+    /// Downsample JPEG data straight to the target pixel size with ImageIO, then
+    /// re-encode at the given quality. Decodes once at the target resolution
+    /// (never a full-size bitmap) and bakes EXIF orientation in.
+    nonisolated private static func downsampledJPEG(
         from data: Data,
         maxDimension: CGFloat,
         quality: CGFloat
@@ -287,6 +293,7 @@ final class ChatViewModel: ObservableObject {
         let defaults = preferred.filter { availableIds.contains($0) }
         // Both branches must be `[String]` — `prefix` returns `ArraySlice`.
         self.selectedConnectors = Set(defaults.isEmpty ? Array(availableIds.prefix(3)) : defaults)
+        loadSelectedConnectors()
         healthService.refreshAuthorizationState()
         locationService.refreshAuthorizationState()
         // Bubble nested service publishes so the Add-to-Chat sheet
@@ -562,13 +569,16 @@ final class ChatViewModel: ObservableObject {
         // Web search / Research — live SERP + optional Wikipedia, shown as
         // grey tool lines on the assistant bubble. OpenRouter models use the
         // provider-native web search API instead of client-side scraping.
+        // Study mode forces sources on every text send so answers always cite.
+        let sourcesForced = studyModeEnabled && !text.isEmpty
         var toolCalls: [ToolCall] = []
-        let nativeWebSearch = model.provider == .openrouter && (researchEnabled || webSearchEnabled)
-        if researchEnabled || webSearchEnabled {
+        let nativeWebSearch = model.provider == .openrouter
+            && (researchEnabled || webSearchEnabled || sourcesForced)
+        if researchEnabled || webSearchEnabled || sourcesForced {
             if nativeWebSearch {
                 let step = WebSearchService.Step(
-                    name: researchEnabled ? "research" : "web_search",
-                    summary: researchEnabled
+                    name: researchEnabled || sourcesForced ? "research" : "web_search",
+                    summary: researchEnabled || sourcesForced
                         ? "Researching with OpenRouter web search…"
                         : "Searching the web with OpenRouter…",
                     detail: "Native OpenRouter web search API",
@@ -579,7 +589,8 @@ final class ChatViewModel: ObservableObject {
                     messages[idx].toolCalls = toolCalls
                 }
             } else {
-                let mode: WebSearchService.Mode = researchEnabled ? .research : .webSearch
+                let mode: WebSearchService.Mode =
+                    researchEnabled || sourcesForced ? .research : .webSearch
                 do {
                     let bundle = try await webSearchService.search(userMessage: text, mode: mode) {
                         [weak self] step in
@@ -600,8 +611,8 @@ final class ChatViewModel: ObservableObject {
                 } catch {
                     let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                     let failed = ToolCall(
-                        name: researchEnabled ? "research" : "web_search",
-                        summary: researchEnabled
+                        name: researchEnabled || sourcesForced ? "research" : "web_search",
+                        summary: researchEnabled || sourcesForced
                             ? "Research unavailable"
                             : "Web search unavailable",
                         detail: msg,
@@ -614,6 +625,29 @@ final class ChatViewModel: ObservableObject {
                     presentError(msg)
                 }
             }
+        }
+
+        // Study mode: every answer must carry sources, not just "cite when
+        // you use a fact" — the search block above already lists them.
+        if sourcesForced {
+            systemContext.append(
+                "Study mode is on: every answer must include sources. "
+                    + "Cite the live web sources listed above inline with markdown links for every factual claim. "
+                    + "When the sources don't cover a claim, say so explicitly and never invent citations."
+            )
+        }
+
+        // Enabled connectors — the model knows which linked accounts / services
+        // are enabled for this chat (local preference, matching the desktop
+        // composer). Live MCP connections are attached via coding sessions.
+        let enabledConnectorNames = connectors
+            .filter { selectedConnectors.contains($0.id) && $0.isEnabled }
+            .map(\.name)
+        if !enabledConnectorNames.isEmpty {
+            systemContext.append(
+                "Enabled connectors (local preference): \(enabledConnectorNames.joined(separator: ", ")). "
+                    + "Use them when the user asks for linked accounts; otherwise note when a live MCP connection is required."
+            )
         }
 
         if !systemContext.isEmpty {
@@ -675,7 +709,7 @@ final class ChatViewModel: ObservableObject {
                 messages: turns,
                 effort: state.effort,
                 webSearchQuery: (liveModel.provider == .openrouter
-                    && (researchEnabled || webSearchEnabled))
+                    && (researchEnabled || webSearchEnabled || sourcesForced))
                     ? text
                     : nil
             )
@@ -1040,10 +1074,62 @@ final class ChatViewModel: ObservableObject {
         } else {
             selectedConnectors.insert(connector.id)
         }
+        persistSelectedConnectors()
     }
 
     /// True when the connector is currently attached to this chat.
     func isConnectorSelected(_ connector: Connector) -> Bool {
         selectedConnectors.contains(connector.id)
+    }
+
+    /// Set a connector's enabled state for this chat and persist it.
+    func setConnector(_ connectorID: String, enabled: Bool) {
+        if enabled {
+            selectedConnectors.insert(connectorID)
+        } else {
+            selectedConnectors.remove(connectorID)
+        }
+        persistSelectedConnectors()
+    }
+
+    /// Persist the selected connector ids so toggles survive relaunches.
+    private func persistSelectedConnectors() {
+        UserDefaults.standard.set(Array(selectedConnectors), forKey: Self.selectedConnectorsKey)
+    }
+
+    private static let selectedConnectorsKey = "roamsocket.chat.selectedConnectors.v1"
+
+    /// Load the persisted connector selection on launch.
+    private func loadSelectedConnectors() {
+        guard let saved = UserDefaults.standard.array(forKey: Self.selectedConnectorsKey) as? [String],
+              !saved.isEmpty
+        else { return }
+        selectedConnectors = Set(saved)
+    }
+
+    // MARK: - Projects
+
+    /// Copy the current chat into a project (keeps the global recent too) and
+    /// record the project on this chat. Returns the copied project chat, or
+    /// nil when the chat is already project-scoped or storage failed.
+    @discardableResult
+    func attachCurrentChat(to project: ProjectItem) -> ProjectChatItem? {
+        guard let history else { return nil }
+        // Project-scoped chats are already in a project — no-op there.
+        guard activeProjectID == nil else { return nil }
+        let chatID = history.ensureActiveChat(selectedModel: state?.selectedModel)
+        activeChatID = chatID
+        guard let added = history.addChatToProject(chatID: chatID, projectID: project.id) else {
+            return nil
+        }
+        currentProject = project.name
+        return added
+    }
+
+    /// Create a new project and attach the current chat to it.
+    func createProjectAndAttach(name: String) {
+        guard let history else { return }
+        let project = history.createProject(name: name)
+        attachCurrentChat(to: project)
     }
 }

@@ -38,8 +38,16 @@ struct ChatView: View {
     /// settings screen.
     @State private var showProviderSettings = false
 
+    /// Set when a coding-session launch is requested from the chat but the
+    /// prerequisites (paired server, repo, model with key) aren't met.
+    @State private var sessionLaunchError: String?
+
     /// Full-screen live voice chat (Siri dictation + spoken replies).
     @State private var showVoiceChat = false
+
+    /// Study mode (sidebar graduation-cap toggle). When on, every send
+    /// attaches web sources, shown as a locked Sources chip above the composer.
+    @AppStorage("studyMode.v1") private var studyMode: Bool = false
 
     /// Extra bottom lift so the composer sits above the software keyboard.
     /// System keyboard avoidance is unreliable here (full-bleed background +
@@ -82,7 +90,7 @@ struct ChatView: View {
         .onAppear {
             bindAndLoad()
         }
-        .onChange(of: resumeToken) { _ in
+        .onChange(of: resumeToken) {
             // Switching chats / new chat while this screen stays mounted.
             persistAndAutoTitleOnLeave()
             bindAndLoad()
@@ -127,8 +135,18 @@ struct ChatView: View {
             AddToChatSheet(viewModel: viewModel) { task in
                 if let config = SessionLauncher.makeConfig(in: state, task: task) {
                     sessionConfig = config
+                } else {
+                    let missing = SessionLauncher.missingRequirements(in: state)
+                    sessionLaunchError = missing.isEmpty
+                        ? "Pick a coding model with an API key, then start again."
+                        : missing.joined(separator: "\n")
                 }
             }
+        }
+        .alert("Start a coding session", isPresented: sessionLaunchErrorBinding) {
+            Button("OK", role: .cancel) { sessionLaunchError = nil }
+        } message: {
+            Text(sessionLaunchError ?? "")
         }
         .sheet(isPresented: $viewModel.showCamera) {
             CameraCapture(isPresented: $viewModel.showCamera) { data in
@@ -219,6 +237,14 @@ struct ChatView: View {
     /// Depth of the bound root navigation path (0 = chat is the visible root).
     private var navigationPathDepth: Int {
         path?.wrappedValue.count ?? 0
+    }
+
+    /// Binding for the coding-session launch alert (message + dismiss).
+    private var sessionLaunchErrorBinding: Binding<Bool> {
+        Binding(
+            get: { sessionLaunchError != nil },
+            set: { if !$0 { sessionLaunchError = nil } }
+        )
     }
 
     private func bindAndLoad() {
@@ -468,7 +494,7 @@ struct ChatView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
             }
-            .onChange(of: viewModel.messages.count) { _ in
+            .onChange(of: viewModel.messages.count) {
                 // Prefer explicit artifact scroll target over following the stream tail.
                 if let target = state.scrollToMessageId {
                     withAnimation(.easeOut(duration: 0.35)) {
@@ -568,6 +594,7 @@ struct ChatView: View {
                 || viewModel.locationEnabled
                 || viewModel.webSearchEnabled
                 || viewModel.researchEnabled
+                || studyMode
             {
                 contextChips
             }
@@ -748,6 +775,13 @@ struct ChatView: View {
     /// Compact indicators for optional context attached on send.
     private var contextChips: some View {
         HStack(spacing: 8) {
+            if studyMode {
+                contextChip(
+                    systemImage: "book.closed.fill",
+                    imageColor: Theme.accent,
+                    title: "Sources"
+                )
+            }
             if viewModel.researchEnabled {
                 contextChip(
                     systemImage: "magnifyingglass",
@@ -797,8 +831,8 @@ struct ChatView: View {
         systemImage: String,
         imageColor: Color,
         title: String,
-        dismissLabel: String,
-        onDismiss: @escaping () -> Void
+        dismissLabel: String? = nil,
+        onDismiss: (() -> Void)? = nil
     ) -> some View {
         HStack(spacing: 6) {
             Image(systemName: systemImage)
@@ -807,18 +841,22 @@ struct ChatView: View {
             Text(title)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(Theme.textSecondary)
-            Button(action: onDismiss) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(Theme.textTertiary)
-                    .frame(width: 20, height: 20)
+            if let onDismiss {
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(Theme.textTertiary)
+                        .frame(width: 20, height: 20)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(dismissLabel ?? "Dismiss")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(dismissLabel)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .background(Theme.surfaceElevated, in: Capsule())
+        .accessibilityElement(children: onDismiss == nil ? .combine : .contain)
+        .accessibilityLabel(Text(title))
     }
 
     private var modelPillTitle: String {

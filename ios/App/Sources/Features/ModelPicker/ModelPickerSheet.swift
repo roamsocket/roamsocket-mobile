@@ -140,6 +140,9 @@ struct ModelPickerSheet: View {
             }
             // Inset grouped = rounded card sections (native iOS). Keeps swipeActions.
             .listStyle(.insetGrouped)
+            // Tighten the default 35pt section gaps so collapsed provider
+            // "dropdown" headers sit close together instead of floating.
+            .listSectionSpacing(.compact)
             .scrollContentBackground(.hidden)
             .task {
                 if let selected = state.selectedModel {
@@ -190,6 +193,7 @@ struct ModelPickerSheet: View {
                         }
                         .tint(Theme.textSecondary)
                         .listRowBackground(Theme.surface)
+                        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                     }
                 } else {
                     ForEach(models) { model in
@@ -204,6 +208,7 @@ struct ModelPickerSheet: View {
             }
             .tint(Theme.textSecondary)
             .listRowBackground(Theme.surface)
+            .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
         }
     }
 
@@ -222,7 +227,7 @@ struct ModelPickerSheet: View {
                         onToggleHidden: { state.toggleModelHidden(model) }
                     )
                     .listRowBackground(Theme.surface)
-                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                 }
                 Button {
                     state.restoreHiddenModels()
@@ -330,7 +335,7 @@ struct ModelPickerSheet: View {
             }
         )
         .listRowBackground(Theme.surface)
-        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
             Button(role: .destructive) {
                 Task { await deleteModel(model) }

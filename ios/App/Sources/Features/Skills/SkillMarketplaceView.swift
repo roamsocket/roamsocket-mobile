@@ -74,7 +74,12 @@ struct SkillMarketplaceView: View {
                     Button {
                         Task {
                             await marketplace.refresh()
-                            try? await state.skillsMCPClient.requestSkillsSync(over: state.serverClient)
+                            if let pair = state.connectedPair {
+                                try? await state.skillsMCPClient.requestSkillsSync(
+                                    endpoint: pair.endpoint,
+                                    token: pair.token
+                                )
+                            }
                         }
                     } label: {
                         Image(systemName: "arrow.clockwise")
@@ -259,10 +264,13 @@ struct SkillMarketplaceView: View {
         .swipeActions {
             Button(role: .destructive) {
                 Task {
-                    try? await state.skillsMCPClient.deleteSkill(
-                        id: skill.id,
-                        over: state.serverClient
-                    )
+                    if let pair = state.connectedPair {
+                        try? await state.skillsMCPClient.deleteSkill(
+                            id: skill.id,
+                            endpoint: pair.endpoint,
+                            token: pair.token
+                        )
+                    }
                 }
             } label: {
                 Label("Delete", systemImage: "trash")
@@ -279,7 +287,15 @@ struct SkillMarketplaceView: View {
 
         let skill = listing.toSkill()
         do {
-            try await state.skillsMCPClient.upsertSkill(skill, over: state.serverClient)
+            guard let pair = state.connectedPair else {
+                installError = "Pair a desktop server in Settings first."
+                return
+            }
+            try await state.skillsMCPClient.upsertSkill(
+                skill,
+                endpoint: pair.endpoint,
+                token: pair.token
+            )
             state.skillManager.apply(skills: state.skillsMCPClient.cachedSkills)
         } catch {
             installError = error.localizedDescription
@@ -297,7 +313,15 @@ struct SkillMarketplaceView: View {
             guard !isInstalled(listing.id) else { continue }
             let skill = listing.toSkill()
             do {
-                try await state.skillsMCPClient.upsertSkill(skill, over: state.serverClient)
+                guard let pair = state.connectedPair else {
+                    installError = "Pair a desktop server in Settings first."
+                    break
+                }
+                try await state.skillsMCPClient.upsertSkill(
+                    skill,
+                    endpoint: pair.endpoint,
+                    token: pair.token
+                )
             } catch {
                 installError = error.localizedDescription
                 break
