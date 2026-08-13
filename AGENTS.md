@@ -116,14 +116,16 @@ Default port: **4319**.
 ```bash
 cd desktop-server
 npm install
-npm run dev              # coding agent TUI + server (tsx)
+npm run dev              # headless server + OpenAI/Anthropic pass-through proxy
 npm start                # needs prior build
 npm run typecheck        # server + electron
 npm run typecheck:server
 npm run test:cli         # CLI parser, TUI reducer, mock local session
 npm run smoke            # offline e2e: pair → session → tools → PR (APC_MOCK)
-APC_MOCK=1 npm run dev   # mock agent TUI, no API key
-roamsocket --serve-only  # headless pairing server only
+APC_MOCK=1 npm run dev   # headless + mock provider keys
+roamsocket --tui         # legacy Ink coding agent UI
+roamsocket open codex    # launch Codex pointed at the local proxy
+roamsocket open claude   # ditto for Claude Code, aider, cursor, opencode
 ```
 
 Electron:
