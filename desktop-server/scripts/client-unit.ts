@@ -378,14 +378,31 @@ check("user memory store: freeform, detail command, import, system format", () =
   const profile = store.byCategory("you").find((e) => e.title === "Profile");
   assert.ok(profile);
   assert.ok(profile!.details.some((d) => d.toLowerCase().includes("beans")));
-  store.applyEntryCommand(profile!.id, "remember that I live in Colorado");
-  assert.ok(
-    store.get(profile!.id)!.details.some((d) => d.toLowerCase().includes("colorado")),
-  );
-  store.applyEntryCommand(profile!.id, "forget Beans");
-  assert.ok(
-    !store.get(profile!.id)!.details.some((d) => d.toLowerCase().includes("beans")),
-  );
+
+  // Smart replace: with a single fact, a freeform command replaces the
+  // only bullet (and refreshes the summary).
+  store.applyEntryCommand(profile!.id, "I live in Colorado");
+  const replaced = store.get(profile!.id)!;
+  assert.deepEqual(replaced.details, ["I live in Colorado"]);
+  assert.equal(replaced.summary, "I live in Colorado");
+
+  // Smart append: once there are multiple facts, freeform commands append
+  // instead of replacing.
+  store.applyEntryCommand(profile!.id, "remember I work at Verizon");
+  const appended = store.get(profile!.id)!;
+  assert.ok(appended.details.includes("I live in Colorado"));
+  assert.ok(appended.details.includes("I work at Verizon"));
+  assert.equal(appended.details.length, 2);
+
+  // Explicit forget still drops matching bullets.
+  store.applyEntryCommand(profile!.id, "forget Colorado");
+  const afterForget = store.get(profile!.id)!;
+  assert.ok(!afterForget.details.some((d) => d.toLowerCase().includes("colorado")));
+  assert.ok(afterForget.details.some((d) => d.toLowerCase().includes("verizon")));
+
+  // Explicit "change summary to" still works regardless of bullet count.
+  store.applyEntryCommand(profile!.id, "change summary to Telecom at Verizon");
+  assert.equal(store.get(profile!.id)!.summary, "Telecom at Verizon");
   const n = store.importFromText(`## Topics
 ### Gaming
 Gaming interests and identity

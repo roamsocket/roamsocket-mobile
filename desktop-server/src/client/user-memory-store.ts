@@ -220,7 +220,17 @@ export class UserMemoryStore {
         .replace(/^add\s+/i, "")
         .trim();
       const bullet = fact.charAt(0).toUpperCase() + fact.slice(1);
-      if (bullet && !entry.details.some((d) => d.toLowerCase() === bullet.toLowerCase())) {
+      if (!bullet) {
+        // nothing to do
+      } else if (entry.details.length <= 1) {
+        // Smart: with a single fact, freeform text replaces it (matches
+        // "tell the assistant what to change" intent). With multiple facts,
+        // append.
+        entry.details = [bullet];
+        if (!entry.summary || entry.summary.toLowerCase() !== bullet.toLowerCase()) {
+          entry.summary = bullet.length > 80 ? `${bullet.slice(0, 77)}…` : bullet;
+        }
+      } else if (!entry.details.some((d) => d.toLowerCase() === bullet.toLowerCase())) {
         entry.details = [...entry.details, bullet];
       }
     }

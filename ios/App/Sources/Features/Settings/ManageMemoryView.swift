@@ -331,114 +331,126 @@ private struct MemoryEntryDetailSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if let entry {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 16) {
-                            Text("Summary")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(Theme.textSecondary)
-                            Text(entry.summary.isEmpty ? "No summary yet." : entry.summary)
-                                .font(.system(size: 15))
-                                .foregroundStyle(Theme.textPrimary)
+        VStack(spacing: 0) {
+            headerBar
 
-                            Text("Details")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(Theme.textSecondary)
-                                .padding(.top, 4)
-                            if entry.details.isEmpty {
-                                Text("No details yet.")
-                                    .font(.system(size: 15))
-                                    .foregroundStyle(Theme.textTertiary)
-                            } else {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    ForEach(entry.details, id: \.self) { line in
-                                        HStack(alignment: .top, spacing: 8) {
-                                            Text("•")
-                                                .foregroundStyle(Theme.textSecondary)
-                                            Text(line)
-                                                .font(.system(size: 15))
-                                                .foregroundStyle(Theme.textPrimary)
-                                        }
+            if let entry {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("Summary")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Theme.textSecondary)
+                        Text(entry.summary.isEmpty ? "No summary yet." : entry.summary)
+                            .font(.system(size: 15))
+                            .foregroundStyle(Theme.textPrimary)
+
+                        Text("Details")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Theme.textSecondary)
+                            .padding(.top, 4)
+                        if entry.details.isEmpty {
+                            Text("No details yet.")
+                                .font(.system(size: 15))
+                                .foregroundStyle(Theme.textTertiary)
+                        } else {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(entry.details, id: \.self) { line in
+                                    HStack(alignment: .top, spacing: 8) {
+                                        Text("•")
+                                            .foregroundStyle(Theme.textSecondary)
+                                        Text(line)
+                                            .font(.system(size: 15))
+                                            .foregroundStyle(Theme.textPrimary)
                                     }
                                 }
                             }
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(16)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+                }
 
-                    HStack(spacing: 8) {
-                        TextField("Tell the assistant what to change or remove", text: $command, axis: .vertical)
-                            .lineLimit(1...3)
-                            .font(.system(size: 15))
-                            .onSubmit { apply() }
-                        Button(action: apply) {
-                            Image(systemName: "arrow.up")
-                                .font(.system(size: 14, weight: .bold))
-                                .foregroundStyle(
-                                    command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                        ? Theme.textSecondary
-                                        : Theme.background
-                                )
-                                .frame(width: 34, height: 34)
-                                .background(
-                                    command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                        ? Theme.surfaceElevated
-                                        : Theme.accent,
-                                    in: Circle()
-                                )
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                HStack(spacing: 8) {
+                    TextField("Tell the assistant what to change or remove", text: $command, axis: .vertical)
+                        .lineLimit(1...3)
+                        .font(.system(size: 15))
+                        .onSubmit { apply() }
+                    Button(action: apply) {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(
+                                command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                    ? Theme.textSecondary
+                                    : Theme.background
+                            )
+                            .frame(width: 34, height: 34)
+                            .background(
+                                command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                    ? Theme.surfaceElevated
+                                    : Theme.accent,
+                                in: Circle()
+                            )
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(Theme.surfaceElevated, in: Capsule())
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 16)
-                } else {
-                    ContentUnavailableView("Memory deleted", systemImage: "trash")
+                    .buttonStyle(.plain)
+                    .disabled(command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-            }
-            .background(Theme.background)
-            .navigationTitle(entry?.title ?? "Memory")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button {
-                        dismiss()
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "chevron.left")
-                            Text("Memory")
-                        }
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(Theme.textPrimary)
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Delete", role: .destructive) {
-                        showDeleteConfirm = true
-                    }
-                    .foregroundStyle(.red.opacity(0.9))
-                }
-            }
-            .confirmationDialog(
-                "Delete this memory?",
-                isPresented: $showDeleteConfirm,
-                titleVisibility: .visible
-            ) {
-                Button("Delete", role: .destructive) {
-                    store.delete(id: entryID)
-                    dismiss()
-                }
-                Button("Cancel", role: .cancel) {}
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(Theme.surfaceElevated, in: Capsule())
+                .padding(.horizontal, 16)
+                .padding(.bottom, 16)
+            } else {
+                ContentUnavailableView("Memory deleted", systemImage: "trash")
             }
         }
+        .background(Theme.background)
         .presentationDetents([.large, .medium])
         .presentationBackground(Theme.background)
+        .confirmationDialog(
+            "Delete this memory?",
+            isPresented: $showDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                store.delete(id: entryID)
+                dismiss()
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    // Custom top bar so the parent sheet doesn't double up the navigation chrome.
+    private var headerBar: some View {
+        HStack(alignment: .center) {
+            Button {
+                dismiss()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "chevron.left")
+                    Text("Memory")
+                }
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Theme.textPrimary)
+            }
+            .buttonStyle(.plain)
+            Spacer()
+            Text(entry?.title ?? "Memory")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Theme.textPrimary)
+                .lineLimit(1)
+            Spacer()
+            Button("Delete", role: .destructive) {
+                showDeleteConfirm = true
+            }
+            .font(.system(size: 15, weight: .medium))
+            .foregroundStyle(.red.opacity(0.9))
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 44)
+        .background(Theme.background)
+        .overlay(alignment: .bottom) {
+            Divider().background(Theme.separator)
+        }
     }
 
     private func apply() {

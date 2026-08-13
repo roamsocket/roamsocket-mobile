@@ -181,11 +181,20 @@ final class UserMemoryStore: ObservableObject {
                 fact = String(fact.dropFirst("add ".count))
             }
             fact = fact.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !fact.isEmpty {
-                let bullet = fact.prefix(1).uppercased() + fact.dropFirst()
-                if !entry.details.contains(where: { $0.caseInsensitiveCompare(String(bullet)) == .orderedSame }) {
-                    entry.details.append(String(bullet))
+            guard !fact.isEmpty else { return entry }
+            let bullet = fact.prefix(1).uppercased() + fact.dropFirst()
+            // Smart: if there's a single fact, treat the command as a replacement
+            // (matches "tell the assistant what to change"). If there are already
+            // multiple facts, append the new one as another bullet.
+            if entry.details.count <= 1 {
+                entry.details = [String(bullet)]
+                if entry.summary.isEmpty
+                    || entry.summary.caseInsensitiveCompare(entry.details.first ?? "")
+                        != .orderedSame {
+                    entry.summary = String(bullet.prefix(80))
                 }
+            } else if !entry.details.contains(where: { $0.caseInsensitiveCompare(String(bullet)) == .orderedSame }) {
+                entry.details.append(String(bullet))
             }
         }
         entry.updatedAt = Date()
