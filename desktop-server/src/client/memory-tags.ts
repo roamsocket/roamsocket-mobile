@@ -57,7 +57,9 @@ function parseAttrs(tagBody: string): Record<string, string> {
   const re = /([a-zA-Z_][\w-]*)\s*=\s*"([^"]*)"/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(tagBody)) !== null) {
-    out[m[1].toLowerCase()] = m[2];
+    const key = m[1];
+    const val = m[2];
+    if (key && val !== undefined) out[key.toLowerCase()] = val;
   }
   return out;
 }
