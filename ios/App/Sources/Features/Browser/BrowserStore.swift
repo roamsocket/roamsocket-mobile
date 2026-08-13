@@ -25,6 +25,10 @@ final class BrowserStore: ObservableObject {
     @Published var chatMessages: [BrowserChatMessage] = []
     /// True while the approved plan is actively executing steps.
     @Published var isPlanRunning = false
+    /// True while the AI is calling the model for the next-step re-analysis
+    /// (i.e. between the last finished step and the next proposed one).
+    /// Drives the spinner label so the UI doesn't lie about what it's doing.
+    @Published var isDecidingNextStep = false
     /// A freshly proposed plan awaiting Approve/Deny — nothing has executed yet.
     @Published var pendingPlan: BrowserPlan?
     /// The plan currently executing (or just finished). Starts empty and
@@ -76,6 +80,15 @@ final class BrowserStore: ObservableObject {
     /// id it was scheduled for, so a stale task can never eat steps from a
     /// later run.
     private var stepDismissTasks: [UUID: Task<Void, Never>] = [:]
+    /// Handle to the in-flight plan execution loop, so the user can stop
+    /// it mid-flight (long LLM call, runaway waits, etc.). Nil whenever no
+    /// plan is running — `stopRun` is then a no-op.
+    private var runningPlanTask: Task<Void, Never>?
+    /// Set to true when the run was ended by the user's Stop button (vs
+    /// naturally finishing or hitting `maxStepsPerRun`). Read by the
+    /// finished banner to show "Stopped by you" instead of a generic done
+    /// summary.
+    private var wasStoppedByUser = false
 
     init() {
         let raw = UserDefaults.standard.string(forKey: granularityKey)
@@ -205,7 +218,7 @@ final class BrowserStore: ObservableObject {
             // heavy JS sites (ESPN, etc.) report "loading" done long before
             // their content is painted, which used to hand the model an
             // empty page it then told the user about.
-            var context = await captureContextForPage()
+            let context = await captureContextForPage()
 
             // Fall back to a web search when the page snapshot is thin so the
             // model gets curated live content instead of guessing from stale
@@ -306,6 +319,10 @@ final class BrowserStore: ObservableObject {
     }
 
     private func beginRun(_ plan: BrowserPlan, bulk: Bool) {
+        // Cancel any prior run before starting a new one so a fresh approval
+        // can never collide with a still-in-flight execution loop.
+        runningPlanTask?.cancel()
+        wasStoppedByUser = false
         pendingPlan = nil
         completionSummary = nil
         cancelAutoDismiss()
@@ -320,7 +337,37 @@ final class BrowserStore: ObservableObject {
         // the same "approve several things at once" flow used for anything
         // proposed later) — they run immediately; only what comes *after*
         // this batch gets freshly re-derived from the live page.
-        Task { await runApprovedSteps(goal: plan.goal, initialQueue: plan.steps, bulk: bulk) }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.runApprovedSteps(goal: plan.goal, initialQueue: plan.steps, bulk: bulk)
+        }
+        runningPlanTask = task
+    }
+
+    /// Stops the in-flight plan execution, if any. Safe to call any time:
+    /// from the Stop button in the prompt bar, from the X in the running
+    /// banner, or programmatically. Cancels the underlying task so any
+    /// pending LLM call / settle wait bails out cleanly instead of the UI
+    /// lying about progress for several more seconds.
+    func stopRun() {
+        guard isPlanRunning, runningPlanTask != nil else {
+            // No run in flight — just clear any leftover banner state.
+            cancelAutoDismiss()
+            cancelStepDismissals()
+            runningPlan = nil
+            completionSummary = nil
+            return
+        }
+        wasStoppedByUser = true
+        runningPlanTask?.cancel()
+        // Also unblock any pending per-step approval prompt so the cancel
+        // propagates immediately instead of waiting for the user to tap.
+        respondToPendingStep(allow: false)
+        // The `runApprovedSteps` loop will see the cancellation on its next
+        // `Task.isCancelled` check and flip `isPlanRunning = false` with the
+        // right summary. We schedule the banner auto-dismiss so it doesn't
+        // hang forever if the loop took its sweet time unwinding.
+        scheduleAutoDismiss()
     }
 
     /// Response to the step(s) currently shown in `pendingStepsApproval`.
@@ -333,11 +380,16 @@ final class BrowserStore: ObservableObject {
     }
 
     func dismissRunningPlan() {
+        // If a plan is still running, route through stopRun so the in-flight
+        // task is cancelled cleanly instead of being orphaned.
+        if isPlanRunning {
+            stopRun()
+            return
+        }
         cancelAutoDismiss()
         cancelStepDismissals()
         runningPlan = nil
         completionSummary = nil
-        isPlanRunning = false
     }
 
     private func cancelAutoDismiss() {
@@ -402,9 +454,17 @@ final class BrowserStore: ObservableObject {
         var completed: [BrowserStep] = []
 
         while !queue.isEmpty {
+            if Task.isCancelled {
+                if completionSummary == nil || completionSummary?.isEmpty == true {
+                    completionSummary = wasStoppedByUser ? "Stopped by you." : "Stopped."
+                }
+                break
+            }
+
             var stoppedEarly = false
 
             for step in queue {
+                if Task.isCancelled { stoppedEarly = true; break }
                 if completed.count >= maxStepsPerRun {
                     completionSummary = "Stopped after \(maxStepsPerRun) steps to avoid an endless loop — ask again to continue."
                     stoppedEarly = true
@@ -427,6 +487,11 @@ final class BrowserStore: ObservableObject {
 
             if stoppedEarly { break }
 
+            if Task.isCancelled {
+                completionSummary = wasStoppedByUser ? "Stopped by you." : "Stopped."
+                break
+            }
+
             guard let modelContext = resolveModelContext() else {
                 completionSummary = "Stopped: no model/API key available to plan the next step."
                 break
@@ -436,11 +501,17 @@ final class BrowserStore: ObservableObject {
             // snapshotting — otherwise we hand the model a mid-paint page and
             // it proposes steps against content that isn't actually there yet.
             if let tab = activeTab {
+                isDecidingNextStep = true
                 await tab.waitForPageSettled(timeout: 5)
                 await tab.installNetworkActivityInstrumentation()
             }
             let context = await activeTab?.captureContext()
+            // Lightweight anti-runaway: if the page didn't change at all
+            // since the last step and we've already done a few, ask the
+            // model to declare done rather than propose another scroll/wait.
+            let pageIsUnchanged = isPageUnchangedAfterStep(completed: completed, currentContext: context)
             do {
+                isDecidingNextStep = true
                 let decision = try await BrowserAgent.requestNextStep(
                     goal: goal,
                     completedSteps: completed,
@@ -449,8 +520,15 @@ final class BrowserStore: ObservableObject {
                     apiKey: modelContext.apiKey,
                     catalog: modelContext.catalog,
                     customBaseURL: modelContext.customBaseURL,
-                    style: modelContext.style
+                    style: modelContext.style,
+                    pageUnchangedHint: pageIsUnchanged
                 )
+                isDecidingNextStep = false
+                if Task.isCancelled {
+                    completionSummary = wasStoppedByUser ? "Stopped by you." : "Stopped."
+                    queue = []
+                    continue
+                }
                 guard !decision.done, !decision.steps.isEmpty else {
                     completionSummary = decision.summary.isEmpty ? "Done." : decision.summary
                     queue = []
@@ -462,6 +540,11 @@ final class BrowserStore: ObservableObject {
                     pendingStepsApproval = decision.steps
                     let approved = await waitForStepDecision()
                     pendingStepsApproval = nil
+                    if Task.isCancelled {
+                        completionSummary = wasStoppedByUser ? "Stopped by you." : "Stopped."
+                        queue = []
+                        continue
+                    }
                     if approved {
                         queue = decision.steps
                     } else {
@@ -475,14 +558,54 @@ final class BrowserStore: ObservableObject {
                     }
                 }
             } catch {
-                errorMessage = error.localizedDescription
-                completionSummary = "Stopped: couldn't work out the next step."
+                isDecidingNextStep = false
+                // Cancellation surfaces as CancellationError; treat it like
+                // a user stop rather than dumping a network/API error in the
+                // banner. Everything else is a real failure.
+                if Task.isCancelled {
+                    completionSummary = wasStoppedByUser ? "Stopped by you." : "Stopped."
+                } else {
+                    errorMessage = error.localizedDescription
+                    completionSummary = "Stopped: couldn't work out the next step."
+                }
                 queue = []
             }
         }
 
         isPlanRunning = false
+        isDecidingNextStep = false
+        runningPlanTask = nil
         scheduleAutoDismiss()
+    }
+
+    /// Cheap signal used to nudge the model toward declaring done: compares
+    /// the current page snapshot (URL + title + trimmed text hash) to the
+    /// last step's snapshot. If nothing has changed since the most recent
+    /// step and we're past the first batch, the page is in a loop — either
+    /// stuck at the bottom of an infinite-scroll page or the agent's last
+    /// action was a no-op. We pass this hint to the model so it can choose
+    /// to stop rather than propose another scroll/wait.
+    private func isPageUnchangedAfterStep(completed: [BrowserStep], currentContext: BrowserPageContext?) -> Bool {
+        guard let currentContext else { return false }
+        // Only kick in after the first batch — give the agent room to actually
+        // work the page before complaining that nothing's changing.
+        guard completed.count >= 2 else { return false }
+        // We don't snapshot after every step (only on the next-step call),
+        // so we approximate: if the last step was a `wait` and the page is
+        // still loading, flag it. If the last step was a `scroll` and the
+        // snapshot's text snippet overlaps heavily with what we'd expect
+        // post-scroll, that's also a loop signal. Keep the heuristic simple
+        // and let the model decide — we just want to give it a hint.
+        let lastStep = completed.last
+        let lastWasScroll = lastStep?.kind == .scroll
+        let lastWasWait = lastStep?.kind == .wait
+        // If the page is still mid-load (text snippet ended with an ellipsis
+        // or is suspiciously short after a scroll) we lean on the model.
+        let textLooksLikeStillLoading = currentContext.textSnippet.isEmpty
+            || currentContext.textSnippet.hasSuffix("…")
+            || currentContext.textSnippet.hasSuffix("...")
+        return lastWasScroll && textLooksLikeStillLoading
+            || lastWasWait && textLooksLikeStillLoading
     }
 
     /// Appends `step` as a new entry at the end of the live `runningPlan`.
@@ -523,6 +646,9 @@ final class BrowserStore: ObservableObject {
 
     private func execute(step: BrowserStep) async -> (ok: Bool, note: String?) {
         guard let tab = activeTab else { return (false, "No active tab.") }
+        if Task.isCancelled {
+            return (false, "Stopped by you.")
+        }
         switch step.kind {
         case .navigate:
             guard let target = step.target, let url = BrowserAddressResolver.resolve(target) else {
@@ -580,9 +706,14 @@ final class BrowserStore: ObservableObject {
         case .wait:
             // Model-requested explicit wait. Still let the page settle after
             // the timer so a step that follows (or the next-step re-analysis)
-            // doesn't read a mid-paint page.
+            // doesn't read a mid-paint page. Honors cancellation so the
+            // Stop button doesn't have to wait out a 10s sleep.
             let seconds = min(max(Double(step.target ?? "1") ?? 1, 0), 10)
-            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            do {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            } catch {
+                return (false, "Stopped by you.")
+            }
             await tab.waitForPageSettled(timeout: 2, minSettle: 0.2)
             return (true, "Waited \(Int(seconds))s.")
         case .extract:

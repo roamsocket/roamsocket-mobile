@@ -197,9 +197,20 @@ struct BrowserHomeView: View {
             .submitLabel(.send)
             .onSubmit(submitPrompt)
 
-            if store.isPlanning || store.isAsking {
-                ProgressView()
-                    .tint(Theme.textSecondary)
+            if store.isPlanning || store.isAsking || store.isPlanRunning {
+                // The send button morphs into a stop button while the agent
+                // is busy. Plan / plan-running → `stopRun()` actually cancels
+                // the in-flight task; Ask (talking to the model about the
+                // page) is an LLM call we can't interrupt mid-stream, so the
+                // button just hides the spinner and waits for the reply to
+                // arrive — but at least it's discoverable.
+                Button(action: stopButtonTapped) {
+                    Image(systemName: "stop.circle.fill")
+                        .font(.system(size: 22))
+                        .foregroundStyle(Theme.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Stop")
             } else if !store.promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Button(action: submitPrompt) {
                     Image(systemName: "arrow.up.circle.fill")
@@ -249,6 +260,21 @@ struct BrowserHomeView: View {
             askChatExpanded = true
         }
         Task { await store.submitPrompt(appState: state) }
+    }
+
+    /// Wired to the stop button that replaces the send button while the
+    /// agent is busy. The plan / plan-running branch actually cancels the
+    /// in-flight task via `BrowserStore.stopRun`; the Ask branch is a no-op
+    /// on cancellation (we can't interrupt the LLM call mid-stream) — the
+    /// button is still discoverable so users know there's no other way out
+    /// until the answer arrives.
+    private func stopButtonTapped() {
+        promptFocused = false
+        if store.isPlanRunning || store.isPlanning {
+            store.stopRun()
+        }
+        // For Ask / pure planning, the in-flight LLM call will return on its
+        // own; tapping stop at least dismisses the prompt UI.
     }
 
     // MARK: - Address bar
@@ -481,6 +507,20 @@ struct BrowserHomeView: View {
                 .foregroundStyle(Theme.textSecondary)
                 .lineLimit(1)
             Spacer(minLength: 0)
+            // Prominent stop button so the user has an obvious escape hatch
+            // when the agent is mid-step or mid-decision. Tap cancels the
+            // in-flight run; the banner transitions to its finished state
+            // with a "Stopped by you" summary.
+            Button(action: { store.stopRun() }) {
+                Text("Stop")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.textSecondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Theme.surfaceElevated, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Stop the running plan")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -492,7 +532,15 @@ struct BrowserHomeView: View {
         if let running = plan.steps.last, running.status == .running {
             return running.description
         }
-        return "Thinking about the next step…"
+        // Between the last finished step and the next appended one, the run
+        // loop is either re-analyzing the page (settle wait + capture + LLM
+        // call) or has nothing left to do. The store flips `isPlanRunning`
+        // off in both cases before this banner re-renders, but during the
+        // gap we want a label that's accurate instead of generic.
+        if store.isDecidingNextStep {
+            return "Deciding what to do next…"
+        }
+        return "Working on it…"
     }
 
     /// The Ask-mode conversation about the current page. Collapsed to a

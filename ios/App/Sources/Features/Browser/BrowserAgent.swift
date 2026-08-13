@@ -37,6 +37,15 @@ enum BrowserAgent {
         - "extract" means "read the resulting page and summarize for the user" — use it as the final step whenever you need to report back what happened.
         - Keep plans short: 1-6 steps. Never invent data you weren't given (login credentials, payment details, personal info) — if the task needs a secret you don't have, stop and add a single step explaining what's missing instead of guessing.
         - Never mark a task complete in "description" text; describe intent ("Search for X"), not outcome ("Searched for X").
+
+        Anti-loop rules:
+        - Before adding a "scroll" step, scan the "Prominent clickable elements" \
+        list for the target you need. If it's there, click/type it directly — \
+        do not scroll "just in case". The user can already see the item they want; \
+        scrolling past it is the most common complaint.
+        - Do not include more than one "scroll" step in a row unless the goal \
+        explicitly requires reaching the bottom of a long page (a list of N \
+        items, an article, etc.).
         """
     }
 
@@ -149,13 +158,41 @@ enum BrowserAgent {
         action — adapt: try a different element description, scroll to find it, or \
         explain in "summary" (with "done": true) what's blocking progress if you're \
         truly stuck.
+
+        CRITICAL anti-loop rules (read these — runaway scrolling is the #1 user complaint):
+
+        - PREFER VISIBLE TARGETS. Before scrolling, scan the snapshot's "Prominent \
+        clickable elements" list for the item the user asked about. If it's there, \
+        click/type it directly. Do not scroll "just in case there's more below".
+
+        - NEVER SCROLL TO THE BOTTOM OF THE PAGE. If the visible text looks \
+        complete enough to answer the question, or if the target you need is \
+        already in the "Prominent clickable elements" list, do not add another \
+        "scroll" step. Declare done with "done": true instead.
+
+        - DO NOT CHAIN SCROLLS. If your last step was "scroll", look at the new \
+        snapshot before scrolling again. If the "Prominent clickable elements" \
+        list still contains everything you need, act on it. If the page is short \
+        (e.g. a Google home page, search results that already show the answer, \
+        an error page), do NOT keep scrolling — declare done.
+
+        - DO NOT CHAIN WAITS. If your last step was "wait" and the page text is \
+        still empty or still ends with an ellipsis, the page is either fully \
+        loaded with no real content or stuck. Do NOT add another "wait" step — \
+        adapt (try a different selector, navigate elsewhere, or declare done \
+        with what you know).
+
+        - When you see the hint "page-unchanged-since-last-step": trust it. The \
+        page is not changing. The right move is "done": true with a summary of \
+        what you found, not another wait or scroll.
         """
     }
 
     private static func nextStepUserPrompt(
         goal: String,
         completedSteps: [BrowserStep],
-        context: BrowserPageContext?
+        context: BrowserPageContext?,
+        pageUnchangedHint: Bool
     ) -> String {
         var lines: [String] = ["Original goal: \(goal)"]
         if completedSteps.isEmpty {
@@ -175,6 +212,9 @@ enum BrowserAgent {
             lines.append("Steps already executed:\n\(history)")
         }
         lines.append(contentsOf: pageContextLines(context))
+        if pageUnchangedHint {
+            lines.append("HINT: page-unchanged-since-last-step — the page text didn't change after the most recent action. Strongly prefer declaring done over proposing another wait/scroll.")
+        }
         lines.append("Decide the next step now (or declare done).")
         return lines.joined(separator: "\n\n")
     }
@@ -190,14 +230,20 @@ enum BrowserAgent {
         apiKey: String,
         catalog: ModelCatalog,
         customBaseURL: URL?,
-        style: CustomProviderStyle?
+        style: CustomProviderStyle?,
+        pageUnchangedHint: Bool = false
     ) async throws -> NextStepDecision {
         let provider = catalog.provider(model.provider, customBaseURL: customBaseURL, style: style)
         let messages = [
             ProviderChatMessage(role: .system, content: nextStepSystemPrompt()),
             ProviderChatMessage(
                 role: .user,
-                content: nextStepUserPrompt(goal: goal, completedSteps: completedSteps, context: context)
+                content: nextStepUserPrompt(
+                    goal: goal,
+                    completedSteps: completedSteps,
+                    context: context,
+                    pageUnchangedHint: pageUnchangedHint
+                )
             ),
         ]
         let raw: String

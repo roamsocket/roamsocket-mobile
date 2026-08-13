@@ -639,34 +639,70 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             try? await Task.sleep(nanoseconds: UInt64(pollInterval * 1_000_000_000))
         }
 
-        // 2. Poll the page until document.readyState is 'complete' AND the
-        //    network has been quiet for `quietWindow`. The JS returns a small
-        //    status blob so we don't have to reach into page globals from Swift.
+        // 2. Poll the page until document.readyState is 'complete' AND either
+        //    the network is quiet for `quietWindow` OR the page has visibly
+        //    stabilized (scroll position + document height unchanged across
+        //    two consecutive observations, with no error in the page's last
+        //    network attempt). The "stable page" fallback is what stops
+        //    infinite-scroll / ad-polling sites (ESPN, news, scoreboards) from
+        //    holding us at the bottom of the page forever — their background
+        //    fetches never go idle, but the actual content the user can see
+        //    has long since stopped changing.
         let js = """
         (function () {
-          if (document.readyState !== 'complete') return { ready: false, inflight: 0 };
-          // Count in-flight fetches + XHRs we instrumented; sites that override
-          // fetch/XHR will still be observable through __rsInFlight if our hook
-          // landed first, otherwise 0 means "no observable activity" which is
-          // safe enough for the wait.
+          var ready = document.readyState === 'complete';
           var inflight = (window.__rsInFlight && typeof window.__rsInFlight.count === 'number')
             ? window.__rsInFlight.count : 0;
-          return { ready: true, inflight: inflight };
+          var docH = document.documentElement ? document.documentElement.scrollHeight : 0;
+          var scrollY = window.scrollY || window.pageYOffset || 0;
+          var atBottom = (window.innerHeight + scrollY) >= (docH - 4);
+          return { ready: ready, inflight: inflight, docH: docH, scrollY: scrollY, atBottom: atBottom };
         })();
         """
 
         var lastActive = Date()
+        var lastStableSignature: String?
+        var stableStreak = 0
         let probeIntervalNS = UInt64(pollInterval * 1_000_000_000)
 
         while Date() < deadline {
             let probe = await evaluateJS(js) as? [String: Any]
             let ready = (probe?["ready"] as? Bool) ?? false
             let inflight = (probe?["inflight"] as? Int) ?? 0
-            if ready && inflight == 0 {
-                if lastActive.timeIntervalSinceNow <= -quietWindow { break }
+            let docH = (probe?["docH"] as? Int) ?? 0
+            let scrollY = (probe?["scrollY"] as? Int) ?? 0
+            let atBottom = (probe?["atBottom"] as? Bool) ?? false
+
+            // Two consecutive probes with the same height + scroll + ready
+            // + no observable in-flight work counts as "stable" — even if a
+            // background polling loop keeps the network counter > 0.
+            let signature = "\(ready)|\(inflight)|\(docH)|\(scrollY)"
+            if signature == lastStableSignature, ready {
+                stableStreak += 1
             } else {
-                // Any non-quiet observation resets the quiet clock.
+                stableStreak = 0
+                lastStableSignature = signature
+            }
+            let isQuiet = ready && inflight == 0
+            let isStable = ready && stableStreak >= 1
+
+            if isQuiet {
+                if lastActive.timeIntervalSinceNow <= -quietWindow { break }
+            } else if isStable {
+                // Page signature has held across two polls — treat as
+                // settled even though the network counter is non-zero.
+                // One extra probe worth of quiet to be safe.
+                if lastActive.timeIntervalSinceNow <= -quietWindow { break }
                 lastActive = Date()
+            } else {
+                lastActive = Date()
+            }
+            // Sanity: if the page claims to be at the bottom AND the height
+            // matches the viewport, there's literally nothing to load. Bail
+            // out immediately instead of burning the full timeout budget.
+            // The check happens in-page so we get innerHeight for free.
+            if atBottom, docH > 0, docH - scrollY <= 4 {
+                break
             }
             try? await Task.sleep(nanoseconds: probeIntervalNS)
         }
