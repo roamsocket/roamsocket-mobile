@@ -185,21 +185,47 @@ struct BrowserHomeView: View {
                 .foregroundStyle(Theme.accent)
                 .frame(width: 20)
 
-            TextField(
-                store.promptMode == .ask ? "Ask about this page…" : "Ask AI to do something on this page…",
-                text: $store.promptText,
-                axis: .vertical
-            )
-            .font(.system(size: 15))
-            .foregroundStyle(Theme.textPrimary)
-            .lineLimit(1...3)
-            .focused($promptFocused)
-            .submitLabel(.send)
-            .onSubmit(submitPrompt)
+            // While the agent is busy, the text the user just sent stays
+            // visible — but instead of a separate wave overlay covering the
+            // whole row, the text itself shimmers. A non-editable `Text` is
+            // rendered with the prompt content and masked by a horizontal
+            // grey gradient whose bright band travels left → right, so the
+            // effect is "the words are loading", not "the whole row has a
+            // rainbow wash". When idle we fall back to the regular editable
+            // `TextField`.
+            let isBusy = store.isPlanning || store.isAsking || store.isPlanRunning
+            if isBusy {
+                ShimmeringPromptText(text: store.promptText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityLabel("Agent is working on: \(store.promptText)")
+            } else {
+                TextField(
+                    store.promptMode == .ask ? "Ask about this page…" : "Ask AI to do something on this page…",
+                    text: $store.promptText,
+                    axis: .vertical
+                )
+                .font(.system(size: 15))
+                .foregroundStyle(Theme.textPrimary)
+                .lineLimit(1...3)
+                .focused($promptFocused)
+                .submitLabel(.send)
+                .onSubmit(submitPrompt)
+            }
 
-            if store.isPlanning || store.isAsking {
-                ProgressView()
-                    .tint(Theme.textSecondary)
+            if isBusy {
+                // The send button morphs into a stop button while the agent
+                // is busy. Plan / plan-running → `stopRun()` actually cancels
+                // the in-flight task; Ask (talking to the model about the
+                // page) is an LLM call we can't interrupt mid-stream, so the
+                // button just hides the spinner and waits for the reply to
+                // arrive — but at least it's discoverable.
+                Button(action: stopButtonTapped) {
+                    Image(systemName: "stop.circle.fill")
+                        .font(.system(size: 22))
+                        .foregroundStyle(Theme.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Stop")
             } else if !store.promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Button(action: submitPrompt) {
                     Image(systemName: "arrow.up.circle.fill")
@@ -227,6 +253,78 @@ struct BrowserHomeView: View {
         .accessibilityLabel("Prompt mode: \(store.promptMode.title)")
     }
 
+    /// Renders the in-progress prompt text with a left-to-right shimmering
+    /// grey gradient so it reads as "the words are loading" while the agent
+    /// thinks, instead of a separate wave washing over the whole row.
+    ///
+    /// Implementation: draw `Text` once in a dim grey, then mask it with an
+    /// animated horizontal gradient. The gradient's bright band travels
+    /// across the text width over time, so only the portion under the
+    /// bright stop is fully visible — the rest fades toward the
+    /// background. The result looks like the words themselves are pulsing
+    /// from left to right, with the page behind the field untouched.
+    ///
+    /// Built on `TimelineView(.animation)` so the animation runs on the
+    /// display link and stays in sync with the rest of the UI (vs. a
+    /// `withAnimation` loop that drifts when the view re-renders for other
+    /// reasons).
+    private struct ShimmeringPromptText: View {
+        let text: String
+
+        /// How long one full pass of the wave takes. 1.8s is a hair slower
+        /// than the rainbow wave it replaced — the new effect is more
+        /// subtle, so a slower pass reads as "loading" instead of "anxious".
+        private let cycleSeconds: Double = 1.8
+
+        var body: some View {
+            TimelineView(.animation) { context in
+                let t = context.date.timeIntervalSinceReferenceDate
+                // Position of the bright band's center, normalized 0...1
+                // across the text width, looping every `cycleSeconds`.
+                let phase = (t.truncatingRemainder(dividingBy: cycleSeconds)) / cycleSeconds
+                // Three-stop gradient: transparent → bright → transparent.
+                // Asymmetric widths (narrow leading edge, wider trailing
+                // tail) so the wave reads as a comet sweep rather than a
+                // symmetric pulse.
+                let leadingEdge = max(0, CGFloat(phase) - 0.25)
+                let trailingEdge = min(1, CGFloat(phase) + 0.5)
+                let gradient = LinearGradient(
+                    stops: [
+                        .init(color: .clear, location: leadingEdge),
+                        .init(color: Theme.textSecondary.opacity(0.95), location: CGFloat(phase)),
+                        .init(color: .clear, location: trailingEdge)
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+
+                ZStack(alignment: .leading) {
+                    // Underlying dim copy of the text — visible wherever
+                    // the mask gradient is transparent, so words never
+                    // fully disappear. Painted at reduced opacity so the
+                    // bright wave reads as the highlight.
+                    Text(text.isEmpty ? " " : text)
+                        .font(.system(size: 15))
+                        .foregroundStyle(Theme.textTertiary.opacity(0.55))
+
+                    // Foreground copy of the same text, masked by the
+                    // moving bright gradient. Only the portion under the
+                    // bright stop is fully opaque — everywhere else the
+                    // dim layer underneath shows through.
+                    Text(text.isEmpty ? " " : text)
+                        .font(.system(size: 15))
+                        .foregroundStyle(Theme.textSecondary)
+                        .mask(
+                            gradient
+                                // Gentle breathing so the wave pulses
+                                // rather than sliding at constant intensity.
+                                .opacity(0.7 + 0.3 * sin(t * .pi / (cycleSeconds / 2)))
+                        )
+                }
+            }
+        }
+    }
+
     private func modeToggleButton(_ mode: BrowserPromptMode) -> some View {
         Button {
             store.promptMode = mode
@@ -249,6 +347,21 @@ struct BrowserHomeView: View {
             askChatExpanded = true
         }
         Task { await store.submitPrompt(appState: state) }
+    }
+
+    /// Wired to the stop button that replaces the send button while the
+    /// agent is busy. The plan / plan-running branch actually cancels the
+    /// in-flight task via `BrowserStore.stopRun`; the Ask branch is a no-op
+    /// on cancellation (we can't interrupt the LLM call mid-stream) — the
+    /// button is still discoverable so users know there's no other way out
+    /// until the answer arrives.
+    private func stopButtonTapped() {
+        promptFocused = false
+        // `stopRun` now covers all three sub-states (Ask, plan-generation,
+        // plan execution) — calling it unconditionally is the right move
+        // since the button only shows when *some* `isBusy` flag is true.
+        // It no-ops gracefully if no task is live.
+        store.stopRun()
     }
 
     // MARK: - Address bar
@@ -473,14 +586,40 @@ struct BrowserHomeView: View {
     }
 
     private func runningPlanBanner(_ plan: BrowserPlan) -> some View {
-        HStack(spacing: 10) {
-            ProgressView()
-                .tint(Theme.accent)
-            Text(currentStepLabel(plan))
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.textSecondary)
-                .lineLimit(1)
-            Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                ProgressView()
+                    .tint(Theme.accent)
+                Text(currentStepLabel(plan))
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.textSecondary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                // Prominent stop button so the user has an obvious escape hatch
+                // when the agent is mid-step or mid-decision. Tap cancels the
+                // in-flight run; the banner transitions to its finished state
+                // with a "Stopped by you" summary.
+                Button(action: { store.stopRun() }) {
+                    Text("Stop")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.textSecondary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Theme.surfaceElevated, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Stop the running plan")
+            }
+            // Optional user-facing commentary from the model — only shown
+            // when the model chose to include one. Soft grey so it reads
+            // as a hint, not an action.
+            if let commentary = store.currentCommentary, !commentary.isEmpty {
+                Text(commentary)
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(Theme.textTertiary)
+                    .lineLimit(3)
+                    .padding(.leading, 30) // align under the spinner column
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -492,7 +631,15 @@ struct BrowserHomeView: View {
         if let running = plan.steps.last, running.status == .running {
             return running.description
         }
-        return "Thinking about the next step…"
+        // Between the last finished step and the next appended one, the run
+        // loop is either re-analyzing the page (settle wait + capture + LLM
+        // call) or has nothing left to do. The store flips `isPlanRunning`
+        // off in both cases before this banner re-renders, but during the
+        // gap we want a label that's accurate instead of generic.
+        if store.isDecidingNextStep {
+            return "Deciding what to do next…"
+        }
+        return "Working on it…"
     }
 
     /// The Ask-mode conversation about the current page. Collapsed to a
@@ -627,7 +774,19 @@ struct BrowserHomeView: View {
                         .frame(width: 18)
                         .padding(.top, 1)
                     VStack(alignment: .leading, spacing: 8) {
-                        if message.searchedWeb {
+                        // `webSearchEmpty` takes precedence over the success
+                        // pill — they're mutually exclusive (search either
+                        // returned hits or it didn't) and showing both would
+                        // be contradictory.
+                        if let empty = message.webSearchEmpty {
+                            HStack(spacing: 4) {
+                                Image(systemName: "magnifyingglass.circle")
+                                    .font(.system(size: 10, weight: .medium))
+                                Text(empty)
+                                    .font(.system(size: 10, weight: .medium))
+                            }
+                            .foregroundStyle(Color.orange.opacity(0.85))
+                        } else if message.searchedWeb {
                             HStack(spacing: 4) {
                                 Image(systemName: "magnifyingglass.circle")
                                     .font(.system(size: 10, weight: .medium))
@@ -654,13 +813,35 @@ struct BrowserHomeView: View {
     /// the remaining banner auto-dismisses after ~10s but can also be closed
     /// immediately.
     private func finishedPlanBanner(_ plan: BrowserPlan) -> some View {
-        let failed = plan.steps.contains { $0.status == .failed }
+        let outcome = store.completionOutcome
+        let anyFailedStep = plan.steps.contains { $0.status == .failed }
+        // Three distinct end-states, three distinct banners. The previous
+        // version conflated "the agent gave up and admitted it couldn't
+        // find X" with "the agent actually finished the task" — both showed
+        // a green checkmark, which was misleading.
+        let icon: String
+        let tint: Color
+        let title: String
+        switch outcome {
+        case .success:
+            icon = anyFailedStep ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"
+            tint = anyFailedStep ? Color.orange : Color.green
+            title = anyFailedStep ? "Plan finished with errors" : "Plan finished"
+        case .blocked:
+            icon = "exclamationmark.triangle.fill"
+            tint = Color.orange
+            title = "Couldn't finish the task"
+        case .stopped:
+            icon = "stop.circle.fill"
+            tint = Color.gray
+            title = "Plan stopped"
+        }
         return VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 8) {
-                Image(systemName: failed ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                    .foregroundStyle(failed ? Color.orange : Color.green)
+                Image(systemName: icon)
+                    .foregroundStyle(tint)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(failed ? "Plan stopped early" : "Plan finished")
+                    Text(title)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Theme.textPrimary)
                     if let summary = store.completionSummary, !summary.isEmpty {
@@ -749,60 +930,33 @@ struct BrowserHomeView: View {
 
     // MARK: - Sheets
 
+    /// Safari-style tab switcher: header with "X Tabs" + Private button on the
+    /// left and Done (✓) on the right, a 2-column grid of tab preview tiles,
+    /// and a "+ New Tab" button at the bottom-left. Tapping a tile switches
+    /// to that tab; the × on each tile closes it.
+    ///
+    /// Why this layout: the old version was a flat `List` of titles — fine for
+    /// power users who read every entry, but it gave no visual sense of
+    /// "which page is in which tab". Safari's grid (preview + small title) is
+    /// the iOS idiom for this and what users expect after using Safari.
     private var tabsSheet: some View {
-        SheetScaffold(
-            title: "Tabs",
-            trailing: AnyView(
-                Button(action: {
-                    store.newTab()
-                    store.showTabsSheet = false
-                }) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Theme.textPrimary)
-                        .frame(width: 40, height: 40)
-                        .background(Theme.surfaceElevated, in: Circle())
-                }
-                .buttonStyle(.plain)
-            ),
-            onClose: { store.showTabsSheet = false }
-        ) {
-            List {
-                ForEach(store.tabs) { tab in
-                    Button {
-                        store.selectTab(tab.id)
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(tab.title.isEmpty ? "New Tab" : tab.title)
-                                    .font(.system(size: 15, weight: .medium))
-                                    .foregroundStyle(Theme.textPrimary)
-                                    .lineLimit(1)
-                                if !tab.urlString.isEmpty {
-                                    Text(tab.urlString)
-                                        .font(.system(size: 12))
-                                        .foregroundStyle(Theme.textTertiary)
-                                        .lineLimit(1)
-                                }
-                            }
-                            Spacer()
-                            if tab.id == store.activeTabID {
-                                Image(systemName: "checkmark")
-                                    .foregroundStyle(Theme.accent)
-                            }
-                        }
-                    }
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        Button(role: .destructive) { store.closeTab(tab.id) } label: {
-                            Label("Close", systemImage: "xmark")
-                        }
-                    }
-                }
-            }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-        }
-        .presentationDetents([.medium, .large])
+        TabsSwitcherSheet(
+            tabs: store.tabs,
+            activeTabID: store.activeTabID,
+            onSelect: { store.selectTab($0) },
+            onCloseTab: { store.closeTab($0) },
+            onNewTab: {
+                store.newTab()
+                store.showTabsSheet = false
+            },
+            onDone: { store.showTabsSheet = false },
+            // The store refreshes snapshots in the background; the sheet
+            // simply renders whatever `tab.snapshot` currently is. We pass
+            // a single fire-and-forget task here so each open of the sheet
+            // kicks off a refresh without blocking the UI.
+            refreshSnapshots: { Task { await store.refreshAllSnapshots() } }
+        )
+        .presentationDetents([.large])
         .presentationBackground(Theme.background)
         .presentationDragIndicator(.visible)
     }

@@ -195,8 +195,17 @@ struct BrowserChatMessage: Identifiable, Equatable {
     /// Raw assistant text may include `…` tags; the UI peels them
     /// before display and before feeding them back as history.
     var content: String
-    /// True when this assistant reply was supplemented with live web search.
+    /// True when this assistant reply was supplemented with live web search
+    /// that returned at least one hit. Renders as a quiet grey "Searched
+    /// the web for more context" pill under the assistant message.
     var searchedWeb: Bool
+    /// Set when the Ask-mode web-search fallback ran and returned zero hits.
+    /// Lets the UI tell the user "we tried, nothing came back" instead of
+    /// just showing a confident-sounding "I can't find that" answer with no
+    /// signal that the agent actually searched. When this is non-nil it
+    /// takes precedence over `searchedWeb` so we don't claim success while
+    /// also showing the empty-results note.
+    var webSearchEmpty: String?
     let createdAt: Date
 
     init(
@@ -204,12 +213,14 @@ struct BrowserChatMessage: Identifiable, Equatable {
         role: Role,
         content: String,
         searchedWeb: Bool = false,
+        webSearchEmpty: String? = nil,
         createdAt: Date = Date()
     ) {
         self.id = id
         self.role = role
         self.content = content
         self.searchedWeb = searchedWeb
+        self.webSearchEmpty = webSearchEmpty
         self.createdAt = createdAt
     }
 

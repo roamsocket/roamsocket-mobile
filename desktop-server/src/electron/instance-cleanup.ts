@@ -204,7 +204,9 @@ export async function findConflictingProcesses(port: number): Promise<Conflictin
   const byPid = new Map<number, ConflictingProcess>();
 
   try {
+    process.stderr.write(`[apc-debug] findConflictingProcesses: calling listListeningPorts port=${port}\n`);
     const ports = await listListeningPorts();
+    process.stderr.write(`[apc-debug] findConflictingProcesses: listListeningPorts returned ${ports.length} ports\n`);
     for (const p of ports) {
       if (p.port !== port || isOurPid(p.pid)) continue;
       const target = await rootKillTarget(p.pid);
@@ -213,15 +215,23 @@ export async function findConflictingProcesses(port: number): Promise<Conflictin
         reason: `listening on port ${port}`,
       });
     }
-  } catch {
+  } catch (err) {
+    process.stderr.write(`[apc-debug] findConflictingProcesses: port scan failed: ${(err as Error).message}\n`);
     /* port scan failed — still try process list */
   }
 
-  for (const proc of await listApcServerProcesses()) {
-    if (isOurPid(proc.pid)) continue;
-    // Avoid killing *this* Electron main if the command line matches the app name.
-    // process.pid already excluded; also skip if command is clearly our own forge/dev parent chain.
-    if (!byPid.has(proc.pid)) byPid.set(proc.pid, proc);
+  try {
+    process.stderr.write(`[apc-debug] findConflictingProcesses: calling listApcServerProcesses\n`);
+    const apcProcs = await listApcServerProcesses();
+    process.stderr.write(`[apc-debug] findConflictingProcesses: listApcServerProcesses returned ${apcProcs.length} procs\n`);
+    for (const proc of apcProcs) {
+      if (isOurPid(proc.pid)) continue;
+      // Avoid killing *this* Electron main if the command line matches the app name.
+      // process.pid already excluded; also skip if command is clearly our own forge/dev parent chain.
+      if (!byPid.has(proc.pid)) byPid.set(proc.pid, proc);
+    }
+  } catch (err) {
+    process.stderr.write(`[apc-debug] findConflictingProcesses: listApcServerProcesses failed: ${(err as Error).message}\n`);
   }
 
   return [...byPid.values()].sort((a, b) => a.pid - b.pid);

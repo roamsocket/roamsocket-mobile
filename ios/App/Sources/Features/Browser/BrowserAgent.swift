@@ -33,10 +33,19 @@ enum BrowserAgent {
         - "click" needs a short hint in "target" describing the visible label/text of the element (e.g. "Sign in button"), not a CSS selector unless you are certain of it.
         - "type" needs a hint in "target" (e.g. "search box", "email field") and the literal text to enter in "value"; add a trailing step describing submission if a form should be submitted (use another "type" or a "click" step for the submit button).
         - "scroll" target is "up" or "down".
-        - "wait" target is a whole number of seconds (used sparingly, e.g. after submitting a search).
+        - "wait" target is a whole number of seconds (used sparingly, e.g. after submitting a search). The driver already waits for the page to fully settle (readyState complete + network quiet + a minimum paint delay) after every action, so you do NOT need to insert "wait" steps just because a page is JavaScript-heavy — only use "wait" when you genuinely need extra time for an animation, redirect, or external system to finish.
         - "extract" means "read the resulting page and summarize for the user" — use it as the final step whenever you need to report back what happened.
         - Keep plans short: 1-6 steps. Never invent data you weren't given (login credentials, payment details, personal info) — if the task needs a secret you don't have, stop and add a single step explaining what's missing instead of guessing.
         - Never mark a task complete in "description" text; describe intent ("Search for X"), not outcome ("Searched for X").
+
+        Anti-loop rules:
+        - Before adding a "scroll" step, scan the "Prominent clickable elements" \
+        list for the target you need. If it's there, click/type it directly — \
+        do not scroll "just in case". The user can already see the item they want; \
+        scrolling past it is the most common complaint.
+        - Do not include more than one "scroll" step in a row unless the goal \
+        explicitly requires reaching the bottom of a long page (a list of N \
+        items, an article, etc.).
         """
     }
 
@@ -99,12 +108,44 @@ enum BrowserAgent {
     /// usually one, but see `nextStepSystemPrompt` for when it may batch
     /// several mechanical actions (e.g. checking a row of checkboxes) into
     /// one combined approval instead of asking again after every single one.
+    /// Why a `done: true` decision ended the run. Lets the UI tell the
+    /// difference between "I actually finished the task" and "I gave up
+    /// because I couldn't find what you asked for" — both used to render
+    /// as a green "Plan finished" banner, which is misleading when the
+    /// agent admits it couldn't do the thing.
+    enum CompletionOutcome: String {
+        /// The agent accomplished the user's goal (or as much of it as
+        /// was possible).
+        case success
+        /// The agent stopped because it couldn't make progress — the
+        /// target wasn't on the page, the model couldn't parse the
+        /// result, the page wouldn't load, etc. `summary` should explain
+        /// *why* so the user understands what went wrong.
+        case blocked
+        /// The agent hit the per-run step cap without finishing — this
+        /// is a runaway-loop guard, not the agent's own judgment.
+        case stopped
+    }
+
     struct NextStepDecision {
         let done: Bool
         /// If `done`, a one-sentence outcome; otherwise a brief status note.
         let summary: String
         /// Empty iff `done` is true.
         let steps: [BrowserStep]
+        /// Short user-facing commentary the model can include alongside its
+        /// decision (e.g. "I'll click the Sign in button now", "The page
+        /// didn't load — let me try again", "Found it on the second try").
+        /// Optional — the model is told it can include it but doesn't have
+        /// to. When present, the running banner shows it as a soft grey
+        /// line so the user understands what the AI is doing/thinking.
+        let commentary: String?
+        /// Only meaningful when `done == true`. Defaults to `.success`
+        /// when the field is absent in the model's response (older /
+        /// stub models). The model is told to set this explicitly so we
+        /// can render "couldn't find X" as a warning instead of a
+        /// checkmark.
+        var outcome: CompletionOutcome
     }
 
     private static func nextStepSystemPrompt() -> String {
@@ -117,14 +158,24 @@ enum BrowserAgent {
 
         You will be given: the original goal, every step already executed (with \
         its outcome), and a fresh snapshot of the current page. Decide exactly one of:
-        - The goal is now accomplished, or it cannot be accomplished — respond \
-        with "done": true, "steps": [], and a one-sentence "summary" of the actual outcome.
+        - The goal is now accomplished — respond with "done": true, "outcome": \
+        "success", "steps": [], and a one-sentence "summary" describing what was \
+        actually accomplished.
+        - The goal cannot be accomplished (the page doesn't have what the user \
+        asked for, you can't find the right control, the page won't load, you \
+        lack a needed secret, etc.) — respond with "done": true, "outcome": \
+        "blocked", "steps": [], and a one-sentence "summary" naming the specific \
+        blocker in plain language ("I can't find a search box on this page.", \
+        "The page is showing a captcha I can't solve.", "I don't have login \
+        credentials for this site."). DO NOT report blockers as "success" — be \
+        honest with the user about what went wrong.
         - More is needed — respond with "done": false, a brief "summary" of where \
         things stand, and a "steps" array describing what to do next.
 
         Respond with ONLY minified JSON, no prose, no markdown fences, matching one of:
-        {"done": false, "summary": "<brief status>", "steps": [{"kind":"<\(allowedKinds)>","target":"<url, element hint, or direction/seconds>","value":"<text to type, or null>","description":"<one plain-language sentence a non-technical user can approve>"}]}
-        {"done": true, "summary": "<one sentence describing what was actually accomplished>", "steps": []}
+        {"done": false, "summary": "<brief status>", "commentary": "<one short user-facing sentence explaining what you're about to do and why, in plain English — or null>", "steps": [{"kind":"<\(allowedKinds)>","target":"<url, element hint, or direction/seconds>","value":"<text to type, or null>","description":"<one plain-language sentence a non-technical user can approve>"}]}
+        {"done": true, "outcome": "success", "summary": "<one sentence describing what was actually accomplished>", "commentary": "<one short user-facing sentence, or null>", "steps": []}
+        {"done": true, "outcome": "blocked", "summary": "<one sentence naming the specific blocker>", "commentary": "<one short user-facing sentence, or null>", "steps": []}
 
         Normally "steps" should have exactly one entry. You may include several \
         entries at once ONLY when they are clearly mechanical repeats of the same \
@@ -149,13 +200,60 @@ enum BrowserAgent {
         action — adapt: try a different element description, scroll to find it, or \
         explain in "summary" (with "done": true) what's blocking progress if you're \
         truly stuck.
+
+        CRITICAL anti-loop rules (read these — runaway scrolling is the #1 user complaint):
+
+        - PREFER VISIBLE TARGETS. Before scrolling, scan the snapshot's "Prominent \
+        clickable elements" list for the item the user asked about. If it's there, \
+        click/type it directly. Do not scroll "just in case there's more below".
+
+        - NEVER SCROLL TO THE BOTTOM OF THE PAGE. If the visible text looks \
+        complete enough to answer the question, or if the target you need is \
+        already in the "Prominent clickable elements" list, do not add another \
+        "scroll" step. Declare done with "done": true instead.
+
+        - DO NOT CHAIN SCROLLS. If your last step was "scroll", look at the new \
+        snapshot before scrolling again. If the "Prominent clickable elements" \
+        list still contains everything you need, act on it. If the page is short \
+        (e.g. a Google home page, search results that already show the answer, \
+        an error page), do NOT keep scrolling — declare done.
+
+        - DO NOT CHAIN WAITS. If your last step was "wait" and the page text is \
+        still empty or still ends with an ellipsis, the page is either fully \
+        loaded with no real content or stuck. Do NOT add another "wait" step — \
+        adapt (try a different selector, navigate elsewhere, or declare done \
+        with what you know).
+
+        - When you see the hint "page-unchanged-since-last-step": trust it. The \
+        page is not changing. The right move is "done": true with a summary of \
+        what you found, not another wait or scroll. If your last step failed \
+        (the target wasn't there) and the page is unchanged, use "outcome": \
+        "blocked" with a summary like "The page doesn't contain X — visible \
+        controls are: …" instead of pretending the task succeeded.
+
+        User-facing commentary:
+        - You may include a "commentary" field in your response — a single \
+        short sentence (max ~120 chars) in plain English that the user can \
+        read alongside the action. This is OPTIONAL but very welcome; it \
+        tells the user what you're about to do or why you're choosing this \
+        path, in the tone of a thoughtful assistant.
+        - Examples of good commentary: "The Sign in link is at the top \
+        right — I'll click it now.", "That search didn't find it — let me \
+        try a different phrase.", "The page is taking a moment to load, so \
+        I'll wait a second before reading it.", "Found it! The first \
+        result matches what you asked about."
+        - Do NOT include commentary that restates the action's "description" \
+        field — those are different audiences. Description is for the \
+        approval card; commentary is for the live "what is the AI doing \
+        right now" display.
         """
     }
 
     private static func nextStepUserPrompt(
         goal: String,
         completedSteps: [BrowserStep],
-        context: BrowserPageContext?
+        context: BrowserPageContext?,
+        pageUnchangedHint: Bool
     ) -> String {
         var lines: [String] = ["Original goal: \(goal)"]
         if completedSteps.isEmpty {
@@ -173,8 +271,31 @@ enum BrowserAgent {
                 return "\(index + 1). [\(step.kind.rawValue)] \(step.description) -> \(outcome)\(note)"
             }.joined(separator: "\n")
             lines.append("Steps already executed:\n\(history)")
+
+            // When the last step failed with a "target not found" error, the
+            // generic history line ("FAILED — Couldn't find anything matching
+            // \"Search for X\" on the page.") doesn't make the failed hint
+            // *prominent enough* — models have a strong tendency to re-read
+            // the snapshot, see "Search for X" as visible text, and propose
+            // the exact same click. Surface the failed hint explicitly so
+            // the model knows it tried that target and it wasn't there, and
+            // forces it to pick a different element from the visible list.
+            if let last = completedSteps.last, last.status == .failed,
+               let target = last.target,
+               (last.kind == .click || last.kind == .type)
+            {
+                lines.append(
+                    "Last action FAILED because no element on the page matched your hint \u{201C}\(target)\u{201D}. " +
+                    "Do NOT re-propose a click/type with the same or near-identical hint. Pick a different element from the " +
+                    "Prominent clickable elements list below, scroll to look for it, navigate elsewhere, or declare " +
+                    "\u{201C}done\u{201D} with outcome=\u{201C}blocked\u{201D} and a summary naming what was missing."
+                )
+            }
         }
         lines.append(contentsOf: pageContextLines(context))
+        if pageUnchangedHint {
+            lines.append("HINT: page-unchanged-since-last-step — the page text didn't change after the most recent action. Strongly prefer declaring done over proposing another wait/scroll.")
+        }
         lines.append("Decide the next step now (or declare done).")
         return lines.joined(separator: "\n\n")
     }
@@ -190,14 +311,20 @@ enum BrowserAgent {
         apiKey: String,
         catalog: ModelCatalog,
         customBaseURL: URL?,
-        style: CustomProviderStyle?
+        style: CustomProviderStyle?,
+        pageUnchangedHint: Bool = false
     ) async throws -> NextStepDecision {
         let provider = catalog.provider(model.provider, customBaseURL: customBaseURL, style: style)
         let messages = [
             ProviderChatMessage(role: .system, content: nextStepSystemPrompt()),
             ProviderChatMessage(
                 role: .user,
-                content: nextStepUserPrompt(goal: goal, completedSteps: completedSteps, context: context)
+                content: nextStepUserPrompt(
+                    goal: goal,
+                    completedSteps: completedSteps,
+                    context: context,
+                    pageUnchangedHint: pageUnchangedHint
+                )
             ),
         ]
         let raw: String
@@ -281,9 +408,27 @@ enum BrowserAgent {
             throw PlanError(message: "The model didn't return a next-step decision I could parse.")
         }
         let summary = (obj["summary"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let commentary = (obj["commentary"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let done = obj["done"] as? Bool ?? false
+        // The outcome field is new; older models and stubs won't send it.
+        // Default to `.success` so we don't break existing behavior, but the
+        // system prompt above tells every supported model to set it.
+        let outcome: CompletionOutcome = {
+            if let raw = obj["outcome"] as? String,
+               let parsed = CompletionOutcome(rawValue: raw)
+            {
+                return parsed
+            }
+            return .success
+        }()
         if done {
-            return NextStepDecision(done: true, summary: summary.isEmpty ? "Done." : summary, steps: [])
+            return NextStepDecision(
+                done: true,
+                summary: summary.isEmpty ? "Done." : summary,
+                steps: [],
+                commentary: (commentary?.isEmpty == false ? commentary : nil),
+                outcome: outcome
+            )
         }
         // Tolerant of either "steps": [...] (the documented contract) or a
         // single "step": {...} object, in case the model reverts to the
@@ -311,7 +456,13 @@ enum BrowserAgent {
         guard !steps.isEmpty else {
             throw PlanError(message: "The model's next step was missing or used an unsupported action.")
         }
-        return NextStepDecision(done: false, summary: summary, steps: steps)
+        return NextStepDecision(
+            done: false,
+            summary: summary,
+            steps: steps,
+            commentary: (commentary?.isEmpty == false ? commentary : nil),
+            outcome: .success
+        )
     }
 
     /// Tolerant JSON parsing: models sometimes wrap JSON in prose or code
