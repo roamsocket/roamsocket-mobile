@@ -22,6 +22,9 @@ struct AppSettingsView: View {
     @State private var syncMessage: String?
     @State private var syncError: String?
     @State private var pendingPullSnapshot: AppSettingsSnapshot?
+    /// Per-kind status from the last push/pull, shown as bullets under the
+    /// main button. Empty when no sync has run yet.
+    @State private var syncStatuses: [SettingsSync.SyncKind: String] = [:]
 
     /// Optional entry focus. `.providers` jumps straight into the API-key
     /// providers screen as soon as the settings sheet finishes presenting,
@@ -521,6 +524,23 @@ struct AppSettingsView: View {
                         .foregroundStyle(Theme.textSecondary)
                         .padding(.horizontal, 16)
                 }
+                if !syncStatuses.isEmpty {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(SettingsSync.SyncKind.allCases, id: \.self) { kind in
+                            if let line = syncStatuses[kind] {
+                                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                    Text(kind.displayName)
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundStyle(Theme.textSecondary)
+                                    Text(line)
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(Theme.textTertiary)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                }
                 if let syncError {
                     Text(syncError)
                         .font(.footnote)
@@ -569,15 +589,19 @@ struct AppSettingsView: View {
 
     private var settingsBackupBlurb: String {
         if let repo = state.settingsSyncRepoFullName {
-            return "Settings are stored in \(repo). Add a new device and restore from GitHub to get the same environments, custom providers, model aliases, and hidden models."
+            return "Settings, memory, and chat history (no incognito) are stored in \(repo). Add a new device and restore from GitHub to get the same environments, model aliases, memory entries, and chats."
         }
-        return "We'll create a private \(SettingsSync.repoName) repo in your account and push your settings there."
+        return "We'll create a private \(SettingsSync.repoName) repo in your account and push your settings, memory, and non-incognito chat history there."
     }
 
     private var syncButtonTitle: String {
-        state.settingsSyncRepoFullName == nil ? "Sync to GitHub" : "Push settings"
+        state.settingsSyncRepoFullName == nil ? "Sync to GitHub" : "Push to GitHub"
     }
 
+    /// Push settings + memory + chats to the private sync repo. Each kind
+    /// gets its own status line so the user can see what made it. Memory
+    /// and chats fall back to an empty payload if the in-app store hasn't
+    /// loaded yet (very early in launch).
     private func pushSettings() {
         guard let token = state.githubToken, !token.isEmpty else {
             syncError = nil
@@ -587,16 +611,51 @@ struct AppSettingsView: View {
         syncInFlight = true
         syncError = nil
         syncMessage = nil
-        Task {
+        syncStatuses = [:]
+        Task { @MainActor in
             do {
                 let repo = try await state.settingsSync.ensureRepo(token: token)
                 state.settingsSyncRepoFullName = repo.fullName
-                let snapshot = state.snapshotForSync()
+
+                // 1. Settings.
+                let settingsSnap = state.snapshotForSync()
                 try await state.settingsSync.push(
-                    snapshot: snapshot,
+                    snapshot: settingsSnap,
                     token: token,
                     repoFullName: repo.fullName
                 )
+                syncStatuses[.settings] = "Pushed."
+
+                // 2. Memory.
+                let memorySnap = state.memorySnapshotForSync()
+                try await state.settingsSync.push(
+                    memory: memorySnap,
+                    token: token,
+                    repoFullName: repo.fullName
+                )
+                syncStatuses[.memory] = "\(memorySnap.entries.count) entries."
+
+                // 3. Chats.
+                if let chatsSnap = state.chatsSnapshotForSync() {
+                    try await state.settingsSync.push(
+                        chats: chatsSnap,
+                        token: token,
+                        repoFullName: repo.fullName
+                    )
+                    let recentCount = chatsSnap.recents.count
+                    let projectCount = chatsSnap.projects.count
+                    let projectChatCount = chatsSnap.projectChats
+                        .reduce(0) { $0 + $1.value.count }
+                    syncStatuses[.recents] = "\(recentCount) chat(s)."
+                    syncStatuses[.projects] = "\(projectCount) project(s)."
+                    syncStatuses[.projectChats] = "\(projectChatCount) chat(s) across projects."
+                } else {
+                    for kind in [SettingsSync.SyncKind.recents,
+                                 .projects, .projectChats] {
+                        syncStatuses[kind] = "Skipped (history not loaded)."
+                    }
+                }
+
                 syncMessage = "Pushed to \(repo.fullName)."
             } catch {
                 syncError = error.localizedDescription
@@ -605,6 +664,8 @@ struct AppSettingsView: View {
         }
     }
 
+    /// Pull all three kinds. Memory and chats merge silently; settings
+    /// still prompts for confirmation since applying them clobbers state.
     private func pullSettings() {
         guard let token = state.githubToken, !token.isEmpty else {
             syncError = nil
@@ -614,18 +675,55 @@ struct AppSettingsView: View {
         syncInFlight = true
         syncError = nil
         syncMessage = nil
-        Task {
+        syncStatuses = [:]
+        Task { @MainActor in
             do {
                 let repo = try await state.settingsSync.ensureRepo(token: token)
                 state.settingsSyncRepoFullName = repo.fullName
+
+                // Settings — surface the "Apply?" dialog.
                 if let snap = try await state.settingsSync.pull(
                     token: token,
                     repoFullName: repo.fullName
                 ) {
                     pendingPullSnapshot = snap
+                    syncStatuses[.settings] = "Ready to apply."
                 } else {
-                    syncMessage = "No settings.json found in \(repo.fullName) yet."
+                    syncStatuses[.settings] = "Not found in repo."
                 }
+
+                // Memory — merge silently.
+                if let mem = try await state.settingsSync.pullMemory(
+                    token: token,
+                    repoFullName: repo.fullName
+                ) {
+                    state.applyMemorySnapshot(mem)
+                    syncStatuses[.memory] = "Merged \(mem.entries.count) entries."
+                } else {
+                    syncStatuses[.memory] = "Not found in repo."
+                }
+
+                // Chats — merge silently.
+                let chats = try await state.settingsSync.pullChats(
+                    token: token,
+                    repoFullName: repo.fullName
+                )
+                let totalRecents = chats.recents.count
+                let totalProjects = chats.projects.count
+                let totalProjectChats = chats.projectChats
+                    .reduce(0) { $0 + $1.value.count }
+                let merged = state.applyChatsSnapshot(chats)
+                if merged || totalRecents + totalProjects + totalProjectChats > 0 {
+                    syncStatuses[.recents] = "Merged \(totalRecents) chat(s)."
+                    syncStatuses[.projects] = "Merged \(totalProjects) project(s)."
+                    syncStatuses[.projectChats] = "Merged \(totalProjectChats) project chat(s)."
+                } else {
+                    syncStatuses[.recents] = "Nothing in repo."
+                    syncStatuses[.projects] = "Nothing in repo."
+                    syncStatuses[.projectChats] = "Nothing in repo."
+                }
+
+                syncMessage = "Pulled from \(repo.fullName)."
             } catch {
                 syncError = error.localizedDescription
             }

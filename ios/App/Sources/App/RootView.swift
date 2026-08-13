@@ -181,6 +181,11 @@ struct RootView: View {
             StudyScanView()
                 .environmentObject(state)
         }
+        .onAppear {
+            // Hand our ChatHistoryStore to AppState so SettingsSync can read
+            // it for GitHub push and write back on restore.
+            state.setChatHistory(history)
+        }
         .onChange(of: path) { oldPath, newPath in
             // Leaving the chat root for any pushed destination — forget an
             // "on exit" incognito chat the user walked away from.
