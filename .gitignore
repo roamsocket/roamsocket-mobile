@@ -21,6 +21,24 @@ $RECYCLE.BIN/
 .zed/
 *.iml
 
+# ---------- AI agent state ----------
+# Worktrees created by AI coding agents (Claude Code, Codex, etc.) at the
+# repo root. Keep them out of git so multi-session runs don't pollute history.
+.worktrees/
+# Agent scratch / per-session memory files
+.aider*
+.continue/
+.clinerules/
+.cody/
+.windsurfrules/
+# Codex / Cursor / Claude local caches
+.codex/
+.cursorignore
+.cursorindexerignore
+# Per-repo agent rules (use AGENTS.md / CLAUDE.md at root instead)
+AGENTS.local.md
+CLAUDE.local.md
+
 # ---------- Node / npm ----------
 node_modules/
 npm-debug.log*
