@@ -130,12 +130,13 @@ struct MemorySnapshot: Codable, Sendable {
     }
 }
 
-/// Cross-device chat history. We send three files for clean diffs and partial
-/// restore (recents / projects / project chats). Incognito chats are filtered
-/// out by the caller before snapshot — their lifetime is "local only" by
-/// product definition.
+/// In-memory snapshot of all chats to sync. On the wire this is split into
+/// one file per chat plus `chats/projects.json`; the struct itself is just
+/// a convenience container for the push/pull APIs. Incognito chats are
+/// filtered out by the caller before snapshot — their lifetime is "local
+/// only" by product definition.
 struct ChatsSnapshot: Codable, Sendable {
-    static let currentSchemaVersion = 1
+    static let currentSchemaVersion = 2
 
     var schemaVersion: Int
     var generatedAt: Date
@@ -144,9 +145,7 @@ struct ChatsSnapshot: Codable, Sendable {
     var recents: [ChatHistoryItem]
     /// Projects list (project metadata only, not their chats).
     var projects: [ProjectItem]
-    /// Map of project.id → its chat rows. Stored as `[UUID: ...]` for type
-    /// safety in the rest of the app; serialized to disk as
-    /// `[String: ...]` via `init(from:)` / `encode(to:)`.
+    /// Map of project.id → its chat rows.
     var projectChats: [UUID: [ProjectChatItem]]
 
     static func empty() -> ChatsSnapshot {
@@ -170,53 +169,12 @@ struct ChatsSnapshot: Codable, Sendable {
         self.projects = projects
         self.projectChats = projectChats
     }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
-        generatedAt = try c.decode(Date.self, forKey: .generatedAt)
-        recents = try c.decode([ChatHistoryItem].self, forKey: .recents)
-        projects = try c.decode([ProjectItem].self, forKey: .projects)
-        let raw: [String: [ProjectChatItem]] = (try c.decodeIfPresent(
-            [String: [ProjectChatItem]].self, forKey: .projectChats
-        )) ?? [:]
-        var mapped: [UUID: [ProjectChatItem]] = [:]
-        for (key, value) in raw {
-            if let uuid = UUID(uuidString: key) {
-                mapped[uuid] = value
-            }
-        }
-        projectChats = mapped
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(schemaVersion, forKey: .schemaVersion)
-        try c.encode(generatedAt, forKey: .generatedAt)
-        try c.encode(recents, forKey: .recents)
-        try c.encode(projects, forKey: .projects)
-        var stringKeyed: [String: [ProjectChatItem]] = [:]
-        for (key, value) in projectChats {
-            stringKeyed[key.uuidString] = value
-        }
-        try c.encode(stringKeyed, forKey: .projectChats)
-    }
-
-    /// Stored properties get serialized as these keys. Explicit because we
-    /// override both `init(from:)` and `encode(to:)` for the UUID→String
-    /// projectChats mapping.
-    private enum CodingKeys: String, CodingKey {
-        case schemaVersion
-        case generatedAt
-        case recents
-        case projects
-        case projectChats
-    }
 }
 
 /// Pushes and pulls `AppSettingsSnapshot` (settings.json), `MemorySnapshot`
-/// (memory.json) and `ChatsSnapshot` (chats/recents.json, chats/projects.json,
-/// chats/project-chats.json) to a GitHub repo. Uses the existing GitHub PAT
+/// (memory.json) and chat history (one file per chat:
+/// `chats/recents/<id>.json` + `chats/project-chats/<id>.json`, plus
+/// `chats/projects.json`) to a GitHub repo. Uses the existing GitHub PAT
 /// stored in the keychain; no desktop involvement.
 actor SettingsSync {
     static let repoName = "anyprov-code-settings"
@@ -244,15 +202,22 @@ actor SettingsSync {
             }
         }
 
-        /// File path inside the sync repo.
+        /// File path inside the sync repo. Single-file kinds have a stable path;
+/// per-chat kinds return their directory prefix — the actual file lives at
+/// `directoryPrefix + "/" + chatID.uuidString + ".json"`.
         var path: String {
             switch self {
             case .settings: return "settings.json"
             case .memory: return "memory.json"
-            case .recents: return "chats/recents.json"
+            case .recents: return "chats/recents"
             case .projects: return "chats/projects.json"
-            case .projectChats: return "chats/project-chats.json"
+            case .projectChats: return "chats/project-chats"
             }
+        }
+
+        /// Full path for a single chat (recents or project chats).
+        func path(forChatID id: UUID) -> String {
+            "\(path)/\(id.uuidString).json"
         }
 
         static var allPaths: [String] { allCases.map { $0.path } }
@@ -309,85 +274,259 @@ actor SettingsSync {
     /// Push the snapshot, creating the file on the first call.
     func push(snapshot: AppSettingsSnapshot, token: String, repoFullName: String) async throws {
         let content = try encodeJSON(snapshot)
-        try await pushFile(kind: .settings, token: token, repoFullName: repoFullName, content: content)
+        try await pushFile(
+            path: SettingsSync.SyncKind.settings.path,
+            token: token,
+            repoFullName: repoFullName,
+            content: content,
+            commitMessage: Self.commitMessage(for: .settings)
+        )
     }
 
     /// Pull the snapshot, returning nil if the file doesn't exist yet.
     func pull(token: String, repoFullName: String) async throws -> AppSettingsSnapshot? {
-        try await pullDecoded(kind: .settings, token: token, repoFullName: repoFullName)
+        try await pullDecoded(
+            path: SettingsSync.SyncKind.settings.path,
+            token: token,
+            repoFullName: repoFullName
+        )
     }
 
     // MARK: - Memory push/pull
 
     func push(memory: MemorySnapshot, token: String, repoFullName: String) async throws {
         let content = try encodeJSON(memory)
-        try await pushFile(kind: .memory, token: token, repoFullName: repoFullName, content: content)
+        try await pushFile(
+            path: SettingsSync.SyncKind.memory.path,
+            token: token,
+            repoFullName: repoFullName,
+            content: content,
+            commitMessage: Self.commitMessage(for: .memory)
+        )
     }
 
     func pullMemory(token: String, repoFullName: String) async throws -> MemorySnapshot? {
-        try await pullDecoded(kind: .memory, token: token, repoFullName: repoFullName)
+        try await pullDecoded(
+            path: SettingsSync.SyncKind.memory.path,
+            token: token,
+            repoFullName: repoFullName
+        )
     }
 
     // MARK: - Chats push/pull
 
-    /// Push all three chat files. We push them in a stable order and reuse
-    /// each file's previous `sha` so GitHub tracks them as updates, not
-    /// duplicate creates.
+    /// Push chats: one file per recent chat and one file per project chat,
+    /// plus a single `chats/projects.json`. We push each file with its
+    /// previous `sha` so GitHub tracks them as updates, not duplicate
+    /// creates. Recents are pushed newest-first so the most active chat
+    /// appears first in the git history.
     func push(chats: ChatsSnapshot, token: String, repoFullName: String) async throws {
-        let recentsContent = try encodeJSON(ChatsRecentsFile(snapshot: chats))
+        // Projects first — single file, stable.
         let projectsContent = try encodeJSON(ChatsProjectsFile(snapshot: chats))
-        let projectChatsContent = try encodeJSON(ChatsProjectChatsFile(snapshot: chats))
+        try await pushFile(
+            path: SettingsSync.SyncKind.projects.path,
+            token: token,
+            repoFullName: repoFullName,
+            content: projectsContent,
+            commitMessage: Self.commitMessage(for: .projects)
+        )
 
-        try await pushFile(kind: .recents, token: token, repoFullName: repoFullName, content: recentsContent)
-        try await pushFile(kind: .projects, token: token, repoFullName: repoFullName, content: projectsContent)
-        try await pushFile(kind: .projectChats, token: token, repoFullName: repoFullName, content: projectChatsContent)
+        // Recents — one file per chat, sorted newest-first.
+        let sortedRecents = chats.recents.sorted { $0.lastMessageAt > $1.lastMessageAt }
+        for chat in sortedRecents {
+            let envelope = ChatsRecentsFileEnvelope(generatedAt: chats.generatedAt, chat: chat)
+            let content = try encodeJSON(envelope)
+            try await pushFile(
+                path: SettingsSync.SyncKind.recents.path(forChatID: chat.id),
+                token: token,
+                repoFullName: repoFullName,
+                content: content,
+                commitMessage: Self.commitMessage(for: .recents)
+            )
+        }
+
+        // Project chats — one file per chat (flat), regardless of which
+        // project the chat belongs to.
+        let flattened = chats.projectChats.flatMap { (projectID, rows) in
+            rows.map { (projectID, $0) }
+        }
+        let sortedProjectChats = flattened.sorted { $0.1.lastMessageAt > $1.1.lastMessageAt }
+        for (projectID, chat) in sortedProjectChats {
+            let envelope = ChatsProjectChatsFileEnvelope(
+                generatedAt: chats.generatedAt,
+                projectID: projectID,
+                chat: chat
+            )
+            let content = try encodeJSON(envelope)
+            try await pushFile(
+                path: SettingsSync.SyncKind.projectChats.path(forChatID: chat.id),
+                token: token,
+                repoFullName: repoFullName,
+                content: content,
+                commitMessage: Self.commitMessage(for: .projectChats)
+            )
+        }
     }
 
-    /// Pull all three chat files. Missing files come back as `nil` (e.g.
-    /// very first pull before any chats were ever pushed).
+    /// Pull chats: enumerate per-id files via the GitHub Contents API, and
+    /// for backward compatibility also read the legacy aggregate files
+    /// (`chats/recents.json` and `chats/project-chats.json`) when they
+    /// still exist. Legacy wins for chats it lists; per-id wins for chats
+    /// the legacy doesn't know about. After the first per-id push, legacy
+    /// is stale and the per-id layer carries the truth forward.
     func pullChats(token: String, repoFullName: String) async throws -> ChatsSnapshot {
-        let recentsFile: ChatsRecentsFile? = try? await pullDecoded(
-            kind: .recents, token: token, repoFullName: repoFullName
-        )
+        // Projects — single file (not per-id in this design).
         let projectsFile: ChatsProjectsFile? = try? await pullDecoded(
-            kind: .projects, token: token, repoFullName: repoFullName
+            path: SettingsSync.SyncKind.projects.path,
+            token: token,
+            repoFullName: repoFullName
         )
-        let projectChatsFile: ChatsProjectChatsFile? = try? await pullDecoded(
-            kind: .projectChats, token: token, repoFullName: repoFullName
+
+        // Recents: merge legacy aggregate + per-id files.
+        let recents = await pullRecentChats(
+            legacyAggregatePath: "chats/recents.json",
+            token: token,
+            repoFullName: repoFullName
         )
-        let rawProjectChats = projectChatsFile?.projectChats ?? [:]
-        var mappedProjectChats: [UUID: [ProjectChatItem]] = [:]
-        for (key, value) in rawProjectChats {
-            if let uuid = UUID(uuidString: key) {
-                mappedProjectChats[uuid] = value
+
+        // Project chats: same.
+        let projectChats = await pullAllProjectChats(
+            legacyAggregatePath: "chats/project-chats.json",
+            token: token,
+            repoFullName: repoFullName
+        )
+
+        return ChatsSnapshot(
+            recents: recents,
+            projects: projectsFile?.projects ?? [],
+            projectChats: projectChats
+        )
+    }
+
+    /// Merges the legacy aggregate and every per-id recents file. Per-id
+    /// wins on id conflict (newer shape is the source of truth post-
+    /// migration); legacy fills in any ids the per-id layer is missing.
+    private func pullRecentChats(
+        legacyAggregatePath: String,
+        token: String,
+        repoFullName: String
+    ) async -> [ChatHistoryItem] {
+        // 1. Pull legacy aggregate if present.
+        var merged: [UUID: ChatHistoryItem] = [:]
+        if let legacy: ChatsRecentsFile = try? await pullDecoded(
+            path: legacyAggregatePath,
+            token: token,
+            repoFullName: repoFullName
+        ) {
+            for chat in legacy.recents {
+                merged[chat.id] = chat
             }
         }
-        return ChatsSnapshot(
-            recents: recentsFile?.recents ?? [],
-            projects: projectsFile?.projects ?? [],
-            projectChats: mappedProjectChats
-        )
+
+        // 2. Enumerate `chats/recents/` and read each per-id file. Per-id
+        //    wins because it's the new shape the device is actively writing.
+        let entries = (try? await client.listDirectory(
+            token: token,
+            fullName: repoFullName,
+            path: SettingsSync.SyncKind.recents.path
+        )) ?? []
+        for entry in entries where entry.type == "file" && entry.name.hasSuffix(".json") {
+            let idString = String(entry.name.dropLast(".json".count))
+            guard let id = UUID(uuidString: idString) else { continue }
+            let envelope: ChatsRecentsFileEnvelope? = try? await pullDecoded(
+                path: entry.path,
+                token: token,
+                repoFullName: repoFullName
+            )
+            if let chat = envelope?.chat {
+                merged[id] = chat
+            }
+        }
+
+        return Array(merged.values)
+    }
+
+    /// Same merge logic for project chats. Legacy aggregate keyed by
+    /// projectID (string on disk); per-id files are flat (projectChatItem
+    /// already carries its projectID). We use the per-id file's
+    /// `chat.projectID` to bucket the result into `[UUID: [ProjectChatItem]]`
+    /// for the caller.
+    private func pullAllProjectChats(
+        legacyAggregatePath: String,
+        token: String,
+        repoFullName: String
+    ) async -> [UUID: [ProjectChatItem]] {
+        // 1. Legacy aggregate.
+        var byProject: [UUID: [ProjectChatItem]] = [:]
+        if let legacy: ChatsProjectChatsFile = try? await pullDecoded(
+            path: legacyAggregatePath,
+            token: token,
+            repoFullName: repoFullName
+        ) {
+            for (key, rows) in legacy.projectChats {
+                guard let pid = UUID(uuidString: key) else { continue }
+                byProject[pid] = rows
+            }
+        }
+
+        // 2. Per-id files.
+        let entries = (try? await client.listDirectory(
+            token: token,
+            fullName: repoFullName,
+            path: SettingsSync.SyncKind.projectChats.path
+        )) ?? []
+        // Build a quick lookup keyed by chat id so we can replace legacy rows.
+        var flat: [UUID: (UUID, ProjectChatItem)] = [:]
+        for entry in entries where entry.type == "file" && entry.name.hasSuffix(".json") {
+            let idString = String(entry.name.dropLast(".json".count))
+            guard let id = UUID(uuidString: idString) else { continue }
+            let envelope: ChatsProjectChatsFileEnvelope? = try? await pullDecoded(
+                path: entry.path,
+                token: token,
+                repoFullName: repoFullName
+            )
+            if let envelope {
+                flat[id] = (envelope.projectID, envelope.chat)
+            }
+        }
+
+        // Re-bucket: for each chat id, prefer the per-id version. If only
+        // legacy exists, fall back to the legacy bucket.
+        var out: [UUID: [ProjectChatItem]] = [:]
+        // First, lay down everything legacy had.
+        for (pid, rows) in byProject {
+            out[pid] = rows
+        }
+        // Then overwrite/add per-id rows. Per-id carries its own projectID
+        // (in the envelope) since `ProjectChatItem` doesn't have one.
+        for (_, projectIDAndChat) in flat {
+            let (pid, chat) = projectIDAndChat
+            out[pid, default: []].append(chat)
+        }
+        return out
     }
 
     // MARK: - Generic per-file push/pull helpers
 
+    /// Push a single file by path (no `SyncKind` — per-chat files use this).
     private func pushFile(
-        kind: SyncKind,
+        path: String,
         token: String,
         repoFullName: String,
-        content: String
+        content: String,
+        commitMessage: String
     ) async throws {
         let existing = try? await client.getFile(
             token: token,
             fullName: repoFullName,
-            path: kind.path
+            path: path
         )
         do {
             try await client.putFile(
                 token: token,
                 fullName: repoFullName,
-                path: kind.path,
-                message: commitMessage(for: kind),
+                path: path,
+                message: commitMessage,
                 content: content,
                 sha: existing?.sha
             )
@@ -397,14 +536,14 @@ actor SettingsSync {
     }
 
     private func pullDecoded<T: Decodable>(
-        kind: SyncKind,
+        path: String,
         token: String,
         repoFullName: String
     ) async throws -> T? {
         guard let file = try await client.getFile(
             token: token,
             fullName: repoFullName,
-            path: kind.path
+            path: path
         ) else { return nil }
         guard let data = Data(base64Encoded: file.content
             .replacingOccurrences(of: "\n", with: "")
@@ -424,7 +563,7 @@ actor SettingsSync {
         return String(data: data, encoding: .utf8) ?? "{}"
     }
 
-    private func commitMessage(for kind: SyncKind) -> String {
+    private static func commitMessage(for kind: SyncKind) -> String {
         switch kind {
         case .settings: return "chore: sync anyprov-code settings"
         case .memory: return "chore: sync anyprov-code memory"
@@ -435,22 +574,45 @@ actor SettingsSync {
     }
 }
 
-// MARK: - Per-file chat wrappers
+// MARK: - Per-file chat envelopes
 
-/// `ChatsSnapshot` is one logical thing but lives as three files. Each file
-/// gets its own envelope so a single bad file doesn't poison the others.
-private struct ChatsRecentsFile: Codable, Sendable {
-    static let currentSchemaVersion = 1
-    var schemaVersion: Int = ChatsRecentsFile.currentSchemaVersion
+/// `ChatsSnapshot` is one logical thing but lives as N+1 files in the repo:
+/// one file per recent chat, one file per project chat, and one projects
+/// file. Each per-chat file gets the same envelope (schema + generatedAt +
+/// chat) so future clients can detect older shapes and a single bad file
+/// can't poison the rest.
+private struct ChatsRecentsFileEnvelope: Codable, Sendable {
+    static let currentSchemaVersion = 2
+    var schemaVersion: Int = ChatsRecentsFileEnvelope.currentSchemaVersion
     var generatedAt: Date
-    var recents: [ChatHistoryItem]
+    var chat: ChatHistoryItem
 
-    init(snapshot: ChatsSnapshot) {
-        generatedAt = snapshot.generatedAt
-        recents = snapshot.recents
+    init(generatedAt: Date, chat: ChatHistoryItem) {
+        self.generatedAt = generatedAt
+        self.chat = chat
     }
 }
 
+private struct ChatsProjectChatsFileEnvelope: Codable, Sendable {
+    static let currentSchemaVersion = 2
+    var schemaVersion: Int = ChatsProjectChatsFileEnvelope.currentSchemaVersion
+    var generatedAt: Date
+    /// Project this chat belongs to. Not stored on `ProjectChatItem` (its
+    /// id is the key in the local dictionary), so we keep it here for the
+    /// per-id file shape — every chat file lives flat under
+    /// `chats/project-chats/<chatID>.json`, and we re-bucket by `projectID`
+    /// on the way back into `ChatsSnapshot`.
+    var projectID: UUID
+    var chat: ProjectChatItem
+
+    init(generatedAt: Date, projectID: UUID, chat: ProjectChatItem) {
+        self.generatedAt = generatedAt
+        self.projectID = projectID
+        self.chat = chat
+    }
+}
+
+/// Projects are still a single file — they don't churn as much as chats.
 private struct ChatsProjectsFile: Codable, Sendable {
     static let currentSchemaVersion = 1
     var schemaVersion: Int = ChatsProjectsFile.currentSchemaVersion
@@ -463,38 +625,27 @@ private struct ChatsProjectsFile: Codable, Sendable {
     }
 }
 
+// MARK: - Legacy aggregate envelopes (read-only)
+
+/// Legacy v1 shape: `chats/recents.json` carried the whole recent-chats
+/// list in one file. We still decode this on pull so users who upgraded
+/// from the previous release keep their cross-device history until the
+/// first push rewrites everything in the new per-chat shape.
+private struct ChatsRecentsFile: Codable, Sendable {
+    static let currentSchemaVersion = 1
+    var schemaVersion: Int = ChatsRecentsFile.currentSchemaVersion
+    var generatedAt: Date
+    var recents: [ChatHistoryItem]
+}
+
+/// Legacy v1 shape: `chats/project-chats.json` carried every project chat
+/// in one file. Read-only — we don't emit it any more.
 private struct ChatsProjectChatsFile: Codable, Sendable {
     static let currentSchemaVersion = 1
     var schemaVersion: Int = ChatsProjectChatsFile.currentSchemaVersion
     var generatedAt: Date
+    /// `[projectID.uuidString: [ProjectChatItem]]` on disk, kept as
+    /// `[String: ...]` so the JSON parses cleanly. Decoded back to
+    /// `[UUID: ...]` by `pullProjectChats`.
     var projectChats: [String: [ProjectChatItem]]
-
-    init(snapshot: ChatsSnapshot) {
-        generatedAt = snapshot.generatedAt
-        var out: [String: [ProjectChatItem]] = [:]
-        for (key, value) in snapshot.projectChats {
-            out[key.uuidString] = value
-        }
-        projectChats = out
-    }
-}
-
-// MARK: - Dictionary key conversion helpers
-
-private extension Dictionary {
-    func mapKeys<K: Hashable>(_ transform: (Key) -> K) -> [K: Value] {
-        var out: [K: Value] = [:]
-        out.reserveCapacity(count)
-        for (k, v) in self { out[transform(k)] = v }
-        return out
-    }
-
-    func compactMapKeys<K: Hashable>(_ transform: (Key) -> K?) -> [K: Value] {
-        var out: [K: Value] = [:]
-        out.reserveCapacity(count)
-        for (k, v) in self {
-            if let nk = transform(k) { out[nk] = v }
-        }
-        return out
-    }
 }
