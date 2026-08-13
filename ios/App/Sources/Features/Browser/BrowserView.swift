@@ -186,29 +186,30 @@ struct BrowserHomeView: View {
                 .frame(width: 20)
 
             // While the agent is busy, the text the user just sent stays
-            // visible (greyed-out, non-editable) with a pulsing rainbow
-            // light wave sliding across it so it's clear the AI is thinking.
-            // The store clears `promptText` once the run lands, so the field
-            // is automatically ready for the next question.
+            // visible — but instead of a separate wave overlay covering the
+            // whole row, the text itself shimmers. A non-editable `Text` is
+            // rendered with the prompt content and masked by a horizontal
+            // grey gradient whose bright band travels left → right, so the
+            // effect is "the words are loading", not "the whole row has a
+            // rainbow wash". When idle we fall back to the regular editable
+            // `TextField`.
             let isBusy = store.isPlanning || store.isAsking || store.isPlanRunning
-            ZStack(alignment: .leading) {
+            if isBusy {
+                ShimmeringPromptText(text: store.promptText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityLabel("Agent is working on: \(store.promptText)")
+            } else {
                 TextField(
                     store.promptMode == .ask ? "Ask about this page…" : "Ask AI to do something on this page…",
                     text: $store.promptText,
                     axis: .vertical
                 )
                 .font(.system(size: 15))
-                .foregroundStyle(isBusy ? Theme.textTertiary : Theme.textPrimary)
+                .foregroundStyle(Theme.textPrimary)
                 .lineLimit(1...3)
                 .focused($promptFocused)
                 .submitLabel(.send)
                 .onSubmit(submitPrompt)
-                .disabled(isBusy)
-
-                if isBusy {
-                    ShimmerOverlay()
-                        .allowsHitTesting(false)
-                }
             }
 
             if isBusy {
@@ -252,52 +253,74 @@ struct BrowserHomeView: View {
         .accessibilityLabel("Prompt mode: \(store.promptMode.title)")
     }
 
-    /// Pulsing rainbow light wave that slides across the prompt bar's text
-    /// field while the agent is thinking. Built on `TimelineView` so the
-    /// animation runs on the display link and stays in sync with the rest
-    /// of the UI (vs. a `withAnimation` loop that drifts when the view
-    /// re-renders). The mask matches the field's text shape so the wave
-    /// only "lights up" the actual characters, not the empty area.
-    private struct ShimmerOverlay: View {
-        /// How long one full pass of the wave takes. Long enough to feel
-        /// contemplative, short enough that the user doesn't forget the AI
-        /// is still working. 1.6s matches the cursor halo's pulse cycle
-        /// elsewhere in the browser so the two animations feel coherent.
-        private let cycleSeconds: Double = 1.6
+    /// Renders the in-progress prompt text with a left-to-right shimmering
+    /// grey gradient so it reads as "the words are loading" while the agent
+    /// thinks, instead of a separate wave washing over the whole row.
+    ///
+    /// Implementation: draw `Text` once in a dim grey, then mask it with an
+    /// animated horizontal gradient. The gradient's bright band travels
+    /// across the text width over time, so only the portion under the
+    /// bright stop is fully visible — the rest fades toward the
+    /// background. The result looks like the words themselves are pulsing
+    /// from left to right, with the page behind the field untouched.
+    ///
+    /// Built on `TimelineView(.animation)` so the animation runs on the
+    /// display link and stays in sync with the rest of the UI (vs. a
+    /// `withAnimation` loop that drifts when the view re-renders for other
+    /// reasons).
+    private struct ShimmeringPromptText: View {
+        let text: String
+
+        /// How long one full pass of the wave takes. 1.8s is a hair slower
+        /// than the rainbow wave it replaced — the new effect is more
+        /// subtle, so a slower pass reads as "loading" instead of "anxious".
+        private let cycleSeconds: Double = 1.8
 
         var body: some View {
             TimelineView(.animation) { context in
                 let t = context.date.timeIntervalSinceReferenceDate
+                // Position of the bright band's center, normalized 0...1
+                // across the text width, looping every `cycleSeconds`.
                 let phase = (t.truncatingRemainder(dividingBy: cycleSeconds)) / cycleSeconds
-                // Sliding band: bright in the middle, transparent at edges.
-                let bandStart = CGFloat(phase) - 0.3
-                let bandEnd = CGFloat(phase) + 0.3
-                LinearGradient(
+                // Three-stop gradient: transparent → bright → transparent.
+                // Asymmetric widths (narrow leading edge, wider trailing
+                // tail) so the wave reads as a comet sweep rather than a
+                // symmetric pulse.
+                let leadingEdge = max(0, CGFloat(phase) - 0.25)
+                let trailingEdge = min(1, CGFloat(phase) + 0.5)
+                let gradient = LinearGradient(
                     stops: [
-                        .init(color: Color.white.opacity(0), location: max(0, bandStart)),
-                        .init(color: Color.white.opacity(0.85), location: phase),
-                        .init(color: Color.white.opacity(0), location: min(1, bandEnd))
+                        .init(color: .clear, location: leadingEdge),
+                        .init(color: Theme.textSecondary.opacity(0.95), location: CGFloat(phase)),
+                        .init(color: .clear, location: trailingEdge)
                     ],
                     startPoint: .leading,
                     endPoint: .trailing
                 )
-                .blendMode(.plusLighter)
-                // Subtle pulse in opacity so the wave "breathes" instead of
-                // sliding with constant intensity. 0.65 baseline, ±0.15.
-                .opacity(0.5 + 0.25 * sin(t * .pi / (cycleSeconds / 2)))
-                // Rainbow tint behind the white wave — gives the band a
-                // colorful cast instead of a pure-white wash.
-                .background(
-                    LinearGradient(
-                        gradient: Gradient(colors: [
-                            Color(red: 1.0, green: 0.37, blue: 0.64).opacity(0.15),
-                            Color(red: 0.48, green: 0.99, blue: 0.83).opacity(0.15),
-                            Color(red: 0.61, green: 0.55, blue: 1.0).opacity(0.15)
-                        ]),
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
+
+                ZStack(alignment: .leading) {
+                    // Underlying dim copy of the text — visible wherever
+                    // the mask gradient is transparent, so words never
+                    // fully disappear. Painted at reduced opacity so the
+                    // bright wave reads as the highlight.
+                    Text(text.isEmpty ? " " : text)
+                        .font(.system(size: 15))
+                        .foregroundStyle(Theme.textTertiary.opacity(0.55))
+
+                    // Foreground copy of the same text, masked by the
+                    // moving bright gradient. Only the portion under the
+                    // bright stop is fully opaque — everywhere else the
+                    // dim layer underneath shows through.
+                    Text(text.isEmpty ? " " : text)
+                        .font(.system(size: 15))
+                        .foregroundStyle(Theme.textSecondary)
+                        .mask(
+                            gradient
+                                // Gentle breathing so the wave pulses
+                                // rather than sliding at constant intensity.
+                                .opacity(0.7 + 0.3 * sin(t * .pi / (cycleSeconds / 2)))
+                        )
+                }
             }
         }
     }
