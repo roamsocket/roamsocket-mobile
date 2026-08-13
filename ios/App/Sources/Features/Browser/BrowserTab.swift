@@ -230,6 +230,13 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     /// and finally falls back to treating `hint` as a raw CSS selector.
     @discardableResult
     func click(hint: String) async -> Bool {
+        // Show the magical pointer at the target before clicking — the user
+        // gets to literally see "the AI's finger is hovering here" before
+        // the action lands. Best-effort: if the indicator fails to render
+        // (CSP, no target yet, etc.) the click still runs.
+        await showPointerAtTarget(kind: "click", hint: hint, settleSeconds: 0.75)
+        defer { Task { await self.hidePointer() } }
+
         let escaped = escapeJS(hint)
         let js = """
         (function () {
@@ -253,6 +260,11 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     /// events so frameworks (React, etc.) observe the update.
     @discardableResult
     func type(hint: String, text: String, submit: Bool) async -> Bool {
+        // Hover the magical pointer at the target field first so the user
+        // can see where the AI is about to type.
+        await showPointerAtTarget(kind: "type", hint: hint, settleSeconds: 0.75)
+        defer { Task { await self.hidePointer() } }
+
         let escapedHint = escapeJS(hint)
         let escapedText = escapeJS(text)
         let js = """
@@ -291,6 +303,306 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     func scroll(direction: String, amount: CGFloat = 600) async {
         let dy = direction.lowercased() == "up" ? -amount : amount
         _ = await evaluateJS("window.scrollBy(0, \(dy));")
+    }
+
+    // MARK: - AI "finger" pointer overlay
+    //
+    // Renders a magical rainbow pointer + sparkle trail at the element the
+    // AI is about to act on, so the user can see exactly where the agent is
+    // "hovering" before it clicks / types. The overlay lives in the page
+    // (not native) so it scales with the web content, sits above every site
+    // CSS without z-index wars, and self-cleans after the action finishes.
+
+    /// Anchors the overlay element on which the AI will act, then animates
+    /// the magical pointer to it. Returns the JS-driven promise so callers
+    /// can await pointer arrival before the real interaction. `selector` is
+    /// optional — when omitted the overlay positions itself at the visible
+    /// center of `target` (an `Element` JS expression evaluated in the page).
+    static let pointerOverlayJS = """
+    (function () {
+      // ---- container -------------------------------------------------------
+      var host = document.getElementById('__rs_pointer_host');
+      if (!host) {
+        host = document.createElement('div');
+        host.id = '__rs_pointer_host';
+        host.style.cssText = [
+          'position: fixed',
+          'left: 0',
+          'top: 0',
+          'width: 0',
+          'height: 0',
+          'pointer-events: none',
+          'z-index: 2147483647',
+          'overflow: visible'
+        ].join(';');
+        (document.body || document.documentElement).appendChild(host);
+      }
+
+      // ---- pulse ring on the actual element --------------------------------
+      var target = null;
+      try { target = (__RS_TARGET__); } catch (e) {}
+      var rect = null;
+      if (target && target.getBoundingClientRect) {
+        var r = target.getBoundingClientRect();
+        rect = { x: r.left, y: r.top, w: r.width, h: r.height };
+      }
+      // Fallback: position near viewport center if we somehow don't have a target.
+      var cx = rect ? (rect.x + rect.w / 2) : (window.innerWidth / 2);
+      var cy = rect ? (rect.y + rect.h / 2) : (window.innerHeight / 2);
+
+      // Pre-existing pulse rings: remove so we don't stack forever.
+      var oldPulses = document.querySelectorAll('.__rs_pulse_ring');
+      for (var i = 0; i < oldPulses.length; i++) oldPulses[i].remove();
+
+      if (rect) {
+        var ring = document.createElement('div');
+        ring.className = '__rs_pulse_ring';
+        ring.style.cssText = [
+          'position: fixed',
+          'left: ' + rect.x + 'px',
+          'top: ' + rect.y + 'px',
+          'width: ' + rect.w + 'px',
+          'height: ' + rect.h + 'px',
+          'border-radius: 14px',
+          'border: 2px solid transparent',
+          'background-image: linear-gradient(90deg,#ff5fa2,#ffd86b,#7afcff,#9b8cff,#ff7be6,#ff5fa2)',
+          'background-origin: border-box',
+          '-webkit-background-clip: border-box',
+          'background-clip: border-box',
+          '-webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0)',
+          '-webkit-mask-composite: xor',
+                  'mask-composite: exclude',
+          'padding: 2px',
+          'pointer-events: none',
+          'box-sizing: border-box',
+          'opacity: 0',
+          'transition: opacity .15s ease-out',
+          'animation: __rsPulse 1.4s ease-out infinite'
+        ].join(';');
+        (document.body || document.documentElement).appendChild(ring);
+        // Force a reflow so the opacity transition runs.
+        void ring.offsetWidth;
+        ring.style.opacity = '1';
+      }
+
+      // ---- magical pointer (SVG with rainbow gradient + sparkles) --------
+      var oldPointer = document.getElementById('__rs_pointer');
+      if (oldPointer) oldPointer.remove();
+
+      var svgNS = 'http://www.w3.org/2000/svg';
+      var svg = document.createElementNS(svgNS, 'svg');
+      svg.id = '__rs_pointer';
+      svg.setAttribute('width', '64');
+      svg.setAttribute('height', '64');
+      svg.setAttribute('viewBox', '0 0 64 64');
+      svg.style.cssText = [
+        'position: fixed',
+        'left: 0',
+        'top: 0',
+        'width: 64px',
+        'height: 64px',
+        // Start from current pointer pos if known, else center.
+        'transform: translate(' + (window.__rsPointerFrom
+          ? (window.__rsPointerFrom.x - 32) + 'px,' + (window.__rsPointerFrom.y - 32) + 'px'
+          : (cx - 32) + 'px,' + (cy - 32) + 'px') + ')',
+        'transition: transform .55s cubic-bezier(.22,1.05,.36,1)',
+        'filter: drop-shadow(0 2px 6px rgba(0,0,0,.35))',
+        'pointer-events: none',
+        'will-change: transform'
+      ].join(';');
+
+      // Defs: rainbow gradient for the pointer body + a soft glow gradient.
+      var defs = document.createElementNS(svgNS, 'defs');
+      var rainbow = document.createElementNS(svgNS, 'linearGradient');
+      rainbow.setAttribute('id', '__rs_rainbow');
+      rainbow.setAttribute('x1', '0%'); rainbow.setAttribute('y1', '0%');
+      rainbow.setAttribute('x2', '100%'); rainbow.setAttribute('y2', '100%');
+      var stops = [
+        ['#ff5fa2', '0%'], ['#ffd86b', '20%'], ['#7afcff', '40%'],
+        ['#9b8cff', '60%'], ['#ff7be6', '80%'], ['#ff5fa2', '100%']
+      ];
+      for (var s = 0; s < stops.length; s++) {
+        var stop = document.createElementNS(svgNS, 'stop');
+        stop.setAttribute('offset', stops[s][1]);
+        stop.setAttribute('stop-color', stops[s][0]);
+        stop.setAttribute('stop-opacity', '1');
+        rainbow.appendChild(stop);
+      }
+      defs.appendChild(rainbow);
+
+      var glow = document.createElementNS(svgNS, 'radialGradient');
+      glow.setAttribute('id', '__rs_glow');
+      glow.setAttribute('cx', '50%'); glow.setAttribute('cy', '50%');
+      glow.setAttribute('r', '50%');
+      var glowStop = document.createElementNS(svgNS, 'stop');
+      glowStop.setAttribute('offset', '0%');
+      glowStop.setAttribute('stop-color', '#ffffff');
+      glowStop.setAttribute('stop-opacity', '0.9');
+      var glowStop2 = document.createElementNS(svgNS, 'stop');
+      glowStop2.setAttribute('offset', '100%');
+      glowStop2.setAttribute('stop-color', '#ffffff');
+      glowStop2.setAttribute('stop-opacity', '0');
+      glow.appendChild(glowStop);
+      glow.appendChild(glowStop2);
+      defs.appendChild(glow);
+
+      // Sparkle stars are reusable symbols.
+      var sparkleSym = document.createElementNS(svgNS, 'symbol');
+      sparkleSym.setAttribute('id', '__rs_sparkle');
+      sparkleSym.setAttribute('viewBox', '0 0 10 10');
+      var sparklePath = document.createElementNS(svgNS, 'path');
+      sparklePath.setAttribute('d', 'M5 0 L6 4 L10 5 L6 6 L5 10 L4 6 L0 5 L4 4 Z');
+      sparklePath.setAttribute('fill', '#ffffff');
+      sparkleSym.appendChild(sparklePath);
+      defs.appendChild(sparkleSym);
+
+      svg.appendChild(defs);
+
+      // Soft white halo behind the pointer.
+      var halo = document.createElementNS(svgNS, 'circle');
+      halo.setAttribute('cx', '32'); halo.setAttribute('cy', '32'); halo.setAttribute('r', '28');
+      halo.setAttribute('fill', 'url(#__rs_glow)');
+      halo.style.cssText = 'opacity:0.65; animation: __rsHalo 1.6s ease-in-out infinite;';
+      svg.appendChild(halo);
+
+      // Cursor arrow filled with the rainbow gradient.
+      var cursor = document.createElementNS(svgNS, 'path');
+      cursor.setAttribute('d', 'M14 10 L14 46 L24 38 L30 50 L36 47 L30 35 L43 34 Z');
+      cursor.setAttribute('fill', 'url(#__rs_rainbow)');
+      cursor.setAttribute('stroke', '#ffffff');
+      cursor.setAttribute('stroke-width', '1.6');
+      cursor.setAttribute('stroke-linejoin', 'round');
+      svg.appendChild(cursor);
+
+      // Sparkles scattered around the pointer, each with its own animation
+      // delay so they twinkle instead of pulsing in unison.
+      var sparklePositions = [
+        { x: 4, y: 8, r: 5, d: 0 },
+        { x: 52, y: 4, r: 4, d: 200 },
+        { x: 56, y: 30, r: 5, d: 400 },
+        { x: 40, y: 56, r: 4, d: 600 },
+        { x: 10, y: 50, r: 5, d: 800 },
+        { x: 26, y: 24, r: 3, d: 1000 }
+      ];
+      for (var k = 0; k < sparklePositions.length; k++) {
+        var sp = sparklePositions[k];
+        var use = document.createElementNS(svgNS, 'use');
+        use.setAttributeNS('http://www.w3.org/1999/xlink', 'href', '#__rs_sparkle');
+        use.setAttribute('href', '#__rs_sparkle');
+        use.setAttribute('x', sp.x - sp.r);
+        use.setAttribute('y', sp.y - sp.r);
+        use.setAttribute('width', sp.r * 2);
+        use.setAttribute('height', sp.r * 2);
+        use.style.cssText = 'opacity:0; animation: __rsSparkle 1.8s ease-in-out ' + sp.d + 'ms infinite;';
+        svg.appendChild(use);
+      }
+
+      host.appendChild(svg);
+
+      // Inject keyframes once.
+      if (!document.getElementById('__rs_pointer_styles')) {
+        var style = document.createElement('style');
+        style.id = '__rs_pointer_styles';
+        style.textContent = [
+          '@keyframes __rsSparkle {',
+          '  0%   { opacity: 0; transform: scale(0.6); }',
+          '  40%  { opacity: 1; transform: scale(1.15); }',
+          '  70%  { opacity: 0.4; transform: scale(0.9); }',
+          '  100% { opacity: 0; transform: scale(0.6); }',
+          '}',
+          '@keyframes __rsHalo {',
+          '  0%, 100% { opacity: 0.35; transform: scale(1); }',
+          '  50%      { opacity: 0.85; transform: scale(1.15); }',
+          '}',
+          '@keyframes __rsPulse {',
+          '  0%   { opacity: 0.9; transform: scale(1); }',
+          '  100% { opacity: 0;   transform: scale(1.08); }',
+          '}'
+        ].join('\\n');
+        document.head.appendChild(style);
+      }
+
+      // Animate to the target. We use CSS transition + a forced reflow so the
+      // browser actually runs the transition from the start position.
+      void svg.offsetWidth;
+      svg.style.transform = 'translate(' + (cx - 32) + 'px,' + (cy - 32) + 'px)';
+      window.__rsPointerFrom = { x: cx, y: cy };
+
+      return { x: cx, y: cy };
+    })();
+    """
+
+    /// Builds the JS payload that resolves the target element inside the page
+    /// then returns the overlay helper JS with the target substituted in.
+    /// We resolve to a single candidate (same fuzzy matcher as click/type) so
+    /// the indicator lands on exactly the element the agent will act on.
+    private static func resolveTargetJS(kind: String, hint: String, extra: String) -> String {
+        let escaped = escapeJSForScript(hint)
+        return """
+        (function () {
+          \(matchHelperJS)
+          var match = null;
+          if ("\(kind)" === "click") {
+            var candidates = Array.from(document.querySelectorAll('a, button, input, [role="button"], [onclick], summary'));
+            match = __bestMatch(candidates, "\(escaped)");
+          } else if ("\(kind)" === "type") {
+            var fields = Array.from(document.querySelectorAll('input, textarea, [contenteditable="true"]'));
+            match = __bestMatch(fields, "\(escaped)");
+            if (!match && fields.length === 1) match = fields[0];
+          }
+          \(extra)
+          if (!match) return null;
+          // Stash target on window so the overlay helper can reach it.
+          window.__rsOverlayTarget = match;
+          return match;
+        })();
+        """
+    }
+
+    /// JS-only escape used inside the pointer overlay's IIFEs; differs from
+    /// `escapeJS` in that it also escapes backticks/template-literal sigils
+    /// so the resulting string is safe to splice into the overlay template.
+    private static func escapeJSForScript(_ s: String) -> String {
+        s.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "`", with: "\\`")
+            .replacingOccurrences(of: "$", with: "\\$")
+    }
+
+    /// Show the magical pointer hovering at the element the AI is about to
+    /// act on. Resolves the target in-page (so the overlay lands on the
+    /// exact element the click/type will hit), animates the pointer there
+    /// with a rainbow trail + sparkle pulse, and waits for the travel
+    /// animation to finish before returning.
+    ///
+    /// Safe to call when no target is found — quietly no-ops.
+    func showPointerAtTarget(kind: String, hint: String, settleSeconds: Double = 0.9) async {
+        let resolveJS = Self.resolveTargetJS(kind: kind, hint: hint, extra: "")
+        // Stash the target on window for the overlay helper to read.
+        _ = await evaluateJS(resolveJS)
+
+        // Now run the overlay with the target variable spliced in.
+        let withTarget = Self.pointerOverlayJS
+            .replacingOccurrences(of: "__RS_TARGET__", with: "window.__rsOverlayTarget || null")
+        _ = await evaluateJS(withTarget)
+
+        // Let the pointer glide in (matches the CSS transition) plus a beat
+        // for the user to actually see it.
+        try? await Task.sleep(nanoseconds: UInt64(settleSeconds * 1_000_000_000))
+    }
+
+    /// Removes the magical pointer + pulse ring from the page. Called after
+    /// a click/type finishes so the overlay doesn't linger past the action.
+    func hidePointer() async {
+        let js = """
+        (function () {
+          var p = document.getElementById('__rs_pointer'); if (p) p.remove();
+          var rings = document.querySelectorAll('.__rs_pulse_ring');
+          for (var i = 0; i < rings.length; i++) rings[i].remove();
+        })();
+        """
+        _ = await evaluateJS(js)
     }
 
     // MARK: - Settle / wait helpers

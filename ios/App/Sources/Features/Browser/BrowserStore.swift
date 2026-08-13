@@ -528,6 +528,7 @@ final class BrowserStore: ObservableObject {
             guard let target = step.target, let url = BrowserAddressResolver.resolve(target) else {
                 return (false, "Missing or invalid URL.")
             }
+            await tab.hidePointer()
             tab.load(url: url)
             // Long budget: a fresh navigation can mean a new SPA bootstrap
             // with lazy chunks, auth redirects, and async data fetches.
@@ -559,16 +560,19 @@ final class BrowserStore: ObservableObject {
             await tab.waitForPageSettled(timeout: 2, minSettle: 0.2)
             return (true, "Scrolled \(step.target ?? "down").")
         case .back:
+            await tab.hidePointer()
             tab.goBack()
             await tab.waitForPageSettled(timeout: 5)
             await tab.installNetworkActivityInstrumentation()
             return (true, "Went back.")
         case .forward:
+            await tab.hidePointer()
             tab.goForward()
             await tab.waitForPageSettled(timeout: 5)
             await tab.installNetworkActivityInstrumentation()
             return (true, "Went forward.")
         case .reload:
+            await tab.hidePointer()
             tab.reload()
             await tab.waitForPageSettled(timeout: 6)
             await tab.installNetworkActivityInstrumentation()
