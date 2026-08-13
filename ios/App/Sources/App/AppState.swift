@@ -409,6 +409,7 @@ final class AppState: ObservableObject {
         loadCustomProviders()
         loadModelAliases()
         loadHiddenModels()
+        migrateLegacyLightweightSettings()
         seedDefaultEnvironmentIfNeeded()
         restorePairingFromDisk()
         Task { await attemptServerReconnect() }
@@ -1470,6 +1471,45 @@ final class AppState: ObservableObject {
         hiddenModelKeys = Set(decoded)
     }
 
+    /// One-shot migration: copy the legacy `LightweightTasksSettings` JSON
+    /// (`lightweightTasks.v1`) into the new `defaultLightweightModelID.v1`
+    /// storage slot the first time we boot after the Default Model feature
+    /// landed. Idempotent — once the new key is populated we leave the legacy
+    /// blob alone until `LightweightTaskRunner` no longer reads it.
+    ///
+    /// Runs *before* `loadHiddenModels` finishes is fine: we're reading two
+    /// independent UserDefaults keys.
+    private func migrateLegacyLightweightSettings() {
+        guard defaultLightweightModelID.isEmpty else { return }
+        guard let data = UserDefaults.standard.data(forKey: "lightweightTasks.v1"),
+              let legacy = try? JSONDecoder().decode(
+                LegacyLightweightSettings.self, from: data
+              )
+        else { return }
+        switch legacy.mode {
+        case "appleFoundation":
+            defaultLightweightModelID = Self.appleFoundationSentinelID
+        case "linkedModel":
+            if let providerRaw = legacy.linkedProviderRaw,
+               let modelID = legacy.linkedModelID,
+               !modelID.isEmpty {
+                // `ProviderID.rawValue` is already the right prefix for AIModel.id.
+                defaultLightweightModelID = "\(providerRaw)/\(modelID)"
+            }
+        default:
+            break
+        }
+    }
+
+    /// Minimal shape of the old `LightweightTasksSettings` blob. We can't
+    /// depend on the type itself from `LightweightTasksSettings.swift` because
+    /// that file still exists and might evolve; this is a pure migration shim.
+    private struct LegacyLightweightSettings: Decodable {
+        let mode: String
+        let linkedProviderRaw: String?
+        let linkedModelID: String?
+    }
+
     private func saveHiddenModels() {
         let list = Array(hiddenModelKeys).sorted()
         if let data = try? JSONEncoder().encode(list) {
@@ -1772,6 +1812,197 @@ final class AppState: ObservableObject {
 
     var canStartSession: Bool {
         selectedRepo != nil && modelSelectionForSession() != nil && serverToken != nil
+    }
+
+    // MARK: - Default model per conversation type
+
+    /// A conversation lane the user wants a different default model for.
+    /// Chat = standard chat composer (all providers).
+    /// Code = coding agent (only providers the desktop agent can drive).
+    /// Vision = camera / image analysis (vision-capable models).
+    /// Lightweight = short helper generations (chat titles, commit subjects,
+    /// artifact names, thinking summaries). The lane additionally supports
+    /// Apple's on-device Foundation Model as a special "no-id" sentinel;
+    /// callers check `defaultLightweightUsesAppleFoundation` for that path.
+    enum DefaultModelKind: String, CaseIterable, Identifiable, Codable, Sendable {
+        case chat, code, vision, lightweight
+
+        var id: String { rawValue }
+
+        /// Storage key for `UserDefaults` (`@AppStorage` only takes `String` / primitives).
+        var storageKey: String {
+            switch self {
+            case .chat:       return "defaultChatModelID.v1"
+            case .code:       return "defaultCodeModelID.v1"
+            case .vision:     return "defaultVisionModelID.v1"
+            case .lightweight: return "defaultLightweightModelID.v1"
+            }
+        }
+
+        var title: String {
+            switch self {
+            case .chat:       return "Chat"
+            case .code:       return "Code"
+            case .vision:     return "Vision"
+            case .lightweight: return "Lightweight"
+            }
+        }
+
+        var subtitle: String {
+            switch self {
+            case .chat:       return "Default model for the chat composer."
+            case .code:       return "Default model for new coding sessions (desktop agent)."
+            case .vision:     return "Default model for camera + image analysis."
+            case .lightweight: return "Default model for chat titles, commit messages, and other short helper jobs."
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .chat:       return "bubble.left.and.bubble.right.fill"
+            case .code:       return "chevron.left.forwardslash.chevron.right"
+            case .vision:     return "eye.fill"
+            case .lightweight: return "bolt.horizontal.circle"
+            }
+        }
+    }
+
+    /// Sentinel id stored in `defaultLightweightModelID` when the user picked
+    /// "Apple Intelligence" (the on-device Foundation Model) instead of a
+    /// regular AIModel. Distinct enough from any real provider rawValue that
+    /// it can never collide.
+    static let appleFoundationSentinelID = "__apple-foundation__"
+
+    /// Stored ids for each lane. Empty string = "no default set".
+    /// We don't use `@AppStorage` directly on a dict because we want a stable
+    /// string-id representation that survives custom-provider slugs and re-installs
+    /// of an on-device Metal model (we re-resolve to a live `AIModel` at use time).
+    private static func defaultModelIDKey(_ kind: DefaultModelKind) -> String { kind.storageKey }
+
+    @AppStorage("defaultChatModelID.v1") private var defaultChatModelID: String = ""
+    @AppStorage("defaultCodeModelID.v1") private var defaultCodeModelID: String = ""
+    @AppStorage("defaultVisionModelID.v1") private var defaultVisionModelID: String = ""
+    @AppStorage("defaultLightweightModelID.v1") private var defaultLightweightModelID: String = ""
+
+    /// Raw stored id for a lane. Empty means "no default".
+    func defaultModelID(for kind: DefaultModelKind) -> String {
+        switch kind {
+        case .chat:       return defaultChatModelID
+        case .code:       return defaultCodeModelID
+        case .vision:     return defaultVisionModelID
+        case .lightweight: return defaultLightweightModelID
+        }
+    }
+
+    /// Persist a new default for a lane. `nil` clears the default.
+    func setDefaultModelID(_ id: String?, for kind: DefaultModelKind) {
+        let trimmed = id?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        switch kind {
+        case .chat:       defaultChatModelID = trimmed
+        case .code:       defaultCodeModelID = trimmed
+        case .vision:     defaultVisionModelID = trimmed
+        case .lightweight: defaultLightweightModelID = trimmed
+        }
+    }
+
+    /// True when the stored lightweight id is the Apple Foundation sentinel
+    /// (rather than a regular AIModel id). Lets the runner branch on
+    /// Foundation Models vs. an HTTP model without changing the storage shape.
+    var defaultLightweightUsesAppleFoundation: Bool {
+        defaultLightweightModelID == Self.appleFoundationSentinelID
+    }
+
+    /// Resolve the stored default id to a live `AIModel` if it's still usable
+    /// for this lane. The stored value is just an id — it can become stale
+    /// (model uninstalled, provider key removed, hidden via swipe, etc.), so we
+    /// always re-verify at lookup time.
+    ///
+    /// Lookup rules per lane:
+    /// - `chat`: any visible model in `providerResults` (excludes hidden).
+    /// - `code`: visible model that ALSO `supportsCodingAgent`; for phone Metal
+    ///   we still allow it (the desktop list isn't always loaded yet, and the
+    ///   agent host will reject if the hub id isn't installed).
+    /// - `vision`: visible model that ALSO supports vision input.
+    /// - `lightweight`: any visible chat-capable model. The lane also has a
+    ///   separate "Apple Intelligence" mode represented by a sentinel id —
+    ///   this function returns nil in that case, callers should check
+    ///   `defaultLightweightUsesAppleFoundation` first.
+    func defaultModel(for kind: DefaultModelKind) -> AIModel? {
+        let raw = defaultModelID(for: kind)
+        guard !raw.isEmpty else { return nil }
+        // The Apple Foundation sentinel lives in the lightweight slot only —
+        // every other lane rejects it so we never try to call it as a real model.
+        if kind == .lightweight, raw == Self.appleFoundationSentinelID {
+            return nil
+        }
+        // Search the live chat pool first, then desktop Metal inventory.
+        let pool = allModels + desktopMetalModels
+        guard let model = pool.first(where: { $0.id == raw }) else { return nil }
+        guard !isModelHidden(model) else { return nil }
+        switch kind {
+        case .chat:
+            return model
+        case .code:
+            guard model.provider.supportsCodingAgent else { return nil }
+            return model
+        case .vision:
+            guard modelSupportsVision(model) else { return nil }
+            return model
+        case .lightweight:
+            // Lightweight jobs are short and cost-sensitive — phone Metal /
+            // Foundation Models / any chat-capable provider is fine. We don't
+            // filter by capability because the list of providers and models is
+            // curated by the user in the picker.
+            return model
+        }
+    }
+
+    /// Returns the default for the lane if one is set and currently usable.
+    /// Convenience used by the Settings UI ("Default model for Chat: Opus 4.5").
+    /// Handles the lightweight lane's Apple Intelligence sentinel by returning
+    /// "Apple Intelligence" as the display name.
+    func defaultModelDisplayName(for kind: DefaultModelKind) -> String? {
+        if kind == .lightweight, defaultLightweightUsesAppleFoundation {
+            return "Apple Intelligence"
+        }
+        guard let model = defaultModel(for: kind) else { return nil }
+        return displayName(for: model)
+    }
+
+    /// Apply the default for a lane to `selectedModel`, but only when the
+    /// current selection doesn't already satisfy the lane's requirements
+    /// (per-chat / per-session overrides must survive). Returns the model
+    /// that ended up as `selectedModel` after the call (either the existing
+    /// one, the default we just applied, or `nil`).
+    @discardableResult
+    func applyDefault(for kind: DefaultModelKind) -> AIModel? {
+        // If current selection already satisfies this lane, leave it alone.
+        if let current = selectedModel, modelMeetsLane(current, kind: kind) {
+            return current
+        }
+        guard let def = defaultModel(for: kind) else {
+            return selectedModel
+        }
+        if selectedModel?.id != def.id {
+            selectedModel = def
+        }
+        return def
+    }
+
+    /// Whether `model` is a valid selection for this lane.
+    func modelMeetsLane(_ model: AIModel, kind: DefaultModelKind) -> Bool {
+        switch kind {
+        case .chat:
+            return true
+        case .code:
+            return model.provider.supportsCodingAgent
+        case .vision:
+            return modelSupportsVision(model)
+        case .lightweight:
+            // Any chat-capable model works. Apple Intelligence isn't an AIModel
+            // and never reaches this path — it's a separate "no-id" branch.
+            return true
+        }
     }
 
     // MARK: - Model aliases

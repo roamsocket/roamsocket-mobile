@@ -63,10 +63,19 @@ enum LightweightTaskRunner {
         user: String,
         maxTokens: Int = 48
     ) async -> String? {
-        let settings = LightweightTasksSettings.load()
+        // The new default-model storage is the source of truth. Three possible
+        // shapes the storage slot can hold:
+        //   - empty string                       → no default picked yet
+        //   - `__apple-foundation__` sentinel    → use Apple Intelligence first
+        //   - `<provider>/<modelID>`             → use the linked model first
+        // For each branch we keep the original Apple ↔ Linked fallback chain
+        // (Apple Foundation can fail if the device disabled Apple Intelligence
+        // mid-session; Linked can fail if the API key was removed).
+        let raw = UserDefaults.standard.string(forKey: DefaultModelStorageKey) ?? ""
+        let usesAppleFoundation = (raw == DefaultAppleFoundationSentinel)
+        let linked = !raw.isEmpty && !usesAppleFoundation ? parseLinkedDefaults(raw) : nil
 
-        switch settings.mode {
-        case .appleFoundation:
+        if usesAppleFoundation {
             if let text = await completeWithAppleFoundation(
                 system: system,
                 user: user,
@@ -78,15 +87,18 @@ enum LightweightTaskRunner {
                 system: system,
                 user: user,
                 maxTokens: maxTokens,
-                settings: settings
+                provider: linked?.provider,
+                modelID: linked?.modelID
             )
+        }
 
-        case .linkedModel:
+        if linked != nil {
             if let text = await completeWithLinkedModel(
                 system: system,
                 user: user,
                 maxTokens: maxTokens,
-                settings: settings
+                provider: linked?.provider,
+                modelID: linked?.modelID
             ) {
                 return text
             }
@@ -96,6 +108,37 @@ enum LightweightTaskRunner {
                 maxTokens: maxTokens
             )
         }
+
+        // Nothing picked yet — try Apple first (cheap, on-device) and bail.
+        return await completeWithAppleFoundation(
+            system: system,
+            user: user,
+            maxTokens: maxTokens
+        )
+    }
+
+    /// Storage key shared with `AppState.defaultLightweightModelID` (`@AppStorage`
+    /// ultimately writes to `UserDefaults.standard` under the same key).
+    /// Keeping these as `static let` lets us reference them from the runner
+    /// without going through an `AppState` instance.
+    private static let DefaultModelStorageKey = "defaultLightweightModelID.v1"
+    private static let DefaultAppleFoundationSentinel = "__apple-foundation__"
+
+    private struct LinkedDefault {
+        let provider: ProviderID
+        let modelID: String
+    }
+
+    /// Parse a stored `"<providerRaw>/<modelID>"` string back into a typed
+    /// `(ProviderID, modelID)` pair. Returns nil when the format is unparsable.
+    private static func parseLinkedDefaults(_ raw: String) -> LinkedDefault? {
+        guard let slash = raw.firstIndex(of: "/") else { return nil }
+        let providerRaw = String(raw[..<slash])
+        let modelID = String(raw[raw.index(after: slash)...])
+        guard !providerRaw.isEmpty, !modelID.isEmpty,
+              let provider = ProviderID(rawValue: providerRaw)
+        else { return nil }
+        return LinkedDefault(provider: provider, modelID: modelID)
     }
 
     // MARK: - Backends
@@ -131,12 +174,10 @@ enum LightweightTaskRunner {
         system: String,
         user: String,
         maxTokens: Int,
-        settings: LightweightTasksSettings
+        provider: ProviderID?,
+        modelID: String?
     ) async -> String? {
-        guard let provider = settings.linkedProvider,
-              let modelID = settings.linkedModelID,
-              !modelID.isEmpty
-        else { return nil }
+        guard let provider, let modelID, !modelID.isEmpty else { return nil }
 
         let store = KeychainSecretStore()
         var key = store.get(SecretKey.providerAPIKey(provider)) ?? ""
