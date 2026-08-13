@@ -336,6 +336,29 @@ export class UserMemoryStore {
     }
   }
 
+  /**
+   * Apply a remote snapshot. Last-write-wins by `updatedAt` for entries
+   * present in both stores. Local-only entries are preserved.
+   */
+  applySync(remote: MemoryEntry[]): void {
+    const byID = new Map<string, MemoryEntry>();
+    for (const e of this.entries) byID.set(e.id, e);
+    let changed = false;
+    for (const r of remote) {
+      const local = byID.get(r.id);
+      if (!local) {
+        byID.set(r.id, r);
+        changed = true;
+      } else if (r.updatedAt > local.updatedAt) {
+        byID.set(r.id, r);
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    this.entries = [...byID.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+    this.persist();
+  }
+
   /** Recent activity rows, newest first. */
   activityList(opts?: { source?: "chat" | "user"; limit?: number }): MemoryActivityEntry[] {
     const source = opts?.source;

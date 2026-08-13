@@ -74,6 +74,17 @@ export const MCPServer = z.object({
 });
 export type MCPServer = z.infer<typeof MCPServer>;
 
+/** A single user-memory entry. Mirrors `client/user-memory-store.ts`. */
+export const MemoryEntry = z.object({
+  id: z.string(),
+  category: z.enum(["you", "topic", "area"]),
+  title: z.string(),
+  summary: z.string().default(""),
+  details: z.array(z.string()).default([]),
+  updatedAt: z.number(),
+});
+export type MemoryEntry = z.infer<typeof MemoryEntry>;
+
 /** The model + provider the agent should run with. */
 export const ModelSelection = z.object({
   provider: ProviderId,
@@ -230,6 +241,26 @@ export const MCPDeleteMsg = z.object({
 });
 export type MCPDeleteMsg = z.infer<typeof MCPDeleteMsg>;
 
+// User memory sync — the iOS app edits locally; the desktop commits the
+// shared repo so iPhone + desktop stay in parity. Same pattern as skills.
+
+export const MemorySyncRequestMsg = z.object({
+  type: z.literal("memory_sync_request"),
+});
+export type MemorySyncRequestMsg = z.infer<typeof MemorySyncRequestMsg>;
+
+export const MemoryUpsertMsg = z.object({
+  type: z.literal("memory_upsert"),
+  entry: MemoryEntry,
+});
+export type MemoryUpsertMsg = z.infer<typeof MemoryUpsertMsg>;
+
+export const MemoryDeleteMsg = z.object({
+  type: z.literal("memory_delete"),
+  id: z.string(),
+});
+export type MemoryDeleteMsg = z.infer<typeof MemoryDeleteMsg>;
+
 // Connectors — real linked-account integrations (token or OAuth2). The
 // desktop holds the credentials; the phone only configures + triggers.
 
@@ -376,6 +407,9 @@ export const ClientMessage = z.discriminatedUnion("type", [
   MCPSyncRequestMsg,
   MCPUpsertMsg,
   MCPDeleteMsg,
+  MemorySyncRequestMsg,
+  MemoryUpsertMsg,
+  MemoryDeleteMsg,
   ConnectorListRequestMsg,
   ConnectorSetTokenMsg,
   ConnectorSetOAuthAppMsg,
@@ -497,6 +531,12 @@ export const SkillsSyncMsg = z.object({
   skills: z.array(Skill),
 });
 export type SkillsSyncMsg = z.infer<typeof SkillsSyncMsg>;
+
+export const MemorySyncMsg = z.object({
+  type: z.literal("memory_sync"),
+  entries: z.array(MemoryEntry),
+});
+export type MemorySyncMsg = z.infer<typeof MemorySyncMsg>;
 
 export const MCPSyncMsg = z.object({
   type: z.literal("mcp_sync"),
@@ -703,6 +743,7 @@ export const ServerMessage = z.discriminatedUnion("type", [
   ErrorMsg,
   SkillsSyncMsg,
   MCPSyncMsg,
+  MemorySyncMsg,
   ConnectorStatusMsg,
   TerminalDataMsg,
   TerminalControlMsg,

@@ -508,6 +508,28 @@ final class UserMemoryStore: ObservableObject {
         }
     }
 
+    // MARK: - Sync
+
+    /// Apply a snapshot from the desktop sync (or a freshly-merged result).
+    /// Last-write-wins by `updatedAt` for entries present in both stores.
+    /// Local-only entries are preserved; remote-only entries are added.
+    func applySync(remoteEntries: [Entry]) {
+        var byID: [String: Entry] = [:]
+        for e in entries { byID[e.id] = e }
+        for r in remoteEntries {
+            if let local = byID[r.id] {
+                byID[r.id] = r.updatedAt > local.updatedAt ? r : local
+            } else {
+                byID[r.id] = r
+            }
+        }
+        let merged = Array(byID.values).sorted { $0.updatedAt > $1.updatedAt }
+        if merged != entries {
+            entries = merged
+            save()
+        }
+    }
+
     // MARK: - Activity log
 
     /// Record a mutation so the user can see and undo it. `source` is

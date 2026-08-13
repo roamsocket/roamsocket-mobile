@@ -219,6 +219,9 @@ public enum ClientMessage: Encodable, Sendable {
     case skillDelete(id: String)
     case mcpUpsert(server: MCPServer)
     case mcpDelete(id: String)
+    case memorySyncRequest
+    case memoryUpsert(entry: MemoryEntryPayload)
+    case memoryDelete(id: String)
     case terminalOpen(terminalId: String?, sessionId: String, cols: Int = 80, rows: Int = 24)
     case terminalInput(terminalId: String, data: String)
     case terminalResize(terminalId: String, cols: Int, rows: Int)
@@ -288,6 +291,14 @@ public enum ClientMessage: Encodable, Sendable {
             try c.encode(server, forKey: .init("server"))
         case let .mcpDelete(id):
             try c.encode("mcp_delete", forKey: .init("type"))
+            try c.encode(id, forKey: .init("id"))
+        case .memorySyncRequest:
+            try c.encode("memory_sync_request", forKey: .init("type"))
+        case let .memoryUpsert(entry):
+            try c.encode("memory_upsert", forKey: .init("type"))
+            try c.encode(entry, forKey: .init("entry"))
+        case let .memoryDelete(id):
+            try c.encode("memory_delete", forKey: .init("type"))
             try c.encode(id, forKey: .init("id"))
         case let .terminalOpen(terminalId, sessionId, cols, rows):
             try c.encode("terminal_open", forKey: .init("type"))
@@ -382,6 +393,33 @@ public struct MCPServerConfig: Codable, Sendable {
     }
 }
 
+/// A single user-memory entry sent over the sync channel. Wire shape must
+/// match desktop `MemoryEntry` in `protocol.ts`.
+public struct MemoryEntryPayload: Codable, Sendable, Hashable {
+    public let id: String
+    public let category: String
+    public let title: String
+    public let summary: String
+    public let details: [String]
+    public let updatedAt: Int
+
+    public init(
+        id: String,
+        category: String,
+        title: String,
+        summary: String = "",
+        details: [String] = [],
+        updatedAt: Int
+    ) {
+        self.id = id
+        self.category = category
+        self.title = title
+        self.summary = summary
+        self.details = details
+        self.updatedAt = updatedAt
+    }
+}
+
 // MARK: server -> app
 
 public enum ServerMessage: Decodable, Sendable {
@@ -397,6 +435,7 @@ public enum ServerMessage: Decodable, Sendable {
     case error(sessionId: String?, message: String)
     case skillsSync(skills: [Skill])
     case mcpSync(servers: [MCPServer])
+    case memorySync(entries: [MemoryEntryPayload])
     case terminalData(terminalId: String, stream: String, data: String)
     case terminalControl(terminalId: String, event: String, code: Int)
     case fileListResult(sessionId: String, path: String, entries: [FileEntryPayload], diff: String?, changes: [FileChangePayload]?)
@@ -594,6 +633,8 @@ public enum ServerMessage: Decodable, Sendable {
             self = .skillsSync(skills: try c.decode([Skill].self, forKey: .skills))
         case "mcp_sync":
             self = .mcpSync(servers: try c.decode([MCPServer].self, forKey: .servers))
+        case "memory_sync":
+            self = .memorySync(entries: try c.decode([MemoryEntryPayload].self, forKey: .entries))
         case "terminal_data":
             self = .terminalData(
                 terminalId: try c.decode(String.self, forKey: .terminalId),
