@@ -357,11 +357,11 @@ struct BrowserHomeView: View {
     /// until the answer arrives.
     private func stopButtonTapped() {
         promptFocused = false
-        if store.isPlanRunning || store.isPlanning {
-            store.stopRun()
-        }
-        // For Ask / pure planning, the in-flight LLM call will return on its
-        // own; tapping stop at least dismisses the prompt UI.
+        // `stopRun` now covers all three sub-states (Ask, plan-generation,
+        // plan execution) — calling it unconditionally is the right move
+        // since the button only shows when *some* `isBusy` flag is true.
+        // It no-ops gracefully if no task is live.
+        store.stopRun()
     }
 
     // MARK: - Address bar

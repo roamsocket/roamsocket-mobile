@@ -96,6 +96,17 @@ final class BrowserStore: ObservableObject {
     /// it mid-flight (long LLM call, runaway waits, etc.). Nil whenever no
     /// plan is running — `stopRun` is then a no-op.
     private var runningPlanTask: Task<Void, Never>?
+    /// Handle to the in-flight *initial plan generation* call (the LLM
+    /// round-trip between "user tapped send" and "plan card shows up").
+    /// `stopRun` cancels this so the user can bail during the prompt
+    /// shimmer instead of waiting for a slow model to finish.
+    private var planningTask: Task<Void, Never>?
+    /// Handle to the in-flight Ask-mode chat call. The Ask branch is just
+    /// an LLM round-trip with no inner loop, so it lives in its own task
+    /// (the view spawns the Task that drives `submitPrompt`, but the store
+    /// owns the cancellation handle so `stopAsk` works from the Stop
+    /// button even mid-stream).
+    private var askTask: Task<Void, Never>?
     /// Set to true when the run was ended by the user's Stop button (vs
     /// naturally finishing or hitting `maxStepsPerRun`). Read by the
     /// finished banner to show "Stopped by you" instead of a generic done
@@ -231,76 +242,29 @@ final class BrowserStore: ObservableObject {
         errorMessage = nil
 
         guard promptMode == .act else {
+            // Ask mode: wrap the whole pipeline (snapshot → optional web
+            // search → LLM call → append reply) in a Task we own, so the
+            // Stop button can cancel it mid-flight via `stopAsk()`. The
+            // Task.isCancelled checks below the awaits are the cooperative
+            // cancellation points — without them the LLM call would still
+            // run to completion and the user would have to wait it out.
             isAsking = true
-            defer { isAsking = false }
-
-            let userMessage = BrowserChatMessage(role: .user, content: goal)
-            chatMessages.append(userMessage)
-
-            // Poll until the page actually renders text before snapshotting —
-            // heavy JS sites (ESPN, etc.) report "loading" done long before
-            // their content is painted, which used to hand the model an
-            // empty page it then told the user about.
-            let context = await captureContextForPage()
-
-            // Fall back to a web search when the page snapshot is thin so the
-            // model gets curated live content instead of guessing from stale
-            // training data — this is what Chat and Vision already do.
-            var webSearchBlock: String?
-            var webSearchEmpty: String?
-            if (context?.textSnippet.count ?? 0) < 200 {
-                let query = Self.browserSearchQuery(prompt: goal, context: context)
-                let service = WebSearchService()
-                do {
-                    let bundle = try await service.search(
-                        userMessage: query,
-                        mode: .webSearch,
-                        onStep: { _ in }
-                    )
-                    if !bundle.hits.isEmpty {
-                        webSearchBlock = bundle.promptBlock
-                    } else {
-                        // Surface "we searched, nothing came back" so the
-                        // user knows the "I can't find that" answer wasn't
-                        // a confident guess from the model — the web search
-                        // fallback also came up empty. The first step's
-                        // summary is already formatted for that exact case
-                        // ("No web results for X").
-                        webSearchEmpty = bundle.steps.first?.summary
-                            ?? "No web results for “\(query.prefix(72))”"
-                    }
-                } catch {
-                    // Search failed — we still have whatever page context was captured.
-                }
-            }
-
-            do {
-                let reply = try await BrowserAgent.chatAboutPage(
-                    prompt: goal,
-                    context: context,
-                    webSearchBlock: webSearchBlock,
-                    history: chatHistoryMessages(),
+            let askHandle = Task { [weak self] in
+                guard let self else { return }
+                await self.runAskPipeline(
+                    goal: goal,
                     model: model,
                     apiKey: apiKey,
-                    catalog: appState.catalog,
-                    customBaseURL: appState.baseURL(for: model.provider),
-                    style: appState.apiStyle(for: model.provider)
+                    appState: appState
                 )
-                chatMessages.append(
-                    BrowserChatMessage(
-                        role: .assistant,
-                        content: reply,
-                        searchedWeb: webSearchBlock != nil,
-                        webSearchEmpty: webSearchEmpty
-                    )
-                )
-                clearPendingPrompt()
-            } catch {
-                // Don't leave an unanswered question stranded in the transcript.
-                chatMessages.removeLast()
-                errorMessage = error.localizedDescription
-                clearPendingPrompt()
             }
+            askTask = askHandle
+            // Wait it out so the caller (the view) sees the same lifecycle
+            // shape as the plan path (synchronous "did the run finish"
+            // from the view's perspective).
+            await askHandle.value
+            askTask = nil
+            isAsking = false
             return
         }
 
@@ -308,9 +272,38 @@ final class BrowserStore: ObservableObject {
         completionOutcome = .success
         cancelAutoDismiss()
         isPlanning = true
+        // Wrap the snapshot + initial-plan LLM call in a tracked task so
+        // the Stop button can cancel it (this is the prompt-shimmer
+        // period — used to be uncancellable, leaving the user staring
+        // at a loading field with no way out if the model hung).
+        let planHandle = Task { [weak self] in
+            guard let self else { return }
+            await self.runInitialPlan(
+                goal: goal,
+                model: model,
+                apiKey: apiKey,
+                appState: appState
+            )
+        }
+        planningTask = planHandle
+        await planHandle.value
+        planningTask = nil
+        isPlanning = false
+    }
+
+    /// Drives the initial plan-generation step (snapshot the page, ask
+    /// the model for a plan, set `pendingPlan` for the approval card).
+    /// Pulled out of `submitPrompt` so the whole thing runs inside a
+    /// `Task` the store owns — that's what lets `stopRun` cancel the
+    /// in-flight LLM call when the user taps Stop during the shimmer.
+    /// Cancellation is cooperative: each `await` returns control and
+    /// the next `Task.isCancelled` check bails out cleanly without
+    /// leaving a half-set `pendingPlan` or a stuck error banner.
+    private func runInitialPlan(goal: String, model: AIModel, apiKey: String, appState: AppState) async {
         // Wait for the page to settle before planning, same reason as Ask mode.
+        if Task.isCancelled { return }
         let context = await captureContextForPage()
-        defer { isPlanning = false }
+        if Task.isCancelled { return }
 
         do {
             let plan = try await BrowserAgent.requestPlan(
@@ -322,12 +315,20 @@ final class BrowserStore: ObservableObject {
                 customBaseURL: appState.baseURL(for: model.provider),
                 style: appState.apiStyle(for: model.provider)
             )
+            // Final cancellation check: the model call returned but the
+            // user may have hit Stop while we were awaiting. Don't
+            // commit a plan they explicitly didn't want.
+            if Task.isCancelled { return }
             pendingPlan = plan
             // Keep promptText visible (greyed, pulsing) while the user
             // reviews the plan card. Cleared on approve/deny or once a run
             // finishes — see `denyPendingPlan`, `beginRun`, and the run
             // loop's tail.
         } catch {
+            // Cancellation surfaces as CancellationError; treat it like
+            // a user stop (no error banner) instead of dumping a
+            // confusing provider error.
+            if Task.isCancelled { return }
             errorMessage = error.localizedDescription
             clearPendingPrompt()
         }
@@ -401,31 +402,56 @@ final class BrowserStore: ObservableObject {
         runningPlanTask = task
     }
 
-    /// Stops the in-flight plan execution, if any. Safe to call any time:
-    /// from the Stop button in the prompt bar, from the X in the running
-    /// banner, or programmatically. Cancels the underlying task so any
-    /// pending LLM call / settle wait bails out cleanly instead of the UI
-    /// lying about progress for several more seconds.
+    /// Stops whatever the agent is currently doing — Ask-mode chat, the
+    /// initial plan-generation LLM call, or the plan execution loop. Safe
+    /// to call any time: from the Stop button in the prompt bar, from the
+    /// X in the running banner, or programmatically. Cancels the underlying
+    /// task so any pending LLM call / settle wait bails out cleanly
+    /// instead of the UI lying about progress for several more seconds.
+    ///
+    /// The three sub-states used to be siloed: `stopRun` only handled
+    /// `isPlanRunning` (the post-approval execution loop), Ask mode and
+    /// the initial plan-generation shimmer were uncancellable, so the Stop
+    /// button was a no-op for the majority of user-visible wait time. All
+    /// three now share this entry point and the `wasStoppedByUser` flag
+    /// so the finished banner reads "Stopped by you" in every case.
     func stopRun() {
-        guard isPlanRunning, runningPlanTask != nil else {
-            // No run in flight — just clear any leftover banner state.
-            cancelAutoDismiss()
-            cancelStepDismissals()
-            runningPlan = nil
-            completionSummary = nil
-            completionOutcome = .success
+        // Pick the live task. Ask mode and the initial plan-generation
+        // LLM call were the two paths that used to be uncancellable;
+        // both now run inside their own tracked task so we can cancel
+        // them here.
+        if let ask = askTask {
+            wasStoppedByUser = true
+            ask.cancel()
+            respondToPendingStep(allow: false)
+            scheduleAutoDismiss()
             return
         }
-        wasStoppedByUser = true
-        runningPlanTask?.cancel()
-        // Also unblock any pending per-step approval prompt so the cancel
-        // propagates immediately instead of waiting for the user to tap.
-        respondToPendingStep(allow: false)
-        // The `runApprovedSteps` loop will see the cancellation on its next
-        // `Task.isCancelled` check and flip `isPlanRunning = false` with the
-        // right summary. We schedule the banner auto-dismiss so it doesn't
-        // hang forever if the loop took its sweet time unwinding.
-        scheduleAutoDismiss()
+        if let plan = planningTask {
+            wasStoppedByUser = true
+            plan.cancel()
+            respondToPendingStep(allow: false)
+            scheduleAutoDismiss()
+            return
+        }
+        if let running = runningPlanTask {
+            wasStoppedByUser = true
+            running.cancel()
+            // Also unblock any pending per-step approval prompt so the
+            // cancel propagates immediately instead of waiting for the
+            // user to tap.
+            respondToPendingStep(allow: false)
+            scheduleAutoDismiss()
+            return
+        }
+        // Nothing to stop — just clear any leftover banner state so
+        // a stuck "Plan stopped" / "Done" banner doesn't hang around
+        // after a manual dismiss.
+        cancelAutoDismiss()
+        cancelStepDismissals()
+        runningPlan = nil
+        completionSummary = nil
+        completionOutcome = .success
     }
 
     /// Response to the step(s) currently shown in `pendingStepsApproval`.
@@ -496,6 +522,125 @@ final class BrowserStore: ObservableObject {
     private func waitForStepDecision() async -> Bool {
         await withCheckedContinuation { continuation in
             self.stepDecisionContinuation = continuation
+        }
+    }
+
+    /// Drives an Ask-mode submission end-to-end: append the user turn,
+    /// snapshot the page (with the JS-render poll that fixes the "heavy SPA
+    /// shows up empty" bug), optionally run a web-search fallback when the
+    /// snapshot is thin, call the model, then append the assistant reply.
+    ///
+    /// Pulled out of `submitPrompt` so the whole pipeline runs inside a
+    /// `Task` the store owns (see `askTask`). Cooperative cancellation
+    /// points at every `await` keep the Stop button responsive: tapping
+    /// it cancels the task, this function bails out at the next check
+    /// without committing the assistant message or leaving the user
+    /// question stranded in the transcript.
+    private func runAskPipeline(goal: String, model: AIModel, apiKey: String, appState: AppState) async {
+        let userMessage = BrowserChatMessage(role: .user, content: goal)
+        chatMessages.append(userMessage)
+
+        // Poll until the page actually renders text before snapshotting —
+        // heavy JS sites (ESPN, etc.) report "loading" done long before
+        // their content is painted, which used to hand the model an
+        // empty page it then told the user about. `captureContextForPage`
+        // already polls in 0.6s ticks up to its budget; the outer
+        // Task.isCancelled check lets a Stop request cut it short.
+        if Task.isCancelled {
+            chatMessages.removeLast()
+            clearPendingPrompt()
+            return
+        }
+        let context = await captureContextForPage()
+        if Task.isCancelled {
+            chatMessages.removeLast()
+            clearPendingPrompt()
+            return
+        }
+
+        // Fall back to a web search when the page snapshot is thin so the
+        // model gets curated live content instead of guessing from stale
+        // training data — this is what Chat and Vision already do.
+        var webSearchBlock: String?
+        var webSearchEmpty: String?
+        if (context?.textSnippet.count ?? 0) < 200 {
+            let query = Self.browserSearchQuery(prompt: goal, context: context)
+            let service = WebSearchService()
+            do {
+                let bundle = try await service.search(
+                    userMessage: query,
+                    mode: .webSearch,
+                    onStep: { _ in }
+                )
+                if Task.isCancelled {
+                    chatMessages.removeLast()
+                    clearPendingPrompt()
+                    return
+                }
+                if !bundle.hits.isEmpty {
+                    webSearchBlock = bundle.promptBlock
+                } else {
+                    // Surface "we searched, nothing came back" so the
+                    // user knows the "I can't find that" answer wasn't
+                    // a confident guess from the model — the web search
+                    // fallback also came up empty. The first step's
+                    // summary is already formatted for that exact case
+                    // ("No web results for X").
+                    webSearchEmpty = bundle.steps.first?.summary
+                        ?? "No web results for “\(query.prefix(72))”"
+                }
+            } catch {
+                // Search failed — we still have whatever page context was captured.
+                if Task.isCancelled {
+                    chatMessages.removeLast()
+                    clearPendingPrompt()
+                    return
+                }
+            }
+        }
+
+        do {
+            let reply = try await BrowserAgent.chatAboutPage(
+                prompt: goal,
+                context: context,
+                webSearchBlock: webSearchBlock,
+                history: chatHistoryMessages(),
+                model: model,
+                apiKey: apiKey,
+                catalog: appState.catalog,
+                customBaseURL: appState.baseURL(for: model.provider),
+                style: appState.apiStyle(for: model.provider)
+            )
+            // Final cancellation check: the model call returned but the
+            // user may have hit Stop while we were awaiting. Don't
+            // commit a reply they explicitly didn't want.
+            if Task.isCancelled {
+                chatMessages.removeLast()
+                clearPendingPrompt()
+                return
+            }
+            chatMessages.append(
+                BrowserChatMessage(
+                    role: .assistant,
+                    content: reply,
+                    searchedWeb: webSearchBlock != nil,
+                    webSearchEmpty: webSearchEmpty
+                )
+            )
+            clearPendingPrompt()
+        } catch {
+            // Don't leave an unanswered question stranded in the transcript.
+            // Cancellation surfaces as CancellationError here; treat it
+            // like a user stop (silently remove the question, no error
+            // banner) instead of dumping a confusing provider error.
+            if Task.isCancelled {
+                chatMessages.removeLast()
+                clearPendingPrompt()
+                return
+            }
+            chatMessages.removeLast()
+            errorMessage = error.localizedDescription
+            clearPendingPrompt()
         }
     }
 
