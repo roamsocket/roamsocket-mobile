@@ -112,7 +112,7 @@ struct LocalMetalSettingsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $search, prompt: "Search models")
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
+                ToolbarItem(placement: .topBarLeading) {
                     Button {
                         dismiss()
                     } label: {
@@ -122,8 +122,10 @@ struct LocalMetalSettingsView: View {
                             .frame(width: 36, height: 36)
                             .background(Theme.surfaceElevated, in: Circle())
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Back")
                 }
-                ToolbarItem(placement: .primaryAction) {
+                ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         Task { await refreshCatalog(force: true) }
                     } label: {
@@ -131,8 +133,12 @@ struct LocalMetalSettingsView: View {
                             ProgressView().controlSize(.small)
                         } else {
                             Image(systemName: "arrow.clockwise")
+                                .foregroundStyle(Theme.accent)
                         }
                     }
+                    .buttonStyle(.plain)
+                    .frame(width: 36, height: 36)
+                    .background(Theme.surfaceElevated, in: Circle())
                     .disabled(isRefreshingCatalog)
                     .accessibilityLabel("Refresh catalog")
                 }
