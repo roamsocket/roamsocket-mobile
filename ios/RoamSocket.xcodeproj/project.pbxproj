@@ -14,6 +14,7 @@
 		0D9CA03E4A4FB171BF57307A /* AppSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E78B36E3B1625307D58DDCC4 /* AppSettingsView.swift */; };
 		0DBC945A4F7EA9E196F7106D /* GitHubLinkView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4E2BE62D5952449E7A71879 /* GitHubLinkView.swift */; };
 		0E452A7671B4961DC4B2713D /* ThinkingSummaryGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5455E5B121D48E8138FB1BD1 /* ThinkingSummaryGenerator.swift */; };
+		10E80A9371833E18ED228800 /* VisionGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A045B4A62AB92DA7B74C1A2 /* VisionGateTests.swift */; };
 		158981E0F778ABC2748FD20E /* LocationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8C59CEAC9FC457A1F8982B3 /* LocationService.swift */; };
 		1761EA12E906FD290FB1696C /* RoamSocketWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 5B7F136843010C797697514A /* RoamSocketWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		1CBCCB19D8DCF55F3B4ED821 /* SessionViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF913EDB357E1A5F7C15B1D6 /* SessionViewModel.swift */; };
@@ -201,6 +202,7 @@
 		44394A209E58F5112FF34826 /* RoamSocketControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoamSocketControls.swift; sourceTree = "<group>"; };
 		471E0875DF99071BF74BD76E /* WebSearchService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSearchService.swift; sourceTree = "<group>"; };
 		484A3E7253B503CC7D47B333 /* VisionCapability.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionCapability.swift; sourceTree = "<group>"; };
+		4A045B4A62AB92DA7B74C1A2 /* VisionGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionGateTests.swift; sourceTree = "<group>"; };
 		4B113EFED5DCB949A927BDF5 /* CreateProjectSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateProjectSheet.swift; sourceTree = "<group>"; };
 		4D74A9315918540821F3A6D3 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		4D74F9F823D3C8B7B8ED5F04 /* ArtifactsListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtifactsListView.swift; sourceTree = "<group>"; };
@@ -363,6 +365,7 @@
 			isa = PBXGroup;
 			children = (
 				65333BFE135A88DA6311828F /* ImageProcessingTests.swift */,
+				4A045B4A62AB92DA7B74C1A2 /* VisionGateTests.swift */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -978,6 +981,7 @@
 			files = (
 				997739F602DACF0DBAE97A74 /* ImageProcessing.swift in Sources */,
 				F6C467520C39224F2E833FA7 /* ImageProcessingTests.swift in Sources */,
+				10E80A9371833E18ED228800 /* VisionGateTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
