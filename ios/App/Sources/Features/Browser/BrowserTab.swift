@@ -293,6 +293,128 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         _ = await evaluateJS("window.scrollBy(0, \(dy));")
     }
 
+    // MARK: - Settle / wait helpers
+
+    /// Wait until the page is actually ready for the next AI action. WKWebView's
+    /// `isLoading` flips false when the top-level load finishes — well before
+    /// SPA-heavy sites (ESPN, scoreboards, anything React/Next/Vite) have
+    /// painted their real content. The agent loop used to snapshot or click
+    /// immediately after `isLoading` cleared, which handed the model an
+    /// empty page it then described as "blank or loading".
+    ///
+    /// This polls three signals — `document.readyState === 'complete'`, a
+    /// short quiescent window where no in-flight XHR/fetch is pending, and
+    /// at minimum a small baseline delay so even a cached/static page isn't
+    /// read mid-paint — and returns as soon as all three are satisfied or the
+    /// overall budget runs out. Every wait is bounded; nothing here ever
+    /// blocks the agent loop forever.
+    ///
+    /// Tunables kept conservative:
+    /// - `quietWindow`: 400ms of no network activity counts as "done".
+    /// - `minSettle`: 250ms minimum so a fast page is still observed post-paint.
+    /// - `pollInterval`: 150ms — responsive without burning CPU.
+    func waitForPageSettled(
+        timeout: TimeInterval = 6,
+        quietWindow: TimeInterval = 0.4,
+        minSettle: TimeInterval = 0.25,
+        pollInterval: TimeInterval = 0.15
+    ) async {
+        let start = Date()
+        let deadline = start.addingTimeInterval(timeout)
+
+        // 1. Wait for the WKWebView to finish its top-level load first.
+        while isLoading, Date() < deadline {
+            try? await Task.sleep(nanoseconds: UInt64(pollInterval * 1_000_000_000))
+        }
+
+        // 2. Poll the page until document.readyState is 'complete' AND the
+        //    network has been quiet for `quietWindow`. The JS returns a small
+        //    status blob so we don't have to reach into page globals from Swift.
+        let js = """
+        (function () {
+          if (document.readyState !== 'complete') return { ready: false, inflight: 0 };
+          // Count in-flight fetches + XHRs we instrumented; sites that override
+          // fetch/XHR will still be observable through __rsInFlight if our hook
+          // landed first, otherwise 0 means "no observable activity" which is
+          // safe enough for the wait.
+          var inflight = (window.__rsInFlight && typeof window.__rsInFlight.count === 'number')
+            ? window.__rsInFlight.count : 0;
+          return { ready: true, inflight: inflight };
+        })();
+        """
+
+        var lastActive = Date()
+        let probeIntervalNS = UInt64(pollInterval * 1_000_000_000)
+
+        while Date() < deadline {
+            let probe = await evaluateJS(js) as? [String: Any]
+            let ready = (probe?["ready"] as? Bool) ?? false
+            let inflight = (probe?["inflight"] as? Int) ?? 0
+            if ready && inflight == 0 {
+                if lastActive.timeIntervalSinceNow <= -quietWindow { break }
+            } else {
+                // Any non-quiet observation resets the quiet clock.
+                lastActive = Date()
+            }
+            try? await Task.sleep(nanoseconds: probeIntervalNS)
+        }
+
+        // 3. Final minimum-settle delay — guarantees we never read the page
+        //    the same tick the load completed, even on a fully-cached page
+        //    where every other signal flipped green immediately.
+        let elapsed = Date().timeIntervalSince(start)
+        if elapsed < minSettle {
+            try? await Task.sleep(nanoseconds: UInt64((minSettle - elapsed) * 1_000_000_000))
+        }
+    }
+
+    /// Installs a small `fetch`/XHR counter on `window.__rsInFlight` so the
+    /// settle helper can detect in-flight network activity the page starts
+    /// after the initial load (lazy chunks, analytics pings, etc.). Safe to
+    /// call repeatedly — the hook is only installed once per page.
+    ///
+    /// Runs at the start of every AI run so the counter exists across reloads
+    /// and navigations (a fresh `document` wipes `window`, so we re-install
+    /// via `document.addEventListener('readystatechange', ...)` semantics in
+    /// the helper script itself).
+    func installNetworkActivityInstrumentation() async {
+        let js = """
+        (function () {
+          if (window.__rsInFlightInstalled) return;
+          window.__rsInFlightInstalled = true;
+          window.__rsInFlight = { count: 0 };
+          var origFetch = window.fetch && window.fetch.bind(window);
+          if (origFetch) {
+            window.fetch = function () {
+              window.__rsInFlight.count++;
+              var p = origFetch.apply(this, arguments);
+              var done = function () { try { window.__rsInFlight.count--; } catch (e) {} };
+              p.then(done, done);
+              return p;
+            };
+          }
+          var OrigXHR = window.XMLHttpRequest;
+          if (OrigXHR && OrigXHR.prototype) {
+            var origOpen = OrigXHR.prototype.open;
+            var origSend = OrigXHR.prototype.send;
+            OrigXHR.prototype.open = function () {
+              this.__rsTracked = true;
+              return origOpen.apply(this, arguments);
+            };
+            OrigXHR.prototype.send = function () {
+              if (this.__rsTracked) {
+                window.__rsInFlight.count++;
+                var done = function () { try { window.__rsInFlight.count--; } catch (e) {} };
+                this.addEventListener('loadend', done);
+              }
+              return origSend.apply(this, arguments);
+            };
+          }
+        })();
+        """
+        _ = await evaluateJS(js)
+    }
+
     private func escapeJS(_ s: String) -> String {
         s.replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")

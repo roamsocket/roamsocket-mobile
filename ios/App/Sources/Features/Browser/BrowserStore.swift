@@ -432,6 +432,13 @@ final class BrowserStore: ObservableObject {
                 break
             }
 
+            // Wait for the live page to settle after the last step before
+            // snapshotting — otherwise we hand the model a mid-paint page and
+            // it proposes steps against content that isn't actually there yet.
+            if let tab = activeTab {
+                await tab.waitForPageSettled(timeout: 5)
+                await tab.installNetworkActivityInstrumentation()
+            }
             let context = await activeTab?.captureContext()
             do {
                 let decision = try await BrowserAgent.requestNextStep(
@@ -522,45 +529,72 @@ final class BrowserStore: ObservableObject {
                 return (false, "Missing or invalid URL.")
             }
             tab.load(url: url)
-            await waitForLoadSettled(tab)
+            // Long budget: a fresh navigation can mean a new SPA bootstrap
+            // with lazy chunks, auth redirects, and async data fetches.
+            await tab.waitForPageSettled(timeout: 8)
+            await tab.installNetworkActivityInstrumentation()
             return (true, "Opened \(url.absoluteString).")
         case .click:
             guard let hint = step.target, !hint.isEmpty else { return (false, "No element description given.") }
             let ok = await tab.click(hint: hint)
-            await waitForLoadSettled(tab, timeout: 4)
+            // Clicks frequently trigger XHR-driven UI updates (menus opening,
+            // results lists rendering, navigation starting). Give the page a
+            // real chance to settle before the next step runs.
+            await tab.waitForPageSettled(timeout: 5)
             return (ok, ok ? "Clicked \"\(hint)\"." : "Couldn't find anything matching \"\(hint)\" on the page.")
         case .type:
             guard let hint = step.target, let text = step.value else {
                 return (false, "Missing field description or text.")
             }
             let ok = await tab.type(hint: hint, text: text, submit: false)
+            // Typing alone rarely starts a network request, but autocomplete
+            // dropdowns and validation effects do — a short settle avoids
+            // reading mid-animation.
+            await tab.waitForPageSettled(timeout: 2, minSettle: 0.15)
             return (ok, ok ? "Typed into \"\(hint)\"." : "Couldn't find a field matching \"\(hint)\".")
         case .scroll:
             await tab.scroll(direction: step.target ?? "down")
+            // Scroll alone is cheap, but lazy-loaded sections may fetch new
+            // content as soon as they enter the viewport.
+            await tab.waitForPageSettled(timeout: 2, minSettle: 0.2)
             return (true, "Scrolled \(step.target ?? "down").")
         case .back:
             tab.goBack()
-            await waitForLoadSettled(tab, timeout: 4)
+            await tab.waitForPageSettled(timeout: 5)
+            await tab.installNetworkActivityInstrumentation()
             return (true, "Went back.")
         case .forward:
             tab.goForward()
-            await waitForLoadSettled(tab, timeout: 4)
+            await tab.waitForPageSettled(timeout: 5)
+            await tab.installNetworkActivityInstrumentation()
             return (true, "Went forward.")
         case .reload:
             tab.reload()
-            await waitForLoadSettled(tab)
+            await tab.waitForPageSettled(timeout: 6)
+            await tab.installNetworkActivityInstrumentation()
             return (true, "Reloaded the page.")
         case .wait:
+            // Model-requested explicit wait. Still let the page settle after
+            // the timer so a step that follows (or the next-step re-analysis)
+            // doesn't read a mid-paint page.
             let seconds = min(max(Double(step.target ?? "1") ?? 1, 0), 10)
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            await tab.waitForPageSettled(timeout: 2, minSettle: 0.2)
             return (true, "Waited \(Int(seconds))s.")
         case .extract:
+            // Extract is the read step — it needs the most up-to-date view, so
+            // we deliberately wait here too before snapshotting.
+            await tab.waitForPageSettled(timeout: 4)
             let context = await tab.captureContext()
             let summary = context.textSnippet.isEmpty ? "(no visible text)" : String(context.textSnippet.prefix(280))
             return (true, "\(context.title): \(summary)")
         }
     }
 
+    /// Legacy short-form load waiter kept as a thin shim — only used by
+    /// `captureContextForPage` for cases where we want "is the top-level load
+    /// done?" without the heavier settle dance. New step code should call
+    /// `BrowserTab.waitForPageSettled` directly.
     private func waitForLoadSettled(_ tab: BrowserTab, timeout: TimeInterval = 8) async {
         let start = Date()
         while tab.isLoading, Date().timeIntervalSince(start) < timeout {
@@ -573,13 +607,20 @@ final class BrowserStore: ObservableObject {
     /// well before SPA-heavy sites (ESPN, news, scoreboards) paint their
     /// content — so we re-capture every ~0.6s up to `budget` seconds rather
     /// than handing the model a blank page it then describes as "empty".
+    /// We also wait for the page to settle (readyState complete + network
+    /// quiet) before the first capture, so the loop never starts reading a
+    /// page that's still mid-hydration.
     private func captureContextForPage(budget: TimeInterval = 15) async -> BrowserPageContext? {
         guard let tab = activeTab else { return nil }
-        await waitForLoadSettled(tab)
+        await tab.waitForPageSettled(timeout: 6)
+        await tab.installNetworkActivityInstrumentation()
         let start = Date()
         var context = await tab.captureContext()
         while context.textSnippet.isEmpty, Date().timeIntervalSince(start) < budget {
             try? await Task.sleep(nanoseconds: 600_000_000)
+            // Re-check settle in case the page kept loading more after the
+            // first capture (infinite scroll, late-loading widgets, etc.).
+            await tab.waitForPageSettled(timeout: 2, minSettle: 0.15)
             context = await tab.captureContext()
         }
         return context

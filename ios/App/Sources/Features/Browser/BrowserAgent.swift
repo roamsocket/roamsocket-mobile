@@ -33,7 +33,7 @@ enum BrowserAgent {
         - "click" needs a short hint in "target" describing the visible label/text of the element (e.g. "Sign in button"), not a CSS selector unless you are certain of it.
         - "type" needs a hint in "target" (e.g. "search box", "email field") and the literal text to enter in "value"; add a trailing step describing submission if a form should be submitted (use another "type" or a "click" step for the submit button).
         - "scroll" target is "up" or "down".
-        - "wait" target is a whole number of seconds (used sparingly, e.g. after submitting a search).
+        - "wait" target is a whole number of seconds (used sparingly, e.g. after submitting a search). The driver already waits for the page to fully settle (readyState complete + network quiet + a minimum paint delay) after every action, so you do NOT need to insert "wait" steps just because a page is JavaScript-heavy — only use "wait" when you genuinely need extra time for an animation, redirect, or external system to finish.
         - "extract" means "read the resulting page and summarize for the user" — use it as the final step whenever you need to report back what happened.
         - Keep plans short: 1-6 steps. Never invent data you weren't given (login credentials, payment details, personal info) — if the task needs a secret you don't have, stop and add a single step explaining what's missing instead of guessing.
         - Never mark a task complete in "description" text; describe intent ("Search for X"), not outcome ("Searched for X").
