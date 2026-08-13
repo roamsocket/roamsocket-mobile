@@ -575,6 +575,7 @@ struct ChatView: View {
                 || viewModel.webSearchEnabled
                 || viewModel.researchEnabled
                 || studyMode
+                || viewModel.guidedLearningEnabled
             {
                 contextChips
             }
@@ -708,6 +709,16 @@ struct ChatView: View {
                     imageColor: Theme.accent,
                     title: "Sources"
                 )
+            }
+            if viewModel.guidedLearningEnabled {
+                contextChip(
+                    systemImage: "graduationcap.fill",
+                    imageColor: Theme.accent,
+                    title: "Guided learning",
+                    dismissLabel: "Turn off Guided Learning"
+                ) {
+                    viewModel.guidedLearningEnabled = false
+                }
             }
             if viewModel.researchEnabled {
                 contextChip(

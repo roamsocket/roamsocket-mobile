@@ -25,6 +25,7 @@ extension AIThinkingAttributes {
         case code
         case vision
         case study
+        case guided
 
         var title: String {
             switch self {
@@ -32,6 +33,7 @@ extension AIThinkingAttributes {
             case .code: return "Code"
             case .vision: return "Vision"
             case .study: return "Study"
+            case .guided: return "Study"
             }
         }
 
@@ -41,6 +43,7 @@ extension AIThinkingAttributes {
             case .code: return "chevron.left.forwardslash.chevron.right"
             case .vision: return "eye.fill"
             case .study: return "graduationcap.fill"
+            case .guided: return "graduationcap.fill"
             }
         }
 
@@ -50,6 +53,7 @@ extension AIThinkingAttributes {
             case .code: return .code
             case .vision: return .vision
             case .study: return .chat
+            case .guided: return .chat
             }
         }
     }

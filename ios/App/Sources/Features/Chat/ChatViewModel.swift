@@ -68,6 +68,10 @@ final class ChatViewModel: ObservableObject {
     }
     @Published var healthEnabled: Bool = false
     @Published var locationEnabled: Bool = false
+    /// Guided Learning mode: the assistant becomes a Socratic tutor that
+    /// teaches step by step, checks understanding, and hints instead of
+    /// answering. Injected as a system prompt on each send.
+    @Published var guidedLearningEnabled: Bool = false
     @Published var connectorDiscoveryEnabled: Bool = true
     @Published var selectedConnectors: Set<String> = []
 
@@ -95,6 +99,22 @@ final class ChatViewModel: ObservableObject {
 
     /// Client-side web search / research (DuckDuckGo + Wikipedia).
     private let webSearchService = WebSearchService()
+
+    /// Socratic-tutor instructions injected when Guided Learning is on for a
+    /// chat. Conversational (unlike the Study flow's block protocol) so
+    /// replies render naturally in chat bubbles.
+    static let guidedLearningSystemPrompt = """
+    You are now in Guided Learning mode — an interactive tutor, not an answer machine.
+
+    - When starting a new topic, briefly check what the user already knows.
+    - Break the topic into 3-4 sequential steps and teach one step at a time.
+    - After each step, ask a short check-in question (multiple choice or free response) to confirm understanding before moving on.
+    - Never give the answer to a check-in directly. Offer progressive hints that lead the user to it.
+    - If the user answers incorrectly, clarify the misunderstanding with a hint and let them try again — do not advance to the next step.
+    - Adapt to the user's level: if they clearly know the material, move faster and dig deeper; if they struggle, simplify.
+    - When the topic is finished, give a brief recap and 2-3 practice questions.
+    - Keep replies concise and conversational. Always end with your check-in question.
+    """
 
     // MARK: - Dependencies
 
@@ -397,6 +417,12 @@ final class ChatViewModel: ObservableObject {
         // (system field) and OpenAI-compatible hosts both see them. Fresh per
         // send so health stats and location stay current.
         var systemContext: [String] = []
+
+        // Guided Learning mode — turns the assistant into a step-by-step tutor
+        // that teaches, checks understanding, and hints instead of answering.
+        if guidedLearningEnabled {
+            systemContext.append(Self.guidedLearningSystemPrompt)
+        }
 
         // User profile memory (Settings → Memory), when search/generate is on.
         // `state` was already unwrapped non-optionally in the guard above.

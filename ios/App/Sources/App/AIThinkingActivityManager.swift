@@ -134,6 +134,7 @@ final class AIThinkingActivityManager {
         case .code: return "Working…"
         case .vision: return "Analyzing…"
         case .study: return "Reading questions…"
+        case .guided: return "Teaching…"
         }
     }
 
