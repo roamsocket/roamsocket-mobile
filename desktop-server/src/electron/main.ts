@@ -64,6 +64,15 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+function dbg(msg: string): void {
+  // Use stderr so the line shows up in the terminal even when the parent
+  // process uses `stdio: 'inherit'` on macOS where Electron's stdout can
+  // be captured by the internal logger.
+  process.stderr.write(`[apc-debug] ${msg}\n`);
+}
+
+dbg(`main.ts loaded, electron=${typeof process.versions.electron} node=${process.versions.node}`);
+
 // Compile-time constants injected by `@electron-forge/plugin-vite` via Vite
 // `define` (NOT process.env). In `electron-forge start` the first is the
 // renderer dev-server URL; in production builds it is undefined and the
@@ -912,12 +921,16 @@ async function promptKillConflictingInstances(port: number): Promise<boolean> {
 }
 
 app.whenReady().then(async () => {
+  dbg("whenReady fired");
   loadPrefs();
+  dbg("prefs loaded");
   loadSecrets();
+  dbg("secrets loaded");
   // App-managed tunnel binaries (cloudflared / ngrok) live under userData/bin
   // so installs work without admin and are found by the tunnel spawner.
   process.env.APC_BIN_DIR = path.join(app.getPath("userData"), "bin");
   registerIpc();
+  dbg("IPC registered");
 
   // Apply last-known marketplace merge immediately, then refresh remotes.
   try {
@@ -935,8 +948,10 @@ app.whenReady().then(async () => {
   const port = Number(process.env.PORT ?? 4319);
   // Bind all interfaces so phones on the LAN can pair; override with APC_HOST.
   const host = process.env.APC_HOST ?? "0.0.0.0";
+  dbg(`port=${port} host=${host}, about to call promptKillConflictingInstances`);
 
   const canStart = await promptKillConflictingInstances(port);
+  dbg(`canStart=${canStart} port=${port}`);
   if (!canStart) {
     isQuitting = true;
     app.quit();
@@ -944,12 +959,14 @@ app.whenReady().then(async () => {
   }
 
   try {
+    dbg("calling startServer");
     server = await startServer({
       port,
       host,
       silent: true,
       onReady: () => refreshTrayMenu(),
     });
+    dbg(`server listening on http://${server.host}:${server.port}, code=${server.pairingCode}`);
     console.log(`[apc] server listening on http://${server.host}:${server.port}, code=${server.pairingCode}`);
   } catch (err) {
     const message = String((err as Error).message ?? err);
@@ -989,7 +1006,9 @@ app.whenReady().then(async () => {
   }
 
   createTray();
+  dbg("tray created");
   createWindow();
+  dbg("window created");
   console.log("[apc] tray + window created");
 
   // Verification hook: dump shell DOM after renderer bootstrap, then optional quit.
