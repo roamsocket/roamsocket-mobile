@@ -108,4 +108,22 @@ final class MemoryTagParserTests: XCTestCase {
         XCTAssertEqual(r.actions, [])
         XCTAssertEqual(r.text, "")
     }
+
+    func testEndToEndVisibleAndActions() {
+        // Realistic shape: greeting, tag, follow-up. Visible text should
+        // drop the tag cleanly; actions should parse the add.
+        let p = MemoryTagParser()
+        let r1 = p.push(chunk: "Got it. ")
+        XCTAssertEqual(r1.text, "Got it. ")
+        XCTAssertEqual(r1.actions, [])
+        let r2 = p.push(chunk: #"<memory action="add" category="you" title="Profile" summary="I work at Verizon" details="I work at Verizon" />"#)
+        XCTAssertEqual(r2.text, "")
+        XCTAssertEqual(r2.actions, [
+            .add(category: .you, title: "Profile", summary: "I work at Verizon", details: ["I work at Verizon"])
+        ])
+        let r3 = p.push(chunk: " Will remember.")
+        XCTAssertEqual(r3.text, " Will remember.")
+        let r4 = p.end()
+        XCTAssertEqual(r4.text, "")
+    }
 }

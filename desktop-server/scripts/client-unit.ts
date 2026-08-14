@@ -428,6 +428,32 @@ kind365 app and foundation
   assert.ok(!again.get(profile!.id));
 });
 
+check("user memory applySync round-trip and LWW conflict resolution", () => {
+  const mem = memoryStorage();
+  const store = new UserMemoryStore(mem);
+  const t = Date.now();
+  // Initial state from "remote" (e.g. desktop pulled from a fresh clone).
+  store.applySync([
+    { id: "mem_a", category: "you", title: "Profile", summary: "A", details: ["A"], updatedAt: t },
+  ]);
+  assert.ok(store.byCategory("you").some((e) => e.id === "mem_a"));
+  // Local-only entries are preserved across an empty sync.
+  store.addFreeformFact("B");
+  store.applySync([]);
+  assert.ok(store.list().some((e) => e.details.includes("B")));
+  // Last-write-wins on the same id.
+  const localTime = store.get("mem_a")!.updatedAt;
+  store.applySync([
+    { id: "mem_a", category: "you", title: "Profile", summary: "newer", details: ["A2"], updatedAt: localTime + 60_000 },
+  ]);
+  assert.equal(store.get("mem_a")!.details[0], "A2");
+  // Remote older than local → keep local.
+  store.applySync([
+    { id: "mem_a", category: "you", title: "Profile", summary: "stale", details: ["OLD"], updatedAt: localTime - 60_000 },
+  ]);
+  assert.equal(store.get("mem_a")!.details[0], "A2");
+});
+
 check("buildChatSystemContent injects user memory", () => {
   const system = buildChatSystemContent({
     tools: loadComposerTools(memoryStorage()),
