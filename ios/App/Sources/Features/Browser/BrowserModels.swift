@@ -13,6 +13,16 @@ struct BrowserStep: Identifiable, Codable, Equatable {
         case reload
         case wait
         case extract
+        /// Tries to dismiss whatever cookie/consent banner is covering the page
+        /// before doing anything else. Privacy-first: Reject all → Reject →
+        /// Accept only-essential → Accept all. Falls back to clicking the
+        /// topmost visible fixed-position button if no labelled consent copy
+        /// is found.
+        /// Wire form is `dismiss_consent` (matches the snake_case used in
+        /// `BrowserAgent`'s allowed-kinds list and the model-facing JSON
+        /// schema). The Swift identifier stays camelCase for idiomatic
+        /// switch usage.
+        case dismissConsent = "dismiss_consent"
 
         var systemImage: String {
             switch self {
@@ -25,6 +35,7 @@ struct BrowserStep: Identifiable, Codable, Equatable {
             case .reload: return "arrow.clockwise"
             case .wait: return "clock"
             case .extract: return "doc.text.magnifyingglass"
+            case .dismissConsent: return "hand.raised.fill"
             }
         }
 

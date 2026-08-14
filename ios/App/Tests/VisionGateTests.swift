@@ -84,7 +84,7 @@ final class VisionGateTests: XCTestCase {
         // not enable vision from name heuristics alone — the user has to
         // turn the toggle on in Settings.
         let model = AIModel(
-            provider: .custom(id: "my-ollama"),
+            provider: .custom("my-ollama"),
             modelID: "llava-13b",
             displayName: "llava-13b",
             contextWindow: 4096

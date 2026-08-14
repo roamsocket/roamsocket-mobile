@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import AnyProvCore
 
 /// Talks to the selected chat model to turn a user goal (plus the current
@@ -12,7 +13,76 @@ enum BrowserAgent {
         var errorDescription: String? { message }
     }
 
-    private static let allowedKinds = "navigate, click, type, scroll, back, forward, reload, wait, extract"
+    private static let allowedKinds = "navigate, click, type, scroll, back, forward, reload, wait, extract, dismiss_consent"
+
+    /// Visible-text threshold below which we attach a page screenshot to the
+    /// model call. <200 chars is roughly "one paragraph or less" — anything
+    /// shorter than that and the agent is guessing blind (CAPTCHA, blank
+    /// JS-only page, cookie banner with no real text, etc.).
+    ///
+    /// Tuned by hand: at 200 we still attach on a lot of legitimate
+    /// one-line landing pages, but those are also the cases where a
+    /// picture genuinely helps (search box + logo only). Keep it tight
+    /// so heavy text-pages don't pay the image tax unnecessarily.
+    static let imageFallbackTextThreshold = 200
+
+    /// True when the page text looks like it's mostly cookie/consent
+    /// *dialog* copy rather than real content (or a long privacy policy).
+    /// Cheaply heuristic (case-insensitive substring presence, weighted by
+    /// hit count) — the goal is to catch the obvious "this is a consent
+    /// banner covering the page" cases so we attach an image even when
+    /// the text is technically long.
+    ///
+    /// Markers chosen for *action-oriented* consent UX copy:
+    /// "we use cookies"/"by clicking accept" appear in banner CTAs but
+    /// rarely in policy pages. Conversely, "consent" by itself is too
+    /// generic — any privacy policy mentions it.
+    ///
+    /// Threshold is 2 to avoid catching pages that happen to mention one
+    /// cookie reference in passing; 3+ is the "this is clearly a banner"
+    /// zone. Tunes via the privacy-policy regression test in
+    /// `BrowserAgentConsentTests`.
+    static func looksLikeConsentPage(_ text: String) -> Bool {
+        guard !text.isEmpty else { return false }
+        let lower = text.lowercased()
+        var hits = 0
+        let markers = [
+            "we use cookies",
+            "this site uses cookies",
+            "by clicking",
+            "privacy choices",
+            "accept all",
+            "reject all",
+            "cookie preferences",
+            "manage settings",
+            "personalize my choices",
+            "consent preferences",
+        ]
+        for marker in markers {
+            if lower.contains(marker) { hits += 1 }
+        }
+        // Two-or-more banner-action phrases strongly suggest a consent
+        // dialog (privacy policies have lots of legalese but they don't
+        // usually say "by clicking accept all" or "manage settings" up
+        // front — those are banner CTA language).
+        return hits >= 2
+    }
+
+    /// Decode a `UIImage` into the `ProviderChatMessage.ImageAttachment`
+    /// shape. Prefers JPEG (smaller payload, every provider supports it)
+    /// and falls back to PNG. Re-encodes at a modest quality so we don't
+    /// ship a giant original — the caller should already have downscaled
+    /// to ≤1024px via `BrowserTab.takeCompressedSnapshot`.
+    static func imageAttachment(from image: UIImage?) -> ProviderChatMessage.ImageAttachment? {
+        guard let image else { return nil }
+        if let jpeg = image.jpegData(compressionQuality: 0.7) {
+            return ProviderChatMessage.ImageAttachment(mimeType: "image/jpeg", jpegData: jpeg)
+        }
+        if let png = image.pngData() {
+            return ProviderChatMessage.ImageAttachment(mimeType: "image/png", base64Data: png.base64EncodedString(), rawBytes: png)
+        }
+        return nil
+    }
 
     private static func systemPrompt() -> String {
         """
@@ -35,8 +105,12 @@ enum BrowserAgent {
         - "scroll" target is "up" or "down".
         - "wait" target is a whole number of seconds (used sparingly, e.g. after submitting a search). The driver already waits for the page to fully settle (readyState complete + network quiet + a minimum paint delay) after every action, so you do NOT need to insert "wait" steps just because a page is JavaScript-heavy — only use "wait" when you genuinely need extra time for an animation, redirect, or external system to finish.
         - "extract" means "read the resulting page and summarize for the user" — use it as the final step whenever you need to report back what happened.
+        - "dismiss_consent" gets the cookie/privacy banner out of the way. Use it as the FIRST step whenever the page text is dominated by consent language (phrases like "we use cookies", "your privacy", "accept all", "reject all", "manage settings", "this site uses cookies"), OR when the visible text looks like the real page is hidden behind a fixed/sticky overlay. Describe in "description" what's being dismissed ("Dismiss the cookie banner so I can see the real page") and pass a short hint in "target" only if you know which vendor it is (e.g. "OneTrust", "Cookiebot") — otherwise leave "target" empty. The driver handles the click. After it runs, decide what to do based on the fresh page text in the next turn.
         - Keep plans short: 1-6 steps. Never invent data you weren't given (login credentials, payment details, personal info) — if the task needs a secret you don't have, stop and add a single step explaining what's missing instead of guessing.
         - Never mark a task complete in "description" text; describe intent ("Search for X"), not outcome ("Searched for X").
+
+        Reading from images:
+        - Sometimes the page snapshot below includes a "page-image-attached" note — that means an actual picture of the page was attached to this prompt. When an image is attached, use it to see layout, banner positions, image-only/labeled-with-icons buttons, and anything else the text snippet missed. Do NOT describe the picture to the user — it's grounding for *you*, not for them. Never invent a step you can't justify from the text + image + visible controls list.
 
         Anti-loop rules:
         - Before adding a "scroll" step, scan the "Prominent clickable elements" \
@@ -46,12 +120,17 @@ enum BrowserAgent {
         - Do not include more than one "scroll" step in a row unless the goal \
         explicitly requires reaching the bottom of a long page (a list of N \
         items, an article, etc.).
+        - When the page looks covered by a consent/cookie overlay (visible text \
+        dominated by words like "cookies", "consent", "privacy", "accept", \
+        "reject", OR a "page-image-attached" hint and the image shows a \
+        full-page modal/overlay), do NOT scroll. Add a "dismiss_consent" \
+        step as your very first one and re-plan from there.
         """
     }
 
     /// Shared page-grounding block reused by both the initial plan prompt
     /// and the after-every-step re-analysis prompt.
-    private static func pageContextLines(_ context: BrowserPageContext?) -> [String] {
+    private static func pageContextLines(_ context: BrowserPageContext?, attachedImage: Bool = false) -> [String] {
         guard let context else {
             return ["No page is loaded yet. If the request needs a specific site, start with a \"navigate\" step."]
         }
@@ -68,21 +147,34 @@ enum BrowserAgent {
             let sample = context.links.prefix(30).map { "- \($0.label)" }.joined(separator: "\n")
             lines.append("Prominent clickable elements on the page:\n\(sample)")
         }
+        if attachedImage {
+            // Tells the model "you can see the page" — referenced in the
+            // system prompt's "Reading from images" guidance. Cheap
+            // explicit hint so the model doesn't ignore the attachment.
+            lines.append("page-image-attached: a JPEG screenshot of the visible viewport is included with this turn. Use it for layout, banner positions, image-only/labeled-with-icons buttons, and anything the text snippet missed.")
+        }
         return lines
     }
 
-    private static func userPrompt(goal: String, context: BrowserPageContext?) -> String {
+    private static func userPrompt(goal: String, context: BrowserPageContext?, attachedImage: Bool = false) -> String {
         var lines: [String] = ["User request: \(goal)"]
-        lines.append(contentsOf: pageContextLines(context))
+        lines.append(contentsOf: pageContextLines(context, attachedImage: attachedImage))
         lines.append("Respond with the JSON plan now.")
         return lines.joined(separator: "\n\n")
     }
 
     /// Ask the model for a plan. Throws `PlanError` on missing model/key or
     /// unparsable output so the caller can show a friendly message.
+    ///
+    /// When `attachedImage` is non-nil the snapshot is included as an inline
+    /// image on the user message (Anthropic / OpenAI-compat / Google
+    /// providers all accept JPEGs) so the model can see layout, banner
+    /// positions, icon-only buttons, etc. Pass an image whenever the text
+    /// snapshot is thin (< ~200 chars) or dominated by consent copy.
     static func requestPlan(
         goal: String,
         context: BrowserPageContext?,
+        attachedImage: UIImage?,
         model: AIModel,
         apiKey: String,
         catalog: ModelCatalog,
@@ -90,9 +182,11 @@ enum BrowserAgent {
         style: CustomProviderStyle?
     ) async throws -> BrowserPlan {
         let provider = catalog.provider(model.provider, customBaseURL: customBaseURL, style: style)
+        let prompt = userPrompt(goal: goal, context: context, attachedImage: attachedImage != nil)
+        let attachments = imageAttachment(from: attachedImage).map { [$0] } ?? []
         let messages = [
             ProviderChatMessage(role: .system, content: systemPrompt()),
-            ProviderChatMessage(role: .user, content: userPrompt(goal: goal, context: context)),
+            ProviderChatMessage(role: .user, content: prompt, images: attachments),
         ]
         let raw: String
         do {
@@ -194,8 +288,28 @@ enum BrowserAgent {
         "navigate" needs a full URL; "click"/"type" need a short visible-label hint, \
         never a guessed CSS selector; "type" needs the literal text in "value"; \
         "scroll" target is "up"/"down"; "wait" target is whole seconds; "extract" \
-        means read-and-summarize. Never claim in any "description" that the action \
-        already happened — describe intent, not outcome. If the last step failed or \
+        means read-and-summarize; "dismiss_consent" removes the cookie/privacy \
+        banner so the real page becomes usable. Never claim in any "description" \
+        that the action already happened — describe intent, not outcome.
+
+        About "dismiss_consent": when the visible page text is dominated by \
+        consent language (phrases like "we use cookies", "your privacy choices", \
+        "accept all", "manage settings", "personalize my choices"), OR the \
+        "page-image-attached" hint fires and the image shows a fixed/sticky \
+        overlay covering the content, add "dismiss_consent" as your very next \
+        step before doing anything else. The driver will pick the most \
+        privacy-friendly button automatically. If the page is now clean \
+        (no banner text in the visible text), do NOT re-propose dismiss_consent.
+
+        Reading from images:
+        - Sometimes the page snapshot below includes a "page-image-attached" \
+        note — a picture of the live page is on this turn's user message. \
+        When it is, use the image to ground layout, banner positions, image-\
+        only buttons, and anything the text snippet missed. Do NOT describe \
+        the picture to the user — it's only for your grounding. Never invent \
+        a step you can't justify from the text + image + visible controls list.
+
+        If the last step failed or \
         the page doesn't show what was expected, do not just repeat the exact same \
         action — adapt: try a different element description, scroll to find it, or \
         explain in "summary" (with "done": true) what's blocking progress if you're \
@@ -253,7 +367,8 @@ enum BrowserAgent {
         goal: String,
         completedSteps: [BrowserStep],
         context: BrowserPageContext?,
-        pageUnchangedHint: Bool
+        pageUnchangedHint: Bool,
+        attachedImage: Bool = false
     ) -> String {
         var lines: [String] = ["Original goal: \(goal)"]
         if completedSteps.isEmpty {
@@ -291,8 +406,24 @@ enum BrowserAgent {
                     "\u{201C}done\u{201D} with outcome=\u{201C}blocked\u{201D} and a summary naming what was missing."
                 )
             }
+            // When a `dismiss_consent` step failed — "No consent banner
+            // detected." or "Found a banner but no clickable controls." —
+            // the model shouldn't keep retrying. Either the page is clean
+            // already (most common), or the overlay is too exotic for our
+            // detector (rare); in both cases the right move is to proceed
+            // with the original goal, not loop on dismissal.
+            if let last = completedSteps.last, last.status == .failed,
+               last.kind == .dismissConsent
+            {
+                lines.append(
+                    "Last dismiss_consent step FAILED — the auto-dismisser could not find or click a banner control. " +
+                    "If the visible page text looks usable now, proceed with the original goal instead of re-proposing dismiss_consent. " +
+                    "If the page text is still empty or still dominated by consent copy, declare done with outcome=\u{201C}blocked\u{201D} " +
+                    "and explain the banner can't be auto-dismissed on this site."
+                )
+            }
         }
-        lines.append(contentsOf: pageContextLines(context))
+        lines.append(contentsOf: pageContextLines(context, attachedImage: attachedImage))
         if pageUnchangedHint {
             lines.append("HINT: page-unchanged-since-last-step — the page text didn't change after the most recent action. Strongly prefer declaring done over proposing another wait/scroll.")
         }
@@ -303,10 +434,17 @@ enum BrowserAgent {
     /// Re-analyze the live page after a step has run and decide what to do
     /// next — this is what lets the agent adapt in real time instead of
     /// trusting a plan that may already be stale.
+    ///
+    /// When `attachedImage` is non-nil, it's attached as an inline image on
+    /// the user message so the model can see the visible viewport —
+    /// especially useful mid-run when the text snapshot is thin (CAPTCHA
+    /// walls, JS-only pages that haven't painted yet, or after a
+    /// `dismiss_consent` step that didn't quite clear the overlay).
     static func requestNextStep(
         goal: String,
         completedSteps: [BrowserStep],
         context: BrowserPageContext?,
+        attachedImage: UIImage?,
         model: AIModel,
         apiKey: String,
         catalog: ModelCatalog,
@@ -315,17 +453,17 @@ enum BrowserAgent {
         pageUnchangedHint: Bool = false
     ) async throws -> NextStepDecision {
         let provider = catalog.provider(model.provider, customBaseURL: customBaseURL, style: style)
+        let promptText = nextStepUserPrompt(
+            goal: goal,
+            completedSteps: completedSteps,
+            context: context,
+            pageUnchangedHint: pageUnchangedHint,
+            attachedImage: attachedImage != nil
+        )
+        let attachments = imageAttachment(from: attachedImage).map { [$0] } ?? []
         let messages = [
             ProviderChatMessage(role: .system, content: nextStepSystemPrompt()),
-            ProviderChatMessage(
-                role: .user,
-                content: nextStepUserPrompt(
-                    goal: goal,
-                    completedSteps: completedSteps,
-                    context: context,
-                    pageUnchangedHint: pageUnchangedHint
-                )
-            ),
+            ProviderChatMessage(role: .user, content: promptText, images: attachments),
         ]
         let raw: String
         do {
@@ -356,9 +494,9 @@ enum BrowserAgent {
         return prompt
     }
 
-    private static func chatUserPrompt(prompt: String, context: BrowserPageContext?, webSearchBlock: String?) -> String {
+    private static func chatUserPrompt(prompt: String, context: BrowserPageContext?, webSearchBlock: String?, attachedImage: Bool = false) -> String {
         var lines: [String] = ["User: \(prompt)"]
-        lines.append(contentsOf: pageContextLines(context))
+        lines.append(contentsOf: pageContextLines(context, attachedImage: attachedImage))
         if let block = webSearchBlock, !block.isEmpty {
             lines.append(block)
         }
@@ -374,10 +512,16 @@ enum BrowserAgent {
     /// stale training data. `history` carries prior Ask-mode turns so
     /// follow-up questions keep conversational context; only the latest turn
     /// gets a fresh page snapshot (captured at submit time).
+    ///
+    /// When the page text is unusually thin (cookie consent screen, JS-only
+    /// page that hasn't painted, etc.) the caller should pass an
+    /// `attachedImage` so the model can see the page directly instead of
+    /// relying on the (almost empty) text snippet.
     static func chatAboutPage(
         prompt: String,
         context: BrowserPageContext?,
         webSearchBlock: String? = nil,
+        attachedImage: UIImage? = nil,
         history: [ProviderChatMessage] = [],
         model: AIModel,
         apiKey: String,
@@ -386,18 +530,120 @@ enum BrowserAgent {
         style: CustomProviderStyle?
     ) async throws -> String {
         let provider = catalog.provider(model.provider, customBaseURL: customBaseURL, style: style)
+        let userText = chatUserPrompt(
+            prompt: prompt,
+            context: context,
+            webSearchBlock: webSearchBlock,
+            attachedImage: attachedImage != nil
+        )
+        let attachments = imageAttachment(from: attachedImage).map { [$0] } ?? []
         var messages: [ProviderChatMessage] = [
             ProviderChatMessage(role: .system, content: chatSystemPrompt(hasWebResults: webSearchBlock != nil))
         ]
         messages.append(contentsOf: history)
-        messages.append(
-            ProviderChatMessage(role: .user, content: chatUserPrompt(prompt: prompt, context: context, webSearchBlock: webSearchBlock))
-        )
+        messages.append(ProviderChatMessage(role: .user, content: userText, images: attachments))
         do {
             return try await provider.chat(model: model.modelID, apiKey: apiKey, messages: messages, effort: nil)
         } catch {
             throw PlanError(message: error.localizedDescription)
         }
+    }
+
+    // MARK: - Image-only description
+
+    /// System prompt used when we hand the model an image but no text
+    /// context — usually because the visible-text extraction came back
+    /// empty or thin (cookie banner, JS-only page, paywall, blank SPA).
+    /// Crucially: NO actions. The model is only ever asked to describe
+    /// what's visible, in plain prose, so it can be shown verbatim to the
+    /// user (or used as a smarter substitute for the generic
+    /// "(no visible text)" string the agent used to return).
+    private static func describeImageSystemPrompt(role: DescribeRole) -> String {
+        let intro = role == .extract
+            ? """
+            You are a careful description assistant. You can see an image \
+            of a web page but no readable text was extracted from it — \
+            either because it's a heavy JavaScript app that hasn't painted, \
+            a page with a cookie-consent overlay covering everything, a \
+            canvas/WebGL render, or a CAPTCHA. Describe what is visible in \
+            plain prose, in 1-3 sentences, so the user gets a concrete \
+            answer instead of "(no visible text)".
+            """
+            : """
+            You are a careful description assistant. You can see an image \
+            of a web page; describe it in plain prose so the user gets a \
+            concrete answer about what's on screen. Keep it short (2-4 \
+            sentences). Focus on what the user can interact with: text, \
+            buttons, forms, banners, images. Mention the page title and \
+            URL if visible. Do NOT invent what isn't there.
+            """
+        return """
+        \(intro)
+
+        Hard rules:
+        - Plain prose only — no markdown, no JSON, no bullet points.
+        - Do NOT propose or claim any browser actions (you have none).
+        - Do NOT include "the image shows" / "this screenshot" framing; \
+        speak as if describing the page itself.
+        - Do NOT fabricate text or controls you cannot clearly read.
+        """
+    }
+
+    /// What the image is being described for — `extract` is the agent's
+    /// `.extract` step summary (terse, factual), `description` is a
+    /// user-facing "what's on this page" answer (a touch warmer).
+    enum DescribeRole {
+        case extract
+        case description
+    }
+
+    /// Test-only wrapper around the private system prompt so the test
+    /// target can assert what guarantees we make to the model (no
+    /// actions, plain prose). Kept visible-but-narrow so external
+    /// callers can't accidentally invoke the prompt builder.
+    static func describeImageSystemPromptPublic(role: DescribeRole) -> String {
+        return describeImageSystemPrompt(role: role)
+    }
+
+    /// Generate a plain-prose description of `image`. Used by `.extract`
+    /// when the page text was empty/thin, and by Ask-mode chat fallback
+    /// when both the text snapshot and the web-search fallback came up
+    /// dry. Returns `nil` when the image is nil, decoding fails, or the
+    /// provider returns empty text — the caller can then fall back to the
+    /// text-only "(no visible text)" string without committing to it.
+    static func describePage(
+        image: UIImage?,
+        pageURL: String,
+        pageTitle: String,
+        role: DescribeRole,
+        model: AIModel,
+        apiKey: String,
+        catalog: ModelCatalog,
+        customBaseURL: URL?,
+        style: CustomProviderStyle?
+    ) async throws -> String? {
+        guard let attachment = imageAttachment(from: image) else { return nil }
+        let provider = catalog.provider(model.provider, customBaseURL: customBaseURL, style: style)
+        let system = describeImageSystemPrompt(role: role)
+        let userBody: String
+        switch role {
+        case .extract:
+            userBody = "URL: \(pageURL)\nTitle: \(pageTitle)\nDescribe what the page shows right now (1-3 sentences)."
+        case .description:
+            userBody = "URL: \(pageURL)\nTitle: \(pageTitle)\nDescribe what's visible on the page (2-4 sentences)."
+        }
+        let messages = [
+            ProviderChatMessage(role: .system, content: system),
+            ProviderChatMessage(role: .user, content: userBody, images: [attachment]),
+        ]
+        let raw: String
+        do {
+            raw = try await provider.chat(model: model.modelID, apiKey: apiKey, messages: messages, effort: nil)
+        } catch {
+            throw PlanError(message: error.localizedDescription)
+        }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     static func parseNextStepDecision(_ raw: String) throws -> NextStepDecision {

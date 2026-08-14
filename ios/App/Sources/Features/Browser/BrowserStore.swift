@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UIKit
 import AnyProvCore
 
 /// Owns every tab, the address/AI prompt state, bookmarks, history, and the
@@ -328,13 +329,17 @@ final class BrowserStore: ObservableObject {
     private func runInitialPlan(goal: String, model: AIModel, apiKey: String, appState: AppState) async {
         // Wait for the page to settle before planning, same reason as Ask mode.
         if Task.isCancelled { return }
-        let context = await captureContextForPage()
+        // Capture text + an optional page screenshot in one go. The image is
+        // attached when the page is thin or consent-heavy so the model can
+        // actually see the banner (most common cause of "couldn't find X").
+        let (context, image) = await captureContextAndImageForPage()
         if Task.isCancelled { return }
 
         do {
             let plan = try await BrowserAgent.requestPlan(
                 goal: goal,
                 context: context,
+                attachedImage: image,
                 model: model,
                 apiKey: apiKey,
                 catalog: appState.catalog,
@@ -577,7 +582,12 @@ final class BrowserStore: ObservableObject {
             clearPendingPrompt()
             return
         }
-        let context = await captureContextForPage()
+        // Snapshot the page (text + optional image) before asking the model. If
+        // the page is thin or consent-heavy, the image gets attached so the
+        // model can see the actual screen instead of an empty text snippet
+        // — the difference between "I see the cookie banner" and "I can't
+        // find anything on this page" answers.
+        let (context, attachedImage) = await captureContextAndImageForPage()
         if Task.isCancelled {
             chatMessages.removeLast()
             clearPendingPrompt()
@@ -589,7 +599,7 @@ final class BrowserStore: ObservableObject {
         // training data — this is what Chat and Vision already do.
         var webSearchBlock: String?
         var webSearchEmpty: String?
-        if (context?.textSnippet.count ?? 0) < 200 {
+        if (context?.textSnippet.count ?? 0) < BrowserAgent.imageFallbackTextThreshold {
             let query = Self.browserSearchQuery(prompt: goal, context: context)
             let service = WebSearchService()
             do {
@@ -630,6 +640,7 @@ final class BrowserStore: ObservableObject {
                 prompt: goal,
                 context: context,
                 webSearchBlock: webSearchBlock,
+                attachedImage: attachedImage,
                 history: chatHistoryMessages(),
                 model: model,
                 apiKey: apiKey,
@@ -777,6 +788,12 @@ final class BrowserStore: ObservableObject {
                 await tab.installNetworkActivityInstrumentation()
             }
             let context = await activeTab?.captureContext()
+            // Attach a screenshot whenever the text is thin or consent-y so
+            // the model can spot a lingering cookie banner or JS-only page
+            // that the text snippet hides. The gate is intentionally the
+            // same one used for the initial plan and Ask-mode chat, so the
+            // user gets consistent image grounding across the run.
+            let attachedImage = await attachmentImageIfNeeded(for: context)
             // Lightweight anti-runaway: if the page didn't change at all
             // since the last step and we've already done a few, ask the
             // model to declare done rather than propose another scroll/wait.
@@ -787,6 +804,7 @@ final class BrowserStore: ObservableObject {
                     goal: goal,
                     completedSteps: completed,
                     context: context,
+                    attachedImage: attachedImage,
                     model: modelContext.model,
                     apiKey: modelContext.apiKey,
                     catalog: modelContext.catalog,
@@ -1006,10 +1024,52 @@ final class BrowserStore: ObservableObject {
         case .extract:
             // Extract is the read step — it needs the most up-to-date view, so
             // we deliberately wait here too before snapshotting.
+            await tab.hidePointer()
             await tab.waitForPageSettled(timeout: 4)
             let context = await tab.captureContext()
+            let textCount = context.textSnippet.count
+            // When the text snapshot is thin or consent-y, the regular summary
+            // would return the useless "(no visible text)" string — so we
+            // ship the page screenshot off to the model via `describePage`
+            // and use its prose description as the step note. This is what
+            // lets a cookie-banner page, JS-only SPA, or canvas-heavy page
+            // still produce a real "the page shows a consent overlay…" summary
+            // instead of "I couldn't read it."
+            if textCount < BrowserAgent.imageFallbackTextThreshold || BrowserAgent.looksLikeConsentPage(context.textSnippet),
+               let image = await tab.takeCompressedSnapshot()
+            {
+                if let modelContext = resolveModelContext() {
+                    let described = try? await BrowserAgent.describePage(
+                        image: image,
+                        pageURL: context.url,
+                        pageTitle: context.title,
+                        role: .extract,
+                        model: modelContext.model,
+                        apiKey: modelContext.apiKey,
+                        catalog: modelContext.catalog,
+                        customBaseURL: modelContext.customBaseURL,
+                        style: modelContext.style
+                    )
+                    if let described, !described.isEmpty {
+                        return (true, "\(context.title): \(described)")
+                    }
+                }
+                // Fall back to text-only if the vision call fails (e.g. local
+                // Metal without an attached VLM, or model returned nothing).
+            }
             let summary = context.textSnippet.isEmpty ? "(no visible text)" : String(context.textSnippet.prefix(280))
             return (true, "\(context.title): \(summary)")
+        case .dismissConsent:
+            // Privacy-first auto-dismiss for whatever cookie/consent banner is
+            // currently occluding the page. Returns its own human-readable note
+            // ("Dismissed consent banner (Reject all)" etc.) so the live step
+            // log shows what actually happened. We follow up with a real page
+            // settle so any clicks/cascades the SDK triggers have time to apply
+            // before the next step reads the page.
+            await tab.hidePointer()
+            let result = await tab.dismissConsent()
+            await tab.waitForPageSettled(timeout: 4, minSettle: 0.2)
+            return (result.ok, result.note)
         }
     }
 
@@ -1046,6 +1106,48 @@ final class BrowserStore: ObservableObject {
             context = await tab.captureContext()
         }
         return context
+    }
+
+    /// Snap a `(context, image)` pair for the active page: the same text/links
+    /// bundle as `captureContextForPage`, plus an optional downscaled JPEG
+    /// snapshot whenever the agent would otherwise be guessing blind.
+    ///
+    /// The image is attached to the next model call when the page text is
+    /// too thin to be actionable (< ~200 chars) OR is dominated by consent
+    /// copy ("we use cookies", "manage settings", etc.). In both cases the
+    /// model gets to *see* the page instead of describing the absence of
+    /// text — that's what lets it spot a cookie banner or a JS-only page
+    /// and reach for `dismiss_consent` (or the right banner button) instead
+    /// of looping on "couldn't find anything matching X".
+    ///
+    /// Single shared gate so every calling path (initial plan, next-step
+    /// re-analysis, Ask-mode chat) agrees on when images get attached —
+    /// prevents surprising the user with one image attachment in mode A and
+    /// none in mode B.
+    private func captureContextAndImageForPage(budget: TimeInterval = 15) async -> (context: BrowserPageContext?, image: UIImage?) {
+        let context = await captureContextForPage(budget: budget)
+        if let image = await attachmentImageIfNeeded(for: context) {
+            return (context, image)
+        }
+        return (context, nil)
+    }
+
+    /// Captures (and downsamples) a page screenshot iff the current text
+    /// snapshot is thin or consent-y. Kept separate from
+    /// `captureContextAndImageForPage` so future call sites can opt into
+    /// "always attach an image" without redoing the text snapshot loop.
+    private func attachmentImageIfNeeded(for context: BrowserPageContext?) async -> UIImage? {
+        guard let context else { return nil }
+        guard let tab = activeTab else { return nil }
+        // Trigger image attachment in two cases:
+        //   1. Text is thin — the agent would otherwise be guessing blind.
+        //   2. Text is dominated by consent copy — even with plenty of text,
+        //      the layout (banner at the bottom, "Accept all" CTA, etc.) is
+        //      what we actually need to read.
+        let textThin = context.textSnippet.count < BrowserAgent.imageFallbackTextThreshold
+        let looksConsent = BrowserAgent.looksLikeConsentPage(context.textSnippet)
+        guard textThin || looksConsent else { return nil }
+        return await tab.takeCompressedSnapshot()
     }
 
     /// Prior Ask-mode turns, ready to send back to the model so follow-up
