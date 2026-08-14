@@ -53,6 +53,7 @@ struct VisionView: View {
                 shutterStackClearance: shutterStackClearance,
                 hasFrozenCapture: viewModel.hasFrozenCapture,
                 sheetMode: viewModel.sheetMode,
+                phase: viewModel.phase,
                 keyboardHeight: keyboardHeight,
                 keyboardVisible: keyboardVisible
             )
@@ -62,6 +63,7 @@ struct VisionView: View {
             let chromeBlockHeight = layout.chromeBlockHeight
             let topChromeClearance = layout.topChromeClearance
             let bottomPad: CGFloat = layout.bottomPad
+            let qrAboveSheetVisible = layout.qrAboveSheetVisible
             let sheetOccupied = estimatedSheetOccupiedHeight(
                 totalHeight: geo.size.height,
                 topChromeClearance: topChromeClearance,
@@ -111,26 +113,15 @@ struct VisionView: View {
                     .zIndex(1.5)
                 }
 
-                // QR-code card (live + result). Floats above the analysis
-                // sheet without touching the still or the capture chrome.
-                if let qr = viewModel.scannedQR {
-                    let cardBottomInset: CGFloat = {
-                        // If the analysis card is on screen, sit just above its
-                        // top edge so the card doesn't cover the first lines of
-                        // the answer. Otherwise (no capture yet, live camera
-                        // only) sit above the chrome.
-                        switch viewModel.sheetMode {
-                        case .full, .expanded, .minimized: return sheetOccupied + 14
-                        case .hidden: return chromeBlockHeight + 14
-                        }
-                    }()
-                    qrCard(
-                        payload: qr,
-                        bottomInset: cardBottomInset
-                    )
-                    .frame(maxWidth: min(geo.size.width - 28, 480))
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .zIndex(1.6)
+                // QR-code card placement:
+                // - Live / capturing: card lives in `bottomControls` (above
+                //   the prompt selector) so it sits naturally in the chrome.
+                // - Analyzing / result / failed: card floats above the
+                //   analysis sheet so the user can still reach it.
+                if qrAboveSheetVisible, let qr = viewModel.scannedQR {
+                    qrCardAboveSheetContainer(payload: qr, sheetOccupied: sheetOccupied, totalWidth: geo.size.width)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .zIndex(1.6)
                 }
 
                 // Chrome + live camera. Camera fills only the middle band so it
@@ -321,13 +312,59 @@ struct VisionView: View {
         }
     }
 
-    /// QR card wrapper: applies the bottom inset (above the analysis sheet or
-    /// above the chrome when no capture is in flight) and the auto-expire
-    /// timer. Extracted so SwiftUI's type-checker doesn't blow up trying to
-    /// resolve the still-overlay ZStack + this card simultaneously.
-    private func qrCard(
+    /// QR card wrapper used while the live camera is on screen. Sits inside the
+    /// chrome stack so it lives directly above the prompt selector. Auto-expires
+    /// after `qrCardVisibleDuration`.
+    private func qrCardInline(payload: VisionViewModel.ScannedQR) -> some View {
+        VisionQRScanCard(
+            payload: payload,
+            onUse: {
+                viewModel.consumeScannedQR(pasteIntoCapturePrompt: true)
+                viewModel.requestQRRescan()
+            },
+            onCopy: { /* flash logic lives in the card itself */ },
+            onOpenURL: payload.url.map { url in
+                {
+                    UIApplication.shared.open(url, options: [:]) { _ in }
+                    viewModel.dismissScannedQR()
+                    viewModel.requestQRRescan()
+                }
+            },
+            onDismiss: {
+                viewModel.dismissScannedQR()
+                viewModel.requestQRRescan()
+            }
+        )
+        .task(id: payload.id) {
+            // Auto-expire — fires when the card mounts. Re-fires when a fresh
+            // QR is detected (different `payload.id`), so the timer never
+            // outlives the visible card.
+            try? await Task.sleep(nanoseconds: UInt64(VisionViewModel.qrCardVisibleDuration * 1_000_000_000))
+            if !Task.isCancelled, viewModel.scannedQR?.id == payload.id {
+                viewModel.dismissScannedQR()
+                viewModel.requestQRRescan()
+            }
+        }
+    }
+
+    /// QR card wrapper for `.analyzing` / `.result` / `.failed` phases. Floats
+    /// above the analysis sheet so it stays reachable when the chrome is
+    /// covered. The caller is responsible for the bottom inset via padding.
+    private func qrCardAboveSheetContainer(
         payload: VisionViewModel.ScannedQR,
-        bottomInset: CGFloat
+        sheetOccupied: CGFloat,
+        totalWidth: CGFloat
+    ) -> some View {
+        qrCardAboveSheet(payload: payload, sheetOccupied: sheetOccupied)
+            .frame(maxWidth: min(totalWidth - 28, 480))
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .padding(.bottom, sheetOccupied + 14)
+    }
+
+    /// Inner QR card used by `qrCardAboveSheetContainer`.
+    private func qrCardAboveSheet(
+        payload: VisionViewModel.ScannedQR,
+        sheetOccupied _: CGFloat
     ) -> some View {
         VisionQRScanCard(
             payload: payload,
@@ -348,16 +385,7 @@ struct VisionView: View {
                 viewModel.requestQRRescan()
             }
         )
-        .padding(.bottom, bottomInset)
-        .frame(
-            maxWidth: .infinity,
-            maxHeight: .infinity,
-            alignment: .bottom
-        )
         .task(id: payload.id) {
-            // Auto-expire — fires when the card mounts. Re-fires when a fresh
-            // QR is detected (different `payload.id`), so the timer never
-            // outlives the visible card.
             try? await Task.sleep(nanoseconds: UInt64(VisionViewModel.qrCardVisibleDuration * 1_000_000_000))
             if !Task.isCancelled, viewModel.scannedQR?.id == payload.id {
                 viewModel.dismissScannedQR()
@@ -418,6 +446,19 @@ struct VisionView: View {
                 emptyVisionModelsHint
             }
 
+            // QR-code card sits at the top of the bottom chrome so it never
+            // collides with the shutter / zoom row, and reads as "the
+            // latest thing above the prompt selector". For non-live
+            // phases the chrome is hidden behind the analysis sheet, so
+            // the card is rendered in `body` above the sheet instead.
+            if let qr = viewModel.scannedQR,
+               viewModel.phase == .live || viewModel.phase == .capturing
+            {
+                qrCardInline(payload: qr)
+                    .frame(maxWidth: min(UIScreen.main.bounds.width - 28, 480))
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
             if viewModel.hasFrozenCapture {
                 // When the analysis card is open (medium/full), Retake lives on the
                 // sheet header. Keep a bottom Retake only for the minimized pill state
@@ -458,6 +499,7 @@ struct VisionView: View {
                 }
             }
         }
+        .animation(.easeOut(duration: 0.22), value: viewModel.scannedQR?.id)
     }
 
     /// 1× / 2× / Max chips in the iOS Camera-app style. Tap a chip → smooth
@@ -844,6 +886,7 @@ private struct LayoutValues {
     let shutterStackClearance: CGFloat
     let hasFrozenCapture: Bool
     let sheetMode: VisionViewModel.SheetMode
+    let phase: VisionViewModel.Phase
     let keyboardHeight: CGFloat
     let keyboardVisible: Bool
 
@@ -878,6 +921,15 @@ private struct LayoutValues {
             return max(keyboardHeight, bottomSafe) + 8
         }
         return max(bottomSafe, 8) + 10
+    }
+
+    /// True when the QR card should float above the analysis sheet. In live
+    /// / capturing the chrome stack owns the card placement instead.
+    var qrAboveSheetVisible: Bool {
+        switch phase {
+        case .analyzing, .result, .failed: return true
+        case .live, .capturing: return false
+        }
     }
 }
 
