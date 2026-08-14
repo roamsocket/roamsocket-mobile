@@ -1,0 +1,44 @@
+# EditorConfig: https://editorconfig.org
+# Keeps indent/EOF/whitespace behavior consistent across agents and humans,
+# even before any linter runs. Most editors (VS Code, Zed, Xcode, IntelliJ,
+# Sublime, Helix) read this automatically.
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+indent_style = space
+indent_size = 2
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# SwiftUI / Foundation — SwiftFormat drives the heavy lifting
+[*.swift]
+indent_size = 4
+trim_trailing_whitespace = false   # Swift multi-line strings often trail
+max_line_length = 120
+
+# Markdown — preserve trailing whitespace (used for line breaks)
+[*.md]
+trim_trailing_whitespace = false
+
+# YAML — XcodeGen spec + workflows
+[*.{yml,yaml}]
+indent_size = 2
+
+# JSON — package manifests, Biome handles formatting
+[*.json]
+indent_size = 2
+
+# Shell scripts — match existing style
+[*.{sh,bash}]
+indent_size = 2
+
+# Python — used in post-edit-xcodegen.sh sibling helper
+[*.py]
+indent_size = 4
+
+# Makefiles — tabs are non-negotiable
+[Makefile]
+indent_style = tab

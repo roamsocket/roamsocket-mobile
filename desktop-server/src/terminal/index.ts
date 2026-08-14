@@ -8,9 +8,9 @@
  * (no `TERM=`, no `isatty`, no colors from `ls --color`). For a true
  * PTY experience, install `node-pty` and swap the implementation.
  */
-import { spawn, type ChildProcess } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import type { WebSocket } from "ws";
+import { spawn, type ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import type { WebSocket } from 'ws';
 
 export interface TerminalSession {
   id: string;
@@ -23,26 +23,26 @@ const terminals = new Map<string, TerminalSession>();
 
 export function startTerminal(workdir: string, ws: WebSocket): TerminalSession {
   const id = randomUUID();
-  const proc = spawn(process.env.SHELL ?? "/bin/zsh", ["-i"], {
+  const proc = spawn(process.env.SHELL ?? '/bin/zsh', ['-i'], {
     cwd: workdir,
     env: {
       ...process.env,
-      PS1: "$ ",
-      TERM: "dumb",
+      PS1: '$ ',
+      TERM: 'dumb',
     },
-    stdio: ["pipe", "pipe", "pipe"],
+    stdio: ['pipe', 'pipe', 'pipe'],
   });
-  const session: TerminalSession = { id, workdir, proc, buffer: "" };
+  const session: TerminalSession = { id, workdir, proc, buffer: '' };
   terminals.set(id, session);
 
-  proc.stdout?.on("data", (data) => sendChunk(ws, id, "out", data));
-  proc.stderr?.on("data", (data) => sendChunk(ws, id, "err", data));
-  proc.on("exit", (code) => {
-    sendControl(ws, id, "exit", code ?? 0);
+  proc.stdout?.on('data', (data) => sendChunk(ws, id, 'out', data));
+  proc.stderr?.on('data', (data) => sendChunk(ws, id, 'err', data));
+  proc.on('exit', (code) => {
+    sendControl(ws, id, 'exit', code ?? 0);
     terminals.delete(id);
   });
 
-  sendControl(ws, id, "ready", 0);
+  sendControl(ws, id, 'ready', 0);
   return session;
 }
 
@@ -58,26 +58,30 @@ export function resizeTerminal(id: string, _cols: number, _rows: number): void {
 export function killTerminal(id: string): void {
   const session = terminals.get(id);
   if (!session) return;
-  session.proc.kill("SIGTERM");
+  session.proc.kill('SIGTERM');
   terminals.delete(id);
 }
 
-function sendChunk(ws: WebSocket, id: string, stream: "out" | "err", data: Buffer | string) {
+function sendChunk(ws: WebSocket, id: string, stream: 'out' | 'err', data: Buffer | string) {
   if (ws.readyState !== ws.OPEN) return;
-  ws.send(JSON.stringify({
-    type: "terminal_data",
-    terminalId: id,
-    stream,
-    data: typeof data === "string" ? data : data.toString("utf8"),
-  }));
+  ws.send(
+    JSON.stringify({
+      type: 'terminal_data',
+      terminalId: id,
+      stream,
+      data: typeof data === 'string' ? data : data.toString('utf8'),
+    })
+  );
 }
 
-function sendControl(ws: WebSocket, id: string, event: "ready" | "exit", code: number) {
+function sendControl(ws: WebSocket, id: string, event: 'ready' | 'exit', code: number) {
   if (ws.readyState !== ws.OPEN) return;
-  ws.send(JSON.stringify({
-    type: "terminal_control",
-    terminalId: id,
-    event,
-    code,
-  }));
+  ws.send(
+    JSON.stringify({
+      type: 'terminal_control',
+      terminalId: id,
+      event,
+      code,
+    })
+  );
 }

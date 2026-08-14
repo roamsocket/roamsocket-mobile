@@ -5,47 +5,43 @@
  * for a BYOK local agent + phone pairing companion (no /usage, /cost, cloud
  * teleport, subscription login, etc.).
  */
-import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import path from "node:path";
-import QRCode from "qrcode";
-import { listCloudModels } from "../client/list-cloud-models.js";
-import { CHAT_PROVIDERS, defaultModelFor } from "../client/providers-meta.js";
-import type { PermissionMode } from "../protocol.js";
-import { getMetalStore } from "../metal/store.js";
-import { pairPayload } from "./banner.js";
-import {
-  type MetalCliAction,
-  getMetalCompletions,
-  parseMetalArgs,
-} from "./metal-cli.js";
-import { loadCliSecrets, resolveApiKey } from "./secrets.js";
+import { spawnSync } from 'node:child_process';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import QRCode from 'qrcode';
+import { listCloudModels } from '../client/list-cloud-models.js';
+import { CHAT_PROVIDERS, defaultModelFor } from '../client/providers-meta.js';
+import type { PermissionMode } from '../protocol.js';
+import { getMetalStore } from '../metal/store.js';
+import { pairPayload } from './banner.js';
+import { type MetalCliAction, getMetalCompletions, parseMetalArgs } from './metal-cli.js';
+import { loadCliSecrets, resolveApiKey } from './secrets.js';
 
-export type EffortLevel = "low" | "medium" | "high";
+export type EffortLevel = 'low' | 'medium' | 'high';
 
 export type CliCommand =
-  | { kind: "help" }
-  | { kind: "clear" }
-  | { kind: "compact" }
-  | { kind: "quit" }
-  | { kind: "mobile" }
-  | { kind: "pair" }
-  | { kind: "server" }
-  | { kind: "permission"; mode?: PermissionMode }
-  | { kind: "model"; provider?: string; model?: string }
-  | { kind: "keys"; provider?: string; key?: string }
-  | { kind: "effort"; effort?: EffortLevel }
-  | { kind: "context" }
-  | { kind: "doctor" }
-  | { kind: "init" }
-  | { kind: "memory" }
-  | { kind: "tasks" }
-  | { kind: "diff" }
-  | { kind: "export" }
-  | { kind: "metal"; action: MetalCliAction }
-  | { kind: "unknown"; raw: string }
+  | { kind: 'help' }
+  | { kind: 'clear' }
+  | { kind: 'compact' }
+  | { kind: 'quit' }
+  | { kind: 'mobile' }
+  | { kind: 'pair' }
+  | { kind: 'server' }
+  | { kind: 'permission'; mode?: PermissionMode }
+  | { kind: 'model'; provider?: string; model?: string }
+  | { kind: 'keys'; provider?: string; key?: string }
+  | { kind: 'effort'; effort?: EffortLevel }
+  | { kind: 'context' }
+  | { kind: 'doctor' }
+  | { kind: 'init' }
+  | { kind: 'memory' }
+  | { kind: 'tasks' }
+  | { kind: 'diff' }
+  | { kind: 'export' }
+  | { kind: 'metal'; action: MetalCliAction }
+  | { kind: 'unknown'; raw: string }
   /** Pass through to the agent (includes /goal and skill-style kickoffs). */
-  | { kind: "agent"; text: string };
+  | { kind: 'agent'; text: string };
 
 export interface SlashCommandDef {
   /** Canonical name without leading slash. */
@@ -67,118 +63,118 @@ export interface SlashCommandDef {
  * Keep aliases out of the primary list when they are short helpers (/h, /q).
  */
 export const SLASH_COMMANDS: SlashCommandDef[] = [
-  { name: "help", aliases: ["h", "?"], description: "Show slash-command help" },
-  { name: "clear", aliases: ["new", "reset"], description: "New conversation (same workdir)" },
+  { name: 'help', aliases: ['h', '?'], description: 'Show slash-command help' },
+  { name: 'clear', aliases: ['new', 'reset'], description: 'New conversation (same workdir)' },
   {
-    name: "compact",
-    description: "Free context — start a fresh conversation (same workdir)",
+    name: 'compact',
+    description: 'Free context — start a fresh conversation (same workdir)',
   },
   {
-    name: "mobile",
-    description: "Show pairing QR + 6-digit code for the iOS app",
+    name: 'mobile',
+    description: 'Show pairing QR + 6-digit code for the iOS app',
   },
   {
-    name: "pair",
-    aliases: ["code"],
-    description: "Show the 6-digit pairing code (no QR)",
+    name: 'pair',
+    aliases: ['code'],
+    description: 'Show the 6-digit pairing code (no QR)',
   },
   {
-    name: "server",
-    aliases: ["status"],
-    description: "Server port, LAN/tunnel, workdir",
+    name: 'server',
+    aliases: ['status'],
+    description: 'Server port, LAN/tunnel, workdir',
   },
   {
-    name: "model",
-    usage: "[provider/model]",
-    description: "Show or set provider/model",
+    name: 'model',
+    usage: '[provider/model]',
+    description: 'Show or set provider/model',
   },
   {
-    name: "effort",
-    usage: "[low|medium|high]",
-    description: "Show or set reasoning effort",
+    name: 'effort',
+    usage: '[low|medium|high]',
+    description: 'Show or set reasoning effort',
   },
   {
-    name: "permission",
-    aliases: ["perm", "mode", "permissions"],
-    usage: "[acceptEdits|ask|plan]",
-    description: "Cycle or set permission mode",
+    name: 'permission',
+    aliases: ['perm', 'mode', 'permissions'],
+    usage: '[acceptEdits|ask|plan]',
+    description: 'Cycle or set permission mode',
   },
   {
-    name: "plan",
-    description: "Switch to plan mode (read-only tools)",
+    name: 'plan',
+    description: 'Switch to plan mode (read-only tools)',
   },
   {
-    name: "keys",
-    aliases: ["key"],
-    usage: "[provider key]",
-    description: "List or save a provider API key",
+    name: 'keys',
+    aliases: ['key'],
+    usage: '[provider key]',
+    description: 'List or save a provider API key',
   },
   {
-    name: "metal",
-    usage: "[browse|download|use|delete|runtime|…]",
-    description: "On-device Metal models — browser, download, use, runtime",
+    name: 'metal',
+    usage: '[browse|download|use|delete|runtime|…]',
+    description: 'On-device Metal models — browser, download, use, runtime',
   },
   {
-    name: "goal",
-    usage: "[condition|clear]",
-    description: "Keep working until a condition is met",
-    toAgent: (args) => (args ? `/goal ${args}` : "/goal"),
+    name: 'goal',
+    usage: '[condition|clear]',
+    description: 'Keep working until a condition is met',
+    toAgent: (args) => (args ? `/goal ${args}` : '/goal'),
   },
   {
-    name: "context",
-    description: "Show model, mode, workdir, tunnel, task count",
+    name: 'context',
+    description: 'Show model, mode, workdir, tunnel, task count',
   },
   {
-    name: "doctor",
-    description: "Quick health check (keys, workdir, server)",
+    name: 'doctor',
+    description: 'Quick health check (keys, workdir, server)',
   },
   {
-    name: "init",
-    description: "Create a starter AGENTS.md in the workdir",
+    name: 'init',
+    description: 'Create a starter AGENTS.md in the workdir',
   },
   {
-    name: "memory",
-    description: "Show loaded instructions (global / workspace / folder .claude)",
+    name: 'memory',
+    description: 'Show loaded instructions (global / workspace / folder .claude)',
   },
   {
-    name: "tasks",
-    description: "Show the agent task checklist",
+    name: 'tasks',
+    description: 'Show the agent task checklist',
   },
   {
-    name: "diff",
-    description: "Show git status + short diff in the workdir",
+    name: 'diff',
+    description: 'Show git status + short diff in the workdir',
   },
   {
-    name: "export",
-    description: "Write the current transcript to a text file",
+    name: 'export',
+    description: 'Write the current transcript to a text file',
   },
   {
-    name: "review",
-    aliases: ["code-review"],
-    usage: "[focus]",
-    description: "Ask the agent to review the current diff",
+    name: 'review',
+    aliases: ['code-review'],
+    usage: '[focus]',
+    description: 'Ask the agent to review the current diff',
     toAgent: (args) =>
       args
         ? `Review the current uncommitted changes with focus on: ${args}. Look for bugs, regressions, and missing tests. Summarize findings.`
-        : "Review the current uncommitted changes for correctness bugs, edge cases, and cleanup. Summarize findings with severity.",
+        : 'Review the current uncommitted changes for correctness bugs, edge cases, and cleanup. Summarize findings with severity.',
   },
   {
-    name: "security-review",
-    usage: "[focus]",
-    description: "Ask the agent for a security-focused diff review",
+    name: 'security-review',
+    usage: '[focus]',
+    description: 'Ask the agent for a security-focused diff review',
     toAgent: (args) =>
       args
         ? `Security-review the current changes focusing on: ${args}. Flag injection, auth, secrets, and unsafe shell/file use.`
-        : "Security-review the current uncommitted changes. Flag injection, auth gaps, secret leaks, path traversal, and unsafe commands.",
+        : 'Security-review the current uncommitted changes. Flag injection, auth gaps, secret leaks, path traversal, and unsafe commands.',
   },
   {
-    name: "quit",
-    aliases: ["exit", "q"],
-    description: "Exit the TUI (stops the pairing server)",
+    name: 'quit',
+    aliases: ['exit', 'q'],
+    description: 'Exit the TUI (stops the pairing server)',
   },
 ];
 
-const PERMISSION_CYCLE: PermissionMode[] = ["acceptEdits", "ask", "plan"];
+const PERMISSION_CYCLE: PermissionMode[] = ['acceptEdits', 'ask', 'plan'];
 
 /** All names + aliases for lookup. */
 function buildLookup(): Map<string, SlashCommandDef> {
@@ -194,110 +190,110 @@ const LOOKUP = buildLookup();
 
 export function parseCliCommand(input: string): CliCommand {
   const text = input.trim();
-  if (!text.startsWith("/")) {
-    return { kind: "agent", text };
+  if (!text.startsWith('/')) {
+    return { kind: 'agent', text };
   }
 
   const m = text.match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/);
-  if (!m) return { kind: "unknown", raw: text };
-  const token = (m[1] ?? "").toLowerCase();
-  const arg = (m[2] ?? "").trim();
+  if (!m) return { kind: 'unknown', raw: text };
+  const token = (m[1] ?? '').toLowerCase();
+  const arg = (m[2] ?? '').trim();
   const def = LOOKUP.get(token);
 
   if (!def) {
-    return { kind: "unknown", raw: text };
+    return { kind: 'unknown', raw: text };
   }
 
   // Agent-forward commands (goal, review, …)
   if (def.toAgent) {
-    return { kind: "agent", text: def.toAgent(arg) };
+    return { kind: 'agent', text: def.toAgent(arg) };
   }
 
   switch (def.name) {
-    case "help":
-      return { kind: "help" };
-    case "clear":
-      return { kind: "clear" };
-    case "compact":
-      return { kind: "compact" };
-    case "quit":
-      return { kind: "quit" };
-    case "mobile":
-      return { kind: "mobile" };
-    case "pair":
-      return { kind: "pair" };
-    case "server":
-      return { kind: "server" };
-    case "context":
-      return { kind: "context" };
-    case "doctor":
-      return { kind: "doctor" };
-    case "init":
-      return { kind: "init" };
-    case "memory":
-      return { kind: "memory" };
-    case "tasks":
-      return { kind: "tasks" };
-    case "diff":
-      return { kind: "diff" };
-    case "export":
-      return { kind: "export" };
-    case "metal":
-      return { kind: "metal", action: parseMetalArgs(arg) };
-    case "plan":
-      return { kind: "permission", mode: "plan" };
-    case "permission": {
-      if (!arg) return { kind: "permission" };
+    case 'help':
+      return { kind: 'help' };
+    case 'clear':
+      return { kind: 'clear' };
+    case 'compact':
+      return { kind: 'compact' };
+    case 'quit':
+      return { kind: 'quit' };
+    case 'mobile':
+      return { kind: 'mobile' };
+    case 'pair':
+      return { kind: 'pair' };
+    case 'server':
+      return { kind: 'server' };
+    case 'context':
+      return { kind: 'context' };
+    case 'doctor':
+      return { kind: 'doctor' };
+    case 'init':
+      return { kind: 'init' };
+    case 'memory':
+      return { kind: 'memory' };
+    case 'tasks':
+      return { kind: 'tasks' };
+    case 'diff':
+      return { kind: 'diff' };
+    case 'export':
+      return { kind: 'export' };
+    case 'metal':
+      return { kind: 'metal', action: parseMetalArgs(arg) };
+    case 'plan':
+      return { kind: 'permission', mode: 'plan' };
+    case 'permission': {
+      if (!arg) return { kind: 'permission' };
       const mode = normalizePermission(arg);
-      return mode ? { kind: "permission", mode } : { kind: "unknown", raw: text };
+      return mode ? { kind: 'permission', mode } : { kind: 'unknown', raw: text };
     }
-    case "effort": {
-      if (!arg) return { kind: "effort" };
+    case 'effort': {
+      if (!arg) return { kind: 'effort' };
       const effort = normalizeEffort(arg);
-      return effort ? { kind: "effort", effort } : { kind: "unknown", raw: text };
+      return effort ? { kind: 'effort', effort } : { kind: 'unknown', raw: text };
     }
-    case "model": {
-      if (!arg) return { kind: "model" };
-      const slash = arg.indexOf("/");
+    case 'model': {
+      if (!arg) return { kind: 'model' };
+      const slash = arg.indexOf('/');
       if (slash > 0) {
         return {
-          kind: "model",
+          kind: 'model',
           provider: arg.slice(0, slash).trim(),
           model: arg.slice(slash + 1).trim(),
         };
       }
       const parts = arg.split(/\s+/);
       if (parts.length >= 2) {
-        return { kind: "model", provider: parts[0], model: parts.slice(1).join(" ") };
+        return { kind: 'model', provider: parts[0], model: parts.slice(1).join(' ') };
       }
-      return { kind: "model", model: arg };
+      return { kind: 'model', model: arg };
     }
-    case "keys": {
-      if (!arg) return { kind: "keys" };
-      const sp = arg.indexOf(" ");
-      if (sp < 0) return { kind: "keys", provider: arg };
+    case 'keys': {
+      if (!arg) return { kind: 'keys' };
+      const sp = arg.indexOf(' ');
+      if (sp < 0) return { kind: 'keys', provider: arg };
       return {
-        kind: "keys",
+        kind: 'keys',
         provider: arg.slice(0, sp).trim(),
         key: arg.slice(sp + 1).trim(),
       };
     }
     default:
-      return { kind: "unknown", raw: text };
+      return { kind: 'unknown', raw: text };
   }
 }
 
 function normalizePermission(s: string): PermissionMode | null {
-  const t = s.toLowerCase().replace(/[_-]/g, "");
-  if (t === "acceptedits" || t === "accept" || t === "auto") return "acceptEdits";
-  if (t === "ask" || t === "manual") return "ask";
-  if (t === "plan" || t === "readonly") return "plan";
+  const t = s.toLowerCase().replace(/[_-]/g, '');
+  if (t === 'acceptedits' || t === 'accept' || t === 'auto') return 'acceptEdits';
+  if (t === 'ask' || t === 'manual') return 'ask';
+  if (t === 'plan' || t === 'readonly') return 'plan';
   return null;
 }
 
 function normalizeEffort(s: string): EffortLevel | null {
   const t = s.toLowerCase();
-  if (t === "low" || t === "medium" || t === "high") return t;
+  if (t === 'low' || t === 'medium' || t === 'high') return t;
   return null;
 }
 
@@ -323,9 +319,7 @@ export interface ModelCompletionCatalog {
   fetchedAt?: number;
 }
 
-const LISTABLE_PROVIDERS = CHAT_PROVIDERS.map((p) => p.id).filter(
-  (id) => id !== "localMetal",
-);
+const LISTABLE_PROVIDERS = CHAT_PROVIDERS.map((p) => p.id).filter((id) => id !== 'localMetal');
 
 /**
  * Fetch models for every provider that has a key (env or `/keys` store).
@@ -335,11 +329,11 @@ export async function loadModelCompletionCatalog(opts?: {
   mock?: boolean;
   signal?: AbortSignal;
 }): Promise<ModelCompletionCatalog> {
-  if (opts?.mock || process.env.APC_MOCK === "1") {
+  if (opts?.mock || process.env.APC_MOCK === '1') {
     return {
-      linked: ["anthropic"],
+      linked: ['anthropic'],
       byProvider: {
-        anthropic: [{ id: "mock", displayName: "mock (APC_MOCK)" }],
+        anthropic: [{ id: 'mock', displayName: 'mock (APC_MOCK)' }],
       },
       fetchedAt: Date.now(),
     };
@@ -347,7 +341,7 @@ export async function loadModelCompletionCatalog(opts?: {
 
   const secrets = loadCliSecrets();
   const linked: string[] = [];
-  const byProvider: ModelCompletionCatalog["byProvider"] = {};
+  const byProvider: ModelCompletionCatalog['byProvider'] = {};
 
   await Promise.all(
     LISTABLE_PROVIDERS.map(async (provider) => {
@@ -373,14 +367,14 @@ export async function loadModelCompletionCatalog(opts?: {
           ? [{ id: fallback, displayName: `${fallback} (default)` }]
           : [];
       }
-    }),
+    })
   );
 
   // Downloaded on-device Metal models (no cloud key required).
   try {
     const metal = getMetalStore().listDownloaded();
     if (metal.length > 0) {
-      linked.push("localMetal");
+      linked.push('localMetal');
       byProvider.localMetal = metal.map((m) => ({
         id: m.hubID,
         displayName: m.displayName || m.hubID,
@@ -408,9 +402,9 @@ export interface SlashCompletionOptions {
  */
 export function getSlashCompletions(
   input: string,
-  opts?: SlashCompletionOptions,
+  opts?: SlashCompletionOptions
 ): SlashCompletion[] {
-  if (!input.startsWith("/") || input.includes("\n")) return [];
+  if (!input.startsWith('/') || input.includes('\n')) return [];
 
   const body = input.slice(1);
   const space = body.search(/\s/);
@@ -432,7 +426,7 @@ export function getSlashCompletions(
         seen.add(primary);
         const needsSpace = Boolean(def.usage) || Boolean(def.toAgent);
         out.push({
-          token: `/${primary}${needsSpace && q.length >= primary.length ? " " : ""}`,
+          token: `/${primary}${needsSpace && q.length >= primary.length ? ' ' : ''}`,
           description: def.description,
         });
         break;
@@ -446,30 +440,28 @@ export function getSlashCompletions(
   const def = LOOKUP.get(cmdToken);
   if (!def) return [];
 
-  if (def.name === "permission" || def.name === "plan") {
-    return completeFromList(argPart, ["acceptEdits", "ask", "plan"], input);
+  if (def.name === 'permission' || def.name === 'plan') {
+    return completeFromList(argPart, ['acceptEdits', 'ask', 'plan'], input);
   }
-  if (def.name === "effort") {
-    return completeFromList(argPart, ["low", "medium", "high"], input);
+  if (def.name === 'effort') {
+    return completeFromList(argPart, ['low', 'medium', 'high'], input);
   }
-  if (def.name === "goal") {
-    return completeFromList(argPart, ["clear", "stop"], input).concat(
-      argPart === ""
-        ? [{ token: "/goal ", description: "Type a completion condition…" }]
-        : [],
+  if (def.name === 'goal') {
+    return completeFromList(argPart, ['clear', 'stop'], input).concat(
+      argPart === '' ? [{ token: '/goal ', description: 'Type a completion condition…' }] : []
     );
   }
-  if (def.name === "model") {
+  if (def.name === 'model') {
     return completeModelArg(argPart, input, opts?.modelCatalog ?? null);
   }
-  if (def.name === "metal") {
+  if (def.name === 'metal') {
     return getMetalCompletions(argPart, input);
   }
-  if (def.name === "keys") {
+  if (def.name === 'keys') {
     return completeFromList(
       argPart,
-      ["anthropic ", "openai ", "google ", "groq ", "openrouter ", "xai ", "mistral ", "minimax "],
-      input,
+      ['anthropic ', 'openai ', 'google ', 'groq ', 'openrouter ', 'xai ', 'mistral ', 'minimax '],
+      input
     );
   }
   return [];
@@ -483,13 +475,13 @@ export function getSlashCompletions(
 export function completeModelArg(
   argPart: string,
   fullInput: string,
-  catalog: ModelCompletionCatalog | null,
+  catalog: ModelCompletionCatalog | null
 ): SlashCompletion[] {
   const prefix = fullInput.slice(0, fullInput.length - argPart.length);
   const linked = catalog?.linked ?? [];
   const byProvider = catalog?.byProvider ?? {};
 
-  const slash = argPart.indexOf("/");
+  const slash = argPart.indexOf('/');
   if (slash >= 0) {
     const prov = argPart.slice(0, slash).trim().toLowerCase();
     const modelQ = argPart.slice(slash + 1).toLowerCase();
@@ -497,12 +489,12 @@ export function completeModelArg(
   }
 
   // "anthropic claude…" or "anthropic " (trailing space)
-  const trimmedEnd = argPart.replace(/\s+$/, "");
+  const trimmedEnd = argPart.replace(/\s+$/, '');
   const hasTrailingSpace = argPart.length > 0 && /\s$/.test(argPart);
   const spaceParts = trimmedEnd.split(/\s+/).filter(Boolean);
   if (spaceParts.length >= 2 || (spaceParts.length === 1 && hasTrailingSpace)) {
-    const prov = (spaceParts[0] ?? "").toLowerCase();
-    const modelQ = spaceParts.slice(1).join(" ").toLowerCase();
+    const prov = (spaceParts[0] ?? '').toLowerCase();
+    const modelQ = spaceParts.slice(1).join(' ').toLowerCase();
     return modelCompletionsForProvider(prov, modelQ, prefix, byProvider, linked, catalog?.loading);
   }
 
@@ -512,10 +504,10 @@ export function completeModelArg(
 
   // Exact provider match → jump straight to its models
   if (q && (linked.includes(q) || byProvider[q])) {
-    return modelCompletionsForProvider(q, "", prefix, byProvider, linked, catalog?.loading);
+    return modelCompletionsForProvider(q, '', prefix, byProvider, linked, catalog?.loading);
   }
 
-  const hits = providerPool.filter((p) => p.startsWith(q) || q === "");
+  const hits = providerPool.filter((p) => p.startsWith(q) || q === '');
   if (hits.length === 0 && q) {
     // Partial model id without provider: search all linked catalogs
     return searchAllModels(q, prefix, byProvider).slice(0, 12);
@@ -526,10 +518,10 @@ export function completeModelArg(
     const n = models.length;
     const linkedHint = linked.includes(p);
     let description: string;
-    if (n > 0) description = `${n} model${n === 1 ? "" : "s"}`;
-    else if (catalog?.loading && linkedHint) description = "loading models…";
-    else if (linkedHint) description = "linked provider";
-    else description = "link with /keys first";
+    if (n > 0) description = `${n} model${n === 1 ? '' : 's'}`;
+    else if (catalog?.loading && linkedHint) description = 'loading models…';
+    else if (linkedHint) description = 'linked provider';
+    else description = 'link with /keys first';
     return {
       token: `${prefix}${p}/`,
       description,
@@ -541,14 +533,14 @@ function modelCompletionsForProvider(
   prov: string,
   modelQ: string,
   prefix: string,
-  byProvider: ModelCompletionCatalog["byProvider"],
+  byProvider: ModelCompletionCatalog['byProvider'],
   linked: string[],
-  loading?: boolean,
+  loading?: boolean
 ): SlashCompletion[] {
   const models = byProvider[prov] ?? [];
   if (models.length === 0) {
     if (loading && linked.includes(prov)) {
-      return [{ token: `${prefix}${prov}/`, description: "loading models…" }];
+      return [{ token: `${prefix}${prov}/`, description: 'loading models…' }];
     }
     if (!linked.includes(prov)) {
       return [
@@ -561,7 +553,7 @@ function modelCompletionsForProvider(
     return [
       {
         token: `${prefix}${prov}/`,
-        description: "no models returned (check key / network)",
+        description: 'no models returned (check key / network)',
       },
     ];
   }
@@ -571,19 +563,19 @@ function modelCompletionsForProvider(
       (m) =>
         !modelQ ||
         m.id.toLowerCase().includes(modelQ) ||
-        m.displayName.toLowerCase().includes(modelQ),
+        m.displayName.toLowerCase().includes(modelQ)
     )
     .slice(0, 14)
     .map((m) => ({
       token: `${prefix}${prov}/${m.id}`,
-      description: m.displayName !== m.id ? m.displayName : "model",
+      description: m.displayName !== m.id ? m.displayName : 'model',
     }));
 }
 
 function searchAllModels(
   q: string,
   prefix: string,
-  byProvider: ModelCompletionCatalog["byProvider"],
+  byProvider: ModelCompletionCatalog['byProvider']
 ): SlashCompletion[] {
   const out: SlashCompletion[] = [];
   for (const [prov, models] of Object.entries(byProvider)) {
@@ -603,7 +595,7 @@ function searchAllModels(
 function completeFromList(
   partial: string,
   options: string[],
-  fullInput: string,
+  fullInput: string
 ): SlashCompletion[] {
   const p = partial.toLowerCase();
   const prefix = fullInput.slice(0, fullInput.length - partial.length);
@@ -623,29 +615,29 @@ export function applySlashCompletion(input: string, completionToken: string): st
 
 export function formatHelpText(): string {
   const lines = [
-    "RoamSocket CLI — slash commands",
-    "",
-    "Type / to filter. Tab accepts the highlighted completion.",
-    "",
+    'RoamSocket CLI — slash commands',
+    '',
+    'Type / to filter. Tab accepts the highlighted completion.',
+    '',
   ];
   for (const def of SLASH_COMMANDS) {
-    const usage = def.usage ? ` ${def.usage}` : "";
+    const usage = def.usage ? ` ${def.usage}` : '';
     const alias =
       def.aliases && def.aliases.length > 0
-        ? `  (${def.aliases.map((a) => `/${a}`).join(", ")})`
-        : "";
+        ? `  (${def.aliases.map((a) => `/${a}`).join(', ')})`
+        : '';
     const head = `/${def.name}${usage}`.padEnd(28);
     lines.push(`  ${head}${def.description}${alias}`);
   }
-  lines.push("");
-  lines.push("  Esc                Interrupt running agent");
-  lines.push("  Enter              Send / run command");
-  lines.push("  Tab                Accept slash completion");
-  lines.push("  Ctrl+C             Quit");
-  lines.push("");
-  lines.push("Phone pairs with this process while you code here.");
-  lines.push("Terminal = cwd agent; phone = cloned repo (independent).");
-  return lines.join("\n");
+  lines.push('');
+  lines.push('  Esc                Interrupt running agent');
+  lines.push('  Enter              Send / run command');
+  lines.push('  Tab                Accept slash completion');
+  lines.push('  Ctrl+C             Quit');
+  lines.push('');
+  lines.push('Phone pairs with this process while you code here.');
+  lines.push('Terminal = cwd agent; phone = cloned repo (independent).');
+  return lines.join('\n');
 }
 
 /** @deprecated use formatHelpText — kept for existing imports */
@@ -656,8 +648,8 @@ export const HELP_TEXT = formatHelpText();
 // ---------------------------------------------------------------------------
 
 export function formatPairCode(code: string): string {
-  const d = code.replace(/\D/g, "").padStart(6, "0").slice(0, 6);
-  return d.split("").join(" ");
+  const d = code.replace(/\D/g, '').padStart(6, '0').slice(0, 6);
+  return d.split('').join(' ');
 }
 
 /** Full QR + code card for `/mobile` (ASCII QR for the terminal). */
@@ -668,30 +660,30 @@ export async function buildMobilePairingDisplay(opts: {
   publicUrl?: string | null;
 }): Promise<string> {
   const payload = pairPayload(opts.host, opts.port, opts.pairingCode, opts.publicUrl);
-  const digits = opts.pairingCode.replace(/\D/g, "").padStart(6, "0").slice(0, 6);
-  const spaced = digits.split("").join("  ");
+  const digits = opts.pairingCode.replace(/\D/g, '').padStart(6, '0').slice(0, 6);
+  const spaced = digits.split('').join('  ');
   const lines: string[] = [
-    "RoamSocket — pair phone",
-    "",
+    'RoamSocket — pair phone',
+    '',
     `  Code:  ${spaced}`,
     `  URL:   ${payload.host}`,
-    "",
-    "Scan with RoamSocket → Pair server → Scan QR",
-    "",
+    '',
+    'Scan with RoamSocket → Pair server → Scan QR',
+    '',
   ];
   try {
     const qr = await QRCode.toString(JSON.stringify(payload), {
-      type: "terminal",
+      type: 'terminal',
       small: true,
-      errorCorrectionLevel: "M",
+      errorCorrectionLevel: 'M',
     });
     lines.push(qr.trimEnd());
   } catch (err) {
     lines.push(`(QR unavailable: ${(err as Error).message})`);
   }
-  lines.push("");
+  lines.push('');
   lines.push(`Payload: ${JSON.stringify(payload)}`);
-  return lines.join("\n");
+  return lines.join('\n');
 }
 
 /**
@@ -700,39 +692,39 @@ export async function buildMobilePairingDisplay(opts: {
  */
 export function readProjectMemory(workdir: string): string {
   const candidates = [
-    "AGENTS.md",
-    "CLAUDE.md",
-    "CLAUDE.local.md",
-    "Agents.md",
-    "agents.md",
-    path.join(".claude", "CLAUDE.md"),
-    path.join(".claude", "AGENTS.md"),
-    path.join(".anyprov", "CLAUDE.md"),
-    path.join(".anyprov", "AGENTS.md"),
+    'AGENTS.md',
+    'CLAUDE.md',
+    'CLAUDE.local.md',
+    'Agents.md',
+    'agents.md',
+    path.join('.claude', 'CLAUDE.md'),
+    path.join('.claude', 'AGENTS.md'),
+    path.join('.anyprov', 'CLAUDE.md'),
+    path.join('.anyprov', 'AGENTS.md'),
   ];
   const found: string[] = [];
   for (const name of candidates) {
     const p = path.join(workdir, name);
     if (!existsSync(p)) continue;
     try {
-      const body = readFileSync(p, "utf8");
+      const body = readFileSync(p, 'utf8');
       const preview = body.length > 4000 ? `${body.slice(0, 4000)}\n…` : body;
-      found.push(`── ${name} ──\n${preview.trim() || "(empty)"}`);
+      found.push(`── ${name} ──\n${preview.trim() || '(empty)'}`);
     } catch {
       found.push(`── ${name} ──\n(unreadable)`);
     }
   }
   if (found.length === 0) {
-    return "No AGENTS.md / CLAUDE.md in this workdir. Run /memory for full global + folder scan, or /init to create one.";
+    return 'No AGENTS.md / CLAUDE.md in this workdir. Run /memory for full global + folder scan, or /init to create one.';
   }
-  return found.join("\n\n");
+  return found.join('\n\n');
 }
 
 /** Full hierarchical memory report (global + workspace + folder). */
-export { describeProjectMemory } from "../project/config.js";
+export { describeProjectMemory } from '../project/config.js';
 
 export function writeAgentsInit(workdir: string): { path: string; created: boolean } {
-  const target = path.join(workdir, "AGENTS.md");
+  const target = path.join(workdir, 'AGENTS.md');
   if (existsSync(target)) {
     return { path: target, created: false };
   }
@@ -760,34 +752,34 @@ Project instructions for coding agents (RoamSocket, Claude Code, etc.).
 - Commit secrets
 - Hand-edit generated files without regenerating
 `;
-  writeFileSync(target, stub, "utf8");
+  writeFileSync(target, stub, 'utf8');
   return { path: target, created: true };
 }
 
 export function gitDiffSummary(workdir: string): string {
-  const status = spawnSync("git", ["status", "--short"], {
+  const status = spawnSync('git', ['status', '--short'], {
     cwd: workdir,
-    encoding: "utf8",
+    encoding: 'utf8',
     maxBuffer: 2_000_000,
   });
   if (status.error || status.status !== 0) {
-    return status.stderr?.trim() || "Not a git repository (or git unavailable).";
+    return status.stderr?.trim() || 'Not a git repository (or git unavailable).';
   }
-  const st = (status.stdout || "").trim() || "(clean)";
-  const diff = spawnSync("git", ["diff", "--stat", "HEAD"], {
+  const st = (status.stdout || '').trim() || '(clean)';
+  const diff = spawnSync('git', ['diff', '--stat', 'HEAD'], {
     cwd: workdir,
-    encoding: "utf8",
+    encoding: 'utf8',
     maxBuffer: 2_000_000,
   });
-  const stat = (diff.stdout || "").trim();
-  const unstaged = spawnSync("git", ["diff", "--stat"], {
+  const stat = (diff.stdout || '').trim();
+  const unstaged = spawnSync('git', ['diff', '--stat'], {
     cwd: workdir,
-    encoding: "utf8",
+    encoding: 'utf8',
     maxBuffer: 2_000_000,
   });
-  const u = (unstaged.stdout || "").trim();
+  const u = (unstaged.stdout || '').trim();
   const parts = [`git status:\n${st}`];
   if (stat) parts.push(`\nvs HEAD:\n${stat}`);
   if (u && u !== stat) parts.push(`\nunstaged:\n${u}`);
-  return parts.join("\n");
+  return parts.join('\n');
 }

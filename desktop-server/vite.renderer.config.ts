@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig } from 'vite';
 
 // Renderer config. The Forge plugin sets `root` to the project root, which
 // would mirror our nested renderer folder into the output (so HTML ends up
@@ -12,10 +12,10 @@ import { defineConfig } from "vite";
 // Chromium's renderer tries IPv4 first, which fails with
 // `ERR_FILE_NOT_FOUND` because the dev server isn't listening on IPv4.
 export default defineConfig({
-  root: "src/renderer",
+  root: 'src/renderer',
   build: {
-    target: "chrome128",
-    outDir: "../../.vite/renderer/main_window",
+    target: 'chrome128',
+    outDir: '../../.vite/renderer/main_window',
     emptyOutDir: true,
   },
   server: {

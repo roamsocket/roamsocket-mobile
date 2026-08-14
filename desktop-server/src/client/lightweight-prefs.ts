@@ -2,11 +2,11 @@
  * Lightweight Tasks preferences — short helper generations
  * (titles, artifact names, commit subjects, thinking summaries).
  */
-import type { StorageLike } from "./history-store.js";
+import type { StorageLike } from './history-store.js';
 
-const KEY = "apc.lightweightTasks.v1";
+const KEY = 'apc.lightweightTasks.v1';
 
-export type LightweightMode = "appleFoundation" | "linkedModel";
+export type LightweightMode = 'appleFoundation' | 'linkedModel';
 
 export interface LightweightTasksPrefs {
   mode: LightweightMode;
@@ -17,7 +17,7 @@ export interface LightweightTasksPrefs {
 }
 
 const DEFAULTS: LightweightTasksPrefs = {
-  mode: "linkedModel",
+  mode: 'linkedModel',
   linkedProvider: null,
   linkedModel: null,
   walkthroughCompleted: false,
@@ -30,7 +30,7 @@ export function loadLightweightPrefs(storage: StorageLike): LightweightTasksPref
     const parsed = JSON.parse(raw) as Partial<LightweightTasksPrefs>;
     return {
       mode:
-        parsed.mode === "appleFoundation" || parsed.mode === "linkedModel"
+        parsed.mode === 'appleFoundation' || parsed.mode === 'linkedModel'
           ? parsed.mode
           : DEFAULTS.mode,
       linkedProvider: parsed.linkedProvider ?? null,
@@ -42,13 +42,10 @@ export function loadLightweightPrefs(storage: StorageLike): LightweightTasksPref
   }
 }
 
-export function saveLightweightPrefs(
-  storage: StorageLike,
-  prefs: LightweightTasksPrefs,
-): void {
+export function saveLightweightPrefs(storage: StorageLike, prefs: LightweightTasksPrefs): void {
   storage.setItem(KEY, JSON.stringify(prefs));
 }
 
 export function lightweightModeLabel(mode: LightweightMode): string {
-  return mode === "appleFoundation" ? "Apple Intelligence" : "Linked model";
+  return mode === 'appleFoundation' ? 'Apple Intelligence' : 'Linked model';
 }

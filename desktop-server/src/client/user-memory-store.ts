@@ -5,14 +5,11 @@
  * detail view, and import paste from another AI provider.
  * Stored in localStorage only (device-private).
  */
-import type { StorageLike } from "./history-store.js";
+import type { StorageLike } from './history-store.js';
 
-const KEY = "apc.userMemory.v1";
-const ACTIVITY_KEY = "apc.userMemory.activity.v1";
-const ACTIVITY_MAX_AGE_MS = 60 * 60 * 24 * 30 * 1000; // 30 days
-const ACTIVITY_MAX_COUNT = 200;
+const KEY = 'apc.userMemory.v1';
 
-export type MemoryCategory = "you" | "topic" | "area";
+export type MemoryCategory = 'you' | 'topic' | 'area';
 
 export interface MemoryEntry {
   id: string;
@@ -58,12 +55,12 @@ export interface MemoryActivityEntry {
 }
 
 export const MEMORY_CATEGORY_LABELS: Record<MemoryCategory, string> = {
-  you: "You",
-  topic: "Topics",
-  area: "Areas",
+  you: 'You',
+  topic: 'Topics',
+  area: 'Areas',
 };
 
-export const MEMORY_CATEGORY_ORDER: MemoryCategory[] = ["you", "topic", "area"];
+export const MEMORY_CATEGORY_ORDER: MemoryCategory[] = ['you', 'topic', 'area'];
 
 /** Prompt users copy into another AI product when importing memory. */
 export const MEMORY_IMPORT_PROMPT = `Export all of my stored memories and any context you've learned about me from past conversations. Preserve my words verbatim where possible, especially for instructions and preferences.
@@ -86,17 +83,16 @@ function uid(): string {
 
 function normalizeEntry(raw: Partial<MemoryEntry> & { id: string; title: string }): MemoryEntry {
   const cat = raw.category;
-  const category: MemoryCategory =
-    cat === "topic" || cat === "area" || cat === "you" ? cat : "you";
+  const category: MemoryCategory = cat === 'topic' || cat === 'area' || cat === 'you' ? cat : 'you';
   return {
     id: raw.id,
     category,
-    title: (raw.title || "Untitled").trim() || "Untitled",
-    summary: (raw.summary ?? "").trim(),
+    title: (raw.title || 'Untitled').trim() || 'Untitled',
+    summary: (raw.summary ?? '').trim(),
     details: Array.isArray(raw.details)
       ? raw.details.map((d) => String(d).trim()).filter(Boolean)
       : [],
-    updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : Date.now(),
+    updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : Date.now(),
   };
 }
 
@@ -149,6 +145,15 @@ export class UserMemoryStore {
               .map(normalizeEntry)
           : [];
       }
+      const parsed = JSON.parse(raw) as { entries?: Partial<MemoryEntry>[] };
+      this.entries = Array.isArray(parsed.entries)
+        ? parsed.entries
+            .filter(
+              (e): e is Partial<MemoryEntry> & { id: string; title: string } =>
+                !!e && typeof e.id === 'string' && typeof e.title === 'string'
+            )
+            .map(normalizeEntry)
+        : [];
     } catch {
       this.entries = [];
     }
@@ -189,7 +194,7 @@ export class UserMemoryStore {
     return this.list().filter((e) => e.category === category);
   }
 
-  upsert(entry: Omit<MemoryEntry, "id" | "updatedAt"> & { id?: string }): MemoryEntry {
+  upsert(entry: Omit<MemoryEntry, 'id' | 'updatedAt'> & { id?: string }): MemoryEntry {
     const now = Date.now();
     if (entry.id) {
       const existing = this.get(entry.id);
@@ -229,13 +234,11 @@ export class UserMemoryStore {
     const fact = text.trim();
     if (!fact) return null;
     const bullet = fact.charAt(0).toUpperCase() + fact.slice(1);
-    let profile = this.byCategory("you").find(
-      (e) => e.title.toLowerCase() === "profile",
-    );
+    let profile = this.byCategory('you').find((e) => e.title.toLowerCase() === 'profile');
     if (!profile) {
       profile = this.upsert({
-        category: "you",
-        title: "Profile",
+        category: 'you',
+        title: 'Profile',
         summary: bullet.length > 80 ? `${bullet.slice(0, 77)}…` : bullet,
         details: [bullet],
       });
@@ -263,37 +266,30 @@ export class UserMemoryStore {
     if (!cmd) return entry;
     const lower = cmd.toLowerCase();
 
-    if (
-      lower.startsWith("forget ") ||
-      lower.startsWith("remove ") ||
-      lower.startsWith("delete ")
-    ) {
-      const topic = cmd.replace(/^(forget|remove|delete)\s+/i, "").trim();
+    if (lower.startsWith('forget ') || lower.startsWith('remove ') || lower.startsWith('delete ')) {
+      const topic = cmd.replace(/^(forget|remove|delete)\s+/i, '').trim();
       if (topic) {
         const nextDetails = entry.details.filter(
-          (d) => !d.toLowerCase().includes(topic.toLowerCase()),
+          (d) => !d.toLowerCase().includes(topic.toLowerCase())
         );
         if (nextDetails.length !== entry.details.length) {
           entry.details = nextDetails;
         } else {
-          entry.details = [
-            ...entry.details,
-            `Note: user asked to forget “${topic}”.`,
-          ];
+          entry.details = [...entry.details, `Note: user asked to forget “${topic}”.`];
         }
         if (entry.summary.toLowerCase().includes(topic.toLowerCase())) {
           entry.summary = nextDetails[0] ?? entry.summary;
         }
       }
     } else if (/^change summary to\s+/i.test(cmd) || /^set summary to\s+/i.test(cmd)) {
-      entry.summary = cmd.replace(/^(change|set) summary to\s+/i, "").trim();
+      entry.summary = cmd.replace(/^(change|set) summary to\s+/i, '').trim();
     } else if (/^rename to\s+/i.test(cmd)) {
-      entry.title = cmd.replace(/^rename to\s+/i, "").trim() || entry.title;
+      entry.title = cmd.replace(/^rename to\s+/i, '').trim() || entry.title;
     } else {
       const fact = cmd
-        .replace(/^remember that(?: i)?\s+/i, "")
-        .replace(/^remember\s+/i, "")
-        .replace(/^add\s+/i, "")
+        .replace(/^remember that(?: i)?\s+/i, '')
+        .replace(/^remember\s+/i, '')
+        .replace(/^add\s+/i, '')
         .trim();
       const bullet = fact.charAt(0).toUpperCase() + fact.slice(1);
       if (!bullet) {
@@ -563,18 +559,18 @@ export class UserMemoryStore {
    * Best-effort markdown headings; falls back to one Imported note.
    */
   importFromText(raw: string): number {
-    const text = raw.replace(/\r\n/g, "\n").trim();
+    const text = raw.replace(/\r\n/g, '\n').trim();
     if (!text) return 0;
 
     const blocks = splitImportBlocks(text);
     if (blocks.length === 0) {
       this.upsert({
-        category: "you",
-        title: "Imported",
-        summary: text.slice(0, 100).replace(/\n/g, " "),
+        category: 'you',
+        title: 'Imported',
+        summary: text.slice(0, 100).replace(/\n/g, ' '),
         details: text
           .split(/\n+/)
-          .map((l) => l.replace(/^[-*•]\s*/, "").trim())
+          .map((l) => l.replace(/^[-*•]\s*/, '').trim())
           .filter(Boolean)
           .slice(0, 40),
       });
@@ -609,7 +605,7 @@ export class UserMemoryStore {
         }
       }
     }
-    return parts.join("\n");
+    return parts.join('\n');
   }
 
   isEmpty(): boolean {
@@ -625,11 +621,11 @@ interface ImportBlock {
 }
 
 function splitImportBlocks(text: string): ImportBlock[] {
-  const lines = text.split("\n");
+  const lines = text.split('\n');
   const blocks: ImportBlock[] = [];
-  let category: MemoryCategory = "you";
-  let title = "";
-  let summary = "";
+  let category: MemoryCategory = 'you';
+  let title = '';
+  let summary = '';
   let details: string[] = [];
   let sawHeading = false;
 
@@ -637,12 +633,12 @@ function splitImportBlocks(text: string): ImportBlock[] {
     if (!title && details.length === 0 && !summary) return;
     blocks.push({
       category,
-      title: title || (category === "you" ? "Profile" : "Untitled"),
-      summary: summary || details[0] || "",
+      title: title || (category === 'you' ? 'Profile' : 'Untitled'),
+      summary: summary || details[0] || '',
       details: details.length ? details : summary ? [summary] : [],
     });
-    title = "";
-    summary = "";
+    title = '';
+    summary = '';
     details = [];
   };
 
@@ -651,21 +647,19 @@ function splitImportBlocks(text: string): ImportBlock[] {
     if (!line) continue;
 
     // Category headers: "## You", "### Topics", "You — Profile", etc.
-    const catMatch = line.match(
-      /^(?:#{1,3}\s*)?(You|Topics?|Areas?)\b(?:\s*[—–:-]\s*(.+))?$/i,
-    );
+    const catMatch = line.match(/^(?:#{1,3}\s*)?(You|Topics?|Areas?)\b(?:\s*[—–:-]\s*(.+))?$/i);
     if (catMatch) {
       flush();
       sawHeading = true;
       const label = catMatch[1]!.toLowerCase();
-      if (label.startsWith("topic")) category = "topic";
-      else if (label.startsWith("area")) category = "area";
-      else category = "you";
-      const rest = (catMatch[2] ?? "").trim();
+      if (label.startsWith('topic')) category = 'topic';
+      else if (label.startsWith('area')) category = 'area';
+      else category = 'you';
+      const rest = (catMatch[2] ?? '').trim();
       if (rest) {
         title = rest;
-      } else if (category === "you") {
-        title = "Profile";
+      } else if (category === 'you') {
+        title = 'Profile';
       }
       continue;
     }
@@ -677,18 +671,18 @@ function splitImportBlocks(text: string): ImportBlock[] {
       sawHeading = true;
       title = hMatch[1]!.trim();
       // Infer category from keywords if still default
-      if (category === "you" && !/profile|about me|who i am/i.test(title)) {
+      if (category === 'you' && !/profile|about me|who i am/i.test(title)) {
         if (/app|project|product|startup|company|kind|work/i.test(title)) {
-          category = "area";
+          category = 'area';
         } else if (!/name|role|location|bio/i.test(title)) {
-          category = "topic";
+          category = 'topic';
         }
       }
       continue;
     }
 
-    const bullet = line.replace(/^[-*•]\s+/, "").replace(/^\d+\.\s+/, "");
-    if (bullet !== line || line.startsWith("-") || line.startsWith("*") || line.startsWith("•")) {
+    const bullet = line.replace(/^[-*•]\s+/, '').replace(/^\d+\.\s+/, '');
+    if (bullet !== line || line.startsWith('-') || line.startsWith('*') || line.startsWith('•')) {
       details.push(bullet.trim());
       continue;
     }
@@ -707,14 +701,14 @@ function splitImportBlocks(text: string): ImportBlock[] {
 export function relativeMemoryTime(ts: number, now = Date.now()): string {
   const diff = Math.max(0, now - ts);
   const min = Math.floor(diff / 60_000);
-  if (min < 1) return "just now";
+  if (min < 1) return 'just now';
   if (min < 60) return `${min}m ago`;
   const hr = Math.floor(min / 60);
   if (hr < 48) return `${hr}h ago`;
   const day = Math.floor(hr / 24);
   if (day < 14) return `${day}d ago`;
   return new Date(ts).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
+    month: 'short',
+    day: 'numeric',
   });
 }

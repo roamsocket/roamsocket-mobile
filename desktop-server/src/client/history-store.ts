@@ -3,7 +3,7 @@
  */
 export interface ChatMessageRecord {
   id: string;
-  role: "user" | "assistant";
+  role: 'user' | 'assistant';
   content: string;
   createdAt: number;
   /** Activity row ids from the local user memory store for memory
@@ -32,23 +32,20 @@ export interface StorageLike {
   removeItem?(key: string): void;
 }
 
-const KEY = "apc.chats.v1";
+const KEY = 'apc.chats.v1';
 
-function uid(prefix = "c"): string {
+function uid(prefix = 'c'): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36).slice(-4)}`;
 }
 
-export function newMessage(
-  role: ChatMessageRecord["role"],
-  content: string,
-): ChatMessageRecord {
-  return { id: uid("m"), role, content, createdAt: Date.now() };
+export function newMessage(role: ChatMessageRecord['role'], content: string): ChatMessageRecord {
+  return { id: uid('m'), role, content, createdAt: Date.now() };
 }
 
 export function autoTitleFromMessages(messages: ChatMessageRecord[]): string {
-  const firstUser = messages.find((m) => m.role === "user" && m.content.trim());
-  if (!firstUser) return "New chat";
-  const t = firstUser.content.trim().replace(/\s+/g, " ");
+  const firstUser = messages.find((m) => m.role === 'user' && m.content.trim());
+  if (!firstUser) return 'New chat';
+  const t = firstUser.content.trim().replace(/\s+/g, ' ');
   return t.length > 48 ? `${t.slice(0, 45)}…` : t;
 }
 
@@ -83,7 +80,7 @@ export class HistoryStore {
   persist(): void {
     this.storage.setItem(
       KEY,
-      JSON.stringify({ threads: this.threads, activeChatId: this.activeChatId }),
+      JSON.stringify({ threads: this.threads, activeChatId: this.activeChatId })
     );
   }
 
@@ -112,14 +109,14 @@ export class HistoryStore {
     projectId?: string;
   }): ChatThread {
     const thread: ChatThread = {
-      id: uid("chat"),
-      title: "New chat",
+      id: uid('chat'),
+      title: 'New chat',
       messages: [],
       updatedAt: Date.now(),
       starred: false,
       archived: false,
-      provider: opts?.provider ?? "anthropic",
-      model: opts?.model ?? "",
+      provider: opts?.provider ?? 'anthropic',
+      model: opts?.model ?? '',
       projectId: opts?.projectId,
       titleIsUserEdited: false,
     };
@@ -169,7 +166,7 @@ export class HistoryStore {
     const t = this.get(chatId);
     if (!t) return;
     for (let i = t.messages.length - 1; i >= 0; i--) {
-      if (t.messages[i]!.role === "assistant") {
+      if (t.messages[i]!.role === 'assistant') {
         t.messages[i]!.content = content;
         t.updatedAt = Date.now();
         this.persist();
@@ -204,7 +201,7 @@ export class HistoryStore {
   rename(chatId: string, title: string): void {
     const t = this.get(chatId);
     if (!t) return;
-    t.title = title.trim() || "New chat";
+    t.title = title.trim() || 'New chat';
     t.titleIsUserEdited = true;
     this.persist();
   }

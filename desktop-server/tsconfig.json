@@ -43,10 +43,5 @@
     "src/lightweight/**/*.ts",
     "scripts/**/*.ts"
   ],
-  "exclude": [
-    "node_modules",
-    "dist",
-    "src/renderer/**",
-    "src/electron/**"
-  ]
+  "exclude": ["node_modules", "dist", "src/renderer/**", "src/electron/**"]
 }

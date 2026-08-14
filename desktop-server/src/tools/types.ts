@@ -1,9 +1,9 @@
 /** Shared types for agent tools. */
-import path from "node:path";
+import path from 'node:path';
 
 export interface NetworkPolicy {
   /** What the app's environment config selected. */
-  access: "trusted" | "limited" | "none" | "custom";
+  access: 'trusted' | 'limited' | 'none' | 'custom';
   /** Allowed hostnames when `access === "custom"`. */
   allowedDomains: string[];
 }
@@ -44,7 +44,7 @@ export function truncate(text: string, max = 16_000): string {
 export function resolveInside(workdir: string, p: string): string {
   const resolved = path.resolve(workdir, p);
   const rel = path.relative(workdir, resolved);
-  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
     throw new Error(`Path escapes the working directory: ${p}`);
   }
   return resolved;

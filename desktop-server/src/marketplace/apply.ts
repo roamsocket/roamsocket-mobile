@@ -7,19 +7,19 @@ import {
   applyMarketplacePluginCategories,
   type ConnectorCatalogEntry,
   type PluginCategory,
-} from "../client/composer-tools.js";
-import { setRemoteMetalCatalog, type MetalCatalogEntry, type MetalTag } from "../metal/catalog.js";
-import { metalModelsForPlatform } from "./parse.js";
-import type { MarketplaceCatalog } from "./types.js";
+} from '../client/composer-tools.js';
+import { setRemoteMetalCatalog, type MetalCatalogEntry, type MetalTag } from '../metal/catalog.js';
+import { metalModelsForPlatform } from './parse.js';
+import type { MarketplaceCatalog } from './types.js';
 
 const KNOWN_TAGS = new Set<MetalTag>([
-  "recommended",
-  "best",
-  "thinking",
-  "vision",
-  "new",
-  "experimental",
-  "legacy",
+  'recommended',
+  'best',
+  'thinking',
+  'vision',
+  'new',
+  'experimental',
+  'legacy',
 ]);
 
 export function applyMarketplaceToDesktop(catalog: MarketplaceCatalog): void {
@@ -36,14 +36,12 @@ export function applyMarketplaceToDesktop(catalog: MarketplaceCatalog): void {
       : [];
   if (categories.length) applyMarketplacePluginCategories(categories);
 
-  const metal: MetalCatalogEntry[] = metalModelsForPlatform(catalog, "desktop").map((m) => ({
+  const metal: MetalCatalogEntry[] = metalModelsForPlatform(catalog, 'desktop').map((m) => ({
     hubID: m.hubID,
     displayName: m.displayName,
-    approxSize: m.approxSize ?? "",
-    blurb: m.blurb ?? "",
-    tags: (m.tags ?? [])
-      .map(String)
-      .filter((t): t is MetalTag => KNOWN_TAGS.has(t as MetalTag)),
+    approxSize: m.approxSize ?? '',
+    blurb: m.blurb ?? '',
+    tags: (m.tags ?? []).map(String).filter((t): t is MetalTag => KNOWN_TAGS.has(t as MetalTag)),
     chatOnly: true as const,
   }));
   setRemoteMetalCatalog(metal.length ? metal : null);

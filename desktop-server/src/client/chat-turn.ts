@@ -2,17 +2,14 @@
  * Pure helpers for constructing outbound chat turns (system + user content).
  * Used by the desktop renderer on send — unit-tested without DOM.
  */
-import type { ProjectItem } from "./projects-store.js";
-import { isMemoryEmptyStateChrome } from "./projects-store.js";
-import {
-  type ComposerToolsState,
-  composerToolsSystemHints,
-} from "./composer-tools.js";
-import type { SkillRecord } from "./skills-store.js";
+import type { ProjectItem } from './projects-store.js';
+import { isMemoryEmptyStateChrome } from './projects-store.js';
+import { type ComposerToolsState, composerToolsSystemHints } from './composer-tools.js';
+import type { SkillRecord } from './skills-store.js';
 
 export type ChatAttachment = { name: string; content: string };
 
-export type ChatTurn = { role: "user" | "assistant" | "system"; content: string };
+export type ChatTurn = { role: 'user' | 'assistant' | 'system'; content: string };
 
 /**
  * Merge user text + file/url attachments into one user message body.
@@ -22,7 +19,7 @@ export function buildUserContent(text: string, attachments: ChatAttachment[] = [
   if (!attachments.length) return body;
   const block = attachments
     .map((a) => `### Attachment: ${a.name}\n${a.content.slice(0, 12000)}`)
-    .join("\n\n");
+    .join('\n\n');
   return body ? `${body}\n\n${block}` : block;
 }
 
@@ -31,7 +28,7 @@ export function buildUserContent(text: string, attachments: ChatAttachment[] = [
  */
 export function projectSystemParts(
   project: ProjectItem | undefined | null,
-  opts?: { includeMemory?: boolean },
+  opts?: { includeMemory?: boolean }
 ): string[] {
   if (!project) return [];
   const includeMemory = opts?.includeMemory !== false;
@@ -47,7 +44,7 @@ export function projectSystemParts(
     const ctx = project.contextItems
       .slice(0, 8)
       .map((c) => `### ${c.title}\n${c.content.slice(0, 4000)}`)
-      .join("\n\n");
+      .join('\n\n');
     parts.push(`Project context files:\n${ctx}`);
   }
   return parts;
@@ -81,14 +78,12 @@ export function buildChatSystemContent(opts: {
   includeMemory?: boolean;
   /** Structured user memory from Settings → Memory. */
   userMemorySystem?: string | null;
-  /** When true, append the auto-save instructions so the model emits tags. */
-  autoSaveMemory?: boolean;
-  resolveSkill?: (id: string) => SkillRecord | { id: string; name: string; description: string } | undefined;
+  resolveSkill?: (
+    id: string
+  ) => SkillRecord | { id: string; name: string; description: string } | undefined;
 }): string {
-  const parts = [
-    ...composerToolsSystemHints(opts.tools, opts.resolveSkill),
-  ];
-  const userMem = (opts.userMemorySystem ?? "").trim();
+  const parts = [...composerToolsSystemHints(opts.tools, opts.resolveSkill)];
+  const userMem = (opts.userMemorySystem ?? '').trim();
   if (userMem) {
     parts.push(`User memory (private, on this device):\n${userMem}`);
     if (opts.autoSaveMemory) {
@@ -96,17 +91,14 @@ export function buildChatSystemContent(opts: {
     }
   }
   parts.push(...projectSystemParts(opts.project, { includeMemory: opts.includeMemory }));
-  return parts.join("\n\n");
+  return parts.join('\n\n');
 }
 
 /**
  * Prepend a system turn when content is non-empty.
  */
-export function withSystemTurn(
-  turns: ChatTurn[],
-  systemContent: string,
-): ChatTurn[] {
+export function withSystemTurn(turns: ChatTurn[], systemContent: string): ChatTurn[] {
   const sys = systemContent.trim();
   if (!sys) return turns;
-  return [{ role: "system", content: sys }, ...turns];
+  return [{ role: 'system', content: sys }, ...turns];
 }

@@ -1,12 +1,12 @@
-import type { ApiStyle, ProviderId } from "../protocol.js";
-import type { ProviderAdapter } from "./types.js";
-import { anthropicAdapter, makeAnthropicAdapter } from "./anthropic.js";
-import { makeOpenAICompatibleAdapter } from "./openai.js";
-import { isMetalProviderId, metalAgentAdapter } from "./metal.js";
-import { mockAdapter } from "./mock.js";
+import type { ApiStyle, ProviderId } from '../protocol.js';
+import type { ProviderAdapter } from './types.js';
+import { anthropicAdapter, makeAnthropicAdapter } from './anthropic.js';
+import { makeOpenAICompatibleAdapter } from './openai.js';
+import { isMetalProviderId, metalAgentAdapter } from './metal.js';
+import { mockAdapter } from './mock.js';
 
-export * from "./types.js";
-export { isMetalProviderId, metalAgentAdapter } from "./metal.js";
+export * from './types.js';
+export { isMetalProviderId, metalAgentAdapter } from './metal.js';
 
 export interface AgentAdapterOptions {
   /** Override host for custom / proxy endpoints (e.g. http://localhost:11434/v1). */
@@ -27,44 +27,42 @@ export interface AgentAdapterOptions {
  */
 export function getAgentAdapter(
   provider: ProviderId,
-  opts: AgentAdapterOptions = {},
+  opts: AgentAdapterOptions = {}
 ): ProviderAdapter {
   // Metal never uses a custom cloud base URL — weights live on this machine.
   if (isMetalProviderId(provider)) {
     return metalAgentAdapter;
   }
 
-  const baseUrl = opts.baseUrl?.replace(/\/+$/, "");
-  const style: ApiStyle =
-    opts.apiStyle ??
-    (provider === "anthropic" ? "anthropic" : "openai");
+  const baseUrl = opts.baseUrl?.replace(/\/+$/, '');
+  const style: ApiStyle = opts.apiStyle ?? (provider === 'anthropic' ? 'anthropic' : 'openai');
 
   // Custom / proxy host wins over built-in defaults.
   if (baseUrl) {
-    if (style === "anthropic") {
+    if (style === 'anthropic') {
       return makeAnthropicAdapter(provider, baseUrl);
     }
     return makeOpenAICompatibleAdapter(provider, baseUrl);
   }
 
   switch (provider) {
-    case "anthropic":
+    case 'anthropic':
       return anthropicAdapter;
-    case "openai":
-    case "groq":
-    case "openrouter":
-    case "xai":
-    case "mistral":
-    case "minimax":
+    case 'openai':
+    case 'groq':
+    case 'openrouter':
+    case 'xai':
+    case 'mistral':
+    case 'minimax':
       return makeOpenAICompatibleAdapter(provider);
-    case "google":
+    case 'google':
       throw new Error(
-        "Google Gemini is available for chat and model listing, but the coding agent loop does not support it yet. Pick Anthropic or an OpenAI-compatible provider for coding sessions.",
+        'Google Gemini is available for chat and model listing, but the coding agent loop does not support it yet. Pick Anthropic or an OpenAI-compatible provider for coding sessions.'
       );
     default:
-      if (provider.startsWith("custom:")) {
+      if (provider.startsWith('custom:')) {
         throw new Error(
-          `Custom provider "${provider}" needs a baseUrl on the model selection (set in the iOS custom provider settings).`,
+          `Custom provider "${provider}" needs a baseUrl on the model selection (set in the iOS custom provider settings).`
         );
       }
       throw new Error(`Unknown provider: ${provider}`);

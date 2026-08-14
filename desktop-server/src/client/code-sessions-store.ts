@@ -1,15 +1,10 @@
 /**
  * Local history of coding sessions for the Code home screen.
  */
-import type { StorageLike } from "./history-store.js";
-import type { GitHubPrState } from "./github-pr.js";
+import type { StorageLike } from './history-store.js';
+import type { GitHubPrState } from './github-pr.js';
 
-export type CodeSessionStatus =
-  | "working"
-  | "needs_input"
-  | "ready_for_review"
-  | "done"
-  | "error";
+export type CodeSessionStatus = 'working' | 'needs_input' | 'ready_for_review' | 'done' | 'error';
 
 export interface CodeSessionRecord {
   id: string;
@@ -36,7 +31,7 @@ export interface CodeSessionRecord {
   updatedAt: number;
 }
 
-const KEY = "apc.codeSessions.v1";
+const KEY = 'apc.codeSessions.v1';
 
 function uid(): string {
   return `cs_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36).slice(-4)}`;
@@ -91,13 +86,13 @@ export class CodeSessionsStore {
     const rec: CodeSessionRecord = {
       id: uid(),
       wireSessionId: null,
-      title: partial.title.slice(0, 80) || "Coding session",
+      title: partial.title.slice(0, 80) || 'Coding session',
       repo: partial.repo,
       baseBranch: partial.baseBranch,
       workBranch: partial.workBranch,
       provider: partial.provider,
       model: partial.model,
-      status: "working",
+      status: 'working',
       createdAt: now,
       updatedAt: now,
     };
@@ -111,18 +106,18 @@ export class CodeSessionsStore {
     patch: Partial<
       Pick<
         CodeSessionRecord,
-        | "wireSessionId"
-        | "title"
-        | "status"
-        | "prUrl"
-        | "prNumber"
-        | "prState"
-        | "prBranch"
-        | "prDismissed"
-        | "detail"
-        | "updatedAt"
+        | 'wireSessionId'
+        | 'title'
+        | 'status'
+        | 'prUrl'
+        | 'prNumber'
+        | 'prState'
+        | 'prBranch'
+        | 'prDismissed'
+        | 'detail'
+        | 'updatedAt'
       >
-    >,
+    >
   ): void {
     const s = this.get(id);
     if (!s) return;
@@ -138,13 +133,13 @@ export class CodeSessionsStore {
 
 export function relativeTime(ts: number, now = Date.now()): string {
   const sec = Math.max(0, Math.floor((now - ts) / 1000));
-  if (sec < 60) return "just now";
+  if (sec < 60) return 'just now';
   const min = Math.floor(sec / 60);
   if (min < 60) return `${min}m ago`;
   const hr = Math.floor(min / 60);
   if (hr < 24) return `${hr}h ago`;
   const day = Math.floor(hr / 24);
-  if (day === 1) return "yesterday";
+  if (day === 1) return 'yesterday';
   if (day < 14) return `${day}d ago`;
-  return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }

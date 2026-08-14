@@ -3,19 +3,19 @@
  * files, add to project, GitHub, skills / connectors / plugins flyouts,
  * research + web search toggles.
  */
-import type { ProjectItem } from "../client/projects-store.js";
+import type { ProjectItem } from '../client/projects-store.js';
 import {
   type ComposerToolsState,
   SKILL_CATALOG,
   CONNECTOR_CATALOG,
   PLUGIN_CATEGORIES,
   connectorsWarningCount,
-} from "../client/composer-tools.js";
+} from '../client/composer-tools.js';
 
 type ElFn = <K extends keyof HTMLElementTagNameMap>(
   tag: K,
   attrs?: Record<string, string>,
-  children?: (string | Node)[],
+  children?: (string | Node)[]
 ) => HTMLElementTagNameMap[K];
 
 export type ComposerMenuCallbacks = {
@@ -42,7 +42,7 @@ export type ComposerMenuCallbacks = {
 };
 
 function clearMenus(): void {
-  document.querySelectorAll(".composer-plus-menu, .composer-flyout").forEach((n) => n.remove());
+  document.querySelectorAll('.composer-plus-menu, .composer-flyout').forEach((n) => n.remove());
 }
 
 /**
@@ -51,11 +51,11 @@ function clearMenus(): void {
 export function openComposerPlusMenu(
   anchor: HTMLElement,
   el: ElFn,
-  cb: ComposerMenuCallbacks,
+  cb: ComposerMenuCallbacks
 ): void {
   clearMenus();
 
-  const menu = el("div", { class: "composer-plus-menu", role: "menu" });
+  const menu = el('div', { class: 'composer-plus-menu', role: 'menu' });
   const rect = anchor.getBoundingClientRect();
   const menuW = 280;
   let left = rect.left;
@@ -75,14 +75,14 @@ export function openComposerPlusMenu(
     menu.remove();
     activeFly?.remove();
     activeFly = null;
-    document.removeEventListener("mousedown", onDoc);
-    document.removeEventListener("keydown", onKey);
+    document.removeEventListener('mousedown', onDoc);
+    document.removeEventListener('keydown', onKey);
   };
 
   const hideFly = () => {
     activeFly?.remove();
     activeFly = null;
-    activeRow?.classList.remove("is-open");
+    activeRow?.classList.remove('is-open');
     activeRow = null;
   };
 
@@ -111,11 +111,11 @@ export function openComposerPlusMenu(
     if (activeRow === row && activeFly) return;
     hideFly();
     activeRow = row;
-    row.classList.add("is-open");
+    row.classList.add('is-open');
     activeFly = builder();
-    activeFly.classList.add("composer-flyout");
-    activeFly.addEventListener("mousedown", (e) => e.stopPropagation());
-    activeFly.addEventListener("click", (e) => e.stopPropagation());
+    activeFly.classList.add('composer-flyout');
+    activeFly.addEventListener('mousedown', (e) => e.stopPropagation());
+    activeFly.addEventListener('click', (e) => e.stopPropagation());
     positionFly(row, activeFly);
   };
 
@@ -129,36 +129,36 @@ export function openComposerPlusMenu(
       badge?: string;
       action?: () => void;
       fly?: () => HTMLElement;
-    },
+    }
   ) => {
-    const row = el("button", {
-      class: `composer-menu-item${opts?.fly ? " has-sub" : ""}`,
-      type: "button",
-      role: "menuitem",
+    const row = el('button', {
+      class: `composer-menu-item${opts?.fly ? ' has-sub' : ''}`,
+      type: 'button',
+      role: 'menuitem',
     });
-    row.append(el("span", { class: "cmi-ico" }, [icon]));
-    row.append(el("span", { class: "cmi-label" }, [label]));
+    row.append(el('span', { class: 'cmi-ico' }, [icon]));
+    row.append(el('span', { class: 'cmi-label' }, [label]));
     if (opts?.shortcut) {
-      row.append(el("span", { class: "cmi-shortcut" }, [opts.shortcut]));
+      row.append(el('span', { class: 'cmi-shortcut' }, [opts.shortcut]));
     }
     if (opts?.badge) {
-      row.append(el("span", { class: "cmi-badge" }, [opts.badge]));
+      row.append(el('span', { class: 'cmi-badge' }, [opts.badge]));
     }
     if (opts?.check) {
-      row.append(el("span", { class: "cmi-check" }, ["✓"]));
+      row.append(el('span', { class: 'cmi-check' }, ['✓']));
     }
     if (opts?.chevron) {
-      row.append(el("span", { class: "cmi-chev" }, ["›"]));
+      row.append(el('span', { class: 'cmi-chev' }, ['›']));
     }
     if (opts?.fly) {
-      row.addEventListener("mouseenter", () => showFly(row, opts.fly!));
-      row.addEventListener("click", (e) => {
+      row.addEventListener('mouseenter', () => showFly(row, opts.fly!));
+      row.addEventListener('click', (e) => {
         e.stopPropagation();
         showFly(row, opts.fly!);
       });
     } else {
-      row.addEventListener("mouseenter", () => hideFly());
-      row.addEventListener("click", (e) => {
+      row.addEventListener('mouseenter', () => hideFly());
+      row.addEventListener('click', (e) => {
         e.stopPropagation();
         closeAll();
         opts?.action?.();
@@ -169,22 +169,22 @@ export function openComposerPlusMenu(
 
   // --- Flyouts ---
   const projectsFly = () => {
-    const fly = el("div", { role: "menu" });
+    const fly = el('div', { role: 'menu' });
     const list = cb.projects;
     if (list.length === 0) {
-      fly.append(el("div", { class: "composer-fly-empty" }, ["No projects yet"]));
+      fly.append(el('div', { class: 'composer-fly-empty' }, ['No projects yet']));
     }
     for (const p of list) {
-      const row = el("button", { class: "composer-fly-item", type: "button" });
-      row.append(el("span", { class: "cmi-ico" }, ["📁"]));
-      const mid = el("span", { class: "cmi-fly-copy" });
-      mid.append(el("span", { class: "cmi-fly-title" }, [p.name]));
-      mid.append(el("span", { class: "cmi-fly-sub" }, ["You"]));
+      const row = el('button', { class: 'composer-fly-item', type: 'button' });
+      row.append(el('span', { class: 'cmi-ico' }, ['📁']));
+      const mid = el('span', { class: 'cmi-fly-copy' });
+      mid.append(el('span', { class: 'cmi-fly-title' }, [p.name]));
+      mid.append(el('span', { class: 'cmi-fly-sub' }, ['You']));
       row.append(mid);
       if (cb.currentProjectId === p.id) {
-        row.append(el("span", { class: "cmi-check" }, ["✓"]));
+        row.append(el('span', { class: 'cmi-check' }, ['✓']));
       }
-      row.addEventListener("click", () => {
+      row.addEventListener('click', () => {
         closeAll();
         cb.onAddToProject(p.id);
       });
@@ -194,36 +194,36 @@ export function openComposerPlusMenu(
   };
 
   const skillsFly = () => {
-    const fly = el("div", { role: "menu" });
+    const fly = el('div', { role: 'menu' });
     const skillList = cb.skills?.length
       ? cb.skills
       : SKILL_CATALOG.map((s) => ({ id: s.id, name: s.name }));
     for (const s of skillList) {
-      const row = el("button", { class: "composer-fly-item", type: "button" });
-      row.append(el("span", { class: "cmi-ico" }, ["📋"]));
-      row.append(el("span", { class: "cmi-label" }, [s.name]));
+      const row = el('button', { class: 'composer-fly-item', type: 'button' });
+      row.append(el('span', { class: 'cmi-ico' }, ['📋']));
+      row.append(el('span', { class: 'cmi-label' }, [s.name]));
       if (cb.tools.activeSkillIds.includes(s.id)) {
-        row.append(el("span", { class: "cmi-check" }, ["✓"]));
+        row.append(el('span', { class: 'cmi-check' }, ['✓']));
       }
-      row.addEventListener("click", () => {
+      row.addEventListener('click', () => {
         closeAll();
         cb.onPickSkill(s.id);
       });
       fly.append(row);
     }
-    fly.append(el("div", { class: "composer-menu-sep" }));
-    const manage = el("button", { class: "composer-fly-item", type: "button" });
-    manage.append(el("span", { class: "cmi-ico" }, ["🧰"]));
-    manage.append(el("span", { class: "cmi-label" }, ["Manage skills"]));
-    manage.addEventListener("click", () => {
+    fly.append(el('div', { class: 'composer-menu-sep' }));
+    const manage = el('button', { class: 'composer-fly-item', type: 'button' });
+    manage.append(el('span', { class: 'cmi-ico' }, ['🧰']));
+    manage.append(el('span', { class: 'cmi-label' }, ['Manage skills']));
+    manage.addEventListener('click', () => {
       closeAll();
       cb.onManageSkills();
     });
     fly.append(manage);
-    const browse = el("button", { class: "composer-fly-item", type: "button" });
-    browse.append(el("span", { class: "cmi-ico" }, ["＋"]));
-    browse.append(el("span", { class: "cmi-label" }, ["Browse skills"]));
-    browse.addEventListener("click", () => {
+    const browse = el('button', { class: 'composer-fly-item', type: 'button' });
+    browse.append(el('span', { class: 'cmi-ico' }, ['＋']));
+    browse.append(el('span', { class: 'cmi-label' }, ['Browse skills']));
+    browse.addEventListener('click', () => {
       closeAll();
       cb.onBrowseSkills();
     });
@@ -232,62 +232,62 @@ export function openComposerPlusMenu(
   };
 
   const connectorsFly = () => {
-    const fly = el("div", { role: "menu" });
-    const add = el("button", { class: "composer-fly-item", type: "button" });
-    add.append(el("span", { class: "cmi-ico" }, ["＋"]));
-    add.append(el("span", { class: "cmi-label" }, ["Add connector"]));
-    add.append(el("span", { class: "cmi-chev" }, ["›"]));
-    add.addEventListener("click", () => {
+    const fly = el('div', { role: 'menu' });
+    const add = el('button', { class: 'composer-fly-item', type: 'button' });
+    add.append(el('span', { class: 'cmi-ico' }, ['＋']));
+    add.append(el('span', { class: 'cmi-label' }, ['Add connector']));
+    add.append(el('span', { class: 'cmi-chev' }, ['›']));
+    add.addEventListener('click', () => {
       closeAll();
       cb.onAddConnector();
     });
     fly.append(add);
 
-    const manage = el("button", { class: "composer-fly-item", type: "button" });
-    manage.append(el("span", { class: "cmi-ico" }, ["🧰"]));
-    manage.append(el("span", { class: "cmi-label" }, ["Manage connectors"]));
-    manage.addEventListener("click", () => {
+    const manage = el('button', { class: 'composer-fly-item', type: 'button' });
+    manage.append(el('span', { class: 'cmi-ico' }, ['🧰']));
+    manage.append(el('span', { class: 'cmi-label' }, ['Manage connectors']));
+    manage.addEventListener('click', () => {
       closeAll();
       cb.onManageConnectors();
     });
     fly.append(manage);
-    fly.append(el("div", { class: "composer-menu-sep" }));
+    fly.append(el('div', { class: 'composer-menu-sep' }));
 
     for (const c of CONNECTOR_CATALOG) {
       const disabled = c.available === false;
       let on = !!cb.tools.connectors[c.id] && !disabled;
-      const row = el("div", {
-        class: `composer-fly-toggle-row${disabled ? " is-disabled" : ""}`,
+      const row = el('div', {
+        class: `composer-fly-toggle-row${disabled ? ' is-disabled' : ''}`,
       });
-      row.append(el("span", { class: "cmi-ico" }, [connectorIcon(c.id)]));
-      row.append(el("span", { class: "cmi-label" }, [c.name]));
-      const tog = el("button", {
-        class: `cmi-switch${on ? " on" : ""}`,
-        type: "button",
-        "aria-pressed": on ? "true" : "false",
-        "aria-label": `Toggle ${c.name}`,
+      row.append(el('span', { class: 'cmi-ico' }, [connectorIcon(c.id)]));
+      row.append(el('span', { class: 'cmi-label' }, [c.name]));
+      const tog = el('button', {
+        class: `cmi-switch${on ? ' on' : ''}`,
+        type: 'button',
+        'aria-pressed': on ? 'true' : 'false',
+        'aria-label': `Toggle ${c.name}`,
       });
       if (!disabled) {
-        tog.addEventListener("click", (e) => {
+        tog.addEventListener('click', (e) => {
           e.stopPropagation();
           cb.onToggleConnector(c.id);
           on = !on;
           cb.tools.connectors[c.id] = on;
-          tog.classList.toggle("on", on);
-          tog.setAttribute("aria-pressed", on ? "true" : "false");
+          tog.classList.toggle('on', on);
+          tog.setAttribute('aria-pressed', on ? 'true' : 'false');
           // Refresh warning badge on Connectors row
-          const badge = menu.querySelector(".cmi-badge");
+          const badge = menu.querySelector('.cmi-badge');
           const n = connectorsWarningCount(cb.tools);
           if (badge) {
             if (n > 0) badge.textContent = `⚠ ${n}`;
             else badge.remove();
           } else if (n > 0) {
-            const connectorsRow = Array.from(menu.querySelectorAll(".composer-menu-item")).find(
-              (r) => r.textContent?.includes("Connectors"),
+            const connectorsRow = Array.from(menu.querySelectorAll('.composer-menu-item')).find(
+              (r) => r.textContent?.includes('Connectors')
             );
             connectorsRow
-              ?.querySelector(".cmi-chev")
-              ?.before(el("span", { class: "cmi-badge" }, [`⚠ ${n}`]));
+              ?.querySelector('.cmi-chev')
+              ?.before(el('span', { class: 'cmi-badge' }, [`⚠ ${n}`]));
           }
         });
       } else {
@@ -297,12 +297,12 @@ export function openComposerPlusMenu(
       fly.append(row);
     }
 
-    fly.append(el("div", { class: "composer-menu-sep" }));
-    const tools = el("button", { class: "composer-fly-item", type: "button" });
-    tools.append(el("span", { class: "cmi-ico" }, ["🔍"]));
-    tools.append(el("span", { class: "cmi-label" }, ["Tool access"]));
-    tools.append(el("span", { class: "cmi-chev" }, ["›"]));
-    tools.addEventListener("click", () => {
+    fly.append(el('div', { class: 'composer-menu-sep' }));
+    const tools = el('button', { class: 'composer-fly-item', type: 'button' });
+    tools.append(el('span', { class: 'cmi-ico' }, ['🔍']));
+    tools.append(el('span', { class: 'cmi-label' }, ['Tool access']));
+    tools.append(el('span', { class: 'cmi-chev' }, ['›']));
+    tools.addEventListener('click', () => {
       closeAll();
       cb.onToolAccess();
     });
@@ -311,30 +311,30 @@ export function openComposerPlusMenu(
   };
 
   const pluginsFly = () => {
-    const fly = el("div", { role: "menu" });
+    const fly = el('div', { role: 'menu' });
     for (const cat of PLUGIN_CATEGORIES) {
-      const row = el("button", { class: "composer-fly-item", type: "button" });
-      row.append(el("span", { class: "cmi-label" }, [cat.label]));
-      row.append(el("span", { class: "cmi-chev" }, ["›"]));
-      row.addEventListener("click", () => {
+      const row = el('button', { class: 'composer-fly-item', type: 'button' });
+      row.append(el('span', { class: 'cmi-label' }, [cat.label]));
+      row.append(el('span', { class: 'cmi-chev' }, ['›']));
+      row.addEventListener('click', () => {
         closeAll();
         cb.onPluginCategory(cat.id);
       });
       fly.append(row);
     }
-    fly.append(el("div", { class: "composer-menu-sep" }));
-    const manage = el("button", { class: "composer-fly-item", type: "button" });
-    manage.append(el("span", { class: "cmi-ico" }, ["🧰"]));
-    manage.append(el("span", { class: "cmi-label" }, ["Manage plugins"]));
-    manage.addEventListener("click", () => {
+    fly.append(el('div', { class: 'composer-menu-sep' }));
+    const manage = el('button', { class: 'composer-fly-item', type: 'button' });
+    manage.append(el('span', { class: 'cmi-ico' }, ['🧰']));
+    manage.append(el('span', { class: 'cmi-label' }, ['Manage plugins']));
+    manage.addEventListener('click', () => {
       closeAll();
       cb.onManagePlugins();
     });
     fly.append(manage);
-    const browse = el("button", { class: "composer-fly-item", type: "button" });
-    browse.append(el("span", { class: "cmi-ico" }, ["＋"]));
-    browse.append(el("span", { class: "cmi-label" }, ["Browse plugins"]));
-    browse.addEventListener("click", () => {
+    const browse = el('button', { class: 'composer-fly-item', type: 'button' });
+    browse.append(el('span', { class: 'cmi-ico' }, ['＋']));
+    browse.append(el('span', { class: 'cmi-label' }, ['Browse plugins']));
+    browse.addEventListener('click', () => {
       closeAll();
       cb.onBrowsePlugins();
     });
@@ -344,94 +344,89 @@ export function openComposerPlusMenu(
 
   // --- Main rows ---
   menu.append(
-    actionRow("📎", "Add files or photos", {
-      shortcut: "⌘U",
+    actionRow('📎', 'Add files or photos', {
+      shortcut: '⌘U',
       action: () => cb.onAddFiles(),
-    }),
+    })
   );
   menu.append(
-    actionRow("📁", "Add to project", {
+    actionRow('📁', 'Add to project', {
       chevron: true,
       fly: projectsFly,
-    }),
+    })
   );
   menu.append(
-    actionRow("⌥", "Add from GitHub", {
+    actionRow('⌥', 'Add from GitHub', {
       action: () => cb.onAddFromGitHub(),
-    }),
+    })
   );
-  menu.append(el("div", { class: "composer-menu-sep" }));
+  menu.append(el('div', { class: 'composer-menu-sep' }));
 
   menu.append(
-    actionRow("📋", "Skills", {
+    actionRow('📋', 'Skills', {
       chevron: true,
       fly: skillsFly,
-    }),
+    })
   );
   const warn = connectorsWarningCount(cb.tools);
   menu.append(
-    actionRow("▦", "Connectors", {
+    actionRow('▦', 'Connectors', {
       chevron: true,
       badge: warn > 0 ? `⚠ ${warn}` : undefined,
       fly: connectorsFly,
-    }),
+    })
   );
   menu.append(
-    actionRow("✧", "Plugins", {
+    actionRow('✧', 'Plugins', {
       chevron: true,
       fly: pluginsFly,
-    }),
+    })
   );
-  menu.append(el("div", { class: "composer-menu-sep" }));
+  menu.append(el('div', { class: 'composer-menu-sep' }));
 
   // Toggle rows stay open and flip the ✓ in place (Claude attach-bar parity)
-  const makeToggle = (
-    icon: string,
-    label: string,
-    getOn: () => boolean,
-    toggle: () => void,
-  ) => {
-    const row = el("button", {
-      class: "composer-menu-item",
-      type: "button",
-      role: "menuitemcheckbox",
-      "aria-checked": getOn() ? "true" : "false",
+  const makeToggle = (icon: string, label: string, getOn: () => boolean, toggle: () => void) => {
+    const row = el('button', {
+      class: 'composer-menu-item',
+      type: 'button',
+      role: 'menuitemcheckbox',
+      'aria-checked': getOn() ? 'true' : 'false',
     });
-    row.append(el("span", { class: "cmi-ico" }, [icon]));
-    row.append(el("span", { class: "cmi-label" }, [label]));
-    const check = el("span", { class: "cmi-check" }, [getOn() ? "✓" : ""]);
-    if (!getOn()) check.style.visibility = "hidden";
+    row.append(el('span', { class: 'cmi-ico' }, [icon]));
+    row.append(el('span', { class: 'cmi-label' }, [label]));
+    const check = el('span', { class: 'cmi-check' }, [getOn() ? '✓' : '']);
+    if (!getOn()) check.style.visibility = 'hidden';
     row.append(check);
-    row.addEventListener("mouseenter", () => hideFly());
-    row.addEventListener("click", (e) => {
+    row.addEventListener('mouseenter', () => hideFly());
+    row.addEventListener('click', (e) => {
       e.stopPropagation();
       toggle();
       const on = getOn();
-      check.textContent = on ? "✓" : "";
-      check.style.visibility = on ? "visible" : "hidden";
-      row.setAttribute("aria-checked", on ? "true" : "false");
+      check.textContent = on ? '✓' : '';
+      check.style.visibility = on ? 'visible' : 'hidden';
+      row.setAttribute('aria-checked', on ? 'true' : 'false');
     });
     menu.append(row);
   };
 
   makeToggle(
-    "🔎",
-    "Research",
+    '🔎',
+    'Research',
     () => cb.tools.research,
     () => {
       cb.onToggleResearch();
       // Parent mutates storage; keep local mirror for getOn
       cb.tools.research = !cb.tools.research;
-    },
+    }
   );
   makeToggle(
-    "🌐",
-    "Web search",
+    '🌐',
+    'Web search',
     () => cb.tools.webSearch,
     () => {
       cb.onToggleWebSearch();
       cb.tools.webSearch = !cb.tools.webSearch;
-    },
+    }
   );
 
   const onDoc = (e: MouseEvent) => {
@@ -440,10 +435,10 @@ export function openComposerPlusMenu(
     closeAll();
   };
   const onKey = (e: KeyboardEvent) => {
-    if (e.key === "Escape") closeAll();
+    if (e.key === 'Escape') closeAll();
   };
-  document.addEventListener("mousedown", onDoc);
-  document.addEventListener("keydown", onKey);
+  document.addEventListener('mousedown', onDoc);
+  document.addEventListener('keydown', onKey);
   document.body.append(menu);
 
   // After layout, re-position above if we used estimate
@@ -457,23 +452,23 @@ export function openComposerPlusMenu(
 
 function connectorIcon(id: string): string {
   switch (id) {
-    case "cashapp":
-      return "$";
-    case "figma":
-      return "◇";
-    case "gmail":
-      return "M";
-    case "godaddy":
-      return "G";
-    case "gcal":
-      return "31";
-    case "gdrive":
-      return "△";
-    case "granola":
-      return "◎";
-    case "github":
-      return "⌘";
+    case 'cashapp':
+      return '$';
+    case 'figma':
+      return '◇';
+    case 'gmail':
+      return 'M';
+    case 'godaddy':
+      return 'G';
+    case 'gcal':
+      return '31';
+    case 'gdrive':
+      return '△';
+    case 'granola':
+      return '◎';
+    case 'github':
+      return '⌘';
     default:
-      return "•";
+      return '•';
   }
 }

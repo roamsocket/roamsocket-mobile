@@ -14,58 +14,62 @@
  * (`npm start`) and the Electron shell (`npm run electron:dev`) can reuse
  * the same Express + WebSocket bootstrap.
  */
-import http from "node:http";
-import express from "express";
-import { WebSocketServer, type WebSocket } from "ws";
-import { PairingManager } from "./pairing.js";
-import { SessionManager } from "./sessions.js";
-import { parseClientMessage, encodeServerMessage, PairRequest, type ServerMessage } from "./protocol.js";
-import { mockAdapter } from "./providers/index.js";
-import { syncSkillsRepo, upsertSkill, removeSkill } from "./skills/sync.js";
-import { syncMemoryRepo, upsertMemoryEntry, removeMemoryEntry } from "./memory-sync.js";
-import { syncMCPRepo, upsertMCPServer, removeMCPServer } from "./mcp/sync.js";
-import { listConnectorDefinitions } from "./connectors/catalog.js";
+import http from 'node:http';
+import express from 'express';
+import { WebSocketServer, type WebSocket } from 'ws';
+import { PairingManager } from './pairing.js';
+import { SessionManager } from './sessions.js';
+import {
+  parseClientMessage,
+  encodeServerMessage,
+  PairRequest,
+  type ServerMessage,
+} from './protocol.js';
+import { mockAdapter } from './providers/index.js';
+import { syncSkillsRepo, upsertSkill, removeSkill } from './skills/sync.js';
+import { syncMCPRepo, upsertMCPServer, removeMCPServer } from './mcp/sync.js';
+import { listConnectorDefinitions } from './connectors/catalog.js';
 import {
   clearStoredConnector,
   getStoredConnector,
   isConnectorConnected,
   upsertStoredConnector,
-} from "./connectors/store.js";
-import { startOAuthFlow } from "./connectors/oauth.js";
-import { killTerminal, resizeTerminal, startTerminal, writeToTerminal } from "./terminal/index.js";
-import { diffAgainstBase, listChanges, listDir, readFile, writeFile } from "./workspace/files.js";
-import { listListeningPorts } from "./workspace/ports.js";
-import { productDataDir } from "./product.js";
+} from './connectors/store.js';
+import { startOAuthFlow } from './connectors/oauth.js';
+import { killTerminal, resizeTerminal, startTerminal, writeToTerminal } from './terminal/index.js';
+import { diffAgainstBase, listChanges, listDir, readFile, writeFile } from './workspace/files.js';
+import { listListeningPorts } from './workspace/ports.js';
+import { productDataDir } from './product.js';
 import {
   detectTunnelProviders,
   listTunnels,
   startTunnel,
   stopTunnel,
-} from "./workspace/tunnels.js";
-import { mountProxy } from "./proxy/index.js";
+} from './workspace/tunnels.js';
+import { mountProxy } from './proxy/index.js';
 import {
   currentAccessTunnel,
   ensureAccessTunnel,
   stopAccessTunnel,
-} from "./workspace/access-tunnel.js";
-import { promises as fs, readFileSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { randomBytes } from "node:crypto";
-import { advertiseServer, lanIPv4Addresses } from "./discovery.js";
+} from './workspace/access-tunnel.js';
+import { promises as fs, readFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { randomBytes } from 'node:crypto';
+import { advertiseServer, lanIPv4Addresses } from './discovery.js';
 import {
   loadDesktopPrefs,
   resolveAdvertise,
   resolveAutoTunnel,
-} from "./desktop-config.js";
+} from './desktop-config.js';
 import {
   printPairingBanner,
   printTunnelReadyBanner,
   resolvePairHost,
-} from "./cli/banner.js";
-import { runSettingsMenu } from "./cli/settings-menu.js";
-import { getMetalStore, getMetalRuntimeStatus, METAL_PROVIDER_ID } from "./metal/index.js";
+} from './cli/banner.js';
+import { runSettingsMenu } from './cli/settings-menu.js';
+import { getMetalStore, getMetalRuntimeStatus, METAL_PROVIDER_ID } from './metal/index.js';
 
 export interface StartServerOptions {
   port?: number;
@@ -111,8 +115,8 @@ export interface RunningServer {
 
 const DEFAULT_PORT = 4319;
 /** Listen on all interfaces so LAN phones can pair (override with APC_HOST). */
-const DEFAULT_HOST = "0.0.0.0";
-const DEFAULT_NAME = process.env.APC_NAME ?? "RoamSocket desktop";
+const DEFAULT_HOST = '0.0.0.0';
+const DEFAULT_NAME = process.env.APC_NAME ?? 'RoamSocket desktop';
 
 /**
  * Package version from package.json (keeps /health + banners in sync with npm).
@@ -120,16 +124,16 @@ const DEFAULT_NAME = process.env.APC_NAME ?? "RoamSocket desktop";
  */
 function readPackageVersion(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
-  for (const rel of ["../../package.json", "../package.json"] as const) {
+  for (const rel of ['../../package.json', '../package.json'] as const) {
     try {
-      const raw = readFileSync(path.join(here, rel), "utf8");
+      const raw = readFileSync(path.join(here, rel), 'utf8');
       const v = (JSON.parse(raw) as { version?: string }).version;
-      if (typeof v === "string" && v.length > 0) return v;
+      if (typeof v === 'string' && v.length > 0) return v;
     } catch {
       // try next candidate
     }
   }
-  return "0.0.0";
+  return '0.0.0';
 }
 
 const DEFAULT_VERSION = readPackageVersion();
@@ -137,7 +141,7 @@ const DEFAULT_VERSION = readPackageVersion();
 /** Build the live connector status list sent to the app. */
 function buildConnectorStatusList(): ServerMessage {
   return {
-    type: "connector_status",
+    type: 'connector_status',
     connectors: listConnectorDefinitions().map((def) => ({
       id: def.id,
       name: def.name,
@@ -159,24 +163,24 @@ interface SyncConfig {
 }
 
 async function loadSyncConfig(): Promise<SyncConfig> {
-  const file = path.join(productDataDir(), "config.json");
+  const file = path.join(productDataDir(), 'config.json');
   let json: Partial<SyncConfig> = {};
   try {
-    const raw = await fs.readFile(file, "utf8");
+    const raw = await fs.readFile(file, 'utf8');
     json = JSON.parse(raw);
   } catch {
     // file doesn't exist yet — fall back to env vars
   }
   return {
     skillsRepo: {
-      url: process.env.APC_SKILLS_REPO ?? json.skillsRepo?.url ?? "",
-      branch: process.env.APC_SKILLS_BRANCH ?? json.skillsRepo?.branch ?? "main",
-      token: process.env.APC_SKILLS_TOKEN ?? json.skillsRepo?.token ?? "",
+      url: process.env.APC_SKILLS_REPO ?? json.skillsRepo?.url ?? '',
+      branch: process.env.APC_SKILLS_BRANCH ?? json.skillsRepo?.branch ?? 'main',
+      token: process.env.APC_SKILLS_TOKEN ?? json.skillsRepo?.token ?? '',
     },
     mcpRepo: {
-      url: process.env.APC_MCP_REPO ?? json.mcpRepo?.url ?? "",
-      branch: process.env.APC_MCP_BRANCH ?? json.mcpRepo?.branch ?? "main",
-      token: process.env.APC_MCP_TOKEN ?? json.mcpRepo?.token ?? "",
+      url: process.env.APC_MCP_REPO ?? json.mcpRepo?.url ?? '',
+      branch: process.env.APC_MCP_BRANCH ?? json.mcpRepo?.branch ?? 'main',
+      token: process.env.APC_MCP_TOKEN ?? json.mcpRepo?.token ?? '',
     },
     memoryRepo: {
       url: process.env.APC_MEMORY_REPO ?? json.memoryRepo?.url ?? "",
@@ -184,8 +188,8 @@ async function loadSyncConfig(): Promise<SyncConfig> {
       token: process.env.APC_MEMORY_TOKEN ?? json.memoryRepo?.token ?? "",
     },
     author: {
-      name: process.env.APC_AUTHOR_NAME ?? json.author?.name ?? "RoamSocket",
-      email: process.env.APC_AUTHOR_EMAIL ?? json.author?.email ?? "bot@roamsocket.local",
+      name: process.env.APC_AUTHOR_NAME ?? json.author?.name ?? 'RoamSocket',
+      email: process.env.APC_AUTHOR_EMAIL ?? json.author?.email ?? 'bot@roamsocket.local',
     },
   };
 }
@@ -200,14 +204,13 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
   const host = opts.host ?? process.env.APC_HOST ?? DEFAULT_HOST;
   const serverName = opts.serverName ?? DEFAULT_NAME;
   const version = opts.version ?? DEFAULT_VERSION;
-  const useMock = opts.mock ?? process.env.APC_MOCK === "1";
+  const useMock = opts.mock ?? process.env.APC_MOCK === '1';
   const silent = opts.silent ?? false;
   const shouldAdvertise = resolveAdvertise(desktopPrefs, opts.advertise);
   const shouldAutoTunnel = resolveAutoTunnel(desktopPrefs, opts.autoTunnel);
   const tunnelProvider = desktopPrefs.tunnelProvider;
   const openCliSettings =
-    opts.cliSettings ??
-    (!silent && process.stdin.isTTY && process.env.APC_CLI_SETTINGS !== "0");
+    opts.cliSettings ?? (!silent && process.stdin.isTTY && process.env.APC_CLI_SETTINGS !== '0');
 
   const pairing = new PairingManager();
   const syncConfig = await loadSyncConfig();
@@ -217,14 +220,14 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
   // forward SSE / non-JSON shapes verbatim). Skipping `/v1/*` here keeps
   // the proxy handler from seeing a consumed stream.
   app.use((req, res, next) => {
-    if (req.path.startsWith("/v1/")) return next();
-    return express.json({ limit: "2mb" })(req, res, next);
+    if (req.path.startsWith('/v1/')) return next();
+    return express.json({ limit: '2mb' })(req, res, next);
   });
 
   /** Filled after listen — used by pair + tunnel helpers. */
   let boundPort = 0;
 
-  app.get("/health", (_req, res) => {
+  app.get('/health', (_req, res) => {
     const access = currentAccessTunnel();
     res.json({
       ok: true,
@@ -241,22 +244,26 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
    * Phone coding pickers use this so they never offer phone-local weights that
    * may not match the desktop store.
    */
-  app.get("/metal/models", async (req, res) => {
-    const auth = req.header("authorization") ?? "";
-    const bearer = auth.toLowerCase().startsWith("bearer ")
+  app.get('/metal/models', async (req, res) => {
+    const auth = req.header('authorization') ?? '';
+    const bearer = auth.toLowerCase().startsWith('bearer ')
       ? auth.slice(7).trim()
-      : (typeof req.query.token === "string" ? req.query.token : "");
+      : typeof req.query.token === 'string'
+        ? req.query.token
+        : '';
     if (!pairing.verify(bearer)) {
-      res.status(401).json({ error: "Unauthorized" });
+      res.status(401).json({ error: 'Unauthorized' });
       return;
     }
     try {
       const status = await getMetalRuntimeStatus();
-      const models = getMetalStore().listDownloaded().map((m) => ({
-        hubID: m.hubID,
-        displayName: m.displayName,
-        downloadedAt: m.downloadedAt,
-      }));
+      const models = getMetalStore()
+        .listDownloaded()
+        .map((m) => ({
+          hubID: m.hubID,
+          displayName: m.displayName,
+          downloadedAt: m.downloadedAt,
+        }));
       res.json({
         provider: METAL_PROVIDER_ID,
         runtimeReady: status.runtimeReady,
@@ -269,15 +276,15 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
     }
   });
 
-  app.post("/pair", (req, res) => {
+  app.post('/pair', (req, res) => {
     const parsed = PairRequest.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: "Invalid pair request." });
+      res.status(400).json({ error: 'Invalid pair request.' });
       return;
     }
     const device = pairing.pair(parsed.data.code, parsed.data.deviceName);
     if (!device) {
-      res.status(401).json({ error: "Invalid pairing code." });
+      res.status(401).json({ error: 'Invalid pairing code.' });
       return;
     }
     const access = currentAccessTunnel();
@@ -292,12 +299,13 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
     const autoTunnel = resolveAutoTunnel(livePrefs, opts.autoTunnel);
     // Kick a public tunnel so the phone can leave Wi‑Fi without re-pairing.
     if (autoTunnel && boundPort > 0) {
-      void ensureAccessTunnel({ port: boundPort, provider: livePrefs.tunnelProvider }).then((info) =>
-        announceAccessTunnel(info, {
-          silent,
-          pairingCode: () => pairing.pairingCode,
-          context: "after pair",
-        }),
+      void ensureAccessTunnel({ port: boundPort, provider: livePrefs.tunnelProvider }).then(
+        (info) =>
+          announceAccessTunnel(info, {
+            silent,
+            pairingCode: () => pairing.pairingCode,
+            context: 'after pair',
+          })
       );
     }
     if (livePrefs.rotateCodeAfterPair) {
@@ -332,13 +340,13 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
   });
 
   const server = http.createServer(app);
-  const wss = new WebSocketServer({ server, path: "/session" });
+  const wss = new WebSocketServer({ server, path: '/session' });
 
-  wss.on("connection", (ws: WebSocket, req) => {
-    const url = new URL(req.url ?? "", "http://localhost");
-    const token = url.searchParams.get("token");
+  wss.on('connection', (ws: WebSocket, req) => {
+    const url = new URL(req.url ?? '', 'http://localhost');
+    const token = url.searchParams.get('token');
     if (!pairing.verify(token)) {
-      ws.close(4001, "Unauthorized");
+      ws.close(4001, 'Unauthorized');
       return;
     }
 
@@ -362,130 +370,132 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
       }
     }
 
-    ws.on("message", async (data) => {
+    ws.on('message', async (data) => {
       let msg;
       try {
         msg = parseClientMessage(data.toString());
       } catch (err) {
-        emit({ type: "error", message: `Bad message: ${(err as Error).message}` });
+        emit({ type: 'error', message: `Bad message: ${(err as Error).message}` });
         return;
       }
       try {
         switch (msg.type) {
-          case "create_session":
+          case 'create_session':
             await manager.create(msg);
             break;
-          case "user_message":
+          case 'user_message':
             await manager.handleUserMessage(msg.sessionId, msg.text, msg.model);
             break;
-          case "permission_response":
+          case 'permission_response':
             manager.resolvePermission(msg.sessionId, msg.requestId, msg.decision);
             break;
-          case "interrupt":
+          case 'interrupt':
             manager.interrupt(msg.sessionId);
             break;
-          case "create_pr":
+          case 'create_pr':
             await manager.createPr(msg);
             break;
-          case "git_publish":
+          case 'git_publish':
             await manager.gitPublish(msg);
             break;
-          case "skills_sync_request":
+          case 'skills_sync_request':
             if (!syncConfig.skillsRepo.url) {
-              emit({ type: "error", message: "No skills repo configured on the desktop." });
+              emit({ type: 'error', message: 'No skills repo configured on the desktop.' });
             } else {
-              const skills = await syncSkillsRepo(syncConfig.skillsRepo, syncConfig.skillsRepo.token || undefined);
-              emit({ type: "skills_sync", skills });
-            }
-            break;
-          case "skill_upsert":
-            if (!syncConfig.skillsRepo.url) {
-              emit({ type: "error", message: "No skills repo configured on the desktop." });
-            } else {
-              await upsertSkill(msg.skill, syncConfig.skillsRepo, syncConfig.skillsRepo.token || undefined, syncConfig.author);
-              const skills = await syncSkillsRepo(syncConfig.skillsRepo, syncConfig.skillsRepo.token || undefined);
-              emit({ type: "skills_sync", skills });
-            }
-            break;
-          case "skill_delete":
-            if (!syncConfig.skillsRepo.url) {
-              emit({ type: "error", message: "No skills repo configured on the desktop." });
-            } else {
-              await removeSkill(msg.id, syncConfig.skillsRepo, syncConfig.skillsRepo.token || undefined, syncConfig.author);
-              const skills = await syncSkillsRepo(syncConfig.skillsRepo, syncConfig.skillsRepo.token || undefined);
-              emit({ type: "skills_sync", skills });
-            }
-            break;
-          case "mcp_sync_request":
-            if (!syncConfig.mcpRepo.url) {
-              emit({ type: "error", message: "No MCP repo configured on the desktop." });
-            } else {
-              const servers = await syncMCPRepo(syncConfig.mcpRepo, syncConfig.mcpRepo.token || undefined);
-              emit({ type: "mcp_sync", servers });
-            }
-            break;
-          case "mcp_upsert":
-            if (!syncConfig.mcpRepo.url) {
-              emit({ type: "error", message: "No MCP repo configured on the desktop." });
-            } else {
-              await upsertMCPServer(msg.server, syncConfig.mcpRepo, syncConfig.mcpRepo.token || undefined, syncConfig.author);
-              const servers = await syncMCPRepo(syncConfig.mcpRepo, syncConfig.mcpRepo.token || undefined);
-              emit({ type: "mcp_sync", servers });
-            }
-            break;
-          case "mcp_delete":
-            if (!syncConfig.mcpRepo.url) {
-              emit({ type: "error", message: "No MCP repo configured on the desktop." });
-            } else {
-              await removeMCPServer(msg.id, syncConfig.mcpRepo, syncConfig.mcpRepo.token || undefined, syncConfig.author);
-              const servers = await syncMCPRepo(syncConfig.mcpRepo, syncConfig.mcpRepo.token || undefined);
-              emit({ type: "mcp_sync", servers });
-            }
-            break;
-          case "memory_sync_request":
-            if (!syncConfig.memoryRepo.url) {
-              emit({ type: "error", message: "No memory repo configured on the desktop." });
-            } else {
-              const entries = await syncMemoryRepo(syncConfig.memoryRepo, syncConfig.memoryRepo.token || undefined);
-              emit({ type: "memory_sync", entries });
-            }
-            break;
-          case "memory_upsert":
-            if (!syncConfig.memoryRepo.url) {
-              emit({ type: "error", message: "No memory repo configured on the desktop." });
-            } else {
-              await upsertMemoryEntry(
-                msg.entry,
-                syncConfig.memoryRepo,
-                syncConfig.memoryRepo.token || undefined,
-                syncConfig.author,
+              const skills = await syncSkillsRepo(
+                syncConfig.skillsRepo,
+                syncConfig.skillsRepo.token || undefined
               );
-              const entries = await syncMemoryRepo(syncConfig.memoryRepo, syncConfig.memoryRepo.token || undefined);
-              emit({ type: "memory_sync", entries });
+              emit({ type: 'skills_sync', skills });
             }
             break;
-          case "memory_delete":
-            if (!syncConfig.memoryRepo.url) {
-              emit({ type: "error", message: "No memory repo configured on the desktop." });
+          case 'skill_upsert':
+            if (!syncConfig.skillsRepo.url) {
+              emit({ type: 'error', message: 'No skills repo configured on the desktop.' });
             } else {
-              await removeMemoryEntry(
+              await upsertSkill(
+                msg.skill,
+                syncConfig.skillsRepo,
+                syncConfig.skillsRepo.token || undefined,
+                syncConfig.author
+              );
+              const skills = await syncSkillsRepo(
+                syncConfig.skillsRepo,
+                syncConfig.skillsRepo.token || undefined
+              );
+              emit({ type: 'skills_sync', skills });
+            }
+            break;
+          case 'skill_delete':
+            if (!syncConfig.skillsRepo.url) {
+              emit({ type: 'error', message: 'No skills repo configured on the desktop.' });
+            } else {
+              await removeSkill(
                 msg.id,
-                syncConfig.memoryRepo,
-                syncConfig.memoryRepo.token || undefined,
-                syncConfig.author,
+                syncConfig.skillsRepo,
+                syncConfig.skillsRepo.token || undefined,
+                syncConfig.author
               );
-              const entries = await syncMemoryRepo(syncConfig.memoryRepo, syncConfig.memoryRepo.token || undefined);
-              emit({ type: "memory_sync", entries });
+              const skills = await syncSkillsRepo(
+                syncConfig.skillsRepo,
+                syncConfig.skillsRepo.token || undefined
+              );
+              emit({ type: 'skills_sync', skills });
             }
             break;
-          case "connector_list_request":
+          case 'mcp_sync_request':
+            if (!syncConfig.mcpRepo.url) {
+              emit({ type: 'error', message: 'No MCP repo configured on the desktop.' });
+            } else {
+              const servers = await syncMCPRepo(
+                syncConfig.mcpRepo,
+                syncConfig.mcpRepo.token || undefined
+              );
+              emit({ type: 'mcp_sync', servers });
+            }
+            break;
+          case 'mcp_upsert':
+            if (!syncConfig.mcpRepo.url) {
+              emit({ type: 'error', message: 'No MCP repo configured on the desktop.' });
+            } else {
+              await upsertMCPServer(
+                msg.server,
+                syncConfig.mcpRepo,
+                syncConfig.mcpRepo.token || undefined,
+                syncConfig.author
+              );
+              const servers = await syncMCPRepo(
+                syncConfig.mcpRepo,
+                syncConfig.mcpRepo.token || undefined
+              );
+              emit({ type: 'mcp_sync', servers });
+            }
+            break;
+          case 'mcp_delete':
+            if (!syncConfig.mcpRepo.url) {
+              emit({ type: 'error', message: 'No MCP repo configured on the desktop.' });
+            } else {
+              await removeMCPServer(
+                msg.id,
+                syncConfig.mcpRepo,
+                syncConfig.mcpRepo.token || undefined,
+                syncConfig.author
+              );
+              const servers = await syncMCPRepo(
+                syncConfig.mcpRepo,
+                syncConfig.mcpRepo.token || undefined
+              );
+              emit({ type: 'mcp_sync', servers });
+            }
+            break;
+          case 'connector_list_request':
             emit(buildConnectorStatusList());
             break;
-          case "connector_set_token":
+          case 'connector_set_token':
             upsertStoredConnector(msg.id, { token: msg.token, lastError: undefined });
             emit(buildConnectorStatusList());
             break;
-          case "connector_set_oauth_app":
+          case 'connector_set_oauth_app':
             upsertStoredConnector(msg.id, {
               clientId: msg.clientId,
               clientSecret: msg.clientSecret,
@@ -493,53 +503,53 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
             });
             emit(buildConnectorStatusList());
             break;
-          case "connector_oauth_start": {
+          case 'connector_oauth_start': {
             const result = await startOAuthFlow(msg.id, () => {
               // Authorize URL opened locally on this machine — nothing to
               // push to the phone; the app just waits for connector_status.
             });
-            if ("error" in result) {
+            if ('error' in result) {
               upsertStoredConnector(msg.id, { lastError: result.error });
-              emit({ type: "error", message: result.error });
+              emit({ type: 'error', message: result.error });
             }
             emit(buildConnectorStatusList());
             break;
           }
-          case "connector_disconnect":
+          case 'connector_disconnect':
             clearStoredConnector(msg.id);
             emit(buildConnectorStatusList());
             break;
-          case "terminal_open": {
+          case 'terminal_open': {
             const workdir = manager.workdirFor(msg.sessionId);
             if (!workdir) {
-              emit({ type: "error", sessionId: msg.sessionId, message: "Unknown session." });
+              emit({ type: 'error', sessionId: msg.sessionId, message: 'Unknown session.' });
               break;
             }
             startTerminal(workdir, ws);
             break;
           }
-          case "terminal_input":
+          case 'terminal_input':
             writeToTerminal(msg.terminalId, msg.data);
             break;
-          case "terminal_resize":
+          case 'terminal_resize':
             resizeTerminal(msg.terminalId, msg.cols, msg.rows);
             break;
-          case "terminal_kill":
+          case 'terminal_kill':
             killTerminal(msg.terminalId);
             break;
-          case "file_list": {
+          case 'file_list': {
             const workdir = manager.workdirFor(msg.sessionId);
             if (!workdir) {
-              emit({ type: "error", sessionId: msg.sessionId, message: "Unknown session." });
+              emit({ type: 'error', sessionId: msg.sessionId, message: 'Unknown session.' });
               break;
             }
             try {
               const entries = await listDir(workdir, msg.path);
-              const atRoot = !msg.path || msg.path === "." || msg.path === "";
+              const atRoot = !msg.path || msg.path === '.' || msg.path === '';
               const diff = atRoot ? await diffAgainstBase(workdir) : undefined;
               const changes = atRoot ? await listChanges(workdir) : undefined;
               emit({
-                type: "file_list_result",
+                type: 'file_list_result',
                 sessionId: msg.sessionId,
                 path: msg.path,
                 entries,
@@ -547,20 +557,20 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
                 changes,
               });
             } catch (err) {
-              emit({ type: "error", sessionId: msg.sessionId, message: (err as Error).message });
+              emit({ type: 'error', sessionId: msg.sessionId, message: (err as Error).message });
             }
             break;
           }
-          case "file_read": {
+          case 'file_read': {
             const workdir = manager.workdirFor(msg.sessionId);
             if (!workdir) {
-              emit({ type: "error", sessionId: msg.sessionId, message: "Unknown session." });
+              emit({ type: 'error', sessionId: msg.sessionId, message: 'Unknown session.' });
               break;
             }
             try {
               const { content, truncated, diff } = await readFile(workdir, msg.path);
               emit({
-                type: "file_read_result",
+                type: 'file_read_result',
                 sessionId: msg.sessionId,
                 path: msg.path,
                 content,
@@ -568,20 +578,20 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
                 diff,
               });
             } catch (err) {
-              emit({ type: "error", sessionId: msg.sessionId, message: (err as Error).message });
+              emit({ type: 'error', sessionId: msg.sessionId, message: (err as Error).message });
             }
             break;
           }
-          case "file_write": {
+          case 'file_write': {
             const workdir = manager.workdirFor(msg.sessionId);
             if (!workdir) {
-              emit({ type: "error", sessionId: msg.sessionId, message: "Unknown session." });
+              emit({ type: 'error', sessionId: msg.sessionId, message: 'Unknown session.' });
               break;
             }
             try {
               await writeFile(workdir, msg.path, msg.content);
               emit({
-                type: "file_write_result",
+                type: 'file_write_result',
                 sessionId: msg.sessionId,
                 path: msg.path,
                 ok: true,
@@ -589,7 +599,7 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
               });
             } catch (err) {
               emit({
-                type: "file_write_result",
+                type: 'file_write_result',
                 sessionId: msg.sessionId,
                 path: msg.path,
                 ok: false,
@@ -598,100 +608,94 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
             }
             break;
           }
-          case "port_list": {
+          case 'port_list': {
             const workdir = manager.workdirFor(msg.sessionId);
             if (!workdir) {
-              emit({ type: "error", sessionId: msg.sessionId, message: "Unknown session." });
+              emit({ type: 'error', sessionId: msg.sessionId, message: 'Unknown session.' });
               break;
             }
             const ports = await listListeningPorts();
-            emit({ type: "port_list_result", sessionId: msg.sessionId, ports });
+            emit({ type: 'port_list_result', sessionId: msg.sessionId, ports });
             break;
           }
-          case "tunnel_start": {
+          case 'tunnel_start': {
             if (!manager.workdirFor(msg.sessionId)) {
-              emit({ type: "error", sessionId: msg.sessionId, message: "Unknown session." });
+              emit({ type: 'error', sessionId: msg.sessionId, message: 'Unknown session.' });
               break;
             }
             try {
               await startTunnel({ port: msg.port, provider: msg.provider });
               const availableProviders = await detectTunnelProviders();
               emit({
-                type: "tunnel_status",
+                type: 'tunnel_status',
                 sessionId: msg.sessionId,
                 tunnels: listTunnels(),
                 availableProviders,
               });
             } catch (err) {
-              emit({ type: "error", sessionId: msg.sessionId, message: (err as Error).message });
+              emit({ type: 'error', sessionId: msg.sessionId, message: (err as Error).message });
             }
             break;
           }
-          case "tunnel_stop": {
+          case 'tunnel_stop': {
             stopTunnel(msg.tunnelId);
             emit({
-              type: "tunnel_status",
+              type: 'tunnel_status',
               sessionId: msg.sessionId,
               tunnels: listTunnels(),
               availableProviders: await detectTunnelProviders(),
             });
             break;
           }
-          case "tunnel_list": {
+          case 'tunnel_list': {
             emit({
-              type: "tunnel_status",
+              type: 'tunnel_status',
               sessionId: msg.sessionId,
               tunnels: listTunnels(),
               availableProviders: await detectTunnelProviders(),
             });
             break;
           }
-          case "remote_endpoint_request": {
+          case 'remote_endpoint_request': {
             // Phone fell back to LAN after a dead tunnel — (re)publish a public URL.
             if (boundPort <= 0) {
               emit({
-                type: "remote_endpoint",
-                status: "error",
-                error: "Server is not listening yet.",
+                type: 'remote_endpoint',
+                status: 'error',
+                error: 'Server is not listening yet.',
               });
               break;
             }
             const live = loadDesktopPrefs();
-            void pushRemoteEndpoint(
-              emit,
-              boundPort,
-              live.tunnelProvider,
-              Boolean(msg.force),
-              {
-                silent,
-                pairingCode: () => pairing.pairingCode,
-              },
-            );
+            void pushRemoteEndpoint(emit, boundPort, live.tunnelProvider, Boolean(msg.force), {
+              silent,
+              pairingCode: () => pairing.pairingCode,
+            });
             break;
           }
         }
       } catch (err) {
-        emit({ type: "error", message: (err as Error).message });
+        emit({ type: 'error', message: (err as Error).message });
       }
     });
   });
 
   await new Promise<void>((resolve, reject) => {
     const onError = (err: NodeJS.ErrnoException) => {
-      server.off("error", onError);
-      if (err.code === "EADDRINUSE") {
+      server.off('error', onError);
+      if (err.code === 'EADDRINUSE') {
         reject(
           new Error(
-            `Port ${port} is already in use. Quit the other RoamSocket / desktop-server process, or set PORT to a free port.`,
-          ),
+            `Port ${port} is already in use. Quit the other RoamSocket / desktop-server process, or set PORT to a free port.`
+          )
         );
         return;
       }
       reject(err);
     };
-    server.once("error", onError);
+    server.once('error', onError);
     server.listen(port, host, () => {
-      server.off("error", onError);
+      server.off('error', onError);
       resolve();
     });
   });
@@ -728,12 +732,12 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
       const lan = lanIPv4Addresses();
       console.log(`\n${serverName} v${version} listening on http://${host}:${boundPort}`);
       if (lan.length > 0) {
-        console.log(`LAN: ${lan.map((ip) => `http://${ip}:${boundPort}`).join(", ")}`);
+        console.log(`LAN: ${lan.map((ip) => `http://${ip}:${boundPort}`).join(', ')}`);
       }
       if (existingTunnel) {
         console.log(`Tunnel URL: ${existingTunnel}`);
       }
-      console.log(`Pairing code: ${pairingCode}${useMock ? "  (MOCK agent)" : ""}`);
+      console.log(`Pairing code: ${pairingCode}${useMock ? '  (MOCK agent)' : ''}`);
       // Proxy is always on in serve-only mode. Print the URL + bearer so
       // external CLIs (`roamsocket open <tool>`, or hand-configured Codex /
       // Aider / Cursor / OpenCode) know where to point.
@@ -742,11 +746,10 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
       console.log(`Run \`roamsocket open codex|claude|aider|cursor|opencode\` to launch one of them.`);
     }
     if (openCliSettings) {
-      console.log("CLI settings: type a command at the prompt (h = help, q = leave menu).\n");
+      console.log('CLI settings: type a command at the prompt (h = help, q = leave menu).\n');
       void runSettingsMenu({
         getPairingCode: () => pairing.pairingCode,
-        getPairHost: () =>
-          resolvePairHost(host, boundPort, currentAccessTunnel()?.url ?? null),
+        getPairHost: () => resolvePairHost(host, boundPort, currentAccessTunnel()?.url ?? null),
         rotateCode: () => pairing.rotateCode(),
         getServerInfo: () => ({ host, port: boundPort, name: serverName }),
       });
@@ -757,14 +760,14 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
   // and print the public URL + QR when the tunnel finishes loading.
   if (desktopPrefs.remoteAccessEnabled && boundPort > 0) {
     if (!silent) {
-      console.log("[apc] remote access enabled — starting public tunnel…");
+      console.log('[apc] remote access enabled — starting public tunnel…');
     }
     void ensureAccessTunnel({ port: boundPort, provider: tunnelProvider }).then((info) =>
       announceAccessTunnel(info, {
         silent,
         pairingCode: () => pairing.pairingCode,
-        context: "remote access",
-      }),
+        context: 'remote access',
+      })
     );
   }
 
@@ -799,10 +802,10 @@ async function announceAccessTunnel(
     silent: boolean;
     pairingCode: () => string;
     context?: string;
-  },
+  }
 ): Promise<void> {
-  const ctx = opts.context ? ` ${opts.context}` : "";
-  if (info.url && (info.status === "up" || info.status === "starting")) {
+  const ctx = opts.context ? ` ${opts.context}` : '';
+  if (info.url && (info.status === 'up' || info.status === 'starting')) {
     if (!opts.silent) {
       await printTunnelReadyBanner({
         url: info.url,
@@ -814,7 +817,7 @@ async function announceAccessTunnel(
     }
     return;
   }
-  if (info.status === "error") {
+  if (info.status === 'error') {
     console.warn(`[apc] access tunnel failed${ctx}: ${info.error ?? info.status}`);
   }
 }
@@ -823,18 +826,18 @@ async function announceAccessTunnel(
 async function pushRemoteEndpoint(
   emit: (msg: ServerMessage) => void,
   port: number,
-  provider: "auto" | "ngrok" | "cloudflare" | "localtunnel" | "bore" = "auto",
+  provider: 'auto' | 'ngrok' | 'cloudflare' | 'localtunnel' | 'bore' = 'auto',
   force = false,
   announce?: {
     silent: boolean;
     pairingCode: () => string;
-  },
+  }
 ): Promise<void> {
   const existing = currentAccessTunnel();
-  if (!force && existing?.url && existing.status === "up") {
+  if (!force && existing?.url && existing.status === 'up') {
     emit({
-      type: "remote_endpoint",
-      status: "up",
+      type: 'remote_endpoint',
+      status: 'up',
       url: existing.url,
       provider: existing.provider,
     });
@@ -842,17 +845,17 @@ async function pushRemoteEndpoint(
   }
 
   emit({
-    type: "remote_endpoint",
-    status: "starting",
+    type: 'remote_endpoint',
+    status: 'starting',
     provider: existing?.provider ?? provider,
   });
 
   try {
     const info = await ensureAccessTunnel({ port, provider, force });
-    if (info.url && (info.status === "up" || info.status === "starting")) {
+    if (info.url && (info.status === 'up' || info.status === 'starting')) {
       emit({
-        type: "remote_endpoint",
-        status: "up",
+        type: 'remote_endpoint',
+        status: 'up',
         url: info.url,
         provider: info.provider,
       });
@@ -860,26 +863,26 @@ async function pushRemoteEndpoint(
         await announceAccessTunnel(info, {
           silent: announce.silent,
           pairingCode: announce.pairingCode,
-          context: force ? "remote_endpoint [forced]" : "remote_endpoint",
+          context: force ? 'remote_endpoint [forced]' : 'remote_endpoint',
         });
       } else {
         console.log(
-          `[apc] remote_endpoint → ${info.url} (${info.provider})${force ? " [forced]" : ""}`,
+          `[apc] remote_endpoint → ${info.url} (${info.provider})${force ? ' [forced]' : ''}`
         );
       }
     } else {
       emit({
-        type: "remote_endpoint",
-        status: "error",
+        type: 'remote_endpoint',
+        status: 'error',
         provider: info.provider,
-        error: info.error ?? "Could not obtain a public tunnel URL.",
+        error: info.error ?? 'Could not obtain a public tunnel URL.',
       });
       console.warn(`[apc] remote_endpoint failed: ${info.error ?? info.status}`);
     }
   } catch (err) {
     emit({
-      type: "remote_endpoint",
-      status: "error",
+      type: 'remote_endpoint',
+      status: 'error',
       error: (err as Error).message,
     });
     console.warn(`[apc] remote_endpoint error: ${(err as Error).message}`);
@@ -892,24 +895,21 @@ async function pushRemoteEndpoint(
  * missing-config errors are surfaced to the client as `error` messages
  * rather than throwing.
  */
-async function pushInitialSync(
-  emit: (msg: ServerMessage) => void,
-  cfg: SyncConfig,
-): Promise<void> {
+async function pushInitialSync(emit: (msg: ServerMessage) => void, cfg: SyncConfig): Promise<void> {
   if (cfg.skillsRepo.url) {
     try {
       const skills = await syncSkillsRepo(cfg.skillsRepo, cfg.skillsRepo.token || undefined);
-      emit({ type: "skills_sync", skills });
+      emit({ type: 'skills_sync', skills });
     } catch (err) {
-      emit({ type: "error", message: `Skills sync failed: ${(err as Error).message}` });
+      emit({ type: 'error', message: `Skills sync failed: ${(err as Error).message}` });
     }
   }
   if (cfg.mcpRepo.url) {
     try {
       const servers = await syncMCPRepo(cfg.mcpRepo, cfg.mcpRepo.token || undefined);
-      emit({ type: "mcp_sync", servers });
+      emit({ type: 'mcp_sync', servers });
     } catch (err) {
-      emit({ type: "error", message: `MCP sync failed: ${(err as Error).message}` });
+      emit({ type: 'error', message: `MCP sync failed: ${(err as Error).message}` });
     }
   }
   if (cfg.memoryRepo.url) {
@@ -926,12 +926,12 @@ async function pushInitialSync(
 // Prefer `bin/roamsocket.js` / `src/cli/main.ts` for the full TUI + server.
 const isDirectInvocation =
   import.meta.url === `file://${process.argv[1]}` ||
-  process.argv[1]?.endsWith("index.js") ||
-  process.argv[1]?.endsWith("index.ts");
+  process.argv[1]?.endsWith('index.js') ||
+  process.argv[1]?.endsWith('index.ts');
 
 if (isDirectInvocation) {
   startServer({ cliSettings: true }).catch((err) => {
-    console.error("Failed to start server:", err);
+    console.error('Failed to start server:', err);
     process.exit(1);
   });
 }

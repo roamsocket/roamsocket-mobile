@@ -1,7 +1,7 @@
 /**
  * Parse + merge marketplace catalogs (pure; safe for unit tests).
  */
-import { BUNDLED_MARKETPLACE_CATALOG } from "./defaults.js";
+import { BUNDLED_MARKETPLACE_CATALOG } from './defaults.js';
 import {
   emptyCatalog,
   MARKETPLACE_SCHEMA_VERSION,
@@ -11,26 +11,26 @@ import {
   type MarketplacePlugin,
   type MarketplacePluginCategory,
   type MarketplaceSkill,
-} from "./types.js";
+} from './types.js';
 
-function asString(v: unknown, fallback = ""): string {
-  return typeof v === "string" ? v : fallback;
+function asString(v: unknown, fallback = ''): string {
+  return typeof v === 'string' ? v : fallback;
 }
 
 function asBool(v: unknown, fallback: boolean): boolean {
-  return typeof v === "boolean" ? v : fallback;
+  return typeof v === 'boolean' ? v : fallback;
 }
 
 function asStringArray(v: unknown): string[] | undefined {
   if (!Array.isArray(v)) return undefined;
-  return v.filter((x): x is string => typeof x === "string");
+  return v.filter((x): x is string => typeof x === 'string');
 }
 
 function parseConnectors(raw: unknown): MarketplaceConnector[] {
   if (!Array.isArray(raw)) return [];
   const out: MarketplaceConnector[] = [];
   for (const row of raw) {
-    if (!row || typeof row !== "object") continue;
+    if (!row || typeof row !== 'object') continue;
     const o = row as Record<string, unknown>;
     const id = asString(o.id).trim();
     const name = asString(o.name).trim();
@@ -51,7 +51,7 @@ function parseSkills(raw: unknown): MarketplaceSkill[] {
   if (!Array.isArray(raw)) return [];
   const out: MarketplaceSkill[] = [];
   for (const row of raw) {
-    if (!row || typeof row !== "object") continue;
+    if (!row || typeof row !== 'object') continue;
     const o = row as Record<string, unknown>;
     const id = asString(o.id).trim();
     const name = asString(o.name).trim() || id;
@@ -74,7 +74,7 @@ function parsePlugins(raw: unknown): MarketplacePlugin[] {
   if (!Array.isArray(raw)) return [];
   const out: MarketplacePlugin[] = [];
   for (const row of raw) {
-    if (!row || typeof row !== "object") continue;
+    if (!row || typeof row !== 'object') continue;
     const o = row as Record<string, unknown>;
     const id = asString(o.id).trim();
     const name = asString(o.name).trim() || id;
@@ -95,7 +95,7 @@ function parsePluginCategories(raw: unknown): MarketplacePluginCategory[] {
   if (!Array.isArray(raw)) return [];
   const out: MarketplacePluginCategory[] = [];
   for (const row of raw) {
-    if (!row || typeof row !== "object") continue;
+    if (!row || typeof row !== 'object') continue;
     const o = row as Record<string, unknown>;
     const id = asString(o.id).trim();
     const label = asString(o.label).trim() || id;
@@ -109,11 +109,11 @@ function parseMetalModels(raw: unknown): MarketplaceMetalModel[] {
   if (!Array.isArray(raw)) return [];
   const out: MarketplaceMetalModel[] = [];
   for (const row of raw) {
-    if (!row || typeof row !== "object") continue;
+    if (!row || typeof row !== 'object') continue;
     const o = row as Record<string, unknown>;
     const hubID = asString(o.hubID).trim();
     const displayName = asString(o.displayName).trim() || hubID;
-    if (!hubID.includes("/")) continue;
+    if (!hubID.includes('/')) continue;
     out.push({
       hubID,
       displayName,
@@ -128,10 +128,10 @@ function parseMetalModels(raw: unknown): MarketplaceMetalModel[] {
 
 /** Parse unknown JSON into a catalog; returns null if completely unusable. */
 export function parseMarketplaceCatalog(raw: unknown): MarketplaceCatalog | null {
-  if (!raw || typeof raw !== "object") return null;
+  if (!raw || typeof raw !== 'object') return null;
   const o = raw as Record<string, unknown>;
   const schemaVersion =
-    typeof o.schemaVersion === "number" && Number.isFinite(o.schemaVersion)
+    typeof o.schemaVersion === 'number' && Number.isFinite(o.schemaVersion)
       ? o.schemaVersion
       : MARKETPLACE_SCHEMA_VERSION;
   if (schemaVersion > MARKETPLACE_SCHEMA_VERSION + 2) {
@@ -190,7 +190,7 @@ export function mergeMarketplaceCatalogs(catalogs: MarketplaceCatalog[]): Market
 
   return emptyCatalog({
     schemaVersion: MARKETPLACE_SCHEMA_VERSION,
-    name: name ?? "Merged marketplace",
+    name: name ?? 'Merged marketplace',
     description,
     updatedAt,
     connectors: [...connectors.values()],
@@ -206,25 +206,21 @@ export function normalizeMarketplaceUrl(input: string): string {
   let u = input.trim();
   // Accept github.com/owner/repo blob links → raw
   // https://github.com/o/r/blob/main/marketplace/catalog.json
-  const blob = u.match(
-    /^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/blob\/([^/]+)\/(.+)$/i,
-  );
+  const blob = u.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/blob\/([^/]+)\/(.+)$/i);
   if (blob) {
     const [, owner, repo, branch, pathPart] = blob;
     u = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${pathPart}`;
   }
   // Accept tree links ending without file → append catalog.json
-  const tree = u.match(
-    /^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/tree\/([^/]+)\/?(.*)$/i,
-  );
+  const tree = u.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/tree\/([^/]+)\/?(.*)$/i);
   if (tree) {
     const [, owner, repo, branch, rest] = tree;
-    const pathPart = (rest ?? "").replace(/\/$/, "");
+    const pathPart = (rest ?? '').replace(/\/$/, '');
     const file = pathPart
-      ? pathPart.endsWith(".json")
+      ? pathPart.endsWith('.json')
         ? pathPart
         : `${pathPart}/catalog.json`
-      : "catalog.json";
+      : 'catalog.json';
     u = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${file}`;
   }
   // Bare owner/repo → root catalog.json (official layout); nested marketplace/ also works via tree/blob links.
@@ -237,7 +233,7 @@ export function normalizeMarketplaceUrl(input: string): string {
 export function isValidMarketplaceUrl(url: string): boolean {
   try {
     const u = new URL(url);
-    return u.protocol === "https:" || u.protocol === "http:";
+    return u.protocol === 'https:' || u.protocol === 'http:';
   } catch {
     return false;
   }
@@ -246,7 +242,7 @@ export function isValidMarketplaceUrl(url: string): boolean {
 /** Filter metal models by target platform (omit platforms = both). */
 export function metalModelsForPlatform(
   catalog: MarketplaceCatalog,
-  platform: "ios" | "desktop",
+  platform: 'ios' | 'desktop'
 ): MarketplaceMetalModel[] {
   return catalog.metalModels.filter((m) => {
     const plats = m.platforms;
