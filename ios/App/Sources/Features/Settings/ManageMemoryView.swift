@@ -19,6 +19,7 @@ struct ManageMemoryView: View {
                     preferencesCard
                     importCard
                     entriesCard
+                    activityCard
                     draftCard
                     Text("Memory is stored on this device. Project Instructions and chat history still apply when these toggles are off.")
                         .font(.system(size: 12))
@@ -158,6 +159,118 @@ struct ManageMemoryView: View {
                 }
             }
         }
+    }
+
+    private var activityCard: some View {
+        let rows = userMemory.activityList(limit: 30)
+        return Group {
+            if !rows.isEmpty {
+                card {
+                    VStack(alignment: .leading, spacing: 0) {
+                        HStack {
+                            Text("Activity")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(Theme.textPrimary)
+                            Spacer()
+                            Text("\(rows.count) recent")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Theme.textTertiary)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.top, 12)
+                        .padding(.bottom, 4)
+                        ForEach(rows) { row in
+                            activityRow(row)
+                            if row.id != rows.last?.id {
+                                Divider().background(Theme.separator)
+                                    .padding(.horizontal, 16)
+                            }
+                        }
+                        .padding(.bottom, 4)
+                    }
+                }
+            }
+        }
+    }
+
+    private func activityRow(_ row: UserMemoryStore.ActivityEntry) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            Image(systemName: activityIcon(row))
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(activityColor(row))
+                .frame(width: 18, height: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(activityLabel(row))
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                    if !row.entryTitle.isEmpty {
+                        Text("· \(row.entryTitle)")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.textSecondary)
+                            .lineLimit(1)
+                    }
+                }
+                if !row.detailPreview.isEmpty {
+                    Text(row.detailPreview)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textSecondary)
+                        .lineLimit(2)
+                }
+                Text(relativeTime(row.timestamp))
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.textTertiary)
+            }
+            Spacer(minLength: 6)
+            Button {
+                _ = userMemory.undoActivity(id: row.id)
+            } label: {
+                Text("Undo")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(Theme.accent.opacity(0.12), in: Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+
+    private func activityLabel(_ row: UserMemoryStore.ActivityEntry) -> String {
+        switch row.kind {
+        case .add: return row.source == .chatAutoSave ? "Auto-saved" : "Added"
+        case .update: return "Updated"
+        case .forget: return "Forgot"
+        case .rename: return "Renamed"
+        }
+    }
+
+    private func activityIcon(_ row: UserMemoryStore.ActivityEntry) -> String {
+        switch row.kind {
+        case .add: return "checkmark.circle.fill"
+        case .update: return "pencil.circle"
+        case .forget: return "minus.circle"
+        case .rename: return "tag"
+        }
+    }
+
+    private func activityColor(_ row: UserMemoryStore.ActivityEntry) -> Color {
+        switch row.kind {
+        case .add: return Theme.accent
+        case .update: return Theme.accent
+        case .forget: return .orange
+        case .rename: return Theme.accent
+        }
+    }
+
+    private func relativeTime(_ date: Date) -> String {
+        let diff = Date().timeIntervalSince(date)
+        if diff < 60 { return "just now" }
+        if diff < 3600 { return "\(Int(diff / 60))m ago" }
+        if diff < 86400 { return "\(Int(diff / 3600))h ago" }
+        return "\(Int(diff / 86400))d ago"
     }
 
     private var draftCard: some View {
@@ -331,114 +444,126 @@ private struct MemoryEntryDetailSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if let entry {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 16) {
-                            Text("Summary")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(Theme.textSecondary)
-                            Text(entry.summary.isEmpty ? "No summary yet." : entry.summary)
-                                .font(.system(size: 15))
-                                .foregroundStyle(Theme.textPrimary)
+        VStack(spacing: 0) {
+            headerBar
 
-                            Text("Details")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(Theme.textSecondary)
-                                .padding(.top, 4)
-                            if entry.details.isEmpty {
-                                Text("No details yet.")
-                                    .font(.system(size: 15))
-                                    .foregroundStyle(Theme.textTertiary)
-                            } else {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    ForEach(entry.details, id: \.self) { line in
-                                        HStack(alignment: .top, spacing: 8) {
-                                            Text("•")
-                                                .foregroundStyle(Theme.textSecondary)
-                                            Text(line)
-                                                .font(.system(size: 15))
-                                                .foregroundStyle(Theme.textPrimary)
-                                        }
+            if let entry {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("Summary")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Theme.textSecondary)
+                        Text(entry.summary.isEmpty ? "No summary yet." : entry.summary)
+                            .font(.system(size: 15))
+                            .foregroundStyle(Theme.textPrimary)
+
+                        Text("Details")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Theme.textSecondary)
+                            .padding(.top, 4)
+                        if entry.details.isEmpty {
+                            Text("No details yet.")
+                                .font(.system(size: 15))
+                                .foregroundStyle(Theme.textTertiary)
+                        } else {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(entry.details, id: \.self) { line in
+                                    HStack(alignment: .top, spacing: 8) {
+                                        Text("•")
+                                            .foregroundStyle(Theme.textSecondary)
+                                        Text(line)
+                                            .font(.system(size: 15))
+                                            .foregroundStyle(Theme.textPrimary)
                                     }
                                 }
                             }
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(16)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+                }
 
-                    HStack(spacing: 8) {
-                        TextField("Tell the assistant what to change or remove", text: $command, axis: .vertical)
-                            .lineLimit(1...3)
-                            .font(.system(size: 15))
-                            .onSubmit { apply() }
-                        Button(action: apply) {
-                            Image(systemName: "arrow.up")
-                                .font(.system(size: 14, weight: .bold))
-                                .foregroundStyle(
-                                    command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                        ? Theme.textSecondary
-                                        : Theme.background
-                                )
-                                .frame(width: 34, height: 34)
-                                .background(
-                                    command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                        ? Theme.surfaceElevated
-                                        : Theme.accent,
-                                    in: Circle()
-                                )
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                HStack(spacing: 8) {
+                    TextField("Tell the assistant what to change or remove", text: $command, axis: .vertical)
+                        .lineLimit(1...3)
+                        .font(.system(size: 15))
+                        .onSubmit { apply() }
+                    Button(action: apply) {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(
+                                command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                    ? Theme.textSecondary
+                                    : Theme.background
+                            )
+                            .frame(width: 34, height: 34)
+                            .background(
+                                command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                    ? Theme.surfaceElevated
+                                    : Theme.accent,
+                                in: Circle()
+                            )
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(Theme.surfaceElevated, in: Capsule())
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 16)
-                } else {
-                    ContentUnavailableView("Memory deleted", systemImage: "trash")
+                    .buttonStyle(.plain)
+                    .disabled(command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-            }
-            .background(Theme.background)
-            .navigationTitle(entry?.title ?? "Memory")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button {
-                        dismiss()
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "chevron.left")
-                            Text("Memory")
-                        }
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(Theme.textPrimary)
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Delete", role: .destructive) {
-                        showDeleteConfirm = true
-                    }
-                    .foregroundStyle(.red.opacity(0.9))
-                }
-            }
-            .confirmationDialog(
-                "Delete this memory?",
-                isPresented: $showDeleteConfirm,
-                titleVisibility: .visible
-            ) {
-                Button("Delete", role: .destructive) {
-                    store.delete(id: entryID)
-                    dismiss()
-                }
-                Button("Cancel", role: .cancel) {}
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(Theme.surfaceElevated, in: Capsule())
+                .padding(.horizontal, 16)
+                .padding(.bottom, 16)
+            } else {
+                ContentUnavailableView("Memory deleted", systemImage: "trash")
             }
         }
+        .background(Theme.background)
         .presentationDetents([.large, .medium])
         .presentationBackground(Theme.background)
+        .confirmationDialog(
+            "Delete this memory?",
+            isPresented: $showDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                store.delete(id: entryID)
+                dismiss()
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    // Custom top bar so the parent sheet doesn't double up the navigation chrome.
+    private var headerBar: some View {
+        HStack(alignment: .center) {
+            Button {
+                dismiss()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "chevron.left")
+                    Text("Memory")
+                }
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(Theme.textPrimary)
+            }
+            .buttonStyle(.plain)
+            Spacer()
+            Text(entry?.title ?? "Memory")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Theme.textPrimary)
+                .lineLimit(1)
+            Spacer()
+            Button("Delete", role: .destructive) {
+                showDeleteConfirm = true
+            }
+            .font(.system(size: 15, weight: .medium))
+            .foregroundStyle(.red.opacity(0.9))
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 44)
+        .background(Theme.background)
+        .overlay(alignment: .bottom) {
+            Divider().background(Theme.separator)
+        }
     }
 
     private func apply() {

@@ -28,6 +28,7 @@ import {
 import { mockAdapter } from './providers/index.js';
 import { syncSkillsRepo, upsertSkill, removeSkill } from './skills/sync.js';
 import { syncMCPRepo, upsertMCPServer, removeMCPServer } from './mcp/sync.js';
+import { syncMemoryRepo, upsertMemoryEntry, removeMemoryEntry } from './memory-sync.js';
 import { listConnectorDefinitions } from './connectors/catalog.js';
 import {
   clearStoredConnector,
@@ -158,6 +159,7 @@ function buildConnectorStatusList(): ServerMessage {
 interface SyncConfig {
   skillsRepo: { url: string; branch: string; token: string };
   mcpRepo: { url: string; branch: string; token: string };
+  memoryRepo: { url: string; branch: string; token: string };
   author: { name: string; email: string };
 }
 
@@ -180,6 +182,11 @@ async function loadSyncConfig(): Promise<SyncConfig> {
       url: process.env.APC_MCP_REPO ?? json.mcpRepo?.url ?? '',
       branch: process.env.APC_MCP_BRANCH ?? json.mcpRepo?.branch ?? 'main',
       token: process.env.APC_MCP_TOKEN ?? json.mcpRepo?.token ?? '',
+    },
+    memoryRepo: {
+      url: process.env.APC_MEMORY_REPO ?? json.memoryRepo?.url ?? "",
+      branch: process.env.APC_MEMORY_BRANCH ?? json.memoryRepo?.branch ?? "main",
+      token: process.env.APC_MEMORY_TOKEN ?? json.memoryRepo?.token ?? "",
     },
     author: {
       name: process.env.APC_AUTHOR_NAME ?? json.author?.name ?? 'RoamSocket',
@@ -904,6 +911,14 @@ async function pushInitialSync(emit: (msg: ServerMessage) => void, cfg: SyncConf
       emit({ type: 'mcp_sync', servers });
     } catch (err) {
       emit({ type: 'error', message: `MCP sync failed: ${(err as Error).message}` });
+    }
+  }
+  if (cfg.memoryRepo.url) {
+    try {
+      const entries = await syncMemoryRepo(cfg.memoryRepo, cfg.memoryRepo.token || undefined);
+      emit({ type: "memory_sync", entries });
+    } catch (err) {
+      emit({ type: "error", message: `Memory sync failed: ${(err as Error).message}` });
     }
   }
 }

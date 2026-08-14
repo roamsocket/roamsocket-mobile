@@ -149,6 +149,12 @@ struct ChatMessageView: View {
                 MarkdownContentView(text: resolved.content, fontSize: 17)
             }
 
+            if let ids = message.memoryActivityIDs, !ids.isEmpty {
+                ForEach(ids, id: \.self) { id in
+                    MemoryHintCard(memory: UserMemoryStore.shared, activityID: id)
+                }
+            }
+
             // Animated typing indicator while waiting on the model after tools
             // finish (or when there are no tool lines yet). Skip when the
             // thinking row already shows its own "Thinking" + dots placeholder.

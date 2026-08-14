@@ -35,9 +35,42 @@ final class UserMemoryStore: ObservableObject {
         var updatedAt: Date
     }
 
+    /// One row in the activity log: a single mutation the user can undo.
+    /// The `before` snapshot lets us restore a prior `details` / `summary`
+    /// when the user undoes an `add` or `update`; `new` lets us delete the
+    /// entry that was just created. `source` distinguishes auto-save (from
+    /// chat) from explicit edits (manage screen / detail sheet).
+    struct ActivityEntry: Identifiable, Codable, Equatable, Hashable {
+        var id: String
+        var timestamp: Date
+        var kind: Kind
+        var entryID: String
+        var entryTitle: String
+        var detailPreview: String
+        var before: Entry?
+        var after: Entry?
+        var source: Source
+
+        enum Kind: String, Codable {
+            case add
+            case update
+            case forget
+            case rename
+        }
+
+        enum Source: String, Codable {
+            case chatAutoSave = "chat"
+            case userEdit = "user"
+        }
+    }
+
     @Published private(set) var entries: [Entry] = []
+    @Published private(set) var activity: [ActivityEntry] = []
 
     private let key = "userMemory.entries.v1"
+    private let activityKey = "userMemory.activity.v1"
+    private let activityMaxAge: TimeInterval = 60 * 60 * 24 * 30 // 30 days
+    private let activityMaxCount = 200
 
     /// Prompt users copy into another AI product when importing memory.
     static let importPrompt = """
@@ -56,7 +89,10 @@ final class UserMemoryStore: ObservableObject {
     One section per project/product/domain with a short summary and bullets.
     """
 
-    private init() { load() }
+    private init() {
+        load()
+        pruneActivity()
+    }
 
     var isEmpty: Bool { entries.isEmpty }
 
@@ -70,6 +106,12 @@ final class UserMemoryStore: ObservableObject {
 
     func entry(id: String) -> Entry? {
         entries.first { $0.id == id }
+    }
+
+    /// Recent activity rows, newest first. Caller can filter by source.
+    func activityList(source: ActivityEntry.Source? = nil, limit: Int = 50) -> [ActivityEntry] {
+        let pool = source.map { s in activity.filter { $0.source == s } } ?? activity
+        return Array(pool.sorted { $0.timestamp > $1.timestamp }.prefix(limit))
     }
 
     @discardableResult
@@ -145,55 +187,238 @@ final class UserMemoryStore: ObservableObject {
 
     @discardableResult
     func applyEntryCommand(id: String, command: String) -> Entry? {
-        guard var entry = entry(id: id) else { return nil }
+        guard let entry = entry(id: id) else { return nil }
         let cmd = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cmd.isEmpty else { return entry }
-        let lower = cmd.lowercased()
+        let kind = classifyCommand(cmd)
+        let updated = mutateEntry(entry: entry, kind: kind, command: cmd)
+        guard let updated, updated != entry else { return entry }
+        return commitMutation(
+            kind: activityKind(for: kind),
+            before: entry,
+            after: updated,
+            source: .userEdit
+        )
+    }
 
+    /// Apply a structured action parsed from a chat reply. Returns the
+    /// resulting entry, or nil if the action was a no-op.
+    @discardableResult
+    func applyAction(_ action: ParsedAction) -> Entry? {
+        switch action {
+        case let .add(category, title, summary, details):
+            // Match by title within the same category; create if missing.
+            let target = entry(forTitle: title, category: category)
+            if var target {
+                let before = target
+                let newDetails = details
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                let combined = mergeDetails(existing: target.details, adding: newDetails)
+                if combined == target.details && (summary.isEmpty || summary == target.summary) {
+                    return target
+                }
+                target.details = combined
+                if !summary.isEmpty { target.summary = summary.trimmingCharacters(in: .whitespacesAndNewlines) }
+                target.updatedAt = Date()
+                return commitMutation(
+                    kind: .update,
+                    before: before,
+                    after: target,
+                    source: .chatAutoSave
+                )
+            } else {
+                let created = upsert(
+                    category: category,
+                    title: title,
+                    summary: summary,
+                    details: details
+                )
+                recordActivity(kind: .add, before: nil, after: created, source: .chatAutoSave)
+                return created
+            }
+        case let .forget(target):
+            guard let victim = entry(forTitleOrContains: target) else { return nil }
+            let before = victim
+            let next = victim.details.filter { !$0.localizedCaseInsensitiveContains(target) }
+            if next.count == victim.details.count { return nil }
+            var updated = victim
+            updated.details = next
+            updated.updatedAt = Date()
+            return commitMutation(
+                kind: .forget,
+                before: before,
+                after: updated,
+                source: .chatAutoSave
+            )
+        case let .rename(target, value):
+            guard let victim = entry(forTitleOrContains: target) else { return nil }
+            let before = victim
+            var updated = victim
+            updated.title = value
+            updated.updatedAt = Date()
+            return commitMutation(
+                kind: .rename,
+                before: before,
+                after: updated,
+                source: .chatAutoSave
+            )
+        case let .setSummary(target, value):
+            guard let victim = entry(forTitleOrContains: target) else { return nil }
+            let before = victim
+            var updated = victim
+            updated.summary = value
+            updated.updatedAt = Date()
+            return commitMutation(
+                kind: .update,
+                before: before,
+                after: updated,
+                source: .chatAutoSave
+            )
+        case let .setDetails(target, value):
+            guard let victim = entry(forTitleOrContains: target) else { return nil }
+            let before = victim
+            var updated = victim
+            updated.details = value
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            updated.updatedAt = Date()
+            return commitMutation(
+                kind: .update,
+                before: before,
+                after: updated,
+                source: .chatAutoSave
+            )
+        }
+    }
+
+    /// Structured action emitted by the chat parser. Mirrors the desktop
+    /// `MemoryAction` union minus the wire-format-specific details.
+    enum ParsedAction: Equatable {
+        case add(category: Category, title: String, summary: String, details: [String])
+        case forget(target: String)
+        case rename(target: String, value: String)
+        case setSummary(target: String, value: String)
+        case setDetails(target: String, value: [String])
+    }
+
+    // MARK: - Private mutation helpers
+
+    private enum CommandKind {
+        case forget(topic: String)
+        case setSummary(value: String)
+        case rename(value: String)
+        case appendOrReplaceFact(fact: String)
+    }
+
+    private func classifyCommand(_ cmd: String) -> CommandKind {
+        let lower = cmd.lowercased()
         if lower.hasPrefix("forget ") || lower.hasPrefix("remove ") || lower.hasPrefix("delete ") {
             let topic = cmd
                 .replacingOccurrences(of: #"^(forget|remove|delete)\s+"#, with: "", options: .regularExpression)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            if !topic.isEmpty {
-                let next = entry.details.filter { !$0.localizedCaseInsensitiveContains(topic) }
-                if next.count != entry.details.count {
-                    entry.details = next
-                } else {
-                    entry.details.append("Note: user asked to forget “\(topic)”.")
-                }
-                if entry.summary.localizedCaseInsensitiveContains(topic) {
-                    entry.summary = next.first ?? entry.summary
-                }
-            }
-        } else if let range = lower.range(of: #"^(change|set) summary to\s+"#, options: .regularExpression) {
+            return .forget(topic: topic)
+        }
+        if let range = lower.range(of: #"^(change|set) summary to\s+"#, options: .regularExpression) {
             let drop = cmd.distance(from: cmd.startIndex, to: range.upperBound)
-            entry.summary = String(cmd.dropFirst(drop)).trimmingCharacters(in: .whitespacesAndNewlines)
-        } else if lower.hasPrefix("rename to ") {
+            return .setSummary(value: String(cmd.dropFirst(drop)).trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        if lower.hasPrefix("rename to ") {
             let name = String(cmd.dropFirst("rename to ".count)).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !name.isEmpty { entry.title = name }
-        } else {
-            var fact = cmd
-            if let r = fact.range(of: #"^remember that(?: i)?\s+"#, options: [.regularExpression, .caseInsensitive]) {
-                fact = String(fact[r.upperBound...])
-            } else if fact.lowercased().hasPrefix("remember ") {
-                fact = String(fact.dropFirst("remember ".count))
-            } else if fact.lowercased().hasPrefix("add ") {
-                fact = String(fact.dropFirst("add ".count))
+            return .rename(value: name)
+        }
+        var fact = cmd
+        if let r = fact.range(of: #"^remember that(?: i)?\s+"#, options: [.regularExpression, .caseInsensitive]) {
+            fact = String(fact[r.upperBound...])
+        } else if fact.lowercased().hasPrefix("remember ") {
+            fact = String(fact.dropFirst("remember ".count))
+        } else if fact.lowercased().hasPrefix("add ") {
+            fact = String(fact.dropFirst("add ".count))
+        }
+        return .appendOrReplaceFact(fact: fact.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private func mutateEntry(entry: Entry, kind: CommandKind, command: String) -> Entry? {
+        var entry = entry
+        switch kind {
+        case let .forget(topic):
+            guard !topic.isEmpty else { return nil }
+            let next = entry.details.filter { !$0.localizedCaseInsensitiveContains(topic) }
+            if next.count == entry.details.count { return nil }
+            entry.details = next
+            if entry.summary.localizedCaseInsensitiveContains(topic) {
+                entry.summary = next.first ?? entry.summary
             }
-            fact = fact.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !fact.isEmpty {
-                let bullet = fact.prefix(1).uppercased() + fact.dropFirst()
-                if !entry.details.contains(where: { $0.caseInsensitiveCompare(String(bullet)) == .orderedSame }) {
-                    entry.details.append(String(bullet))
+        case let .setSummary(value):
+            entry.summary = value
+        case let .rename(value):
+            guard !value.isEmpty else { return nil }
+            entry.title = value
+        case let .appendOrReplaceFact(fact):
+            guard !fact.isEmpty else { return nil }
+            let bullet = fact.prefix(1).uppercased() + fact.dropFirst()
+            if entry.details.count <= 1 {
+                entry.details = [String(bullet)]
+                if entry.summary.isEmpty
+                    || entry.summary.caseInsensitiveCompare(entry.details.first ?? "") != .orderedSame {
+                    entry.summary = String(bullet.prefix(80))
                 }
+            } else if !entry.details.contains(where: { $0.caseInsensitiveCompare(String(bullet)) == .orderedSame }) {
+                entry.details.append(String(bullet))
+            } else {
+                return nil // duplicate fact
             }
         }
         entry.updatedAt = Date()
-        if let idx = entries.firstIndex(where: { $0.id == entry.id }) {
-            entries[idx] = entry
+        return entry
+    }
+
+    private func activityKind(for kind: CommandKind) -> ActivityEntry.Kind {
+        switch kind {
+        case .forget: return .forget
+        case .rename: return .rename
+        case .setSummary, .appendOrReplaceFact: return .update
+        }
+    }
+
+    private func commitMutation(
+        kind: ActivityEntry.Kind,
+        before: Entry,
+        after: Entry,
+        source: ActivityEntry.Source
+    ) -> Entry {
+        if let idx = entries.firstIndex(where: { $0.id == after.id }) {
+            entries[idx] = after
+        } else {
+            entries.insert(after, at: 0)
         }
         save()
-        return entry
+        recordActivity(kind: kind, before: before, after: after, source: source)
+        return after
+    }
+
+    private func entry(forTitle title: String, category: Category) -> Entry? {
+        let lower = title.lowercased()
+        return entries.first { $0.category == category && $0.title.lowercased() == lower }
+    }
+
+    private func entry(forTitleOrContains needle: String) -> Entry? {
+        let lower = needle.lowercased()
+        if let exact = entries.first(where: { $0.title.lowercased() == lower }) {
+            return exact
+        }
+        return entries.first { $0.details.contains(where: { $0.lowercased().contains(lower) }) }
+            ?? entries.first { $0.summary.lowercased().contains(lower) }
+    }
+
+    private func mergeDetails(existing: [String], adding: [String]) -> [String] {
+        var out = existing
+        for d in adding {
+            if !out.contains(where: { $0.caseInsensitiveCompare(d) == .orderedSame }) {
+                out.append(d)
+            }
+        }
+        return out
     }
 
     @discardableResult
@@ -248,13 +473,14 @@ final class UserMemoryStore: ObservableObject {
     // MARK: - Persistence
 
     private func load() {
-        guard let data = UserDefaults.standard.data(forKey: key),
-              let decoded = try? JSONDecoder().decode([Entry].self, from: data)
-        else {
-            entries = []
-            return
+        if let data = UserDefaults.standard.data(forKey: key),
+           let decoded = try? JSONDecoder().decode([Entry].self, from: data) {
+            entries = decoded
         }
-        entries = decoded
+        if let data = UserDefaults.standard.data(forKey: activityKey),
+           let decoded = try? JSONDecoder().decode([ActivityEntry].self, from: data) {
+            activity = decoded
+        }
     }
 
     private func save() {
@@ -262,6 +488,102 @@ final class UserMemoryStore: ObservableObject {
             UserDefaults.standard.set(data, forKey: key)
         }
         objectWillChange.send()
+    }
+
+    private func saveActivity() {
+        if let data = try? JSONEncoder().encode(activity) {
+            UserDefaults.standard.set(data, forKey: activityKey)
+        }
+    }
+
+    private func pruneActivity() {
+        let cutoff = Date().addingTimeInterval(-activityMaxAge)
+        let kept = activity.filter { $0.timestamp >= cutoff }
+        let trimmed = kept.count > activityMaxCount
+            ? Array(kept.suffix(activityMaxCount))
+            : kept
+        if trimmed.count != activity.count {
+            activity = trimmed
+            saveActivity()
+        }
+    }
+
+    // MARK: - Sync
+
+    /// Apply a snapshot from the desktop sync (or a freshly-merged result).
+    /// Last-write-wins by `updatedAt` for entries present in both stores.
+    /// Local-only entries are preserved; remote-only entries are added.
+    func applySync(remoteEntries: [Entry]) {
+        var byID: [String: Entry] = [:]
+        for e in entries { byID[e.id] = e }
+        for r in remoteEntries {
+            if let local = byID[r.id] {
+                byID[r.id] = r.updatedAt > local.updatedAt ? r : local
+            } else {
+                byID[r.id] = r
+            }
+        }
+        let merged = Array(byID.values).sorted { $0.updatedAt > $1.updatedAt }
+        if merged != entries {
+            entries = merged
+            save()
+        }
+    }
+
+    // MARK: - Activity log
+
+    /// Record a mutation so the user can see and undo it. `source` is
+    /// `.userEdit` for explicit manage-screen edits and `.chatAutoSave` for
+    /// tags parsed from a chat reply.
+    func recordActivity(
+        kind: ActivityEntry.Kind,
+        before: Entry?,
+        after: Entry?,
+        source: ActivityEntry.Source
+    ) {
+        let id = "act_\(UUID().uuidString.prefix(8).lowercased())"
+        let previewEntry = after ?? before
+        let preview = previewEntry?.summary.isEmpty == false
+            ? previewEntry!.summary
+            : (previewEntry?.details.first ?? previewEntry?.title ?? "")
+        let entry = ActivityEntry(
+            id: id,
+            timestamp: Date(),
+            kind: kind,
+            entryID: after?.id ?? before?.id ?? "",
+            entryTitle: previewEntry?.title ?? "",
+            detailPreview: preview,
+            before: before,
+            after: after,
+            source: source
+        )
+        activity.append(entry)
+        if activity.count > activityMaxCount {
+            activity = Array(activity.suffix(activityMaxCount))
+        }
+        saveActivity()
+    }
+
+    /// Undo a single activity row. Returns true on success. For every kind,
+    /// restoring the entry means putting back the `before` snapshot. For
+    /// `add` (where there is no `before`), the entry is removed entirely.
+    @discardableResult
+    func undoActivity(id: String) -> Bool {
+        guard let idx = activity.firstIndex(where: { $0.id == id }) else { return false }
+        let row = activity[idx]
+        if let before = row.before {
+            if let eidx = entries.firstIndex(where: { $0.id == before.id }) {
+                entries[eidx] = before
+            } else {
+                entries.insert(before, at: 0)
+            }
+        } else {
+            entries.removeAll { $0.id == row.entryID }
+        }
+        activity.remove(at: idx)
+        save()
+        saveActivity()
+        return true
     }
 
     // MARK: - Import parse

@@ -812,6 +812,19 @@ final class SessionViewModel: ObservableObject {
         case let .mcpSync(servers):
             state?.mcpManager.apply(servers: servers)
 
+        case let .memorySync(entries):
+            let mapped = entries.map { p in
+                UserMemoryStore.Entry(
+                    id: p.id,
+                    category: UserMemoryStore.Category(rawValue: p.category) ?? .you,
+                    title: p.title,
+                    summary: p.summary,
+                    details: p.details,
+                    updatedAt: Date(timeIntervalSince1970: TimeInterval(p.updatedAt) / 1000.0)
+                )
+            }
+            UserMemoryStore.shared.applySync(remoteEntries: mapped)
+
         case let .remoteEndpoint(status, url, _, _):
             if status == "up", let url, !url.isEmpty {
                 // Health-check before switching so a stale auto-push can't yank us

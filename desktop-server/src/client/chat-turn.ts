@@ -51,6 +51,24 @@ export function projectSystemParts(
 }
 
 /**
+ * Instructions for chat-driven memory auto-save (mirrors the iOS prompt).
+ * The model emits self-closing `<memory />` tags inline; the renderer
+ * strips them and applies the mutations to the local memory store.
+ */
+export const MEMORY_AUTO_SAVE_PROMPT = `
+You have access to the user's private on-device memory (shown above as "User memory"). You can record new facts about the user, or update / forget existing ones, by emitting self-closing <memory /> tags anywhere in your reply. The tags are stripped from the visible text automatically and the user sees an undo card for each one.
+
+Tag format:
+  <memory action="add" category="you|topic|area" title="Profile" summary="…" details="…" />
+  <memory action="forget" target="Verizon" />
+  <memory action="rename" target="Profile" value="About me" />
+  <memory action="set_summary" target="Profile" value="…" />
+  <memory action="set_details" target="Profile" value="A|B|C" />
+
+Only save STABLE personal facts — identity (name, role, location, relationships), lasting preferences, recurring project / area context, and the user's own explicit "remember that X" requests. Do NOT save transient task info, one-off chat content, or speculative inferences. Anything inside a code block or inline code span is never parsed. When unsure, do not emit a tag. Never emit more than one tag per reply unless the user is doing a deliberate batch. Do not narrate that you saved something; the UI surfaces it.
+`;
+
+/**
  * Full system prefix: composer tools + optional user profile memory + project.
  */
 export function buildChatSystemContent(opts: {
@@ -60,6 +78,8 @@ export function buildChatSystemContent(opts: {
   includeMemory?: boolean;
   /** Structured user memory from Settings → Memory. */
   userMemorySystem?: string | null;
+  /** When true, append the auto-save instructions so the model emits tags. */
+  autoSaveMemory?: boolean;
   resolveSkill?: (
     id: string
   ) => SkillRecord | { id: string; name: string; description: string } | undefined;
@@ -68,6 +88,9 @@ export function buildChatSystemContent(opts: {
   const userMem = (opts.userMemorySystem ?? '').trim();
   if (userMem) {
     parts.push(`User memory (private, on this device):\n${userMem}`);
+    if (opts.autoSaveMemory) {
+      parts.push(MEMORY_AUTO_SAVE_PROMPT.trim());
+    }
   }
   parts.push(...projectSystemParts(opts.project, { includeMemory: opts.includeMemory }));
   return parts.join('\n\n');

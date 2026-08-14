@@ -47,6 +47,7 @@ import {
   MEMORY_IMPORT_PROMPT,
   relativeMemoryTime,
   type MemoryEntry,
+  type MemoryActivityEntry,
   buildUserContent,
   buildChatSystemContent,
   withSystemTurn,
@@ -828,7 +829,59 @@ function messageNode(
   wrap.append(el('div', { class: 'role' }, [role === 'user' ? 'You' : 'Assistant']));
   const bubble = el('div', { class: `bubble${streaming ? ' streaming' : ''}` }, [content]);
   wrap.append(bubble);
+  if (role === "assistant" && memoryActivityIDs && memoryActivityIDs.length > 0 && !streaming) {
+    for (const id of memoryActivityIDs) {
+      const row = userMemory.activityList().find((a) => a.id === id);
+      if (!row) continue;
+      wrap.append(memoryHintNode(row));
+    }
+  }
   return wrap;
+}
+
+/** Inline "Saved to memory" hint card with an Undo button. */
+function memoryHintNode(row: MemoryActivityEntry): HTMLElement {
+  const card = el("div", { class: "memory-hint" });
+  const label = activityLabel(row);
+  card.append(
+    el("div", { class: "memory-hint-icon" }, [activityIcon(row)]),
+  );
+  const body = el("div", { class: "memory-hint-body" });
+  body.append(el("div", { class: "memory-hint-title" }, [label]));
+  if (row.detailPreview) {
+    body.append(el("div", { class: "memory-hint-preview" }, [row.detailPreview]));
+  }
+  card.append(body);
+  const undo = el("button", {
+    class: "memory-hint-undo",
+    type: "button",
+    title: "Undo",
+  }, ["Undo"]);
+  undo.addEventListener("click", () => {
+    userMemory.undoActivity(row.id);
+    // The memory hint DOM is rebuilt on next renderChat; trigger that.
+    if (state.route === "chats") renderChat();
+  });
+  card.append(undo);
+  return card;
+}
+
+function activityLabel(row: MemoryActivityEntry): string {
+  switch (row.kind) {
+    case "add": return row.source === "chat" ? "Saved to memory" : "Added";
+    case "update": return "Updated memory";
+    case "forget": return "Forgot from memory";
+    case "rename": return "Renamed memory";
+  }
+}
+
+function activityIcon(row: MemoryActivityEntry): string {
+  switch (row.kind) {
+    case "add": return "✓";
+    case "update": return "✎";
+    case "forget": return "−";
+    case "rename": return "#";
+  }
 }
 
 /** "Thinking" + three bouncing dots while the assistant has no text yet. */
@@ -1520,7 +1573,12 @@ async function onChatSend(ta: HTMLTextAreaElement) {
         messages: turns,
       });
       full = result.text;
-      history.updateLastAssistant(thread.id, full);
+      // Strip <memory> tags from the visible reply and collect actions.
+      const stripped = tagParser.push(full);
+      const tail = tagParser.end();
+      visible = stripped.text + tail.text;
+      pendingActions.push(...stripped.actions, ...tail.actions);
+      history.updateLastAssistant(thread.id, visible);
       renderChat();
     } else {
       const apiKey = (await window.apc.secrets.readProviderKey(state.provider)) || '';
@@ -1542,9 +1600,36 @@ async function onChatSend(ta: HTMLTextAreaElement) {
             live.classList.add('streaming');
             live.classList.remove('typing');
           }
+          if (r.actions.length > 0) pendingActions.push(...r.actions);
         },
       });
-      history.updateLastAssistant(thread.id, full);
+      // End of stream: flush any unclosed tag tail and apply the actions.
+      const tail = tagParser.end();
+      if (tail.text) {
+        visible += tail.text;
+      }
+      if (tail.actions.length > 0) pendingActions.push(...tail.actions);
+      history.updateLastAssistant(thread.id, visible);
+    }
+
+    // Apply memory auto-save actions. Always strip tags from the visible
+    // reply (already done above); only APPLY them when the toggle is on.
+    if (pendingActions.length > 0 && uiPrefs.memoryGenerateFromChats) {
+      const preCount = userMemory.activityList().length;
+      for (const action of pendingActions) {
+        userMemory.applyAction(action);
+      }
+      const all = userMemory.activityList();
+      const newCount = all.length - preCount;
+      const newIDs = all.slice(-newCount).map((a) => a.id);
+      if (newIDs.length > 0) {
+        history.setLastAssistantMemoryActivity(thread.id, newIDs);
+      }
+      renderChat();
+    } else if (visible !== full) {
+      // Tags were stripped but no actions applied (toggle off). Re-render
+      // so the bubble shows the cleaned text.
+      renderChat();
     }
 
     // Lightweight Tasks: chat title (same jobs as mobile Foundation / linked model).
@@ -3839,6 +3924,15 @@ function fillSettingsMemory(panel: HTMLElement): void {
     );
   }
 
+  // Activity log
+  const activity = userMemory.activityList({ limit: 30 });
+  if (activity.length > 0) {
+    wrap.append(el("div", { class: "memory-section-label memory-activity-label" }, ["Activity"]));
+    for (const row of activity) {
+      wrap.append(memoryActivityRow(row));
+    }
+  }
+
   // Freeform add
   const adjustRow = el('div', { class: 'memory-adjust-row memory-settings-input' });
   const input = el('input', {
@@ -3887,6 +3981,34 @@ function memoryEntryRow(entry: MemoryEntry): HTMLElement {
   row.append(el('span', { class: 'memory-entry-time' }, [relativeMemoryTime(entry.updatedAt)]));
   row.addEventListener('click', () => openMemoryEntryDetail(entry.id));
   return row;
+}
+
+function memoryActivityRow(row: MemoryActivityEntry): HTMLElement {
+  const item = el("div", { class: "memory-activity-row" });
+  item.append(el("div", { class: "memory-activity-icon" }, [activityIcon(row)]));
+  const body = el("div", { class: "memory-activity-body" });
+  const titleLine = el("div", { class: "memory-activity-title-line" });
+  titleLine.append(el("span", { class: "memory-activity-kind" }, [activityLabel(row)]));
+  if (row.entryTitle) {
+    titleLine.append(el("span", { class: "memory-activity-target" }, [` · ${row.entryTitle}`]));
+  }
+  body.append(titleLine);
+  if (row.detailPreview) {
+    body.append(el("div", { class: "memory-activity-preview" }, [row.detailPreview]));
+  }
+  body.append(el("div", { class: "memory-activity-time" }, [relativeMemoryTime(row.timestamp)]));
+  item.append(body);
+  const undo = el("button", {
+    class: "memory-activity-undo",
+    type: "button",
+    title: "Undo",
+  }, ["Undo"]);
+  undo.addEventListener("click", () => {
+    userMemory.undoActivity(row.id);
+    renderSettings();
+  });
+  item.append(undo);
+  return item;
 }
 
 function openMemoryEntryDetail(entryId: string): void {
