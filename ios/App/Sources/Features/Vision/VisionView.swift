@@ -1,6 +1,6 @@
+import AnyProvCore
 import SwiftUI
 import UIKit
-import AnyProvCore
 
 /// Full-screen Vision mode: live camera, capture, minimizable analysis.
 struct VisionView: View {
@@ -17,46 +17,51 @@ struct VisionView: View {
     @State private var keyboardHeight: CGFloat = 0
     /// Bumps when a new still is frozen so pinch-zoom resets.
     @State private var captureZoomResetID = UUID()
+    /// Bumps when the lens needs to snap back to 1× (retake / new shot).
+    @State private var cameraZoomResetID = UUID()
+    /// Live camera zoom factor the chip row reads from.
+    @State private var currentZoomFactor: CGFloat = 1
+    /// One-shot absolute factor the chip row wants the camera to settle on.
+    /// Cleared as soon as the controller consumes it.
+    @State private var pendingZoomFactor: CGFloat? = nil
     @FocusState private var promptFieldFocused: Bool
 
     /// Retake + shutter row height (not including home-indicator inset). Used to
     /// lift the collapsed pill above the capture button.
     private let shutterStackClearance: CGFloat = 110
 
-    private var keyboardVisible: Bool { keyboardHeight > 20 }
+    private var keyboardVisible: Bool {
+        keyboardHeight > 20
+    }
+
+    /// Live Text / Photos-style select-and-copy is "auto" once the still is
+    /// final. While the capture is still developing (`capturing` / `analyzing`)
+    /// the JPEG isn't stable yet, so we hold off — once an analysis result
+    /// (or a follow-up turn) is on screen, the overlay turns on automatically.
+    private var liveTextAvailable: Bool {
+        switch viewModel.phase {
+        case .live, .capturing: return false
+        case .analyzing, .result, .failed: return true
+        }
+    }
 
     var body: some View {
         GeometryReader { geo in
+            let layout = LayoutValues(
+                size: geo.size,
+                safeAreaInsets: geo.safeAreaInsets,
+                shutterStackClearance: shutterStackClearance,
+                hasFrozenCapture: viewModel.hasFrozenCapture,
+                sheetMode: viewModel.sheetMode,
+                keyboardHeight: keyboardHeight,
+                keyboardVisible: keyboardVisible
+            )
             let horizontalInset = max(16, min(20, geo.size.width * 0.045))
-            // With ignoresSafeArea on this reader, insets are the true system bands.
-            // Fall back so Dynamic Island / notch never clips Close / model pill
-            // (fullScreenCover can occasionally report 0 for a frame).
-            let bottomSafe = geo.safeAreaInsets.bottom
-            let topSafe = max(geo.safeAreaInsets.top, 54)
-            // Live: tall shutter stack. After capture: only Retake when the sheet
-            // is minimized (sheet chrome owns Retake in medium/full).
-            let chromeBlockHeight: CGFloat = {
-                let base: CGFloat = {
-                    if !viewModel.hasFrozenCapture { return shutterStackClearance }
-                    // Minimized: leave room for bottom Retake + pill.
-                    // Expanded/full: sheet has its own Retake — keep a small band only.
-                    switch viewModel.sheetMode {
-                    case .minimized: return 56
-                    case .expanded, .full: return 8
-                    case .hidden: return 52
-                    }
-                }()
-                return base + max(bottomSafe, 8)
-            }()
-            // Close (44) + padding under status bar — full sheet must stop below this.
-            let topChromeClearance = topSafe + 6 + 44 + 10
-            // Lift shutter + prompt above the software keyboard (we ignore safe area).
-            let bottomPad: CGFloat = {
-                if keyboardVisible, !viewModel.hasFrozenCapture {
-                    return max(keyboardHeight, bottomSafe) + 8
-                }
-                return max(bottomSafe, 8) + 10
-            }()
+            let bottomSafe = layout.bottomSafe
+            let topSafe = layout.topSafe
+            let chromeBlockHeight = layout.chromeBlockHeight
+            let topChromeClearance = layout.topChromeClearance
+            let bottomPad: CGFloat = layout.bottomPad
             let sheetOccupied = estimatedSheetOccupiedHeight(
                 totalHeight: geo.size.height,
                 topChromeClearance: topChromeClearance,
@@ -90,76 +95,58 @@ struct VisionView: View {
                 // still is still developing we keep the live layer mounted and freeze
                 // its last frame instead — so capture does not tear down the session.
                 if let image = viewModel.capturedImage, !viewModel.showsCameraSession {
-                    VStack(spacing: 0) {
-                        Color.clear
-                            .frame(height: topChromeClearance)
-                            .allowsHitTesting(false)
-                        VisionZoomableImageView(
-                            image: image,
-                            resetID: captureZoomResetID,
-                            onSingleTap: {
-                                // Tap the photo → smallest card so the still is front and center.
-                                guard viewModel.sheetMode != .minimized,
-                                      viewModel.sheetMode != .hidden
-                                else { return }
-                                viewModel.setSheetMinimized()
-                            },
-                            onCropCommitted: { rect in
-                                viewModel.applyCropAndReanalyze(normalizedRect: rect)
-                            }
-                        )
-                        .frame(width: geo.size.width, height: imageBandHeight)
-                        .animation(
-                            .interactiveSpring(response: 0.32, dampingFraction: 0.86),
-                            value: viewModel.sheetMode
-                        )
-                        .animation(
-                            .easeOut(duration: 0.2),
-                            value: viewModel.isThinking
-                        )
-                        Spacer(minLength: 0)
-                            .allowsHitTesting(false)
-                    }
+                    VisionFrozenStillOverlay(
+                        image: image,
+                        resetID: captureZoomResetID,
+                        totalSize: geo.size,
+                        topChromeClearance: topChromeClearance,
+                        imageBandHeight: imageBandHeight,
+                        liveTextEnabled: liveTextAvailable,
+                        onSingleTap: { viewModel.setSheetMinimized() },
+                        onCropCommitted: { rect in
+                            viewModel.applyCropAndReanalyze(normalizedRect: rect)
+                        }
+                    )
                     .frame(width: geo.size.width, height: geo.size.height)
                     .zIndex(1.5)
                 }
 
+                // QR-code card (live + result). Floats above the analysis
+                // sheet without touching the still or the capture chrome.
+                if let qr = viewModel.scannedQR {
+                    let cardBottomInset: CGFloat = {
+                        // If the analysis card is on screen, sit just above its
+                        // top edge so the card doesn't cover the first lines of
+                        // the answer. Otherwise (no capture yet, live camera
+                        // only) sit above the chrome.
+                        switch viewModel.sheetMode {
+                        case .full, .expanded, .minimized: return sheetOccupied + 14
+                        case .hidden: return chromeBlockHeight + 14
+                        }
+                    }()
+                    qrCard(
+                        payload: qr,
+                        bottomInset: cardBottomInset
+                    )
+                    .frame(maxWidth: min(geo.size.width - 28, 480))
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .zIndex(1.6)
+                }
+
                 // Chrome + live camera. Camera fills only the middle band so it
                 // never draws under Close/model or the prompt/shutter stack.
-                VStack(spacing: 0) {
-                    topBar
-                        .padding(.horizontal, horizontalInset)
-
-                    if viewModel.showsCameraSession {
-                        cameraLayer
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .clipped()
-                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                            .padding(.horizontal, 10)
-                            .padding(.top, 8)
-                            .padding(.bottom, 10)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                if promptFieldFocused {
-                                    promptFieldFocused = false
-                                }
-                            }
-                            .accessibilityLabel(
-                                viewModel.freezesCameraPreview
-                                    ? "Frozen photo preview"
-                                    : "Camera preview"
-                            )
-                    } else {
-                        Spacer(minLength: 0)
-                            .allowsHitTesting(false)
-                    }
-
-                    bottomControls
-                        .padding(.horizontal, horizontalInset)
-                }
-                .padding(.top, topSafe + 6)
-                .padding(.bottom, bottomPad)
-                .frame(width: geo.size.width, height: geo.size.height)
+                VisionCameraAndChromeStack(
+                    viewModel: viewModel,
+                    horizontalInset: horizontalInset,
+                    topSafe: topSafe,
+                    bottomPad: bottomPad,
+                    totalWidth: geo.size.width,
+                    totalHeight: geo.size.height,
+                    cameraLayer: AnyView(cameraLayer),
+                    topBar: AnyView(topBar),
+                    bottomControls: AnyView(bottomControls),
+                    onPromptDismiss: { promptFieldFocused = false }
+                )
                 .zIndex(2)
                 .animation(.easeOut(duration: 0.22), value: keyboardHeight)
             }
@@ -241,7 +228,11 @@ struct VisionView: View {
         }
         .alert("Camera", isPresented: Binding(
             get: { cameraError != nil },
-            set: { if !$0 { cameraError = nil } }
+            set: {
+                if !$0 {
+                    cameraError = nil
+                }
+            }
         )) {
             Button("OK", role: .cancel) { cameraError = nil }
         } message: {
@@ -255,7 +246,6 @@ struct VisionView: View {
     /// Final stills use `VisionZoomableImageView` in the band above the results
     /// card (Lens-style). Unmounting the session once the still lands frees
     /// GPU/RAM for on-device VLMs.
-    @ViewBuilder
     private var cameraLayer: some View {
         VisionCameraView(
             onCapture: { image in
@@ -274,8 +264,26 @@ struct VisionView: View {
             },
             captureTrigger: captureTrigger,
             isSessionActive: viewModel.showsCameraSession,
-            isPreviewFrozen: viewModel.freezesCameraPreview
+            isPreviewFrozen: viewModel.freezesCameraPreview,
+            zoomResetTrigger: cameraZoomResetID,
+            requestedZoomFactor: pendingZoomFactor,
+            onZoomChanged: { factor in
+                currentZoomFactor = factor
+            },
+            onQRScanned: { raw in
+                viewModel.registerScannedQR(raw)
+            },
+            qrResetTrigger: viewModel.qrRescanRequest
         )
+        .onChange(of: pendingZoomFactor) { _, newValue in
+            // Clear the one-shot so the representable doesn't re-send it next
+            // update pass while still letting the chip's "selected" mirror
+            // currentZoomFactor above.
+            guard newValue != nil else { return }
+            DispatchQueue.main.async {
+                pendingZoomFactor = nil
+            }
+        }
     }
 
     /// Approximate bottom card footprint so the photo can sit in the remaining band.
@@ -310,6 +318,51 @@ struct VisionView: View {
                 return min(min(totalHeight * 0.88, 300) + bottomSafe, maxByPhoto)
             }
             return min(max(300, totalHeight * 0.88), maxByPhoto)
+        }
+    }
+
+    /// QR card wrapper: applies the bottom inset (above the analysis sheet or
+    /// above the chrome when no capture is in flight) and the auto-expire
+    /// timer. Extracted so SwiftUI's type-checker doesn't blow up trying to
+    /// resolve the still-overlay ZStack + this card simultaneously.
+    private func qrCard(
+        payload: VisionViewModel.ScannedQR,
+        bottomInset: CGFloat
+    ) -> some View {
+        VisionQRScanCard(
+            payload: payload,
+            onUse: {
+                viewModel.consumeScannedQR(pasteIntoCapturePrompt: true)
+                viewModel.requestQRRescan()
+            },
+            onCopy: { /* flash logic lives in the card itself */ },
+            onOpenURL: payload.url.map { url in
+                {
+                    UIApplication.shared.open(url, options: [:]) { _ in }
+                    viewModel.dismissScannedQR()
+                    viewModel.requestQRRescan()
+                }
+            },
+            onDismiss: {
+                viewModel.dismissScannedQR()
+                viewModel.requestQRRescan()
+            }
+        )
+        .padding(.bottom, bottomInset)
+        .frame(
+            maxWidth: .infinity,
+            maxHeight: .infinity,
+            alignment: .bottom
+        )
+        .task(id: payload.id) {
+            // Auto-expire — fires when the card mounts. Re-fires when a fresh
+            // QR is detected (different `payload.id`), so the timer never
+            // outlives the visible card.
+            try? await Task.sleep(nanoseconds: UInt64(VisionViewModel.qrCardVisibleDuration * 1_000_000_000))
+            if !Task.isCancelled, viewModel.scannedQR?.id == payload.id {
+                viewModel.dismissScannedQR()
+                viewModel.requestQRRescan()
+            }
         }
     }
 
@@ -398,8 +451,68 @@ struct VisionView: View {
                     captureButton
                     Color.clear.frame(width: 72, height: 1)
                 }
+                .padding(.bottom, 4)
+
+                if !promptFieldFocused {
+                    zoomChipRow
+                }
             }
         }
+    }
+
+    /// 1× / 2× / Max chips in the iOS Camera-app style. Tap a chip → smooth
+    /// ramp to the device's clamped factor. The "active" chip mirrors
+    /// `currentZoomFactor`, which the controller republishes on every pinch /
+    /// chip change.
+    private var zoomChipRow: some View {
+        HStack(spacing: 10) {
+            ForEach(Array(zoomPresets.enumerated()), id: \.offset) { _, preset in
+                let active = isZoomActive(preset)
+                Button {
+                    setZoom(preset.factor)
+                } label: {
+                    Text(preset.label)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(active ? Theme.background : .white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(
+                            active ? Color.white : Color.black.opacity(0.45),
+                            in: Capsule()
+                        )
+                        .overlay {
+                            Capsule().stroke(
+                                active ? Color.clear : Color.white.opacity(0.14),
+                                lineWidth: 1
+                            )
+                        }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(preset.label) zoom")
+                .accessibilityAddTraits(active ? [.isButton, .isSelected] : .isButton)
+            }
+        }
+        .animation(.easeOut(duration: 0.18), value: currentZoomFactor)
+    }
+
+    /// Pinch-friendly presets: 1× stays exactly on the wide angle, 2× lands
+    /// on the lens (when present) or the closest legal factor, Max pushes to
+    /// the practical 5× ceiling.
+    private var zoomPresets: [ZoomPreset] {
+        [.init(label: ".5", factor: 0.5),
+         .init(label: "1×", factor: 1),
+         .init(label: "2×", factor: 2),
+         .init(label: "Max", factor: 5)]
+    }
+
+    private func isZoomActive(_ preset: ZoomPreset) -> Bool {
+        abs(currentZoomFactor - preset.factor) < 0.08
+    }
+
+    private func setZoom(_ factor: CGFloat) {
+        pendingZoomFactor = factor
+        currentZoomFactor = factor
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 
     /// Optional task prompt + saved presets above the shutter (live camera only).
@@ -416,7 +529,7 @@ struct VisionView: View {
                     text: $viewModel.capturePrompt,
                     axis: .vertical
                 )
-                .lineLimit(1...3)
+                .lineLimit(1 ... 3)
                 .font(.system(size: 15))
                 .foregroundStyle(.white)
                 .tint(Theme.accent)
@@ -577,7 +690,9 @@ struct VisionView: View {
     private var suggestedPresetTitle: String {
         let text = viewModel.trimmedCapturePrompt
         let firstLine = text.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? text
-        if firstLine.count <= 28 { return firstLine }
+        if firstLine.count <= 28 {
+            return firstLine
+        }
         return String(firstLine.prefix(28)).trimmingCharacters(in: .whitespaces) + "…"
     }
 
@@ -668,11 +783,153 @@ struct VisionView: View {
         captureTrigger = nil
         promptFieldFocused = false
         captureZoomResetID = UUID()
+        // Snap the live viewfinder back to 1× so the next shot isn't silently
+        // framed at 3× from the previous one.
+        cameraZoomResetID = UUID()
+        currentZoomFactor = 1
+        pendingZoomFactor = nil
         viewModel.retake()
     }
 }
 
 // MARK: - Vision model picker
+
+/// Zoom preset label / factor shown in the live viewfinder chip row.
+struct ZoomPreset: Equatable {
+    let label: String
+    let factor: CGFloat
+}
+
+/// Frozen still after capture. Owns the zoom/pan/crop photo + Live Text
+/// overlay band above the analysis card. Extracted from `body` so type
+/// inference stays under the compiler's timeout.
+private struct VisionFrozenStillOverlay: View {
+    let image: UIImage
+    let resetID: UUID
+    let totalSize: CGSize
+    let topChromeClearance: CGFloat
+    let imageBandHeight: CGFloat
+    var liveTextEnabled: Bool
+    var onSingleTap: () -> Void
+    var onCropCommitted: (CGRect) -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Color.clear
+                .frame(height: topChromeClearance)
+                .allowsHitTesting(false)
+            VisionZoomableImageView(
+                image: image,
+                resetID: resetID,
+                onSingleTap: onSingleTap,
+                onCropCommitted: onCropCommitted,
+                liveTextEnabled: liveTextEnabled
+            )
+            .frame(width: totalSize.width, height: imageBandHeight)
+            .animation(
+                .interactiveSpring(response: 0.32, dampingFraction: 0.86),
+                value: imageBandHeight
+            )
+            Spacer(minLength: 0)
+                .allowsHitTesting(false)
+        }
+    }
+}
+
+/// Pre-computed layout values for the Vision body. Extracted from a single
+/// `GeometryReader` so Swift's type-checker can resolve the dense chain.
+private struct LayoutValues {
+    let size: CGSize
+    let safeAreaInsets: EdgeInsets
+    let shutterStackClearance: CGFloat
+    let hasFrozenCapture: Bool
+    let sheetMode: VisionViewModel.SheetMode
+    let keyboardHeight: CGFloat
+    let keyboardVisible: Bool
+
+    var bottomSafe: CGFloat {
+        safeAreaInsets.bottom
+    }
+
+    var topSafe: CGFloat {
+        max(safeAreaInsets.top, 54)
+    }
+
+    var chromeBlockHeight: CGFloat {
+        let base: CGFloat = {
+            if !hasFrozenCapture {
+                return shutterStackClearance
+            }
+            switch sheetMode {
+            case .minimized: return 56
+            case .expanded, .full: return 8
+            case .hidden: return 52
+            }
+        }()
+        return base + max(bottomSafe, 8)
+    }
+
+    var topChromeClearance: CGFloat {
+        topSafe + 6 + 44 + 10
+    }
+
+    var bottomPad: CGFloat {
+        if keyboardVisible, !hasFrozenCapture {
+            return max(keyboardHeight, bottomSafe) + 8
+        }
+        return max(bottomSafe, 8) + 10
+    }
+}
+
+/// Live-camera + top bar + bottom chrome stack. Extracted from `body` so
+/// Swift's type-checker can chew on each chunk in isolation — the inner view
+/// graph is dense enough that splitting is the only way to stay under the
+/// default timeout.
+private struct VisionCameraAndChromeStack: View {
+    @ObservedObject var viewModel: VisionViewModel
+    var horizontalInset: CGFloat
+    var topSafe: CGFloat
+    var bottomPad: CGFloat
+    var totalWidth: CGFloat
+    var totalHeight: CGFloat
+    var cameraLayer: AnyView
+    var topBar: AnyView
+    var bottomControls: AnyView
+    var onPromptDismiss: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            topBar
+                .padding(.horizontal, horizontalInset)
+
+            if viewModel.showsCameraSession {
+                cameraLayer
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .padding(.horizontal, 10)
+                    .padding(.top, 8)
+                    .padding(.bottom, 10)
+                    .contentShape(Rectangle())
+                    .onTapGesture { onPromptDismiss() }
+                    .accessibilityLabel(
+                        viewModel.freezesCameraPreview
+                            ? "Frozen photo preview"
+                            : "Camera preview"
+                    )
+            } else {
+                Spacer(minLength: 0)
+                    .allowsHitTesting(false)
+            }
+
+            bottomControls
+                .padding(.horizontal, horizontalInset)
+        }
+        .padding(.top, topSafe + 6)
+        .padding(.bottom, bottomPad)
+        .frame(width: totalWidth, height: totalHeight)
+    }
+}
 
 private struct VisionModelPickerSheet: View {
     @ObservedObject var viewModel: VisionViewModel
@@ -740,8 +997,11 @@ private struct VisionModelPickerSheet: View {
         Binding(
             get: { expandedVisionProviders.contains(provider) },
             set: { expanded in
-                if expanded { expandedVisionProviders.insert(provider) }
-                else { expandedVisionProviders.remove(provider) }
+                if expanded {
+                    expandedVisionProviders.insert(provider)
+                } else {
+                    expandedVisionProviders.remove(provider)
+                }
             }
         )
     }
@@ -750,8 +1010,11 @@ private struct VisionModelPickerSheet: View {
         Binding(
             get: { expandedVisionOrgs.contains(org) },
             set: { expanded in
-                if expanded { expandedVisionOrgs.insert(org) }
-                else { expandedVisionOrgs.remove(org) }
+                if expanded {
+                    expandedVisionOrgs.insert(org)
+                } else {
+                    expandedVisionOrgs.remove(org)
+                }
             }
         )
     }
@@ -1066,7 +1329,7 @@ private struct VisionReanalyzePromptSheet: View {
                             text: $viewModel.capturePrompt,
                             axis: .vertical
                         )
-                        .lineLimit(3...10)
+                        .lineLimit(3 ... 10)
                         .font(.system(size: 15))
                         .foregroundStyle(Theme.textPrimary)
                         .tint(Theme.accent)
@@ -1281,7 +1544,9 @@ private struct VisionPromptLibrarySheet: View {
 
     private func presetPreview(_ preset: VisionPromptPreset) -> String {
         let p = preset.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        if p.isEmpty { return "Default general analysis" }
+        if p.isEmpty {
+            return "Default general analysis"
+        }
         return p.replacingOccurrences(of: "\n", with: " ")
     }
 }
@@ -1305,7 +1570,7 @@ private struct VisionPromptEditorSheet: View {
                         text: $draftPrompt,
                         axis: .vertical
                     )
-                    .lineLimit(4...12)
+                    .lineLimit(4 ... 12)
                 }
                 Section {
                     Text("Leave the prompt empty for the built-in general analysis.")

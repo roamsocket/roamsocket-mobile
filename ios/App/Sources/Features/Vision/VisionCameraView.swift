@@ -1,6 +1,6 @@
-import SwiftUI
 import AVFoundation
 import AVKit
+import SwiftUI
 import UIKit
 
 /// Full-screen live camera preview with still capture (photo output).
@@ -14,12 +14,29 @@ struct VisionCameraView: UIViewControllerRepresentable {
     var isSessionActive: Bool = true
     /// Pause the preview connection so the last live frame freezes in place.
     var isPreviewFrozen: Bool = false
+    /// Bumps when the host wants the lens zoom reset to 1× (retake, etc.).
+    var zoomResetTrigger: UUID?
+    /// Optional absolute zoom factor the host wants applied (e.g. tapping a
+    /// 2× / Max chip). `setZoomFactor` clamps to the device's allowed range.
+    var requestedZoomFactor: CGFloat?
+    /// Reports the device's actual `videoZoomFactor` whenever it changes, so
+    /// the chip row can track the user's pinch or a recent tap equally.
+    var onZoomChanged: ((CGFloat) -> Void)? = nil
+    /// Fired on the main queue whenever a fresh QR code is detected on the
+    /// session. Repeated values for the same code in the same frame window
+    /// are filtered by the controller.
+    var onQRScanned: ((String) -> Void)? = nil
+    /// Bumps when the host wants the QR-tracking memory cleared (so pointing
+    /// at the *same* code can re-trigger after the user dismissed a card).
+    var qrResetTrigger: UUID?
 
-    func makeUIViewController(context: Context) -> VisionCameraController {
+    func makeUIViewController(context _: Context) -> VisionCameraController {
         let vc = VisionCameraController()
         vc.onCapture = onCapture
         vc.onError = onError
         vc.onShutter = onShutter
+        vc.onZoomChanged = onZoomChanged
+        vc.onQRScanned = onQRScanned
         return vc
     }
 
@@ -27,11 +44,32 @@ struct VisionCameraView: UIViewControllerRepresentable {
         uiViewController.onCapture = onCapture
         uiViewController.onError = onError
         uiViewController.onShutter = onShutter
+        uiViewController.onZoomChanged = onZoomChanged
+        uiViewController.onQRScanned = onQRScanned
         if captureTrigger != context.coordinator.lastTrigger {
             context.coordinator.lastTrigger = captureTrigger
             if captureTrigger != nil {
                 uiViewController.capturePhoto()
             }
+        }
+        if let factor = requestedZoomFactor {
+            uiViewController.setZoomFactor(factor, animated: true)
+            context.coordinator.lastRequestedFactor = factor
+        } else {
+            // Cleared by the host (e.g. after consumption) — just nil the ref.
+            context.coordinator.lastRequestedFactor = nil
+        }
+        if let trigger = zoomResetTrigger,
+           trigger != context.coordinator.lastZoomResetTrigger
+        {
+            context.coordinator.lastZoomResetTrigger = trigger
+            uiViewController.resetZoom(animated: false)
+        }
+        if let trigger = qrResetTrigger,
+           trigger != context.coordinator.lastQRResetTrigger
+        {
+            context.coordinator.lastQRResetTrigger = trigger
+            uiViewController.resetQRTracking()
         }
         uiViewController.setSessionRunning(isSessionActive)
         uiViewController.setPreviewFrozen(isPreviewFrozen)
@@ -43,20 +81,32 @@ struct VisionCameraView: UIViewControllerRepresentable {
 
     final class Coordinator {
         var lastTrigger: UUID?
+        var lastZoomResetTrigger: UUID?
+        var lastRequestedFactor: CGFloat?
+        var lastQRResetTrigger: UUID?
     }
 }
 
 // MARK: - Controller
 
-final class VisionCameraController: UIViewController, AVCapturePhotoCaptureDelegate {
+final class VisionCameraController: UIViewController, AVCapturePhotoCaptureDelegate, AVCaptureMetadataOutputObjectsDelegate {
     var onCapture: ((UIImage) -> Void)?
     var onError: ((String) -> Void)?
     var onShutter: (() -> Void)?
+    /// Reports the actual `videoZoomFactor` back to SwiftUI whenever it changes
+    /// (pinch or chip tap). Called on the main queue.
+    var onZoomChanged: ((CGFloat) -> Void)?
+    /// Reports a fresh QR code payload whenever one is detected on the live
+    /// preview. Called on the main queue. Detections are deduplicated by the
+    /// `AVCaptureMetadataOutput` queue naturally; we forward a single stable
+    /// value at a time.
+    var onQRScanned: ((String) -> Void)?
 
     private let session = AVCaptureSession()
     private let sessionQueue = DispatchQueue(label: "com.anyprovcode.vision.camera")
     private var preview: AVCaptureVideoPreviewLayer?
     private let photoOutput = AVCapturePhotoOutput()
+    private let metadataOutput = AVCaptureMetadataOutput()
     private var isConfigured = false
     private var wantsRunning = true
     private var wantsPreviewFrozen = false
@@ -64,11 +114,20 @@ final class VisionCameraController: UIViewController, AVCapturePhotoCaptureDeleg
     private var isCapturingPhoto = false
     /// Hardware Camera Control / volume-button shutter (iOS 17.2+).
     private var captureEventInteraction: AnyObject?
+    /// Pinch-to-zoom gesture attached to `view`. Drives `setZoomFactor` while
+    /// the user is actively pinching so the camera follows their fingers.
+    private var pinchGesture: UIPinchGestureRecognizer?
+    /// Cached active video device for zoom reads / writes.
+    private weak var activeDevice: AVCaptureDevice?
+    /// Last QR value we forwarded up — used to suppress identical repeats
+    /// that the OS sends every few frames while the code stays in view.
+    private var lastForwardedQR: String?
 
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .black
         installHardwareCaptureButtons()
+        installPinchZoomGesture()
         requestAndConfigure()
     }
 
@@ -93,7 +152,9 @@ final class VisionCameraController: UIViewController, AVCapturePhotoCaptureDeleg
         sessionQueue.async { [weak self] in
             guard let self, self.isConfigured else { return }
             if running {
-                if !self.session.isRunning { self.session.startRunning() }
+                if !self.session.isRunning {
+                    self.session.startRunning()
+                }
             } else if self.session.isRunning {
                 self.session.stopRunning()
             }
@@ -107,7 +168,7 @@ final class VisionCameraController: UIViewController, AVCapturePhotoCaptureDeleg
         applyPreviewFrozen()
         // Retake unfreezes while a prior still may still be developing — clear the
         // in-flight lock so the next shutter is not stuck waiting on that JPEG.
-        if wasFrozen && !frozen {
+        if wasFrozen, !frozen {
             sessionQueue.async { [weak self] in
                 self?.isCapturingPhoto = false
             }
@@ -175,6 +236,106 @@ final class VisionCameraController: UIViewController, AVCapturePhotoCaptureDeleg
         capturePhoto()
     }
 
+    // MARK: - Pinch zoom
+
+    /// Pinch gesture recognizer wired straight to `videoZoomFactor`. We use
+    /// UIPinchGestureRecognizer instead of SwiftUI's `MagnifyGesture` because
+    /// it's connected directly to the preview UIView (no race with the SwiftUI
+    /// SwiftUI overlay layer for the shutter / prompt chips).
+    private func installPinchZoomGesture() {
+        let pinch = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
+        pinch.delegate = self
+        view.addGestureRecognizer(pinch)
+        pinchGesture = pinch
+    }
+
+    @objc private func handlePinch(_ gr: UIPinchGestureRecognizer) {
+        // Block while frozen / mid-capture so the deviceless zoom doesn't
+        // fight the still-developing preview path.
+        guard !wantsPreviewFrozen, !isCapturingPhoto else { return }
+        sessionQueue.async { [weak self] in
+            guard let self, let device = self.activeDevice else { return }
+            DispatchQueue.main.async {
+                let base = device.videoZoomFactor
+                let candidate = base * gr.scale
+                let clamped = self.clampedZoom(candidate, on: device)
+                gr.scale = 1 // reset reference so each event is incremental
+                self.applyZoom(clamped, on: device)
+            }
+        }
+    }
+
+    /// Snap back to the device's true 1× wide angle. Used on retake so the next
+    /// shot isn't accidentally framed at 2×.
+    func resetZoom(animated: Bool) {
+        sessionQueue.async { [weak self] in
+            guard let self, let device = self.activeDevice else { return }
+            let target = self.clampedZoom(device.minAvailableVideoZoomFactor, on: device)
+            DispatchQueue.main.async {
+                self.applyZoom(target, on: device, animated: animated)
+            }
+        }
+    }
+
+    /// Host can ask for an absolute target (chip tap). Clamped + ramped so the
+    /// transition feels like the stock Camera app.
+    func setZoomFactor(_ factor: CGFloat, animated: Bool = true) {
+        sessionQueue.async { [weak self] in
+            guard let self, let device = self.activeDevice else { return }
+            let target = self.clampedZoom(factor, on: device)
+            DispatchQueue.main.async {
+                self.applyZoom(target, on: device, animated: animated)
+            }
+        }
+    }
+
+    private func applyZoom(_ factor: CGFloat, on device: AVCaptureDevice, animated: Bool = false) {
+        do {
+            try device.lockForConfiguration()
+            if animated {
+                device.ramp(toVideoZoomFactor: factor, withRate: 4)
+            } else {
+                device.videoZoomFactor = factor
+            }
+            device.unlockForConfiguration()
+        } catch {
+            // Non-fatal — pinch still works against `videoZoomFactor` directly.
+        }
+        // `ramp` is async, so the snapshot immediately after may not reflect the
+        // final value. Send what we asked for, then re-publish after the ramp
+        // would naturally settle. ~300ms matches `ramp` at rate=4 for typical
+        // distances.
+        onZoomChanged?(factor)
+        if animated {
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(320)) { [weak self] in
+                self?.publishCurrentZoom()
+            }
+        }
+    }
+
+    /// Periodically re-publishes the device's current factor so the chip row
+    /// settles on the value the user actually landed on after a ramp.
+    private func publishCurrentZoom() {
+        sessionQueue.async { [weak self] in
+            guard let self, let device = self.activeDevice else { return }
+            let snapshot = device.videoZoomFactor
+            DispatchQueue.main.async {
+                self.onZoomChanged?(snapshot)
+            }
+        }
+    }
+
+    private func clampedZoom(_ factor: CGFloat, on device: AVCaptureDevice) -> CGFloat {
+        // iOS clamps at ~device.activeFormat.videoMaxZoomFactor (often 8–10×)
+        // for non-locked sessions. We never push beyond 5× — beyond that, the
+        // image quality collapses because the OS is cropping pixels, not
+        // switching lenses. Match Apple Camera's behavior.
+        let maxPractical: CGFloat = 5
+        let lo = max(device.minAvailableVideoZoomFactor, 1)
+        let hi = min(device.activeFormat.videoMaxZoomFactor, maxPractical)
+        return min(max(factor, lo), hi)
+    }
+
     // MARK: - Setup
 
     private func requestAndConfigure() {
@@ -205,9 +366,9 @@ final class VisionCameraController: UIViewController, AVCapturePhotoCaptureDeleg
             self.session.sessionPreset = .photo
 
             guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
-                    ?? AVCaptureDevice.default(for: .video),
-                  let input = try? AVCaptureDeviceInput(device: device),
-                  self.session.canAddInput(input)
+                ?? AVCaptureDevice.default(for: .video),
+                let input = try? AVCaptureDeviceInput(device: device),
+                self.session.canAddInput(input)
             else {
                 self.session.commitConfiguration()
                 DispatchQueue.main.async {
@@ -229,6 +390,7 @@ final class VisionCameraController: UIViewController, AVCapturePhotoCaptureDeleg
             } catch {
                 // Non-fatal — continue with the system default.
             }
+            self.activeDevice = device
 
             guard self.session.canAddOutput(self.photoOutput) else {
                 self.session.commitConfiguration()
@@ -244,6 +406,19 @@ final class VisionCameraController: UIViewController, AVCapturePhotoCaptureDeleg
                 if connection.isVideoRotationAngleSupported(portraitAngle) {
                     connection.videoRotationAngle = portraitAngle
                 }
+            }
+
+            // QR / barcode scanner on the same session so we don't open a
+            // second camera authorization prompt. Forward each fresh value
+            // exactly once; the metadata queue debounces duplicates.
+            if self.session.canAddOutput(self.metadataOutput) {
+                self.session.addOutput(self.metadataOutput)
+                self.metadataOutput.setMetadataObjectsDelegate(self, queue: DispatchQueue.main)
+                let supported = self.metadataOutput.availableMetadataObjectTypes
+                // QR is the only one Vision mode currently surfaces; barcode
+                // friends (PDF417 / Data Matrix / Aztec) can come later.
+                let requested: [AVMetadataObject.ObjectType] = [.qr]
+                self.metadataOutput.metadataObjectTypes = requested.filter { supported.contains($0) }
             }
 
             self.session.commitConfiguration()
@@ -274,7 +449,8 @@ final class VisionCameraController: UIViewController, AVCapturePhotoCaptureDeleg
         guard let connection = preview?.connection else { return }
         let portraitAngle: CGFloat = 90
         if connection.isVideoRotationAngleSupported(portraitAngle),
-           connection.videoRotationAngle != portraitAngle {
+           connection.videoRotationAngle != portraitAngle
+        {
             connection.videoRotationAngle = portraitAngle
         }
         applyPreviewFrozen()
@@ -283,8 +459,8 @@ final class VisionCameraController: UIViewController, AVCapturePhotoCaptureDeleg
     // MARK: - AVCapturePhotoCaptureDelegate
 
     func photoOutput(
-        _ output: AVCapturePhotoOutput,
-        willCapturePhotoFor resolvedSettings: AVCaptureResolvedPhotoSettings
+        _: AVCapturePhotoOutput,
+        willCapturePhotoFor _: AVCaptureResolvedPhotoSettings
     ) {
         // System shutter moment — ensure preview stays frozen if the host already
         // asked for it (or freeze here as a fallback for hardware paths).
@@ -298,7 +474,7 @@ final class VisionCameraController: UIViewController, AVCapturePhotoCaptureDeleg
     }
 
     func photoOutput(
-        _ output: AVCapturePhotoOutput,
+        _: AVCapturePhotoOutput,
         didFinishProcessingPhoto photo: AVCapturePhoto,
         error: Error?
     ) {
@@ -357,6 +533,33 @@ final class VisionCameraController: UIViewController, AVCapturePhotoCaptureDeleg
         guard let image = UIImage(data: data) else { return nil }
         return image.fixedOrientation()
     }
+
+    // MARK: - AVCaptureMetadataOutputObjectsDelegate
+
+    func metadataOutput(
+        _: AVCaptureMetadataOutput,
+        didOutput metadataObjects: [AVMetadataObject],
+        from _: AVCaptureConnection
+    ) {
+        guard let first = metadataObjects.first as? AVMetadataMachineReadableCodeObject,
+              first.type == .qr,
+              let value = first.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty
+        else { return }
+        // iOS fires this delegate for every frame that sees the code, so
+        // filter repeated values to avoid spamming the SwiftUI overlay.
+        if value == lastForwardedQR {
+            return
+        }
+        lastForwardedQR = value
+        onQRScanned?(value)
+    }
+
+    /// Forget the last QR so the *same* code can be re-surfaced later (e.g.
+    /// after the user dismisses the card and points at the same code again).
+    func resetQRTracking() {
+        lastForwardedQR = nil
+    }
 }
 
 // MARK: - UIImage orientation
@@ -371,5 +574,22 @@ private extension UIImage {
         return renderer.image { _ in
             draw(in: CGRect(origin: .zero, size: size))
         }
+    }
+}
+
+// MARK: - Gesture coordination
+
+extension VisionCameraController: UIGestureRecognizerDelegate {
+    /// Pinch shares the view with the shutter Button and the SwiftUI chip
+    /// row. Let it fire alongside any single-pointer gesture so the user can
+    /// pinch + pan, but suppress it when AVCaptureEventInteraction is mid-
+    /// capture-event (Camera Control button).
+    func gestureRecognizer(
+        _: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith _: UIGestureRecognizer
+    ) -> Bool {
+        // Allow pinch to compose with the SwiftUI overlay's own gestures.
+        // SwiftUI hands us UIKit gestures via `SimultaneousGesture` chains.
+        true
     }
 }

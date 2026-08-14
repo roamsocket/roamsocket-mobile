@@ -1,6 +1,6 @@
+import AnyProvCore
 import Foundation
 import UIKit
-import AnyProvCore
 
 /// One visible turn in the Vision analysis thread (follow-ups after the first look).
 struct VisionChatTurn: Identifiable, Equatable {
@@ -89,6 +89,80 @@ final class VisionViewModel: ObservableObject {
     /// Sheet to re-run analysis on the frozen photo with a different task prompt.
     @Published var showReanalyzePrompt = false
 
+    // MARK: QR scan (live viewfinder)
+
+    ///
+    /// Holds the most recent QR payload the camera surfaced, plus an ID so
+    /// SwiftUI can animate a fresh card in/out without flicker on repeated
+    /// detections. Auto-expires after `qrCardVisibleDuration`; the host can
+    /// also dismiss or consume it explicitly via `consumeScannedQR(_:)`.
+    @Published var scannedQR: ScannedQR?
+    /// Bump when the host wants the controller to forget the last forwarded
+    /// QR — that way pointing at the *same* code later can re-trigger.
+    @Published var qrRescanRequest: UUID = .init()
+
+    /// How long the freshly-scanned QR card stays on screen before auto-hide.
+    static let qrCardVisibleDuration: TimeInterval = 12
+
+    /// Decoded QR / barcode value surfaced by the camera's metadata output.
+    struct ScannedQR: Identifiable, Equatable {
+        let id: UUID
+        let value: String
+        let detectedAt: Date
+
+        init(id: UUID = UUID(), value: String, detectedAt: Date = Date()) {
+            self.id = id
+            self.value = value
+            self.detectedAt = detectedAt
+        }
+
+        /// Best-effort URL interpretation. Decoded text, deeply nested paths,
+        /// and bare query strings all pass through intact.
+        var url: URL? {
+            guard let candidate = URL(string: value) else { return nil }
+            guard let scheme = candidate.scheme?.lowercased() else { return nil }
+            return ["http", "https", "mailto", "tel", "sms", "ftp"].contains(scheme)
+                ? candidate : nil
+        }
+    }
+
+    func registerScannedQR(_ raw: String) {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        // Skip dupes while the same card is on screen (defense-in-depth; the
+        // camera controller already filters frame-level repeats).
+        if let existing = scannedQR, existing.value == trimmed {
+            return
+        }
+        scannedQR = ScannedQR(value: trimmed)
+    }
+
+    /// Dismiss the QR card without consuming it (× button or auto-expire).
+    func dismissScannedQR() {
+        scannedQR = nil
+    }
+
+    /// Either paste the value into the capture prompt (pre-shutter) or follow
+    /// up on the frozen photo, and clear the card. `pasteIntoCapturePrompt`
+    /// is the natural default — the user can adjust before taking the shot.
+    func consumeScannedQR(pasteIntoCapturePrompt: Bool = true) {
+        guard let payload = scannedQR else { return }
+        if pasteIntoCapturePrompt {
+            // Append, don't clobber — preserving whatever the user already
+            // typed so they can layer instructions around the code.
+            let separator = capturePrompt.isEmpty ? "" : "\n\n"
+            capturePrompt = "\(capturePrompt)\(separator)QR: \(payload.value)"
+        }
+        scannedQR = nil
+    }
+
+    /// Forget the last forwarded QR on the camera controller so the *same*
+    /// code in frame can re-surface a card later (e.g. user dismissed and
+    /// tapped the same QR again).
+    func requestQRRescan() {
+        qrRescanRequest = UUID()
+    }
+
     let promptStore: VisionPromptStore
 
     private let catalog: ModelCatalog
@@ -103,12 +177,14 @@ final class VisionViewModel: ObservableObject {
     /// Full-frame source used for crop → re-analyze (display-scale, orientation-normalized).
     private var analysisSourceImage: UIImage?
     /// Last crop applied for the model payload (normalized image space). Full frame = unit rect.
-    private var lastCropNormalized: CGRect = CGRect(x: 0, y: 0, width: 1, height: 1)
+    private var lastCropNormalized: CGRect = .init(x: 0, y: 0, width: 1, height: 1)
     /// Prompt snapshot for the current frozen photo (reused when re-cropping).
     private var lastProviderPrompt: String = ""
 
     /// Web search / research are client-side and work for any chat-capable vision model.
-    var supportsWebTools: Bool { true }
+    var supportsWebTools: Bool {
+        true
+    }
 
     /// Built-in fallback when the user leaves the capture prompt empty.
     /// Lead with the takeaway so the user sees the useful result without scrolling.
@@ -309,7 +385,8 @@ final class VisionViewModel: ObservableObject {
         // default is unset / stale / not vision-capable.
         if let def = state.defaultModel(for: .vision),
            state.modelSupportsVision(def),
-           selectedModel?.id != def.id {
+           selectedModel?.id != def.id
+        {
             selectedModel = def
         }
         // Keep selection vision-capable: replace text-only picks when a VLM is available.
@@ -327,7 +404,8 @@ final class VisionViewModel: ObservableObject {
                 selectedModel = preferred
             }
         } else if let current = selectedModel,
-                  !state.allModels.contains(where: { $0.id == current.id }) {
+                  !state.allModels.contains(where: { $0.id == current.id })
+        {
             selectedModel = nil
         }
     }
@@ -460,7 +538,9 @@ final class VisionViewModel: ObservableObject {
         guard let source = analysisSourceImage ?? capturedImage else { return }
         let next = Self.clampedNormalizedCrop(normalizedRect)
         // Skip if crop barely moved (corner handle release without real change).
-        if Self.cropsApproximatelyEqual(lastCropNormalized, next) { return }
+        if Self.cropsApproximatelyEqual(lastCropNormalized, next) {
+            return
+        }
         lastCropNormalized = next
 
         let cropped = Self.croppedImage(source, normalized: next)
@@ -495,7 +575,8 @@ final class VisionViewModel: ObservableObject {
         // Prefill the editor with what was last sent for this still so the user
         // can tweak it rather than starting from a blank field.
         if capturePrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           !lastUsedPrompt.isEmpty {
+           !lastUsedPrompt.isEmpty
+        {
             capturePrompt = lastUsedPrompt
             capturePromptEdited()
         }
@@ -645,12 +726,16 @@ final class VisionViewModel: ObservableObject {
     /// Research on implies web search (matches Chat Add-to-chat behavior).
     func setResearchEnabled(_ on: Bool) {
         researchEnabled = on
-        if on { webSearchEnabled = true }
+        if on {
+            webSearchEnabled = true
+        }
     }
 
     func setWebSearchEnabled(_ on: Bool) {
         webSearchEnabled = on
-        if !on { researchEnabled = false }
+        if !on {
+            researchEnabled = false
+        }
     }
 
     /// Prompt string sent to the model for the next capture.
@@ -827,7 +912,8 @@ final class VisionViewModel: ObservableObject {
             text = String(firstLine).trimmingCharacters(in: .whitespacesAndNewlines)
         }
         if (text.hasPrefix("\"") && text.hasSuffix("\""))
-            || (text.hasPrefix("'") && text.hasSuffix("'")) {
+            || (text.hasPrefix("'") && text.hasSuffix("'"))
+        {
             text = String(text.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
         }
         let upper = text.uppercased()
@@ -1015,7 +1101,8 @@ final class VisionViewModel: ObservableObject {
         // Some VLMs (Gemma-family) return only thinking tags for short turns —
         // fall back so we don't treat a real answer as empty.
         if text.isEmpty, let thinking = parsed.thinking?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !thinking.isEmpty {
+           !thinking.isEmpty
+        {
             text = thinking
         }
         guard !text.isEmpty else {
@@ -1128,8 +1215,12 @@ final class VisionViewModel: ObservableObject {
     private static func clampedNormalizedCrop(_ rect: CGRect) -> CGRect {
         let minSide: CGFloat = 0.05
         var r = rect.standardized
-        if r.width < minSide { r.size.width = minSide }
-        if r.height < minSide { r.size.height = minSide }
+        if r.width < minSide {
+            r.size.width = minSide
+        }
+        if r.height < minSide {
+            r.size.height = minSide
+        }
         r.origin.x = min(max(r.origin.x, 0), 1 - r.size.width)
         r.origin.y = min(max(r.origin.y, 0), 1 - r.size.height)
         r.size.width = min(r.size.width, 1 - r.origin.x)
