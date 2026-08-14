@@ -117,6 +117,7 @@
 		CECF151DD9F2D6A926AABFCD /* BrowserModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 972605C18C1EDD61772BF802 /* BrowserModels.swift */; };
 		CF79F46BFA799A70755A0701 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = F0AFD00574E865E5D818751F /* MarkdownUI */; };
 		D18C08D2D8969DE9190FA899 /* VisionCapability.swift in Sources */ = {isa = PBXBuildFile; fileRef = 484A3E7253B503CC7D47B333 /* VisionCapability.swift */; };
+		D377240F0DFF847509A2E823 /* VisionQRScanCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24686AD07FE5AFBA054EA328 /* VisionQRScanCard.swift */; };
 		D4DB63610EDF67A3BA1DC3AA /* AnyProvCore in Frameworks */ = {isa = PBXBuildFile; productRef = B56CF955E91DED9605031824 /* AnyProvCore */; };
 		D5D661AEAFDA9970D369CD15 /* BrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B0A0BA661CBE63B23938DD1 /* BrowserView.swift */; };
 		D6D44B4653CBF2FF5D45AB94 /* StudyScanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C1993FB4194123ABB1B4B51 /* StudyScanView.swift */; };
@@ -132,6 +133,7 @@
 		E33C726AAD13D775CACA70F4 /* ProjectDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2A495CD347D5E5EA3819F9A /* ProjectDetailView.swift */; };
 		E3C5CCF5B6EC4F21608B9AF0 /* MLXLocalEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08463B7B40A982EEF5FC7875 /* MLXLocalEngine.swift */; };
 		E76982093466A87FFE305DA8 /* PreviewSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DDB8096BD8EDC931A40E9D0 /* PreviewSheets.swift */; };
+		E8C0756988B9EF81B0EA0D94 /* LiveTextOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = B368A1C9E36E71F1FA025696 /* LiveTextOverlay.swift */; };
 		E92BA656265BD2D626A7E87F /* MarkdownContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E6BDFEC5407686C57AE778B /* MarkdownContentView.swift */; };
 		E9E79CF1625A1B3950BDC10E /* RoamSocketControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44394A209E58F5112FF34826 /* RoamSocketControls.swift */; };
 		EA4AE35CEECAC53D1DD38A3E /* IncognitoChatSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CDA789F62DF1F26F2CAF00E /* IncognitoChatSheet.swift */; };
@@ -195,6 +197,7 @@
 		16BE332D27423E93B6592767 /* NeuralTTSService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NeuralTTSService.swift; sourceTree = "<group>"; };
 		1F90DB94C3BF91EA0A18CB26 /* EnvironmentPickerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvironmentPickerSheet.swift; sourceTree = "<group>"; };
 		235644045586C3090E69F828 /* GuidedLearningViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuidedLearningViewModel.swift; sourceTree = "<group>"; };
+		24686AD07FE5AFBA054EA328 /* VisionQRScanCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionQRScanCard.swift; sourceTree = "<group>"; };
 		25BB8C5338F7DF305283B5CA /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModel.swift; sourceTree = "<group>"; };
 		25BE60DC817AD0BC7B4B9B31 /* ManageMemoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManageMemoryView.swift; sourceTree = "<group>"; };
 		25F54051B559DF9922EE72D8 /* GuidedLearningView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuidedLearningView.swift; sourceTree = "<group>"; };
@@ -278,6 +281,7 @@
 		AE352F3DEEF02A77DB297A2A /* EffortControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EffortControl.swift; sourceTree = "<group>"; };
 		B06724B6CAF0E3252DE862FC /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B2A495CD347D5E5EA3819F9A /* ProjectDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectDetailView.swift; sourceTree = "<group>"; };
+		B368A1C9E36E71F1FA025696 /* LiveTextOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTextOverlay.swift; sourceTree = "<group>"; };
 		B388DA1635D53AC9A50BCB55 /* StudyFlashcardCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudyFlashcardCardView.swift; sourceTree = "<group>"; };
 		B593DD3D18DD8BE5FE53B910 /* StudyViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudyViewModel.swift; sourceTree = "<group>"; };
 		B60D77C1553A67514FAC8384 /* VoiceChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceChatView.swift; sourceTree = "<group>"; };
@@ -356,10 +360,12 @@
 		126523ADBA060228C63882A9 /* Vision */ = {
 			isa = PBXGroup;
 			children = (
+				B368A1C9E36E71F1FA025696 /* LiveTextOverlay.swift */,
 				78D067A2AA9EBBC55BA10289 /* VisionAnalysisSheet.swift */,
 				2EA229245167DD022667D914 /* VisionCameraView.swift */,
 				484A3E7253B503CC7D47B333 /* VisionCapability.swift */,
 				01040D7178E6CFEAFD28BCE0 /* VisionPromptStore.swift */,
+				24686AD07FE5AFBA054EA328 /* VisionQRScanCard.swift */,
 				E78702A24AA6316C6E487682 /* VisionView.swift */,
 				5865BD07DDF2FB090FEEB8B8 /* VisionViewModel.swift */,
 				94DA5E752C67E433CD266E72 /* VisionZoomableImageView.swift */,
@@ -935,6 +941,7 @@
 				A674EF03137640F7CB3FD496 /* KeychainSecretStore.swift in Sources */,
 				C2DD54AA29CA0384D7A83304 /* LightweightTaskRunner.swift in Sources */,
 				34BDD30A4E4DC3C7345EABB1 /* LightweightTasksSettings.swift in Sources */,
+				E8C0756988B9EF81B0EA0D94 /* LiveTextOverlay.swift in Sources */,
 				550B1CB1218756A76172C94A /* LocalMetalDownloadManager.swift in Sources */,
 				298A9D9CCA4A0F0AB506A716 /* LocalMetalMLXBackend.swift in Sources */,
 				0545F8BCB60A84A7595F7B68 /* LocalMetalSettingsView.swift in Sources */,
@@ -991,6 +998,7 @@
 				F577080BC15C9E21A75A8764 /* VisionCameraView.swift in Sources */,
 				D18C08D2D8969DE9190FA899 /* VisionCapability.swift in Sources */,
 				E08252E5452B485E0FACD9B9 /* VisionPromptStore.swift in Sources */,
+				D377240F0DFF847509A2E823 /* VisionQRScanCard.swift in Sources */,
 				7BE7D87AD5C1038AD21E3274 /* VisionView.swift in Sources */,
 				DC6DC687994549C8353E56A5 /* VisionViewModel.swift in Sources */,
 				675B597857C44AB8DED7450F /* VisionZoomableImageView.swift in Sources */,

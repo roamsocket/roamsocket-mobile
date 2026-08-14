@@ -1,195 +1,240 @@
 import SwiftUI
 import UIKit
+import VisionKit
 
-/// Frozen capture preview: pinch-to-zoom, pan, and Lens-style crop corners.
+/// Frozen capture preview: pinch-to-zoom, pan, double-tap toggle, and
+/// Lens-style crop corners. Long-press / drag on detected text is handled by
+/// VisionKit's `ImageAnalysisOverlayView` (Photos-style "Copy Text"). The
+/// overlay is wired into the live text layer at the bottom of this file —
+/// keep that relationship when changing hit testing.
+///
 /// White L-brackets sit on the **crop** region (default: full image) so they
 /// stay glued to image corners under zoom/pan. Dragging a corner resizes the
 /// crop; releasing re-runs analysis on that region via `onCropCommitted`.
-struct VisionZoomableImageView: View {
+struct VisionZoomableImageView: UIViewControllerRepresentable {
     let image: UIImage
     /// Identity that resets zoom + crop when a new shot is frozen.
     var resetID: UUID?
     /// Single tap (e.g. collapse the analysis card to show more of the photo).
     var onSingleTap: (() -> Void)? = nil
-    /// Normalized crop rect in image space (0…1). Called when a corner drag ends
-    /// or the crop is otherwise committed (not on every pan frame).
+    /// Normalized crop rect in image space (0…1). Called when a corner drag
+    /// ends or the crop is otherwise committed (not on every pan frame).
     var onCropCommitted: ((CGRect) -> Void)? = nil
+    /// Whether to surface Photos-style "Copy text / Look Up / Translate"
+    /// interactions on top of the still. Enabled after the analysis drops.
+    var liveTextEnabled: Bool = true
 
-    @State private var scale: CGFloat = 1
-    @State private var baseScale: CGFloat = 1
-    @State private var offset: CGSize = .zero
-    @State private var baseOffset: CGSize = .zero
-    /// Crop in normalized image coordinates (origin top-leading, size 0…1).
-    @State private var cropNormalized = CGRect(x: 0, y: 0, width: 1, height: 1)
-    @State private var cropDragStart: CGRect?
-    @State private var activeCorner: CropCorner?
+    func makeUIViewController(context _: Context) -> VisionZoomableController {
+        let vc = VisionZoomableController()
+        vc.image = image
+        vc.liveTextEnabled = liveTextEnabled
+        vc.onSingleTap = onSingleTap
+        vc.onCropCommitted = onCropCommitted
+        vc.lastResetID = resetID
+        return vc
+    }
+
+    func updateUIViewController(_ vc: VisionZoomableController, context _: Context) {
+        if vc.image !== image {
+            vc.image = image
+        }
+        vc.onSingleTap = onSingleTap
+        vc.onCropCommitted = onCropCommitted
+        vc.liveTextEnabled = liveTextEnabled
+        if vc.lastResetID != resetID {
+            vc.lastResetID = resetID
+            vc.resetAll()
+        }
+    }
+}
+
+// MARK: - Controller
+
+/// Single-source-of-truth UIKit controller for the frozen still. Owns:
+///
+/// - the `LiveTextOverlayView` (the UIImageView VisionKit analyzes), zoom +
+///   pan transforms, and image content sizing,
+/// - the crop dimming, lens brackets, and corner hit targets,
+/// - pinch / pan / double-tap / single-tap gesture recognizers.
+///
+/// Keeping photo + overlay + crop UI in one coordinate space means
+/// VisionKit's text selection rectangles line up with what the user sees,
+/// even when zoomed or panned.
+final class VisionZoomableController: UIViewController {
+    var image: UIImage? {
+        didSet {
+            guard image !== oldValue else { return }
+            guard isViewLoaded else { return }
+            applyImage()
+            resetAll()
+        }
+    }
+
+    var onSingleTap: (() -> Void)?
+    var onCropCommitted: ((CGRect) -> Void)?
+    var lastResetID: UUID?
+
+    var liveTextEnabled: Bool = true {
+        didSet {
+            guard liveTextEnabled != oldValue else { return }
+            applyLiveText()
+        }
+    }
+
+    // MARK: Tunables
 
     private let minScale: CGFloat = 1
     private let maxScale: CGFloat = 5
     private let minCropSide: CGFloat = 0.12
     private let handleHitSize: CGFloat = 44
 
-    var body: some View {
-        GeometryReader { geo in
-            let box = fittedImageSize(in: geo.size)
-            let container = geo.size
+    // MARK: Subviews / model
 
-            ZStack {
-                Color.black
+    private let imageView = LiveTextOverlayView()
+    private let dimLayer = CAShapeLayer()
+    private let bracketLayer = CAShapeLayer()
+    private var cornerHandles: [CropCorner: UIView] = [:]
+    private var activeCorner: CropCorner?
+    private var cropDragStart: CGRect = .init(x: 0, y: 0, width: 1, height: 1)
+    private var cropNormalized = CGRect(x: 0, y: 0, width: 1, height: 1)
 
-                // Photo layer (zoom + pan).
-                Image(uiImage: image)
-                    .resizable()
-                    .interpolation(.high)
-                    .scaledToFit()
-                    .frame(width: box.width, height: box.height)
-                    .scaleEffect(scale, anchor: .center)
-                    .offset(offset)
-                    .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
+    // MARK: Gesture state
 
-                // Dim everything outside the crop, in screen space over the photo.
-                cropDimOverlay(box: box, container: container)
-                    .allowsHitTesting(false)
+    private var pinchScale: CGFloat = 1
+    private var pinchStartScale: CGFloat = 1
+    private var panOffset: CGSize = .zero
+    private var panStartOffset: CGSize = .zero
+    private var isPinching = false
 
-                // Crop frame + white corner brackets (track zoom/pan).
-                cropFrameOverlay(box: box, container: container)
-                    .allowsHitTesting(false)
+    // MARK: Lifecycle
 
-                // Invisible corner hit targets (priority over pan).
-                cornerHandles(box: box, container: container)
-            }
-            .frame(width: container.width, height: container.height)
-            .clipped()
-            .contentShape(Rectangle())
-            .gesture(zoomAndPanGesture(container: container, imageBox: box))
-            // Double-tap must be registered before single-tap so both fire correctly.
-            .onTapGesture(count: 2) {
-                withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
-                    if scale > 1.05 {
-                        resetZoomOnly()
-                    } else {
-                        scale = 2.2
-                        baseScale = 2.2
-                    }
-                }
-            }
-            .onTapGesture(count: 1) {
-                guard activeCorner == nil else { return }
-                onSingleTap?()
-            }
-            .accessibilityLabel("Captured photo")
-            .accessibilityHint(
-                "Pinch to zoom, drag to pan, drag corners to crop. Double-tap to toggle zoom. Tap to minimize analysis."
-            )
-            .accessibilityAddTraits(.isButton)
-            .accessibilityAction {
-                onSingleTap?()
-            }
-        }
-        .onChange(of: resetID) { _, _ in
-            resetAll()
-        }
-        .onAppear {
-            resetAll()
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+        installImageView()
+        installOverlay()
+        installGestures()
+        applyImage()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        layoutImageView()
+        rebuildCropOverlays()
+        clampPanOffset(animated: false)
+    }
+
+    private func installImageView() {
+        view.addSubview(imageView)
+        imageView.contentMode = .scaleAspectFit
+        imageView.isUserInteractionEnabled = true
+        imageView.accessibilityLabel = "Captured photo"
+    }
+
+    private func installOverlay() {
+        dimLayer.fillRule = .evenOdd
+        dimLayer.fillColor = UIColor.black.withAlphaComponent(0.45).cgColor
+        bracketLayer.fillColor = UIColor.clear.cgColor
+        bracketLayer.strokeColor = UIColor.white.withAlphaComponent(0.95).cgColor
+        bracketLayer.lineWidth = 3.5
+        bracketLayer.lineCap = .round
+        bracketLayer.lineJoin = .round
+        bracketLayer.shadowColor = UIColor.black.cgColor
+        bracketLayer.shadowOpacity = 0.35
+        bracketLayer.shadowRadius = 1.5
+        bracketLayer.shadowOffset = CGSize(width: 0, height: 0.5)
+        view.layer.addSublayer(dimLayer)
+        view.layer.addSublayer(bracketLayer)
+
+        for corner in CropCorner.allCases {
+            let handle = UIView()
+            handle.backgroundColor = .clear
+            handle.isUserInteractionEnabled = true
+            handle.accessibilityLabel = "\(corner.accessibilityName) crop handle"
+            handle.accessibilityHint = "Drag to resize the analysis region"
+            cornerHandles[corner] = handle
+            view.addSubview(handle)
+            installCornerGesture(on: handle, corner: corner)
         }
     }
 
-    // MARK: - Crop overlays
+    private func installGestures() {
+        let pinch = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
+        pinch.delegate = self
+        view.addGestureRecognizer(pinch)
 
-    @ViewBuilder
-    private func cropDimOverlay(box: CGSize, container: CGSize) -> some View {
-        let rect = cropScreenRect(box: box, container: container)
-        Canvas { context, size in
-            var path = Path(CGRect(origin: .zero, size: size))
-            path.addRect(rect)
-            context.fill(
-                path,
-                with: .color(Color.black.opacity(0.45)),
-                style: FillStyle(eoFill: true)
-            )
-        }
-        .frame(width: container.width, height: container.height)
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
+        pan.delegate = self
+        pan.minimumNumberOfTouches = 1
+        pan.maximumNumberOfTouches = 2
+        view.addGestureRecognizer(pan)
+
+        let doubleTap = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTap(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        view.addGestureRecognizer(doubleTap)
+
+        let singleTap = UITapGestureRecognizer(target: self, action: #selector(handleSingleTap(_:)))
+        singleTap.numberOfTapsRequired = 1
+        singleTap.require(toFail: doubleTap)
+        view.addGestureRecognizer(singleTap)
     }
 
-    @ViewBuilder
-    private func cropFrameOverlay(box: CGSize, container: CGSize) -> some View {
-        let rect = cropScreenRect(box: box, container: container)
-        ZStack(alignment: .topLeading) {
-            // Subtle edge so the selection reads on bright photos.
-            Rectangle()
-                .stroke(Color.white.opacity(0.35), lineWidth: 1)
-                .frame(width: max(1, rect.width), height: max(1, rect.height))
-                .position(x: rect.midX, y: rect.midY)
+    // MARK: Image wiring
 
-            LensCornerBrackets()
-                .frame(width: max(1, rect.width), height: max(1, rect.height))
-                .position(x: rect.midX, y: rect.midY)
-        }
-        .frame(width: container.width, height: container.height)
+    private func applyImage() {
+        imageView.image = image
+        applyLiveText()
     }
 
-    @ViewBuilder
-    private func cornerHandles(box: CGSize, container: CGSize) -> some View {
-        let rect = cropScreenRect(box: box, container: container)
-        ForEach(CropCorner.allCases) { corner in
-            let point = corner.point(in: rect)
-            Color.clear
-                .frame(width: handleHitSize, height: handleHitSize)
-                .contentShape(Rectangle())
-                .position(point)
-                .highPriorityGesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { value in
-                            if cropDragStart == nil {
-                                cropDragStart = cropNormalized
-                                activeCorner = corner
-                            }
-                            guard let start = cropDragStart else { return }
-                            cropNormalized = resizedCrop(
-                                from: start,
-                                corner: corner,
-                                translation: value.translation,
-                                box: box,
-                                container: container
-                            )
-                        }
-                        .onEnded { _ in
-                            cropDragStart = nil
-                            activeCorner = nil
-                            commitCrop()
-                        }
-                )
-                .accessibilityLabel("\(corner.accessibilityName) crop handle")
-                .accessibilityHint("Drag to resize the analysis region")
-        }
+    private func applyLiveText() {
+        // VisionKit requires the underlying UIImageView to receive touches.
+        // We keep the parent view's gesture recognizers on too; their delegates
+        // decide who wins below.
+        imageView.isInteractionEnabled = liveTextEnabled
+        imageView.accessibilityHint = liveTextEnabled
+            ? "Tap and drag to select text, then choose Copy, Look Up, or Translate."
+            : "Pinch to zoom, drag to pan, drag corners to crop, double-tap to toggle zoom."
     }
 
-    // MARK: - Layout / coordinates
+    // MARK: Layout
 
-    private func fittedImageSize(in container: CGSize) -> CGSize {
-        // Tight insets so the freeze-frame uses almost the whole photo band.
+    private func fittedImageSize() -> CGSize {
+        guard let image, view.bounds.width > 0, view.bounds.height > 0 else {
+            return .zero
+        }
         let insetX: CGFloat = 12
         let insetY: CGFloat = 6
-        let maxW = max(1, container.width - insetX * 2)
-        let maxH = max(1, container.height - insetY * 2)
+        let maxW = max(1, view.bounds.width - insetX * 2)
+        let maxH = max(1, view.bounds.height - insetY * 2)
         let iw = max(image.size.width, 1)
         let ih = max(image.size.height, 1)
         let s = min(maxW / iw, maxH / ih)
         return CGSize(width: iw * s, height: ih * s)
     }
 
-    /// Image display rect in container space after scale + offset.
-    private func imageDisplayRect(box: CGSize, container: CGSize) -> CGRect {
-        let displayW = box.width * scale
-        let displayH = box.height * scale
-        let originX = (container.width - displayW) / 2 + offset.width
-        let originY = (container.height - displayH) / 2 + offset.height
-        return CGRect(x: originX, y: originY, width: displayW, height: displayH)
+    /// The rect the photo actually occupies on screen, post zoom/pan.
+    private func imageDisplayRect() -> CGRect {
+        let base = fittedImageSize()
+        let scaledW = base.width * pinchScale
+        let scaledH = base.height * pinchScale
+        let originX = (view.bounds.width - scaledW) / 2 + panOffset.width
+        let originY = (view.bounds.height - scaledH) / 2 + panOffset.height
+        return CGRect(x: originX, y: originY, width: scaledW, height: scaledH)
     }
 
-    /// Crop rect mapped into container/screen points.
-    private func cropScreenRect(box: CGSize, container: CGSize) -> CGRect {
-        let img = imageDisplayRect(box: box, container: container)
+    private func layoutImageView() {
+        let rect = fittedImageSize()
+        imageView.frame = CGRect(
+            x: (view.bounds.width - rect.width) / 2,
+            y: (view.bounds.height - rect.height) / 2,
+            width: rect.width,
+            height: rect.height
+        )
+    }
+
+    /// Screen-space crop rect (matches the user's eye / VisionKit text boxes).
+    private func cropScreenRect() -> CGRect {
+        let img = imageDisplayRect()
         return CGRect(
             x: img.minX + cropNormalized.minX * img.width,
             y: img.minY + cropNormalized.minY * img.height,
@@ -198,106 +243,255 @@ struct VisionZoomableImageView: View {
         )
     }
 
-    private func resetAll() {
-        scale = 1
-        baseScale = 1
-        offset = .zero
-        baseOffset = .zero
+    // MARK: Crop overlays (paths + handle positions)
+
+    private func rebuildCropOverlays() {
+        let rect = cropScreenRect()
+        // Dim outside the crop (even-odd: outer = full bounds, inner = crop).
+        let outer = UIBezierPath(rect: view.bounds)
+        let inner = UIBezierPath(roundedRect: rect, cornerRadius: min(8, rect.width / 12))
+        outer.append(inner)
+        outer.usesEvenOddFillRule = true
+        dimLayer.path = outer.cgPath
+
+        // Lens brackets (4 L-shaped corners of the crop rect).
+        let bracket = UIBezierPath()
+        let arm = min(28, min(rect.width, rect.height) * 0.22)
+        let radius = min(4, arm * 0.35)
+        addCornerPath(bracket, in: rect, corner: .topLeading, arm: arm, radius: radius)
+        addCornerPath(bracket, in: rect, corner: .topTrailing, arm: arm, radius: radius)
+        addCornerPath(bracket, in: rect, corner: .bottomTrailing, arm: arm, radius: radius)
+        addCornerPath(bracket, in: rect, corner: .bottomLeading, arm: arm, radius: radius)
+        bracketLayer.path = bracket.cgPath
+
+        for (corner, handle) in cornerHandles {
+            handle.frame = CGRect(
+                origin: .zero,
+                size: CGSize(width: handleHitSize, height: handleHitSize)
+            ).offsetBy(dx: corner.point(in: rect).x - handleHitSize / 2,
+                       dy: corner.point(in: rect).y - handleHitSize / 2)
+        }
+    }
+
+    private func addCornerPath(
+        _ path: UIBezierPath,
+        in rect: CGRect,
+        corner: CropCorner,
+        arm: CGFloat,
+        radius: CGFloat
+    ) {
+        switch corner {
+        case .topLeading:
+            let p = CGPoint(x: rect.minX, y: rect.minY)
+            path.move(to: CGPoint(x: p.x, y: p.y + arm))
+            path.addLine(to: CGPoint(x: p.x, y: p.y + radius))
+            path.addQuadCurve(
+                to: CGPoint(x: p.x + radius, y: p.y),
+                controlPoint: p
+            )
+            path.addLine(to: CGPoint(x: p.x + arm, y: p.y))
+        case .topTrailing:
+            let p = CGPoint(x: rect.maxX, y: rect.minY)
+            path.move(to: CGPoint(x: p.x - arm, y: p.y))
+            path.addLine(to: CGPoint(x: p.x - radius, y: p.y))
+            path.addQuadCurve(
+                to: CGPoint(x: p.x, y: p.y + radius),
+                controlPoint: p
+            )
+            path.addLine(to: CGPoint(x: p.x, y: p.y + arm))
+        case .bottomTrailing:
+            let p = CGPoint(x: rect.maxX, y: rect.maxY)
+            path.move(to: CGPoint(x: p.x, y: p.y - arm))
+            path.addLine(to: CGPoint(x: p.x, y: p.y - radius))
+            path.addQuadCurve(
+                to: CGPoint(x: p.x - radius, y: p.y),
+                controlPoint: p
+            )
+            path.addLine(to: CGPoint(x: p.x - arm, y: p.y))
+        case .bottomLeading:
+            let p = CGPoint(x: rect.minX, y: rect.maxY)
+            path.move(to: CGPoint(x: p.x + arm, y: p.y))
+            path.addLine(to: CGPoint(x: p.x + radius, y: p.y))
+            path.addQuadCurve(
+                to: CGPoint(x: p.x, y: p.y - radius),
+                controlPoint: p
+            )
+            path.addLine(to: CGPoint(x: p.x, y: p.y - arm))
+        }
+    }
+
+    // MARK: Reset
+
+    func resetAll() {
+        pinchScale = 1
+        pinchStartScale = 1
+        panOffset = .zero
+        panStartOffset = .zero
         cropNormalized = CGRect(x: 0, y: 0, width: 1, height: 1)
-        cropDragStart = nil
         activeCorner = nil
+        cropDragStart = cropNormalized
+        view.layer.removeAllAnimations()
+        if isViewLoaded {
+            layoutImageView()
+            rebuildCropOverlays()
+        }
     }
 
-    private func resetZoomOnly() {
-        scale = 1
-        baseScale = 1
-        offset = .zero
-        baseOffset = .zero
+    // MARK: Gesture handlers
+
+    @objc private func handlePinch(_ gr: UIPinchGestureRecognizer) {
+        switch gr.state {
+        case .began:
+            isPinching = true
+            pinchStartScale = pinchScale
+            view.layer.removeAllAnimations()
+        case .changed:
+            let next = pinchStartScale * gr.scale
+            pinchScale = min(max(next, minScale * 0.92), maxScale)
+            layoutImageView()
+            rebuildCropOverlays()
+        case .ended, .cancelled, .failed:
+            isPinching = false
+            if pinchScale < minScale {
+                pinchScale = minScale
+            } else {
+                pinchScale = min(max(pinchScale, minScale), maxScale)
+            }
+            pinchStartScale = pinchScale
+            UIView.animate(
+                withDuration: 0.32,
+                delay: 0,
+                usingSpringWithDamping: 0.86,
+                initialSpringVelocity: 0,
+                options: [.allowUserInteraction]
+            ) {
+                self.layoutImageView()
+                self.rebuildCropOverlays()
+            }
+            clampPanOffset(animated: true)
+        default:
+            break
+        }
     }
 
-    private func commitCrop() {
-        let c = cropNormalized.standardized
-        let clamped = CGRect(
-            x: min(max(c.minX, 0), 1 - minCropSide),
-            y: min(max(c.minY, 0), 1 - minCropSide),
-            width: min(max(c.width, minCropSide), 1),
-            height: min(max(c.height, minCropSide), 1)
-        )
-        cropNormalized = clamped
-        onCropCommitted?(clamped)
+    @objc private func handlePan(_ gr: UIPanGestureRecognizer) {
+        guard pinchScale > 1.02 else { return }
+        switch gr.state {
+        case .began:
+            panStartOffset = panOffset
+        case .changed:
+            let translation = gr.translation(in: view)
+            panOffset = CGSize(
+                width: panStartOffset.width + translation.x,
+                height: panStartOffset.height + translation.y
+            )
+            layoutImageView()
+            rebuildCropOverlays()
+        case .ended, .cancelled, .failed:
+            clampPanOffset(animated: true)
+        default:
+            break
+        }
     }
 
-    // MARK: - Gestures
-
-    private func zoomAndPanGesture(container: CGSize, imageBox: CGSize) -> some Gesture {
-        SimultaneousGesture(
-            MagnifyGesture()
-                .onChanged { value in
-                    guard activeCorner == nil else { return }
-                    let next = baseScale * value.magnification
-                    scale = min(max(next, minScale * 0.92), maxScale)
-                }
-                .onEnded { _ in
-                    guard activeCorner == nil else { return }
-                    if scale < minScale {
-                        withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
-                            resetZoomOnly()
-                        }
-                    } else {
-                        scale = min(max(scale, minScale), maxScale)
-                        baseScale = scale
-                        clampOffset(container: container, imageBox: imageBox, animated: true)
-                        baseOffset = offset
-                    }
-                },
-            DragGesture()
-                .onChanged { value in
-                    guard activeCorner == nil else { return }
-                    // Allow pan whenever zoomed past 1× so the crop stays reachable.
-                    guard scale > 1.02 else { return }
-                    offset = CGSize(
-                        width: baseOffset.width + value.translation.width,
-                        height: baseOffset.height + value.translation.height
-                    )
-                }
-                .onEnded { _ in
-                    guard activeCorner == nil else { return }
-                    clampOffset(container: container, imageBox: imageBox, animated: true)
-                    baseOffset = offset
-                }
-        )
+    @objc private func handleDoubleTap(_: UITapGestureRecognizer) {
+        if pinchScale > 1.05 {
+            pinchScale = 1
+        } else {
+            pinchScale = 2.2
+        }
+        pinchStartScale = pinchScale
+        panOffset = .zero
+        panStartOffset = .zero
+        UIView.animate(
+            withDuration: 0.32,
+            delay: 0,
+            usingSpringWithDamping: 0.86,
+            initialSpringVelocity: 0,
+            options: [.allowUserInteraction]
+        ) {
+            self.layoutImageView()
+            self.rebuildCropOverlays()
+        }
     }
 
-    private func clampOffset(container: CGSize, imageBox: CGSize, animated: Bool) {
-        let scaledW = imageBox.width * scale
-        let scaledH = imageBox.height * scale
-        let maxX = max(0, (scaledW - container.width) / 2 + 12)
-        let maxY = max(0, (scaledH - container.height) / 2 + 12)
+    @objc private func handleSingleTap(_: UITapGestureRecognizer) {
+        guard activeCorner == nil else { return }
+        onSingleTap?()
+    }
+
+    private func clampPanOffset(animated: Bool) {
+        let rect = imageDisplayRect()
+        let maxX = max(0, (rect.width - view.bounds.width) / 2 + 12)
+        let maxY = max(0, (rect.height - view.bounds.height) / 2 + 12)
         let clamped = CGSize(
-            width: min(max(offset.width, -maxX), maxX),
-            height: min(max(offset.height, -maxY), maxY)
+            width: min(max(panOffset.width, -maxX), maxX),
+            height: min(max(panOffset.height, -maxY), maxY)
         )
+        let apply = {
+            self.panOffset = self.pinchScale <= 1.02 ? .zero : clamped
+            self.panStartOffset = self.panOffset
+            self.layoutImageView()
+            self.rebuildCropOverlays()
+        }
         if animated {
-            withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
-                offset = scale <= 1.02 ? .zero : clamped
+            UIView.animate(
+                withDuration: 0.28,
+                delay: 0,
+                usingSpringWithDamping: 0.9,
+                initialSpringVelocity: 0
+            ) {
+                apply()
             }
         } else {
-            offset = scale <= 1.02 ? .zero : clamped
-        }
-        if scale <= 1.02 {
-            baseOffset = .zero
+            apply()
         }
     }
 
-    /// Resize crop from a corner drag. Translation is in screen points.
+    // MARK: Corner drag
+
+    private func installCornerGesture(on handle: UIView, corner: CropCorner) {
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handleCornerPan(_:)))
+        pan.minimumNumberOfTouches = 1
+        pan.maximumNumberOfTouches = 1
+        pan.delegate = self
+        handle.addGestureRecognizer(pan)
+        // Stash the corner so the selector knows which one it's driving.
+        pan.cornerIdentifier = corner.rawValue
+        handle.accessibilityIdentifier = corner.rawValue
+        handle.addGestureRecognizer(pan)
+    }
+
+    @objc private func handleCornerPan(_ gr: UIPanGestureRecognizer) {
+        guard let raw = gr.cornerIdentifier, let resolved = CropCorner(rawValue: raw) else {
+            return
+        }
+        switch gr.state {
+        case .began:
+            cropDragStart = cropNormalized
+            activeCorner = resolved
+        case .changed:
+            let translation = gr.translation(in: view)
+            cropNormalized = resizedCrop(
+                from: cropDragStart,
+                corner: resolved,
+                translation: CGSize(width: translation.x, height: translation.y)
+            )
+            rebuildCropOverlays()
+        case .ended, .cancelled, .failed:
+            activeCorner = nil
+            commitCrop()
+        default:
+            break
+        }
+    }
+
     private func resizedCrop(
         from start: CGRect,
         corner: CropCorner,
-        translation: CGSize,
-        box: CGSize,
-        container: CGSize
+        translation: CGSize
     ) -> CGRect {
-        let img = imageDisplayRect(box: box, container: container)
+        let img = imageDisplayRect()
         guard img.width > 1, img.height > 1 else { return start }
 
         let dx = translation.width / img.width
@@ -328,21 +522,16 @@ struct VisionZoomableImageView: View {
         maxX = max(min(maxX, 1), minX + minCropSide)
         maxY = max(min(maxY, 1), minY + minCropSide)
 
-        // Keep minimum size against the opposite edge.
         if maxX - minX < minCropSide {
             switch corner {
-            case .topLeading, .bottomLeading:
-                minX = maxX - minCropSide
-            case .topTrailing, .bottomTrailing:
-                maxX = minX + minCropSide
+            case .topLeading, .bottomLeading: minX = maxX - minCropSide
+            case .topTrailing, .bottomTrailing: maxX = minX + minCropSide
             }
         }
         if maxY - minY < minCropSide {
             switch corner {
-            case .topLeading, .topTrailing:
-                minY = maxY - minCropSide
-            case .bottomLeading, .bottomTrailing:
-                maxY = minY + minCropSide
+            case .topLeading, .topTrailing: minY = maxY - minCropSide
+            case .bottomLeading, .bottomTrailing: maxY = minY + minCropSide
             }
         }
 
@@ -353,17 +542,60 @@ struct VisionZoomableImageView: View {
 
         return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
     }
+
+    private func commitCrop() {
+        let c = cropNormalized.standardized
+        let clamped = CGRect(
+            x: min(max(c.minX, 0), 1 - minCropSide),
+            y: min(max(c.minY, 0), 1 - minCropSide),
+            width: min(max(c.width, minCropSide), 1),
+            height: min(max(c.height, minCropSide), 1)
+        )
+        cropNormalized = clamped
+        onCropCommitted?(clamped)
+    }
+}
+
+// MARK: - Gesture coordination
+
+extension VisionZoomableController: UIGestureRecognizerDelegate {
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+    ) -> Bool {
+        // Pinch + pan can fire together so the photo pans while zooming.
+        let isPinch = gestureRecognizer is UIPinchGestureRecognizer
+            || other is UIPinchGestureRecognizer
+        let isPan = gestureRecognizer is UIPanGestureRecognizer
+            || other is UIPanGestureRecognizer
+        if isPinch && isPan {
+            return true
+        }
+        return false
+    }
+
+    func gestureRecognizer(
+        _: UIGestureRecognizer,
+        shouldReceive touch: UITouch
+    ) -> Bool {
+        // Corner handles own their own touches.
+        if let view = touch.view, cornerHandles.values.contains(view) {
+            return true
+        }
+        // VisionKit's `ImageAnalysisInteraction` consumes touches that fall on
+        // text / data detectors / subjects. We don't suppress anything else —
+        // pinch + pan + single-tap should keep working everywhere else.
+        return true
+    }
 }
 
 // MARK: - Crop corner
 
-private enum CropCorner: String, CaseIterable, Identifiable {
+private enum CropCorner: String, CaseIterable {
     case topLeading
     case topTrailing
     case bottomLeading
     case bottomTrailing
-
-    var id: String { rawValue }
 
     var accessibilityName: String {
         switch self {
@@ -384,63 +616,22 @@ private enum CropCorner: String, CaseIterable, Identifiable {
     }
 }
 
-// MARK: - Corner brackets (Lens-style)
+/// Store the corner raw value on each pan recognizer so the selector can read
+/// it even when iOS hands us a generic recognizer.
+private var kCornerIdentifierKey: UInt8 = 0
 
-private struct LensCornerBrackets: View {
-    var armLength: CGFloat = 28
-    var lineWidth: CGFloat = 3.5
-    var cornerRadius: CGFloat = 4
-
-    var body: some View {
-        GeometryReader { geo in
-            let w = geo.size.width
-            let h = geo.size.height
-            let l = min(armLength, min(w, h) * 0.22)
-            let r = min(cornerRadius, l * 0.35)
-
-            Path { path in
-                // Top-leading
-                path.move(to: CGPoint(x: 0, y: l))
-                path.addLine(to: CGPoint(x: 0, y: r))
-                path.addQuadCurve(
-                    to: CGPoint(x: r, y: 0),
-                    control: CGPoint(x: 0, y: 0)
-                )
-                path.addLine(to: CGPoint(x: l, y: 0))
-
-                // Top-trailing
-                path.move(to: CGPoint(x: w - l, y: 0))
-                path.addLine(to: CGPoint(x: w - r, y: 0))
-                path.addQuadCurve(
-                    to: CGPoint(x: w, y: r),
-                    control: CGPoint(x: w, y: 0)
-                )
-                path.addLine(to: CGPoint(x: w, y: l))
-
-                // Bottom-trailing
-                path.move(to: CGPoint(x: w, y: h - l))
-                path.addLine(to: CGPoint(x: w, y: h - r))
-                path.addQuadCurve(
-                    to: CGPoint(x: w - r, y: h),
-                    control: CGPoint(x: w, y: h)
-                )
-                path.addLine(to: CGPoint(x: w - l, y: h))
-
-                // Bottom-leading
-                path.move(to: CGPoint(x: l, y: h))
-                path.addLine(to: CGPoint(x: r, y: h))
-                path.addQuadCurve(
-                    to: CGPoint(x: 0, y: h - r),
-                    control: CGPoint(x: 0, y: h)
-                )
-                path.addLine(to: CGPoint(x: 0, y: h - l))
-            }
-            .stroke(
-                Color.white.opacity(0.95),
-                style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
-            )
-            .shadow(color: .black.opacity(0.35), radius: 1.5, y: 0.5)
+private extension UIPanGestureRecognizer {
+    var cornerIdentifier: String? {
+        get {
+            objc_getAssociatedObject(self, &kCornerIdentifierKey) as? String
         }
-        .allowsHitTesting(false)
+        set {
+            objc_setAssociatedObject(
+                self,
+                &kCornerIdentifierKey,
+                newValue,
+                .OBJC_ASSOCIATION_COPY_NONATOMIC
+            )
+        }
     }
 }
