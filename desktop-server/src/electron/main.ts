@@ -24,6 +24,7 @@ import {
   clipboard,
   safeStorage,
   nativeImage,
+  nativeTheme,
 } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -340,20 +341,61 @@ let tray: Tray | null = null;
 let server: RunningServer | null = null;
 let isQuitting = false;
 
+/**
+ * Resolve the directory holding tray / app icon PNGs at runtime.
+ *
+ * Dev: <desktop-server>/build/ (source-controlled under repo root).
+ * Packaged: <resources>/build/ (shipped via forge.config.ts extraResource).
+ */
+function iconDir(): string {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'build');
+  }
+  return path.join(__dirname, '..', '..', 'build');
+}
+
 function buildTrayIcon(): Electron.NativeImage {
-  // Tiny PNG generated at build time; for now we draw a simple square so
-  // the tray entry always has an icon, even on Linux without an .icns.
-  const size = 16;
-  const img = nativeImage.createEmpty();
-  // Use the app's default icon if available; fallback to a generated 1x1 png.
-  const appIcon = nativeImage.createFromPath(path.join(__dirname, '..', '..', 'build', 'icon.png'));
-  if (!appIcon.isEmpty()) return appIcon.resize({ width: size, height: size });
-  // 16x16 transparent PNG (placeholder so macOS doesn't show a blank square).
+  // Pick the 32px template variant that matches the current system theme.
+  // On macOS, setTemplateImage lets the OS re-tint the icon so it reads in
+  // both light and dark menu bars. On Windows / Linux, the tray widget just
+  // uses the PNG as-is.
+  const buildDir = iconDir();
+  const isDark =
+    typeof nativeTheme.shouldUseDarkColors === 'boolean'
+      ? nativeTheme.shouldUseDarkColors
+      : false;
+  const file = isDark ? 'tray-dark.png' : 'tray-light.png';
+  const img = nativeImage.createFromPath(path.join(buildDir, file));
+  if (!img.isEmpty()) {
+    img.setTemplateImage(true);
+    return img;
+  }
+  // Fallback: bundled app icon, no template tinting.
+  const fallback = nativeImage.createFromPath(path.join(buildDir, 'icon.png'));
+  if (!fallback.isEmpty()) return fallback.resize({ width: 32, height: 32 });
+  // Last resort: 16x16 transparent PNG (placeholder so macOS doesn't show a blank square).
   const png1x1 = Buffer.from(
     '89504e470d0a1a0a0000000d49484452000000100000001008060000001ff3ff610000001849444154388f63601805a30050330c0d0a26ab0104c7a3f01a1c0c0c4c1c0c00c0c0c0c0c000c0c04c0c0c00c0c0c0c0c0c00c0000009c1c0218df8c43c0000000049454e44ae426082',
     'hex'
   );
   return nativeImage.createFromBuffer(png1x1);
+}
+
+/** Build the window/app icon for the current system theme. The .icns in the
+ *  bundle already ships multi-resolution, so this is mostly used for dev mode
+ *  and for live theme swaps. */
+function buildAppIcon(): Electron.NativeImage | undefined {
+  const buildDir = iconDir();
+  const isDark =
+    typeof nativeTheme.shouldUseDarkColors === 'boolean'
+      ? nativeTheme.shouldUseDarkColors
+      : false;
+  // `icon-dark.png` is the dark-mode variant of the brand logo. macOS picks
+  // `icon.icns` from the bundle automatically; this is what we hand to
+  // BrowserWindow in dev / un-bundled runs.
+  const file = isDark ? 'icon-dark.png' : 'icon-light.png';
+  const img = nativeImage.createFromPath(path.join(buildDir, file));
+  return img.isEmpty() ? undefined : img;
 }
 
 function createTray(): void {
@@ -369,6 +411,26 @@ function createTray(): void {
     }
     if (mainWindow?.isVisible()) hideWindow();
     else showWindow();
+  });
+
+  // Refresh the tray glyph when the OS appearance changes. setTemplateImage
+  // already makes the icon adapt visually on macOS, but we still swap the
+  // source PNG for non-template platforms (Windows / Linux) so the tray
+  // stays legible in both modes.
+  nativeTheme.on('updated', () => {
+    const next = buildTrayIcon();
+    tray?.setImage(next);
+    // Window/dock icon: macOS picks up the bundle .icns automatically, but
+    // for live updates in dev or un-bundled runs we update the BrowserWindow
+    // icon here too.
+    const appIcon = buildAppIcon();
+    if (appIcon && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.setIcon(appIcon);
+    }
+    if (process.platform === 'darwin' && app.dock) {
+      const dockIcon = buildAppIcon();
+      if (dockIcon) app.dock.setIcon(dockIcon);
+    }
   });
 }
 
@@ -469,6 +531,10 @@ async function handleWindowClose(event: Electron.Event): Promise<void> {
 }
 
 function createWindow(): void {
+  // macOS picks up the bundle .icns for the dock and the window's traffic-
+  // light area automatically; passing `icon` here still helps the window
+  // itself (title bar, taskbar on Windows/Linux, task switcher thumbnails).
+  const windowIcon = buildAppIcon();
   mainWindow = new BrowserWindow({
     width: 1100,
     height: 740,
@@ -478,6 +544,7 @@ function createWindow(): void {
     title: 'RoamSocket',
     backgroundColor: '#0b0d10',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    ...(windowIcon ? { icon: windowIcon } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,

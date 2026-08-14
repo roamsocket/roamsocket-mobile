@@ -17,6 +17,7 @@
     "test:electron-dom": "cd desktop-server && npm run test:electron-dom",
     "dev": "cd desktop-server && npm run dev",
     "build:server": "cd desktop-server && npm run build",
+    "icons:build": "cd desktop-server && npm run icons:build",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",

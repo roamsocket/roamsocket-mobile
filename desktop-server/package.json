@@ -52,6 +52,8 @@
     "electron:dev": "electron-forge start",
     "electron:package": "electron-forge package",
     "electron:make": "electron-forge make",
+    "icons:build": "python3 scripts/icons/build_icons.py",
+    "icons:build:mac": "python3 scripts/icons/build_icons.py",
     "package": "electron-forge package",
     "make": "electron-forge make"
   },
