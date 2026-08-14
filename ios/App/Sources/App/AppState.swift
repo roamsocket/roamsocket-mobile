@@ -1409,7 +1409,10 @@ final class AppState: ObservableObject {
         } else {
             hiddenModelKeys.insert(key)
             if selectedModel?.id == model.id {
-                selectedModel = allModels.first
+                // Honor the stored chat default instead of letting the
+                // alphabetically-first model (often Apple Intelligence /
+                // on-device Metal) silently take the slot.
+                applyDefault(for: .chat)
             }
         }
         saveHiddenModels()
@@ -1549,6 +1552,9 @@ final class AppState: ObservableObject {
         )
         // Drop a selection that no longer has a key / vanished from catalog.
         // When still listed, refresh metadata (friendly display names, etc.).
+        // Otherwise honor the stored chat default (Apple Intelligence / on-device
+        // Metal can't sneak in via the catalog's alphabetical sort — they're
+        // filtered out by `chatDefaultCandidatePool`).
         if let selected = selectedModel {
             if let updated = allModels.first(where: { $0.id == selected.id }) {
                 let canCall = !resolvedAPIKey(for: selected.provider).isEmpty
@@ -1558,13 +1564,13 @@ final class AppState: ObservableObject {
                         selectedModel = updated
                     }
                 } else {
-                    selectedModel = allModels.first
+                    applyDefault(for: .chat)
                 }
             } else {
-                selectedModel = allModels.first
+                applyDefault(for: .chat)
             }
         } else {
-            selectedModel = allModels.first
+            applyDefault(for: .chat)
         }
         // Ensure RAM matches selection after catalog refresh (e.g. new download).
         await ensureSelectedLocalMetalLoaded()
@@ -1918,7 +1924,13 @@ final class AppState: ObservableObject {
     /// always re-verify at lookup time.
     ///
     /// Lookup rules per lane:
-    /// - `chat`: any visible model in `providerResults` (excludes hidden).
+    /// - `chat`: any visible model in `providerResults` (excludes hidden) that
+    ///   is **not** a phone-only provider. Apple Intelligence / phone Metal
+    ///   still appear in the picker for explicit picks, but never get chosen as
+    ///   a fallback default — `fetchAll` returns them alphabetically before any
+    ///   cloud provider the user actually configured, so without this filter
+    ///   they'd silently win the chat slot at launch. Users who want them can
+    ///   pick them explicitly.
     /// - `code`: visible model that ALSO `supportsCodingAgent`; for phone Metal
     ///   we still allow it (the desktop list isn't always loaded yet, and the
     ///   agent host will reject if the hub id isn't installed).
@@ -1941,6 +1953,7 @@ final class AppState: ObservableObject {
         guard !isModelHidden(model) else { return nil }
         switch kind {
         case .chat:
+            guard Self.isChatDefaultCandidate(model) else { return nil }
             return model
         case .code:
             guard model.provider.supportsCodingAgent else { return nil }
@@ -1954,6 +1967,21 @@ final class AppState: ObservableObject {
             // filter by capability because the list of providers and models is
             // curated by the user in the picker.
             return model
+        }
+    }
+
+    /// Whether `model` is a valid chat-lane default. Phone-only providers
+    /// (Apple Intelligence, on-device Metal) are excluded so they can't
+    /// silently win the slot when the catalog finishes loading before the
+    /// stored default has been written or the API key has been entered.
+    /// `defaultModel(for: .chat)` and `applyDefault(for: .chat)` both gate on
+    /// this — explicit picks in `ModelPickerSheet` are unaffected.
+    static func isChatDefaultCandidate(_ model: AIModel) -> Bool {
+        switch model.provider {
+        case .appleFoundation, .localMetal:
+            return false
+        default:
+            return true
         }
     }
 
@@ -1993,6 +2021,11 @@ final class AppState: ObservableObject {
     func modelMeetsLane(_ model: AIModel, kind: DefaultModelKind) -> Bool {
         switch kind {
         case .chat:
+            // Chat accepts any model the user can explicitly pick, including
+            // Apple Intelligence / on-device Metal — those are still listed in
+            // the picker. The chat **default** (used by `refreshModels` and
+            // `defaultModel(for: .chat)`) is narrower; see
+            // `isChatDefaultCandidate`.
             return true
         case .code:
             return model.provider.supportsCodingAgent
