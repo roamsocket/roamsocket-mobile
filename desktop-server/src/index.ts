@@ -28,6 +28,7 @@ import {
 import { mockAdapter } from './providers/index.js';
 import { syncSkillsRepo, upsertSkill, removeSkill } from './skills/sync.js';
 import { syncMCPRepo, upsertMCPServer, removeMCPServer } from './mcp/sync.js';
+import { syncMemoryRepo, upsertMemoryEntry, removeMemoryEntry } from './memory-sync.js';
 import { listConnectorDefinitions } from './connectors/catalog.js';
 import {
   clearStoredConnector,

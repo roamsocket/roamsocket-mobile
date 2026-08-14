@@ -8,6 +8,9 @@
 import type { StorageLike } from './history-store.js';
 
 const KEY = 'apc.userMemory.v1';
+const ACTIVITY_KEY = 'apc.userMemory.activity.v1';
+const ACTIVITY_MAX_AGE_MS = 60 * 60 * 24 * 30 * 1000; // 30 days
+const ACTIVITY_MAX_COUNT = 200;
 
 export type MemoryCategory = 'you' | 'topic' | 'area';
 
@@ -145,15 +148,6 @@ export class UserMemoryStore {
               .map(normalizeEntry)
           : [];
       }
-      const parsed = JSON.parse(raw) as { entries?: Partial<MemoryEntry>[] };
-      this.entries = Array.isArray(parsed.entries)
-        ? parsed.entries
-            .filter(
-              (e): e is Partial<MemoryEntry> & { id: string; title: string } =>
-                !!e && typeof e.id === 'string' && typeof e.title === 'string'
-            )
-            .map(normalizeEntry)
-        : [];
     } catch {
       this.entries = [];
     }

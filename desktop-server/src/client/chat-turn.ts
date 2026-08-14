@@ -78,6 +78,8 @@ export function buildChatSystemContent(opts: {
   includeMemory?: boolean;
   /** Structured user memory from Settings → Memory. */
   userMemorySystem?: string | null;
+  /** When true, append the auto-save instructions so the model emits tags. */
+  autoSaveMemory?: boolean;
   resolveSkill?: (
     id: string
   ) => SkillRecord | { id: string; name: string; description: string } | undefined;
