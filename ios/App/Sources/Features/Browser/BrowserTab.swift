@@ -338,6 +338,342 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         _ = await evaluateJS("window.scrollBy(0, \(dy));")
     }
 
+    /// Snap a privacy-first dismissal of whatever cookie/consent banner is
+    /// currently covering the page. The hard-coded priority order is a
+    /// deliberate product choice — see `BrowserAgent`'s system prompt for
+    /// the reasoning. Returns `true` when at least one banner candidate was
+    /// found and clicked, plus a short human-readable note describing what
+    /// happened so the UI can show "Dismissed cookie banner" instead of the
+    /// generic "Done".
+    ///
+    /// Cascades through three layers of detection (well-known CMP SDK
+    /// containers → any visible fixed/sticky overlay → any topmost visible
+    /// overlay element), each scoring its buttons by a tiered label table
+    /// that prefers the most privacy-friendly choice. Verifies the overlay
+    /// actually disappeared before returning success — banner SDKs sometimes
+    /// briefly keep the DOM around as they animate out, so a single recheck
+    /// is enough to catch the common case without slowing the loop.
+    @discardableResult
+    func dismissConsent() async -> (ok: Bool, note: String) {
+        // First click — try the cascade. Returns a short JSON string: the
+        // raw chosen label, the tier it matched, the layer it was found
+        // in, and a success flag.
+        let firstAttempt = await evaluateJS(Self.consentDismisserJS) as? String
+        // Give banner SDKs a beat to start animating the overlay out.
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        // Second click — verify by re-running with `verifyOnly: true`. If
+        // the banner is gone we know the click landed.
+        let secondAttempt = await evaluateJS(Self.consentDismisserVerifyJS) as? String
+        return Self.parseConsentResult(first: firstAttempt, second: secondAttempt)
+    }
+
+    /// JS that scans the live page for a cookie/consent banner overlay and
+    /// clicks the most privacy-friendly button inside it. Returns a JSON
+    /// string the Swift side parses. Kept as a constant so it can be
+    /// re-evaluated verbatim on every call (CSP-safe under our app content
+    /// world — see `agentWorld`).
+    private static let consentDismisserJS = """
+    (function () {
+      try {
+        function visible(el) {
+          if (!el) return false;
+          var r = el.getBoundingClientRect();
+          if (r.width <= 0 || r.height <= 0) return false;
+          var s = window.getComputedStyle(el);
+          if (s.visibility === 'hidden' || s.display === 'none') return false;
+          if (parseFloat(s.opacity || '1') <= 0) return false;
+          if (s.position !== 'fixed' && s.position !== 'sticky') {
+            // Not fixed/sticky is fine only if the element actually covers
+            // a big chunk of the viewport — that catches banner SDKs that
+            // forget to position themselves but render full-bleed anyway.
+            var vw = window.innerWidth, vh = window.innerHeight;
+            var coversX = r.left <= 16 && r.right >= vw - 16;
+            var coversY = r.top <= 16 && r.bottom >= vh - 16;
+            if (!(coversX && coversY)) return false;
+          }
+          return true;
+        }
+        function elementCenter(el) {
+          var r = el.getBoundingClientRect();
+          return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        }
+        function labelOf(el) {
+          if (!el) return '';
+          var raw = el.innerText || el.value || el.textContent || '';
+          raw = (raw || '').replace(/\\s+/g, ' ').trim();
+          if (raw) return raw;
+          raw = el.getAttribute('aria-label') || el.getAttribute('title') || '';
+          return (raw || '').replace(/\\s+/g, ' ').trim();
+        }
+        // Priority tiers — earlier wins. Tier numbers aren't used by the
+        // algorithm directly; lower index == higher preference.
+        var TIERS = [
+          // Tier 0: privacy gold standard.
+          ['reject all', 'reject all optional cookies', 'decline all', 'refuse all', 'reject non-essential'],
+          // Tier 1: reject the non-essential categories.
+          ['reject', 'reject non essential', 'reject non-essential', 'reject optional', 'decline', 'refuse', 'do not accept', 'do not consent', 'no thanks'],
+          // Tier 2: only the strictly necessary cookies.
+          ['accept only essential', 'accept essential only', 'only essential', 'essential only', 'use necessary cookies only', 'strictly necessary only', 'use essential cookies'],
+          // Tier 3: a manage/settings step (we'll click it and hope the
+          // user can sort it out — last resort on layered CMPs).
+          ['manage', 'manage settings', 'cookie settings', 'settings', 'customize', 'customise', 'preferences', 'more options', 'i agree', 'i accept'],
+          // Tier 4: just get rid of it.
+          ['accept all', 'accept', 'allow all', 'allow', 'agree', 'ok', 'okay', 'got it', 'i understand', 'continue', 'close', 'dismiss']
+        ];
+        function tierScore(label) {
+          if (!label) return -1;
+          var n = label.toLowerCase();
+          for (var i = 0; i < TIERS.length; i++) {
+            for (var j = 0; j < TIERS[i].length; j++) {
+              if (n.indexOf(TIERS[i][j]) !== -1) return i;
+            }
+          }
+          return -1;
+        }
+        // Build a candidate list of clickable buttons/links in any visible
+        // overlay. Order: inside a known CMP frame, then any visible fixed
+        // overlay, then a full-bleed element. Each candidate contributes its
+        // label + a center point so we can sanity-check it really is on
+        // the visible overlay before clicking.
+        var containers = [];
+        // 1. Well-known CMP SDK roots (OneTrust, Cookiebot, CookieYes,
+        //    TrustArc, Termly, Iubenda). These live in iframes OR in fixed
+        //    elements with stable IDs — we check both styles.
+        var knownIds = ['onetrust-banner-sdk','onetrust-consent-sdk','CybotCookiebotDialog','CybotCookiebotDialogBodyUnderlay','cookie-law-info-bar','cky-notification','truste-consent-track','truste-consent-button','termly-console','iubenda-cs-banner'];
+        for (var k = 0; k < knownIds.length; k++) {
+          var el = document.getElementById(knownIds[k]);
+          if (el && visible(el)) containers.push(el);
+          var q = document.querySelector('[id*="' + knownIds[k] + '"]');
+          if (q && q !== el && visible(q)) containers.push(q);
+        }
+        var knownClass = ['cc-window','cc-banner','ot-floating-button','cc-floating','cookie-banner','cookie-consent','gdpr-banner','gdpr-cookie-notice','privacy-banner'];
+        for (var c = 0; c < knownClass.length; c++) {
+          var found = document.querySelectorAll('.' + knownClass[c]);
+          for (var f = 0; f < found.length; f++) {
+            if (visible(found[f])) containers.push(found[f]);
+          }
+        }
+        // 2. All visible fixed/sticky elements with buttons inside. We
+        //    cast a wide net because banner SDKs like Quantcast / Didomi /
+        //    Funding Choices use generic class names.
+        var fixedEls = document.querySelectorAll('*');
+        for (var fe = 0; fe < fixedEls.length; fe++) {
+          var node = fixedEls[fe];
+          if (containers.indexOf(node) !== -1) continue;
+          var s = window.getComputedStyle(node);
+          if (s.position !== 'fixed' && s.position !== 'sticky') continue;
+          if (!visible(node)) continue;
+          // Make sure there's at least one clickable thing inside.
+          if (!node.querySelector('a, button, [role="button"], input[type="submit"], input[type="button"]')) continue;
+          containers.push(node);
+        }
+        // 3. Fallback: full-bleed overlay div even when not positioned
+        //    fixed (covers banner SDKs that forgot to position themselves).
+        if (containers.length === 0) {
+          var all = document.querySelectorAll('body *');
+          for (var a = 0; a < all.length; a++) {
+            var node2 = all[a];
+            if (containers.indexOf(node2) !== -1) continue;
+            if (!visible(node2)) continue;
+            if (!node2.querySelector('a, button, [role="button"], input[type="submit"], input[type="button"]')) continue;
+            containers.push(node2);
+          }
+        }
+        if (containers.length === 0) {
+          return JSON.stringify({ ok: false, label: '', tier: -1, reason: 'no-banner' });
+        }
+        // Score every clickable button across every visible container; pick
+        // the one with the lowest tier number. Ties broken by element area
+        // (bigger button == more likely to be the banner's primary action).
+        var best = null, bestTier = 999, bestArea = 0;
+        for (var i2 = 0; i2 < containers.length; i2++) {
+          var cont = containers[i2];
+          var candidates = cont.querySelectorAll('a, button, [role="button"], input[type="submit"], input[type="button"]');
+          for (var c2 = 0; c2 < candidates.length; c2++) {
+            var cand = candidates[c2];
+            if (!visible(cand)) continue;
+            var lab = labelOf(cand);
+            var t = tierScore(lab);
+            if (t < 0) continue;
+            var rect = cand.getBoundingClientRect();
+            var area = rect.width * rect.height;
+            if (t < bestTier || (t === bestTier && area > bestArea)) {
+              best = cand; bestTier = t; bestArea = area; best.__rsLabel = lab;
+            }
+          }
+        }
+        // If nothing in any visible container scored a label, fall back to
+        // clicking the topmost visible fixed element's biggest button —
+        // better than nothing on banner SDKs we couldn't recognize.
+        if (!best) {
+          var cont2 = containers[0];
+          var bigFallback = null, bigArea2 = 0;
+          var fcands = cont2.querySelectorAll('a, button, [role="button"], input[type="submit"], input[type="button"]');
+          for (var c3 = 0; c3 < fcands.length; c3++) {
+            var cand2 = fcands[c3];
+            if (!visible(cand2)) continue;
+            var rr = cand2.getBoundingClientRect();
+            var aa = rr.width * rr.height;
+            if (aa > bigArea2) { bigFallback = cand2; bigArea2 = aa; }
+          }
+          if (bigFallback) {
+            bigFallback.__rsLabel = labelOf(bigFallback);
+            bigFallback.click();
+            return JSON.stringify({ ok: true, label: bigFallback.__rsLabel, tier: 99, reason: 'fallback-no-label' });
+          }
+          return JSON.stringify({ ok: false, label: '', tier: -1, reason: 'no-clickable' });
+        }
+        best.click();
+        return JSON.stringify({ ok: true, label: best.__rsLabel, tier: bestTier, reason: 'matched' });
+      } catch (err) {
+        return JSON.stringify({ ok: false, label: '', tier: -1, reason: 'exception:' + (err && err.message ? err.message : 'unknown') });
+      }
+    })();
+    """
+
+    /// Second-pass JS used to confirm a banner really did leave the DOM.
+    /// Reruns the same container scan, but only checks for presence — it
+    /// does not click. If the page now looks clean we report `verified: true`
+    /// so the Swift side can confidently say the banner is gone.
+    private static let consentDismisserVerifyJS = """
+    (function () {
+      try {
+        function visible(el) {
+          if (!el) return false;
+          var r = el.getBoundingClientRect();
+          if (r.width <= 0 || r.height <= 0) return false;
+          var s = window.getComputedStyle(el);
+          if (s.visibility === 'hidden' || s.display === 'none') return false;
+          if (parseFloat(s.opacity || '1') <= 0) return false;
+          return true;
+        }
+        var knownIds = ['onetrust-banner-sdk','onetrust-consent-sdk','CybotCookiebotDialog','CybotCookiebotDialogBodyUnderlay','cookie-law-info-bar','cky-notification','truste-consent-track','termly-console','iubenda-cs-banner'];
+        var hit = null;
+        for (var k = 0; k < knownIds.length; k++) {
+          var el = document.getElementById(knownIds[k]);
+          if (el && visible(el)) { hit = knownIds[k]; break; }
+          var q = document.querySelector('[id*="' + knownIds[k] + '"]');
+          if (q && visible(q)) { hit = knownIds[k] + '*'; break; }
+        }
+        if (hit) return JSON.stringify({ verified: false, detector: hit });
+        // No known banner left. Scan for any fixed element containing a
+        // recognizable consent label — if one is still visible the click
+        // didn't take.
+        var labels = ['accept all','reject all','accept','reject','cookie','consent','gdpr','privacy'];
+        var all = document.querySelectorAll('*');
+        for (var i = 0; i < all.length; i++) {
+          var node = all[i];
+          var s = window.getComputedStyle(node);
+          if (s.position !== 'fixed' && s.position !== 'sticky') continue;
+          if (!visible(node)) continue;
+          var txt = (node.innerText || '').toLowerCase();
+          for (var j = 0; j < labels.length; j++) {
+            if (txt.indexOf(labels[j]) !== -1) {
+              return JSON.stringify({ verified: false, detector: labels[j] });
+            }
+          }
+        }
+        return JSON.stringify({ verified: true });
+      } catch (err) {
+        return JSON.stringify({ verified: false, detector: 'exception' });
+      }
+    })();
+    """
+
+    /// Shape of the JSON the consent dismisser JS returns. Local to this
+    /// file so we don't pollute the public models namespace with a debug-only
+    /// summary type.
+    private struct ConsentAttempt: Decodable {
+        let ok: Bool?
+        let label: String?
+        let tier: Int?
+        let reason: String?
+    }
+    private struct ConsentVerify: Decodable {
+        let verified: Bool
+        let detector: String?
+    }
+
+    /// Turn the two raw JSON strings into a friendly `(ok, note)` tuple.
+    /// "ok" means the banner is genuinely gone (clicked + verified); the
+    /// note is what we tell the user, which can be more nuanced than the
+    /// raw label.
+    private static func parseConsentResult(
+        first: String?,
+        second: String?
+    ) -> (ok: Bool, note: String) {
+        let attempt = (first?.data(using: .utf8)).flatMap {
+            try? JSONDecoder().decode(ConsentAttempt.self, from: $0)
+        }
+        let verify = (second?.data(using: .utf8)).flatMap {
+            try? JSONDecoder().decode(ConsentVerify.self, from: $0)
+        }
+        // No banner detected at all — caller usually wants to treat this
+        // as a soft "nothing to do" rather than a failure.
+        if let attempt, attempt.reason == "no-banner" {
+            return (false, "No consent banner detected.")
+        }
+        if let attempt, attempt.reason == "no-clickable" {
+            return (false, "Found a banner but no clickable controls.")
+        }
+        if let attempt, let ok = attempt.ok, !ok {
+            return (false, "Couldn't dismiss the banner.")
+        }
+        // A click happened. If verification says the banner is still around
+        // surface that — the click may have been a no-op or the SDK kept
+        // the container alive for animation.
+        let stillThere: String? = {
+            guard let verify else { return nil }
+            return verify.verified ? nil : (verify.detector ?? "banner")
+        }()
+        if let label = attempt?.label, !label.isEmpty {
+            switch attempt?.tier {
+            case 0: return (stillThere == nil, "Dismissed consent banner (\u{201C}\(label)\u{201D}).")
+            case 1: return (stillThere == nil, "Dismissed non-essential cookies (\u{201C}\(label)\u{201D}).")
+            case 2: return (stillThere == nil, "Accepted essential cookies only (\u{201C}\(label)\u{201D}).")
+            case 3: return (stillThere == nil, "Opened cookie settings (\u{201C}\(label)\u{201D}).")
+            case 4: return (stillThere == nil, "Dismissed banner (\u{201C}\(label)\u{201D}).")
+            default: return (stillThere == nil, "Dismissed banner (\u{201C}\(label)\u{201D}).")
+            }
+        }
+        return (stillThere == nil, "Dismissed banner.")
+    }
+
+    // MARK: - Compressed snapshot for model grounding
+
+    /// Compressed version of `takeSnapshot` sized for shipping alongside a
+    /// model prompt. Caps the longest edge at `maxDimension` (default 1024)
+    /// and re-encodes as JPEG at ~0.7 quality, so a full iPad-class viewport
+    /// comes out well under 400 KB — comfortably small for both cloud and
+    /// local providers.
+    ///
+    /// Returns `nil` for snapshot failures (canvas-only pages, mixed content
+    /// blocks, etc.) — callers must handle that gracefully and fall back to
+    /// text-only grounding.
+    func takeCompressedSnapshot(maxDimension: CGFloat = 1024) async -> UIImage? {
+        guard let image = await takeSnapshot() else { return nil }
+        let size = image.size
+        guard size.width > 0, size.height > 0 else { return nil }
+        let longest = max(size.width, size.height)
+        if longest <= maxDimension {
+            return image
+        }
+        let scale = maxDimension / longest
+        let target = CGSize(
+            width: floor(size.width * scale),
+            height: floor(size.height * scale)
+        )
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        format.opaque = true
+        let renderer = UIGraphicsImageRenderer(size: target, format: format)
+        let resized = renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: target))
+        }
+        guard let jpeg = resized.jpegData(compressionQuality: 0.7) else { return nil }
+        return UIImage(data: jpeg)
+    }
+
     // MARK: - AI "finger" pointer overlay
     //
     // Renders a magical rainbow pointer + sparkle trail at the element the
