@@ -36,6 +36,14 @@ import {
   isSupportedTool,
   launchTool,
 } from './open/index.js';
+import {
+  detectPlatform,
+  formatStatus,
+  installService,
+  parseServiceFlags,
+  serviceStatus,
+  uninstallService,
+} from './service.js';
 
 export interface CliMainOptions {
   argv?: string[];
@@ -55,6 +63,9 @@ Usage:
   roamsocket --tui                   Launch the legacy Ink coding agent UI in this terminal
   roamsocket open <tool>             Print exports + launch an external coding CLI
                                        (codex, claude, aider, cursor, opencode)
+  roamsocket install-service         Install as a launchd/systemd/sc service (auto-start)
+  roamsocket uninstall-service       Remove the installed service
+  roamsocket service status          Show whether the installed service is running
   roamsocket --serve-only            Headless server only (no TUI, no auto-launch)
 
 Options:
@@ -67,6 +78,11 @@ Options:
   --no-launch        Don't auto-launch a tool even if APC_OPEN_IN is set
   --help, -h         Show this help
 
+Service flags (install-service / uninstall-service / service status):
+  --user             Per-user service (no sudo; default)
+  --system           System-wide service (requires sudo on mac/linux; admin on Windows)
+  --no-start         Install without starting (default: start after install)
+
 Environment:
   PORT                 Listen port (default 4319)
   APC_MOCK=1           Mock agent
@@ -75,6 +91,8 @@ Environment:
                          (codex | claude | aider | cursor | opencode)
   APC_PROXY_TOKEN=<…>  Static bearer for /v1/* (else a random token is minted)
   APC_PROXY_PROVIDER   Default upstream when X-RoamSocket-Provider isn't sent
+  APC_PRINT_JSON=1     Print a __ROAMSOCKET_READY__ JSON line on stdout (used by
+                         the iOS SSH auto-setup to fetch pairing code + tunnel URL)
   ANTHROPIC_API_KEY / OPENAI_API_KEY / …   Provider keys
 
 The default is headless so external coding CLIs can use the desktop's keys
@@ -94,6 +112,8 @@ function parseArgs(argv: string[]) {
   let help = false;
   let openTool: string | undefined;
   const openArgs: string[] = [];
+  let subcommand: 'install-service' | 'uninstall-service' | 'service' | undefined;
+  const subcommandArgs: string[] = [];
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -119,10 +139,35 @@ function parseArgs(argv: string[]) {
       // Everything after the tool name is forwarded to it.
       openArgs.push(...argv.slice(i + 1));
       break;
+    } else if (a === 'install-service') {
+      subcommand = 'install-service';
+      subcommandArgs.push(...argv.slice(i + 1));
+      break;
+    } else if (a === 'uninstall-service') {
+      subcommand = 'uninstall-service';
+      subcommandArgs.push(...argv.slice(i + 1));
+      break;
+    } else if (a === 'service') {
+      subcommand = 'service';
+      subcommandArgs.push(...argv.slice(i + 1));
+      break;
     }
   }
 
-  return { serveOnly, tui, noLaunch, cwd, provider, model, mock, help, openTool, openArgs };
+  return {
+    serveOnly,
+    tui,
+    noLaunch,
+    cwd,
+    provider,
+    model,
+    mock,
+    help,
+    openTool,
+    openArgs,
+    subcommand,
+    subcommandArgs,
+  };
 }
 
 /**
@@ -162,6 +207,63 @@ export async function main(opts: CliMainOptions = {}): Promise<void> {
   if (args.help) {
     printHelp();
     return;
+  }
+
+  // System-service subcommands short-circuit before any model/server setup.
+  // They don't need provider keys and don't touch the agent loop.
+  if (args.subcommand) {
+    const flags = parseServiceFlags(args.subcommandArgs);
+    if (flags.help) {
+      console.log(`roamsocket ${args.subcommand} [--user|--system] [--no-start]
+  --user      Per-user service (no sudo; default on mac/linux)
+  --system    System-wide service (sudo on mac/linux; admin on Windows)
+  --no-start  Install/uninstall without starting the service`);
+      return;
+    }
+    const platform = detectPlatform();
+    if (platform === 'unsupported') {
+      console.error(
+        `Unsupported platform: ${process.platform}. Service install/uninstall is only implemented for macOS, Linux, and Windows.`
+      );
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      if (args.subcommand === 'install-service') {
+        const res = await installService({ scope: flags.scope, start: flags.start });
+        if (res.ok) {
+          console.log(
+            `Installed ${res.platform}/${res.scope} service at ${res.unitPath}${
+              res.started ? ' and started it.' : ' (not started; pass --no-start to keep it that way, or omit to start).'
+            }`
+          );
+        } else {
+          console.error(`Failed to install service: ${res.detail ?? 'unknown error'}`);
+          process.exitCode = 1;
+        }
+        return;
+      }
+      if (args.subcommand === 'uninstall-service') {
+        const res = await uninstallService({ scope: flags.scope });
+        if (res.ok) {
+          console.log(`Uninstalled ${res.platform}/${res.scope} service.`);
+        } else {
+          console.error(`Failed to uninstall service: ${res.detail ?? 'unknown error'}`);
+          process.exitCode = 1;
+        }
+        return;
+      }
+      // `service status` — subcommandArgs may include an action word like
+      // `status`; the rest are flags (--user/--system).
+      const status = await serviceStatus({ scope: flags.scope });
+      console.log(formatStatus(status));
+      process.exitCode = status.running ? 0 : status.installed ? 0 : 1;
+      return;
+    } catch (err) {
+      console.error(`Service ${args.subcommand} threw: ${(err as Error).message}`);
+      process.exitCode = 1;
+      return;
+    }
   }
 
   // `roamsocket open <tool>` is its own flow — start the server, print the

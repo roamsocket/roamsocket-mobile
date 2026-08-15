@@ -77,6 +77,40 @@ Headless TTY sessions also open a **CLI settings** prompt (`settings>`) for
 LAN discovery, auto-tunnel, and code display. Type `h` for help, `q` to leave
 the menu (server keeps running).
 
+### Install as a system service (auto-start at boot / login)
+
+```bash
+roamsocket install-service             # per-user launchd (mac) / systemd (linux)
+roamsocket install-service --system    # system-wide (sudo / admin)
+roamsocket install-service --no-start  # install the unit but don't start it yet
+roamsocket uninstall-service           # reverse
+roamsocket service status              # is the service installed + running?
+```
+
+What it does on each platform:
+
+| Platform | User scope | System scope |
+|----------|-----------|--------------|
+| **macOS** | `~/Library/LaunchAgents/ai.roamsocket.server.plist` + `launchctl load -w` | `/Library/LaunchDaemons/ai.roamsocket.server.plist` (needs sudo) |
+| **Linux** | `~/.config/systemd/user/roamsocket.service` + `systemctl --user enable --now` | `/etc/systemd/system/roamsocket.service` (needs sudo) |
+| **Windows** | not supported — services are system-wide | `sc.exe create roamsocket …` (admin shell) |
+
+The unit / plist runs `roamsocket --serve-only` (or `node bin/roamsocket.js --serve-only` if no global install is found), restarts on crash, and uses your stored provider keys from `~/.roamsocket/cli-secrets.json`. Logs go to `/tmp/roamsocket.log` on macOS and to `journalctl` on Linux.
+
+### SSH auto-setup (used by the iOS app)
+
+When the iOS app's *Pair server → Auto-setup over SSH* runs, it SSHes into the
+remote machine and starts the server with `APC_PRINT_JSON=1`. As soon as the
+HTTP port is listening (and a public tunnel is up if `APC_AUTO_TUNNEL=1`), the
+server prints a single sentinel-prefixed line to stdout:
+
+```
+__ROAMSOCKET_READY__ {"type":"roamsocket_ready","port":4319,"host":"0.0.0.0","pairingCode":"123456","serverName":"RoamSocket desktop","version":"0.2.0","publicUrl":"https://…trycloudflare.com","proxyBaseUrl":"http://127.0.0.1:4319"}
+```
+
+The iOS SSH client splits on the `__ROAMSOCKET_READY__` sentinel and uses
+`publicUrl` + `pairingCode` to finish pairing through the existing flow.
+
 ### Electron app (GUI)
 
 ```bash
@@ -105,6 +139,7 @@ To really quit: tray menu → *Quit RoamSocket*, or `Cmd-Q` on macOS.
 | `APC_AUTO_TUNNEL` | on | set `0` to disable auto public tunnel after phone pair |
 | `APC_CLI_SETTINGS` | on (TTY, serve-only) | set `0` to skip the interactive settings prompt |
 | `APC_MOCK` | unset | `1` runs a deterministic offline agent (no API key) |
+| `APC_PRINT_JSON` | unset | `1` prints a `__ROAMSOCKET_READY__` JSON line on stdout once listening (used by the iOS SSH auto-setup) |
 
 Shared connection prefs live under `~/.roamsocket/` (or legacy `~/.roamsocket/` / `~/.anyprov-code/` if already present) as `desktop-prefs.json` (Electron
 settings UI and the CLI menu edit the same file).

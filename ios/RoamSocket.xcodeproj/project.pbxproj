@@ -34,6 +34,7 @@
 		35C26FE21EAA1FEB8038D29C /* VoiceChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B60D77C1553A67514FAC8384 /* VoiceChatView.swift */; };
 		36BED9EA25AEEBBF9CCB1855 /* GuidedLearningViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 235644045586C3090E69F828 /* GuidedLearningViewModel.swift */; };
 		36D95BE4FFAAB05BA1BF5A90 /* EdgeFreeTTSService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4CA05F0A7F773278DAEE431 /* EdgeFreeTTSService.swift */; };
+		380A77660571C17E03718AFC /* SSHAutoSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B8A4BF42960BD664E65C598 /* SSHAutoSetupView.swift */; };
 		380E6AB4B7DEB3A397F94666 /* CodeHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A108E2EB3FEB7EF658927B5 /* CodeHomeView.swift */; };
 		3BD8B485FEA333721E8C4F46 /* SessionConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60FF1C1103A89972C557F418 /* SessionConfig.swift */; };
 		3E7A3F57B487D9B6C6567D27 /* StudyFlashcardCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B388DA1635D53AC9A50BCB55 /* StudyFlashcardCardView.swift */; };
@@ -252,6 +253,7 @@
 		82FC70BD52C9A49A33BFACE6 /* NewSessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewSessionView.swift; sourceTree = "<group>"; };
 		84CE2A5843612EAEEEBD8DEC /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		857FC93A399636F79301B819 /* LightweightTasksSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LightweightTasksSettings.swift; sourceTree = "<group>"; };
+		8B8A4BF42960BD664E65C598 /* SSHAutoSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHAutoSetupView.swift; sourceTree = "<group>"; };
 		8BAED357FB143CAA4A585022 /* GalleryPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryPicker.swift; sourceTree = "<group>"; };
 		8DDB8096BD8EDC931A40E9D0 /* PreviewSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewSheets.swift; sourceTree = "<group>"; };
 		8E6BDFEC5407686C57AE778B /* MarkdownContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownContentView.swift; sourceTree = "<group>"; };
@@ -680,6 +682,7 @@
 				2A2E1E4E5900A3B1A176BA38 /* MarketplaceSettingsView.swift */,
 				FCFCDDBCB421E72768436B69 /* PairQRScannerView.swift */,
 				2F2D62CFB337D25D6AEEC04E /* ServerPairingView.swift */,
+				8B8A4BF42960BD664E65C598 /* SSHAutoSetupView.swift */,
 				C6988A4059DBA7C6CB7C9083 /* UserMemoryStore.swift */,
 			);
 			path = Settings;
@@ -848,6 +851,7 @@
 			mainGroup = 411FE3F394E4A7BEDD039D4D;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				525F2A3FF8EEB87D0328B4B3 /* XCRemoteSwiftPackageReference "Citadel" */,
 				573760594E69C3D9A5C9FD73 /* XCRemoteSwiftPackageReference "Highlightr" */,
 				0A4C7753154C37A4CD690E3C /* XCRemoteSwiftPackageReference "swift-markdown-ui" */,
 				FDE92795AC9F232C6290CDDC /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
@@ -974,6 +978,7 @@
 				CE984FB513D3BBDC93DDFBE3 /* RoamSocketApp.swift in Sources */,
 				73989B35FAE3E446FFA2B2C8 /* RoamSocketShortcutsProvider.swift in Sources */,
 				EDD0A4F1757206B2284C2004 /* RootView.swift in Sources */,
+				380A77660571C17E03718AFC /* SSHAutoSetupView.swift in Sources */,
 				072C0E480133711A2D05B729 /* SchoolClasses.swift in Sources */,
 				46D64F1B9A0276D4C7F3971A /* ServerPairingView.swift in Sources */,
 				3BD8B485FEA333721E8C4F46 /* SessionConfig.swift in Sources */,
@@ -1372,6 +1377,14 @@
 			requirement = {
 				kind = upToNextMajorVersion;
 				minimumVersion = 2.4.0;
+			};
+		};
+		525F2A3FF8EEB87D0328B4B3 /* XCRemoteSwiftPackageReference "Citadel" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/orlandos-nl/Citadel.git";
+			requirement = {
+				kind = revision;
+				revision = ae8562f895de06ccb86fdb1cbb65fd99c8976e12;
 			};
 		};
 		573760594E69C3D9A5C9FD73 /* XCRemoteSwiftPackageReference "Highlightr" */ = {

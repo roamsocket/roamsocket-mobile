@@ -59,16 +59,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { advertiseServer, lanIPv4Addresses } from './discovery.js';
-import {
-  loadDesktopPrefs,
-  resolveAdvertise,
-  resolveAutoTunnel,
-} from './desktop-config.js';
-import {
-  printPairingBanner,
-  printTunnelReadyBanner,
-  resolvePairHost,
-} from './cli/banner.js';
+import { loadDesktopPrefs, resolveAdvertise, resolveAutoTunnel } from './desktop-config.js';
+import { printPairingBanner, printTunnelReadyBanner, resolvePairHost } from './cli/banner.js';
 import { runSettingsMenu } from './cli/settings-menu.js';
 import { getMetalStore, getMetalRuntimeStatus, METAL_PROVIDER_ID } from './metal/index.js';
 
@@ -184,9 +176,9 @@ async function loadSyncConfig(): Promise<SyncConfig> {
       token: process.env.APC_MCP_TOKEN ?? json.mcpRepo?.token ?? '',
     },
     memoryRepo: {
-      url: process.env.APC_MEMORY_REPO ?? json.memoryRepo?.url ?? "",
-      branch: process.env.APC_MEMORY_BRANCH ?? json.memoryRepo?.branch ?? "main",
-      token: process.env.APC_MEMORY_TOKEN ?? json.memoryRepo?.token ?? "",
+      url: process.env.APC_MEMORY_REPO ?? json.memoryRepo?.url ?? '',
+      branch: process.env.APC_MEMORY_BRANCH ?? json.memoryRepo?.branch ?? 'main',
+      token: process.env.APC_MEMORY_TOKEN ?? json.memoryRepo?.token ?? '',
     },
     author: {
       name: process.env.APC_AUTHOR_NAME ?? json.author?.name ?? 'RoamSocket',
@@ -319,9 +311,7 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
   // in the env, use it verbatim so users can pin one token across restarts.
   // Otherwise mint a fresh token — the running process is the trust boundary
   // and we never persist this anywhere.
-  const proxyToken =
-    (process.env.APC_PROXY_TOKEN ?? "").trim() ||
-    randomBytes(24).toString("hex");
+  const proxyToken = (process.env.APC_PROXY_TOKEN ?? '').trim() || randomBytes(24).toString('hex');
   // Filled in after listen; banner uses the actual port.
   let proxyBaseUrl = `http://127.0.0.1:${port}`;
 
@@ -332,7 +322,7 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
     verifyPairToken: (token) => Boolean(pairing.verify(token)),
     verifyProxyToken: (token) => {
       if (!token) return false;
-      const env = (process.env.APC_PROXY_TOKEN ?? "").trim();
+      const env = (process.env.APC_PROXY_TOKEN ?? '').trim();
       return token === env || token === proxyToken;
     },
     onRequest: ({ provider, path, status }) => {
@@ -744,7 +734,9 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
       // Aider / Cursor / OpenCode) know where to point.
       console.log(`Proxy: ${proxyBaseUrl}/v1`);
       console.log(`Proxy token: ${proxyToken}`);
-      console.log(`Run \`roamsocket open codex|claude|aider|cursor|opencode\` to launch one of them.`);
+      console.log(
+        `Run \`roamsocket open codex|claude|aider|cursor|opencode\` to launch one of them.`
+      );
     }
     if (openCliSettings) {
       console.log('CLI settings: type a command at the prompt (h = help, q = leave menu).\n');
@@ -774,6 +766,23 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
 
   opts.onReady?.({ port: boundPort, host, pairingCode });
 
+  // Machine-readable bootstrap for headless provisioning flows (e.g. the
+  // iOS app's SSH auto-setup). When APC_PRINT_JSON=1 is set, we print one
+  // sentinel-prefixed JSON line as soon as the server is ready and (if
+  // auto-tunnel is enabled) a public URL is available. The sentinel lets
+  // the consumer split the JSON out of arbitrary log noise.
+  if (process.env.APC_PRINT_JSON === '1') {
+    void printReadyJson({
+      port: boundPort,
+      host,
+      pairingCode: pairing.pairingCode,
+      serverName,
+      version,
+      proxyBaseUrl,
+      autoTunnel: shouldAutoTunnel,
+    });
+  }
+
   return {
     port: boundPort,
     host,
@@ -790,6 +799,49 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
       await new Promise<void>((resolve) => server.close(() => resolve()));
     },
   };
+}
+
+/**
+ * Print a single sentinel-prefixed JSON line describing the live server,
+ * waiting up to 30s for a public tunnel URL when auto-tunnel is on. Best-
+ * effort: prints whatever we have (no URL = LAN-only pairing) on timeout
+ * or failure.
+ */
+async function printReadyJson(info: {
+  port: number;
+  host: string;
+  pairingCode: string;
+  serverName: string;
+  version: string;
+  proxyBaseUrl: string;
+  autoTunnel: boolean;
+}): Promise<void> {
+  let publicUrl: string | null = null;
+  if (info.autoTunnel) {
+    try {
+      const tunnel = await ensureAccessTunnel({ port: info.port, waitMs: 30_000 });
+      if (tunnel.url && (tunnel.status === 'up' || tunnel.status === 'starting')) {
+        publicUrl = tunnel.url;
+      }
+    } catch {
+      // best-effort; fall through with publicUrl=null
+    }
+  } else {
+    publicUrl = currentAccessTunnel()?.url ?? null;
+  }
+  const payload = {
+    type: 'roamsocket_ready',
+    port: info.port,
+    host: info.host,
+    pairingCode: info.pairingCode,
+    serverName: info.serverName,
+    version: info.version,
+    publicUrl,
+    proxyBaseUrl: info.proxyBaseUrl,
+  };
+  // Sentinel line on its own row so the consumer can split on it even if
+  // other logs interleave with stdout buffering quirks.
+  console.log(`\n__ROAMSOCKET_READY__ ${JSON.stringify(payload)}\n`);
 }
 
 /**
@@ -916,9 +968,9 @@ async function pushInitialSync(emit: (msg: ServerMessage) => void, cfg: SyncConf
   if (cfg.memoryRepo.url) {
     try {
       const entries = await syncMemoryRepo(cfg.memoryRepo, cfg.memoryRepo.token || undefined);
-      emit({ type: "memory_sync", entries });
+      emit({ type: 'memory_sync', entries });
     } catch (err) {
-      emit({ type: "error", message: `Memory sync failed: ${(err as Error).message}` });
+      emit({ type: 'error', message: `Memory sync failed: ${(err as Error).message}` });
     }
   }
 }
