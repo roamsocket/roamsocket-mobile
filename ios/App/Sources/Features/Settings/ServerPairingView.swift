@@ -1,7 +1,7 @@
-import SwiftUI
 import AnyProvCore
+import SwiftUI
 #if canImport(UIKit)
-import UIKit
+    import UIKit
 #endif
 
 /// Pair with a running desktop server by picking a LAN-discovered host or
@@ -17,6 +17,7 @@ struct ServerPairingView: View {
     @State private var status = ""
     @State private var busy = false
     @State private var showScanner = false
+    @State private var showSSHSetup = false
 
     var body: some View {
         Form {
@@ -34,6 +35,30 @@ struct ServerPairingView: View {
                                 .font(.system(size: 16, weight: .medium))
                                 .foregroundStyle(Theme.textPrimary)
                             Text("Scan the code shown in the desktop app or terminal")
+                                .font(.footnote)
+                                .foregroundStyle(Theme.textSecondary)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Theme.textTertiary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                Button {
+                    showSSHSetup = true
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "terminal.fill")
+                            .font(.system(size: 20, weight: .medium))
+                            .foregroundStyle(Theme.accent)
+                            .frame(width: 28)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Auto-setup over SSH")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundStyle(Theme.textPrimary)
+                            Text("Install the server on a remote box and pair from here")
                                 .font(.footnote)
                                 .foregroundStyle(Theme.textSecondary)
                         }
@@ -121,7 +146,9 @@ struct ServerPairingView: View {
                     .keyboardType(.numberPad)
                 Button("Pair", action: pair)
                     .disabled(busy || code.isEmpty || host.isEmpty)
-                if busy { ProgressView() }
+                if busy {
+                    ProgressView()
+                }
                 if !status.isEmpty {
                     Text(status).font(.footnote).foregroundStyle(Theme.textSecondary)
                 }
@@ -174,6 +201,9 @@ struct ServerPairingView: View {
                     : "QR scanned. Review and tap Pair."
             }
         }
+        .sheet(isPresented: $showSSHSetup) {
+            NavigationStack { SSHAutoSetupView() }
+        }
         .onAppear {
             if !state.serverHost.isEmpty {
                 host = state.serverHost
@@ -197,11 +227,13 @@ struct ServerPairingView: View {
                 let response = try await state.serverClient.pair(
                     endpoint: endpoint,
                     code: code,
-                    deviceName: deviceName())
+                    deviceName: deviceName()
+                )
                 // Prefer an already-running public URL from the pair response.
                 let initialURL = response.publicUrl?.trimmingCharacters(in: .whitespacesAndNewlines)
                 if let initialURL, !initialURL.isEmpty,
-                   let publicEndpoint = ServerClient.Endpoint(host: initialURL) {
+                   let publicEndpoint = ServerClient.Endpoint(host: initialURL)
+                {
                     state.savePairing(
                         endpoint: publicEndpoint,
                         token: response.token,
@@ -234,9 +266,9 @@ struct ServerPairingView: View {
 
     private func deviceName() -> String {
         #if os(iOS)
-        return UIDevice.current.name
+            return UIDevice.current.name
         #else
-        return "Device"
+            return "Device"
         #endif
     }
 }

@@ -24,6 +24,13 @@ packages:
   swift-transformers:
     url: https://github.com/huggingface/swift-transformers
     from: 1.3.0
+  # SSH client used by the iOS "Auto-setup over SSH" flow. Citadel is a
+  # SwiftNIO-based SSH library (https://github.com/orlandos-nl/Citadel).
+  # Pinned to a main-branch commit because no tagged release exposes the
+  # exec API yet — see AnyProvCore/Package.swift for the same pin.
+  Citadel:
+    url: https://github.com/orlandos-nl/Citadel.git
+    revision: ae8562f895de06ccb86fdb1cbb65fd99c8976e12
 
 targets:
   RoamSocket:

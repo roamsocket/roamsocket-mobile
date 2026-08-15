@@ -4,7 +4,7 @@ import Foundation
 /// bearer token, then a WebSocket carrying the agent protocol. Inbound frames
 /// are exposed as an `AsyncStream<ServerMessage>`.
 public actor ServerClient {
-    public struct Endpoint: Sendable {
+    public struct Endpoint: Sendable, Equatable, Hashable {
         /// e.g. "http://192.168.1.20:4319"
         public let baseURL: URL
         public init(baseURL: URL) { self.baseURL = baseURL }
