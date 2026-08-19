@@ -1,5 +1,7 @@
 package app.roamsocket.android.ui
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
@@ -7,6 +9,7 @@ import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
@@ -16,10 +19,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
 import app.roamsocket.android.R
+import app.roamsocket.android.ui.chat.ChatScreen
 
 /**
  * Top-level shell mirroring the iOS `RootView` (sidebar + tab bar) but
@@ -52,11 +58,25 @@ fun RootView() {
             }
         },
     ) { padding ->
-        // Placeholder content per tab. Each tab is replaced by its real
-        // feature screen as the corresponding iOS feature gets ported.
+        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+            when (current) {
+                0 -> ChatScreen()
+                else -> PlaceholderTab(label = stringResource(tabs[current].labelRes))
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlaceholderTab(label: String) {
+    Box(
+        modifier = Modifier.fillMaxSize().padding(32.dp),
+        contentAlignment = Alignment.Center,
+    ) {
         Text(
-            text = stringResource(tabs[current].labelRes),
-            modifier = Modifier.padding(padding),
+            text = "$label — port coming in a later PR.",
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
