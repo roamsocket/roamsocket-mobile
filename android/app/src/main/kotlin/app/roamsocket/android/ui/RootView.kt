@@ -26,6 +26,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import app.roamsocket.android.R
 import app.roamsocket.android.ui.chat.ChatScreen
+import app.roamsocket.android.ui.code.CodeScreen
 
 /**
  * Top-level shell mirroring the iOS `RootView` (sidebar + tab bar) but
@@ -61,6 +62,7 @@ fun RootView() {
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             when (current) {
                 0 -> ChatScreen()
+                1 -> CodeScreen()
                 else -> PlaceholderTab(label = stringResource(tabs[current].labelRes))
             }
         }
