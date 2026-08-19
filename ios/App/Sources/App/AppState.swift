@@ -1957,9 +1957,17 @@ final class AppState: ObservableObject {
             return model
         case .code:
             guard model.provider.supportsCodingAgent else { return nil }
+            // A stored default whose key was removed (or whose Metal weights
+            // are phone-only) shouldn't get applied — `applyDefault` would
+            // otherwise write it to `selectedModel` and the composer would
+            // show "+ Add a model" because `modelSelectionForSession` rejects
+            // it. Drop it here so the next call site can fall through to the
+            // catalog fallback.
+            guard isUsableForLane(model, kind: .code) else { return nil }
             return model
         case .vision:
             guard modelSupportsVision(model) else { return nil }
+            guard isUsableForLane(model, kind: .vision) else { return nil }
             return model
         case .lightweight:
             // Lightweight jobs are short and cost-sensitive — phone Metal /
@@ -2001,20 +2009,41 @@ final class AppState: ObservableObject {
     /// current selection doesn't already satisfy the lane's requirements
     /// (per-chat / per-session overrides must survive). Returns the model
     /// that ended up as `selectedModel` after the call (either the existing
-    /// one, the default we just applied, or `nil`).
+    /// one, the default we just applied, a catalog fallback, or `nil`).
+    ///
+    /// Fallback order when the current selection doesn't meet the lane:
+    /// 1. The user's stored default (if it's still usable).
+    /// 2. The first lane-usable model in the live catalog (code + vision
+    ///    only). This avoids the composer rendering "+ Add a model" when the
+    ///    user has any provider configured with a key but no explicit lane
+    ///    default — e.g. they set a chat default to Apple Intelligence and
+    ///    have Anthropic with a key, then tap Code mode.
+    /// 3. Leave `selectedModel` alone.
     @discardableResult
     func applyDefault(for kind: DefaultModelKind) -> AIModel? {
         // If current selection already satisfies this lane, leave it alone.
         if let current = selectedModel, modelMeetsLane(current, kind: kind) {
             return current
         }
-        guard let def = defaultModel(for: kind) else {
-            return selectedModel
+        if let def = defaultModel(for: kind) {
+            if selectedModel?.id != def.id {
+                selectedModel = def
+            }
+            return def
         }
-        if selectedModel?.id != def.id {
-            selectedModel = def
+        // No usable stored default. For code + vision, scan the catalog for
+        // any visible model we can run right now so the composer doesn't
+        // render "+ Add a model" when the user has configured a provider
+        // with a key but no lane-specific default. Lightweight is permissive
+        // (`modelMeetsLane` accepts anything) and the chat path is handled
+        // by `applyDefault(for: .chat)` callers / `autoPickSelectionIfNeeded`
+        // — both intentionally fall through to a no-op here.
+        if kind == .code || kind == .vision,
+           let fallback = firstUsableModel(for: kind),
+           fallback.id != selectedModel?.id {
+            selectedModel = fallback
         }
-        return def
+        return selectedModel
     }
 
     /// Whether `model` is a valid selection for this lane.
@@ -2036,6 +2065,53 @@ final class AppState: ObservableObject {
             // and never reaches this path — it's a separate "no-id" branch.
             return true
         }
+    }
+
+    /// Whether `model` can actually be used right now for this lane (i.e. a
+    /// session / vision job could be started against it without further setup).
+    ///
+    /// Stricter than `modelMeetsLane`: same capability filter, plus a
+    /// resolved API key for cloud providers (and "installed on the paired
+    /// desktop" for local Metal on the code lane). The chat and lightweight
+    /// lanes always pass — chat / lightweight accept any explicit picker pick.
+    ///
+    /// Used by `defaultModel(for: .code/.vision)` to drop a stored default
+    /// whose provider key has been removed (the docstring on
+    /// `defaultModel(for:)` already lists "provider key removed" as a stale
+    /// state but the implementation was only checking capability) and by
+    /// `applyDefault(for: .code/.vision)` as the "pick a first usable
+    /// fallback from the catalog" criterion.
+    func isUsableForLane(_ model: AIModel, kind: DefaultModelKind) -> Bool {
+        switch kind {
+        case .chat:
+            return true
+        case .code:
+            guard model.provider.supportsCodingAgent else { return false }
+            if model.provider == .localMetal {
+                // Phone-local Metal can't drive the desktop agent — only models
+                // advertised by the paired server count. The display-suffix
+                // fallback mirrors `modelSelectionForSession` for models that
+                // were previously picked before the desktop inventory landed.
+                return isDesktopMetalModel(model)
+                    || model.displayName.contains("· Desktop")
+            }
+            return !resolvedAPIKey(for: model.provider).isEmpty
+        case .vision:
+            guard modelSupportsVision(model) else { return false }
+            if !model.provider.requiresAPIKey { return true }
+            return !resolvedAPIKey(for: model.provider).isEmpty
+        case .lightweight:
+            return true
+        }
+    }
+
+    /// First visible model in the live catalog that `isUsableForLane` accepts
+    /// for `kind`. Used by `applyDefault(for: .code/.vision)` when the current
+    /// selection doesn't meet the lane AND no explicit default is set, so the
+    /// composer doesn't render "+ Add a model" if the user has any usable
+    /// provider configured.
+    func firstUsableModel(for kind: DefaultModelKind) -> AIModel? {
+        allModels.first { isUsableForLane($0, kind: kind) }
     }
 
     // MARK: - Model aliases
