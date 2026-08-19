@@ -14,8 +14,11 @@ import app.roamsocket.core.storage.SecretStore
  */
 class AppContainer(application: Application) {
 
+    val applicationContext: android.content.Context = application.applicationContext
     val secretStore: SecretStore = EncryptedPrefsSecretStore(application)
     val userSettings: UserSettings = UserSettings(application)
+    val pairedServerStore: app.roamsocket.android.data.PairedServerStore =
+        app.roamsocket.android.data.PairedServerStore(application)
     val httpClient: HTTPClient = OkHttpHTTPClient()
 
     /** Resolve a chat client for the given [providerId], or null if unsupported. */
