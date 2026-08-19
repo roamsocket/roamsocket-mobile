@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Minimal launcher theme. Compose owns the rest of the styling
+         (see ui/theme/Theme.kt). We just need a Material 3 base so the
+         system bars look right before the first frame is drawn. -->
+    <style name="Theme.RoamSocket" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowBackground">@color/launcher_background</item>
+    </style>
+</resources>

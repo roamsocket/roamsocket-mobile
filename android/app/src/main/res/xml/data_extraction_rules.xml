@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Disable auto-backup of the keystore + provider keys. The user stores
+     secrets in EncryptedSharedPreferences; cloud backups would defeat that. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="roamsocket_secure_prefs.xml" />
+        <exclude domain="database" path="roamsocket.db" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="roamsocket_secure_prefs.xml" />
+    </device-transfer>
+</data-extraction-rules>

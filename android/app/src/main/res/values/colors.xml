@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Background of the launch window (before Compose draws). Matches
+         the dark palette in ui/theme/Color.kt. -->
+    <color name="launcher_background">#FF0B0D10</color>
+    <color name="ic_launcher_background">#FF0B0D10</color>
+</resources>
