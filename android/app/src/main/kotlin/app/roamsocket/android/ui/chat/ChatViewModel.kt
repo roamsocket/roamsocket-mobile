@@ -75,6 +75,13 @@ class ChatViewModel(
         viewModelScope.launch {
             container.userSettings.setCurrent(provider, firstModel)
             applySelection(provider, firstModel)
+            // Re-check the API key for the newly selected provider so the
+            // empty-state copy, the model pill's "Add a model" CTA, and
+            // the "No API key" error path all stay accurate after a
+            // provider switch. (init() only sets this for the initial
+            // provider.)
+            val apiKey = container.secretStore.readApiKey(provider)
+            _state.value = _state.value.copy(hasApiKey = !apiKey.isNullOrEmpty())
         }
     }
 
