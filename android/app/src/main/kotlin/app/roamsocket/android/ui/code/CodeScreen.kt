@@ -59,9 +59,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.roamsocket.android.data.PairedServer
 import app.roamsocket.android.ui.LocalOpenSidebar
+import app.roamsocket.android.ui.codesessions.CodeSessionList
 import app.roamsocket.android.ui.session.SessionConfig
 import app.roamsocket.android.ui.session.SessionModelSelection
 import app.roamsocket.android.ui.session.SessionScreen
+import app.roamsocket.core.code.CodeSession
 import app.roamsocket.core.protocol.RepoRef
 import app.roamsocket.core.providers.ProviderId
 import app.roamsocket.core.server.Endpoint
@@ -78,6 +80,7 @@ fun CodeScreen(viewModel: PairingViewModel = viewModel(factory = PairingViewMode
     val state by viewModel.state.collectAsStateWithLifecycle()
     val paired by viewModel.paired.collectAsStateWithLifecycle()
     val nearby by viewModel.nearbyEndpoints.collectAsStateWithLifecycle()
+    val sessions by viewModel.activeSessions.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
 
     var showNewSessionDialog by remember { mutableStateOf(false) }
@@ -128,6 +131,35 @@ fun CodeScreen(viewModel: PairingViewModel = viewModel(factory = PairingViewMode
                         onPair = viewModel::pair,
                     )
                 }
+            }
+            item {
+                CodeSessionList(
+                    sessions = sessions,
+                    onOpen = { session ->
+                        // Re-attach: rebuild a SessionConfig from the saved
+                        // session and launch SessionScreen. A later PR adds
+                        // proper "reattach to running session" semantics;
+                        // for now we just open a fresh session with the
+                        // same repo/branch.
+                        val p = paired
+                        if (p != null) {
+                            scope.launch {
+                                val base = viewModel.defaultSessionConfig()
+                                if (base != null) {
+                                    val config = base.copy(
+                                        repo = RepoRef(
+                                            fullName = session.repoFullName,
+                                            baseBranch = session.baseBranch,
+                                            workBranch = session.workBranch,
+                                        ),
+                                    )
+                                    activeConfig = config to p
+                                }
+                            }
+                        }
+                    },
+                    onArchive = { viewModel.archiveSession(it.id) },
+                )
             }
             if (paired == null && nearby.isNotEmpty()) {
                 item {
@@ -374,6 +406,25 @@ private fun NewSessionDialog(
                         }
                         val config = base.copy(
                             repo = RepoRef(fullName = repo, workBranch = branch),
+                        )
+                        // Register the session so it shows up in the Code
+                        // home list. Title falls back to the repo + branch
+                        // when the user didn't type a first task; the
+                        // session screen can rename it on first message
+                        // (a later PR can swap in the iOS auto-titler).
+                        val now = System.currentTimeMillis()
+                        val sessionTitle = task.take(48).ifBlank { "$repo · $branch" }
+                        viewModel.registerSession(
+                            CodeSession(
+                                id = config.id,
+                                title = sessionTitle,
+                                repoFullName = repo,
+                                baseBranch = "main",
+                                workBranch = branch,
+                                status = CodeSession.Status.WORKING,
+                                createdAtMillis = now,
+                                updatedAtMillis = now,
+                            ),
                         )
                         onStart(config)
                     }
