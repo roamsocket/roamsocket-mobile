@@ -8,6 +8,10 @@ import android.app.Application
  * (Hilt / Koin) bootstraps; for now we just hold a global AppState handle.
  */
 class RoamSocketApplication : Application() {
+
+    /** DI graph. Lazy so the keystore / DataStore are only touched on first use. */
+    val container: AppContainer by lazy { AppContainer(this) }
+
     override fun onCreate() {
         super.onCreate()
         // Reserved for future setup (DI graph, crash reporter, telemetry opt-in,

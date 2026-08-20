@@ -42,10 +42,14 @@ exactly. When changing a message, update all three implementations and
 | Area | Status |
 |------|--------|
 | Project skeleton, build, manifest, theme | ✅ foundation |
-| Wire protocol (TS / Swift / Kotlin) | ✅ complete (port #1) |
-| Provider chat (Anthropic, OpenAI, …) | ⏳ next PR |
-| Code session (server-paired WebSocket) | ⏳ |
-| Settings / GitHub / pairing | ⏳ |
+| Wire protocol (TS / Swift / Kotlin) | ✅ port #1 |
+| Provider chat (Anthropic, OpenAI-compatible, Google) | ✅ port #2 |
+| EncryptedSharedPreferences-backed SecretStore | ✅ port #2 |
+| Chat tab UI (text-only, no streaming deltas yet) | ✅ port #2 |
+| Model + provider picker (basic) | ✅ port #2 |
+| Code session (server-paired WebSocket) | ⏳ next PR |
+| Settings (proper tab) | ⏳ |
+| GitHub / pairing / repositories | ⏳ |
 | Skills / Marketplace | ⏳ |
 | Voice, Vision, HealthKit (iOS-only features) | 🚫 no Android equivalent — skipped |
 
