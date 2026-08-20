@@ -17,6 +17,19 @@ public data class AIModel(
     val organization: String? = null,
     /** True when the model is free to use (OpenRouter `is_free`). */
     val isFree: Boolean? = null,
+    /**
+     * True when the model can accept image attachments (vision / multimodal
+     * input). Populated by each provider's [ModelProvider.listModels]
+     * using the provider API where possible (OpenRouter's
+     * `architecture.input_modalities`) and a model-id heuristic as a
+     * fallback for providers that don't expose the flag (Anthropic,
+     * OpenAI, Google).
+     *
+     * Drives the chat's inline error: when the user attaches an image
+     * to a non-vision model we show a contextual hint above the input
+     * bar (see `ChatViewModel.computeInlineError`).
+     */
+    val supportsVision: Boolean = false,
 ) {
     /** Stable identity across providers, e.g. `anthropic/claude-…`. */
     val id: String get() = "${provider.rawValue}/$modelID"

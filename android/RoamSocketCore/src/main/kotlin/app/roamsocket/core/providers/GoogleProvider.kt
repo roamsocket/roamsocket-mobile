@@ -45,6 +45,7 @@ public class GoogleProvider(
                     provider = id,
                     modelID = short,
                     displayName = m.displayName ?: short,
+                    supportsVision = ModelCapabilities.supportsVisionByHeuristic(id, short),
                 )
             }
         }.getOrElse { throw ProviderError.Decoding(it.message ?: it.javaClass.simpleName) }

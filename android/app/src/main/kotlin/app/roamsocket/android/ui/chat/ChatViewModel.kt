@@ -747,45 +747,44 @@ private fun queryDisplayName(uri: Uri, contentResolver: ContentResolver): String
 }
 
 /**
- * Heuristic vision-capability table. The real source of truth lives in
- * the iOS `ModelCatalog`; once we move the per-model `supportsVision`
- * flag into `AIModel` (next pass), this collapses to `model.supportsVision`.
- *
- * Today the only provider that is *known* to be vision-less in this
- * catalog is MiniMax (no MiniMax model currently accepts images).
- * Everyone else — Anthropic, OpenAI, Google, Groq, OpenRouter, xAI,
- * Mistral — has at least one vision-capable model in their default
- * set, so we treat the provider as vision-capable. The list is
- * explicitly enumerated (instead of "all except MiniMax") so that
- * adding a new provider forces a deliberate vision decision.
+ * Per-model vision capability lookup against the local
+ * [ChatUiState.modelsForProvider] snapshot. Returns:
+ *  - `true` when the currently selected [AIModel] is vision-capable.
+ *  - `null` when the model isn't in the local list (e.g. the user
+ *    has a custom model id or the live listing hasn't been loaded
+ *    yet). The chat UI treats `null` as "send and let the provider
+ *    decide" rather than guessing.
  */
-private fun providerSupportsVision(provider: ProviderId): Boolean = when (provider) {
-    ProviderId.MiniMax -> false
-    ProviderId.Anthropic,
-    ProviderId.OpenAI,
-    ProviderId.Google,
-    ProviderId.Groq,
-    ProviderId.OpenRouter,
-    ProviderId.XAI,
-    ProviderId.Mistral,
-    ProviderId.LocalMetal -> true
-    is ProviderId.Custom -> true
-}
+private fun selectedModelSupportsVision(state: ChatUiState): Boolean? =
+    state.modelsForProvider.firstOrNull { it.modelID == state.model }?.supportsVision
+
+@Suppress("unused")
+private fun _displayNameAnchor(fn: (android.net.Uri, android.content.ContentResolver) -> String?) = fn  // keep the helper reachable
 
 /**
  * Inspect the current state and return the inline error to show above
  * the input bar, or null when the user is in a happy path. Called by
  * [ChatViewModel.refreshInlineError] after every model / provider /
  * attachment change.
+ *
+ * Decision is per-model (not per-provider): we look up the currently
+ * selected [AIModel] in [ChatUiState.modelsForProvider] and read its
+ * `supportsVision` flag, which the providers populate from the live
+ * `/models` API (OpenRouter's `architecture.input_modalities`) or
+ * from a per-provider id-based heuristic (see [ModelCapabilities]).
+ * Unknown models (e.g. the model is in the live listing but not in
+ * the local list) default to "supported" so the user gets a clear
+ * 400 error from the provider rather than a misleading local hint.
  */
 private fun computeInlineError(state: ChatUiState): InlineError? {
     if (state.attachedImages.isEmpty()) return null
-    if (providerSupportsVision(state.provider)) return null
-    val message = when (state.provider) {
-        ProviderId.MiniMax ->
-            "${state.provider.displayName} doesn't ship a vision model in this catalog. Try Anthropic, OpenAI, or Google."
+    val selectedModel = state.modelsForProvider.firstOrNull { it.modelID == state.model }
+    if (selectedModel?.supportsVision == true) return null
+    val message = when {
+        selectedModel != null ->
+            "${selectedModel.displayName} doesn't accept images. Try a vision-capable model like Claude 3.5 Sonnet, GPT-4o, or Gemini 2.0 Flash."
         else ->
-            "${state.provider.displayName} doesn't support images in this catalog. Try a vision-capable model."
+            "${state.provider.displayName} has no vision-capable model in this catalog. Try Anthropic, OpenAI, or Google."
     }
     return InlineError(message = message, actionLabel = null, onAction = null)
 }

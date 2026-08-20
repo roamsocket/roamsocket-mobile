@@ -52,6 +52,7 @@ public class AnthropicProvider(
                         provider = id,
                         modelID = m.id,
                         displayName = m.displayName ?: m.id,
+                        supportsVision = ModelCapabilities.supportsVisionByHeuristic(id, m.id),
                     )
                 }
             },
