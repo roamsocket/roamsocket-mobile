@@ -145,6 +145,29 @@ public data class ProviderChatMessage(
         /** `data:{mime};base64,{data}` for OpenAI-compatible `image_url` payloads. */
         public val dataURL: String get() = "data:$mimeType;base64,$base64Data"
     }
+
+    /**
+     * Plain-text file picked from the device via the "Add files" entry of
+     * the Add to Chat sheet (port #12). For v1 we only support text-shaped
+     * files; binaries are surfaced as a `[Attached file: foo.bin (binary
+     * skipped)]` line so the model can at least see the name.
+     */
+    @Serializable
+    public data class FileAttachment(
+        /** Display name including the extension, e.g. `notes.md`. */
+        val displayName: String,
+        /** Inferred MIME type, or `application/octet-stream` if unknown. */
+        val mimeType: String,
+        /** Decoded text content. Truncated to [MAX_TEXT_BYTES] when huge. */
+        val text: String,
+        /** True when the picker gave us binary content we couldn't decode. */
+        val skippedBinary: Boolean = false,
+    ) {
+        public companion object {
+            /** Cap so we never paste a 200 MB log into the prompt. */
+            public const val MAX_TEXT_BYTES: Int = 32 * 1024
+        }
+    }
 }
 
 /** Shared helpers for building requests. */

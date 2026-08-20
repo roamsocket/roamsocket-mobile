@@ -11,6 +11,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import app.roamsocket.android.AppContainer
 import app.roamsocket.android.RoamSocketApplication
+import app.roamsocket.android.data.ToolAccessLevel
 import app.roamsocket.core.chats.ChatHistoryRepository
 import app.roamsocket.core.chats.PersistedChatMessage
 import app.roamsocket.core.providers.AIModel
@@ -60,6 +61,16 @@ class ChatViewModel(
             // them type a message and watch it silently fail).
             val apiKey = container.secretStore.readApiKey(provider)
             _state.value = _state.value.copy(hasApiKey = !apiKey.isNullOrEmpty())
+
+            // Restore the Add-to-Chat toggles + tool access level from
+            // DataStore. They're independent of provider / model so we
+            // re-load on every screen open.
+            _state.value = _state.value.copy(
+                researchEnabled = container.userSettings.researchEnabled.first(),
+                webSearchEnabled = container.userSettings.webSearchEnabled.first(),
+                locationEnabled = container.userSettings.locationEnabled.first(),
+                toolAccess = container.userSettings.toolAccess.first(),
+            )
 
             // Resume the persisted transcript when the screen opens on an
             // existing chat id.
@@ -119,10 +130,12 @@ class ChatViewModel(
 
         val now = System.currentTimeMillis()
         val attachedImages = _state.value.attachedImages
+        val attachedFiles = _state.value.attachedFiles
         val userMsg = ChatMessage.User(
             text = trimmed,
             timestampMillis = now,
             images = attachedImages,
+            files = attachedFiles,
         )
         val nextMessages = _state.value.messages + userMsg
         _state.value = _state.value.copy(
@@ -131,6 +144,7 @@ class ChatViewModel(
             isStreaming = true,
             error = null,
             attachedImages = emptyList(),
+            attachedFiles = emptyList(),
         )
 
         // Persist the user message immediately (bug fix: previously the
@@ -138,6 +152,12 @@ class ChatViewModel(
         // text out of the sidebar entirely). The user message is marked
         // PENDING; the success / failure paths below update it.
         persistCurrent(nextMessages, lastUserPending = true)
+
+        // Build the prompt augmentation based on the Add-to-Chat toggles.
+        val prompt = buildAddToChatPrompt(
+            text = trimmed,
+            state = _state.value,
+        )
 
         viewModelScope.launch {
             val apiKey = container.secretStore.readApiKey(provider)
@@ -151,6 +171,7 @@ class ChatViewModel(
                     isStreaming = false,
                     error = "No API key for $provider.",
                     attachedImages = attachedImages,
+                    attachedFiles = attachedFiles,
                 )
                 persistCurrent(failureMessages, lastUserPending = false)
                 return@launch
@@ -159,8 +180,9 @@ class ChatViewModel(
                 val reply = client.chat(
                     model = model,
                     apiKey = apiKey,
-                    messages = nextMessages.toProviderMessages(),
+                    messages = nextMessages.toProviderMessages(prompt = prompt),
                     effort = null,
+                    webSearchQuery = if (_state.value.webSearchEnabled) trimmed else null,
                 )
                 val assistantMsg = ChatMessage.Assistant(
                     text = reply,
@@ -182,6 +204,7 @@ class ChatViewModel(
                     // Restore the images so the user can hit Retry (or
                     // edit the message) without re-picking them.
                     attachedImages = attachedImages,
+                    attachedFiles = attachedFiles,
                 )
                 persistCurrent(failureMessages, lastUserPending = false)
             }
@@ -233,6 +256,62 @@ class ChatViewModel(
             attachedImages = list.toMutableList().apply { removeAt(index) },
             inlineError = null, // Removing the last image clears the inline error too.
         )
+    }
+
+    // ----- Add to Chat sheet (port #12) -----
+
+    /**
+     * Attach a list of files picked from the device's Storage Access
+     * Framework. Each URI is read off the main thread, classified, and
+     * either decoded to text (for text-shaped MIME types) or recorded as
+     * a binary skip. Files that fail to read are silently dropped; the
+     * caller surfaces a snackbar in a follow-up.
+     */
+    fun addFiles(uris: List<Uri>, contentResolver: ContentResolver) {
+        if (uris.isEmpty()) return
+        viewModelScope.launch {
+            val attachments: List<ProviderChatMessage.FileAttachment> = withContext(Dispatchers.IO) {
+                uris.mapNotNull { uri -> uriToFileAttachment(uri, contentResolver) }
+            }
+            if (attachments.isNotEmpty()) {
+                _state.value = _state.value.copy(
+                    attachedFiles = _state.value.attachedFiles + attachments,
+                )
+            }
+        }
+    }
+
+    /** Remove a previously-attached file by index. */
+    fun removeAttachedFile(index: Int) {
+        val list = _state.value.attachedFiles
+        if (index !in list.indices) return
+        _state.value = _state.value.copy(
+            attachedFiles = list.toMutableList().apply { removeAt(index) },
+        )
+    }
+
+    /** Toggle the multi-query research mode. Persisted across launches. */
+    fun setResearchEnabled(enabled: Boolean) {
+        _state.value = _state.value.copy(researchEnabled = enabled)
+        viewModelScope.launch { container.userSettings.setResearchEnabled(enabled) }
+    }
+
+    /** Toggle the provider-native web search. Persisted across launches. */
+    fun setWebSearchEnabled(enabled: Boolean) {
+        _state.value = _state.value.copy(webSearchEnabled = enabled)
+        viewModelScope.launch { container.userSettings.setWebSearchEnabled(enabled) }
+    }
+
+    /** Toggle sharing approximate location with the model. */
+    fun setLocationEnabled(enabled: Boolean) {
+        _state.value = _state.value.copy(locationEnabled = enabled)
+        viewModelScope.launch { container.userSettings.setLocationEnabled(enabled) }
+    }
+
+    /** Update the desktop agent's tool access level. */
+    fun setToolAccess(level: ToolAccessLevel) {
+        _state.value = _state.value.copy(toolAccess = level)
+        viewModelScope.launch { container.userSettings.setToolAccess(level) }
     }
 
     fun dismissError() {
@@ -359,12 +438,27 @@ data class ChatUiState(
      */
     val attachedImages: List<ProviderChatMessage.ImageAttachment> = emptyList(),
     /**
+     * Files the user has attached but not yet sent (port #12, from
+     * the Add to Chat sheet → "Add files"). Cleared on a successful
+     * [ChatViewModel.send]; restored on failure for retry.
+     */
+    val attachedFiles: List<ProviderChatMessage.FileAttachment> = emptyList(),
+    /**
      * Contextual hint shown right above the input field. Distinct from
      * [error] (the top ErrorBanner) so the user sees the message next
      * to the composer when the issue is about what they just did — e.g.
      * a photo attached to a model that doesn't accept vision.
      */
     val inlineError: InlineError? = null,
+    // ----- Add to Chat (port #12) -----
+    /** Multi-query research mode. */
+    val researchEnabled: Boolean = false,
+    /** Provider-native web search. */
+    val webSearchEnabled: Boolean = false,
+    /** Share approximate location with the model. */
+    val locationEnabled: Boolean = false,
+    /** Desktop agent's tool access level (Auto / Read-only / Full). */
+    val toolAccess: ToolAccessLevel = ToolAccessLevel.Auto,
 )
 
 /**
@@ -397,6 +491,13 @@ sealed interface ChatMessage {
          * so existing call sites (tests, history-replay) keep working.
          */
         val images: List<ProviderChatMessage.ImageAttachment> = emptyList(),
+        /**
+         * File attachments from the Add to Chat sheet (port #12). In-memory
+         * for the same reason as `images`. The contents are inlined into
+         * the user message text at send time so the model sees a single
+         * prompt rather than a parallel structure.
+         */
+        val files: List<ProviderChatMessage.FileAttachment> = emptyList(),
     ) : ChatMessage {
         enum class Delivery { SENT, PENDING, FAILED }
     }
@@ -441,19 +542,76 @@ internal fun PersistedChatMessage.toUi(): ChatMessage = when (role) {
     PersistedChatMessage.Role.SYSTEM -> ChatMessage.Assistant(content, timestampMillis)
 }
 
-internal fun List<ChatMessage>.toProviderMessages(): List<ProviderChatMessage> = map { msg ->
+/**
+ * Convert the in-memory transcript into the provider's wire format.
+ *
+ * - File attachments are inlined as `[Attached file: name]` blocks
+ *   immediately under the user message body. The model's own context
+ *   window decides what to do with them.
+ * - The [prompt] suffix (built by [buildAddToChatPrompt]) is appended
+ *   to the *last* user message only. This keeps prior turns verbatim
+ *   while still injecting the live Add-to-Chat toggles into the
+ *   outgoing turn.
+ */
+internal fun List<ChatMessage>.toProviderMessages(prompt: String = ""): List<ProviderChatMessage> = mapIndexed { idx, msg ->
     when (msg) {
-        is ChatMessage.User -> ProviderChatMessage(
-            role = ProviderChatMessage.Role.USER,
-            content = msg.text,
-            images = msg.images,
-        )
+        is ChatMessage.User -> {
+            val isLast = idx == lastIndex
+            val fileBlocks = msg.files.joinToString(separator = "\n\n") { f ->
+                if (f.skippedBinary) {
+                    "[Attached file: ${f.displayName} (binary content skipped — type: ${f.mimeType})]"
+                } else {
+                    "[Attached file: ${f.displayName} (${f.mimeType})]\n```\n${f.text}\n```"
+                }
+            }
+            val body = buildString {
+                append(msg.text)
+                if (fileBlocks.isNotEmpty()) {
+                    append("\n\n")
+                    append(fileBlocks)
+                }
+                if (isLast && prompt.isNotEmpty()) {
+                    append("\n\n")
+                    append(prompt)
+                }
+            }
+            ProviderChatMessage(
+                role = ProviderChatMessage.Role.USER,
+                content = body,
+                images = msg.images,
+            )
+        }
         is ChatMessage.Assistant -> ProviderChatMessage(
             role = ProviderChatMessage.Role.ASSISTANT,
             content = msg.text,
         )
     }
 }
+
+/**
+ * Build the trailing prompt block applied to the outgoing user message
+ * based on the Add to Chat toggles + the current tool access level. Kept
+ * here (rather than the iOS sheet) so the wire format lives in one
+ * place. Empty string when nothing's toggled.
+ */
+internal fun buildAddToChatPrompt(text: String, state: ChatUiState): String = buildString {
+    if (state.researchEnabled) {
+        append("[Research mode: use multi-query web search and Wikipedia for deeper answers.]\n")
+    }
+    if (state.webSearchEnabled) {
+        append("[Web search enabled: search the web for the latest information and cite sources.]\n")
+    }
+    if (state.locationEnabled) {
+        // The desktop server resolves the precise location once we ship
+        // location services; for now the chat client doesn't have a
+        // geocoder, so we hint that location context is on. The user
+        // will see the toggle in Settings and can re-configure.
+        append("[Location sharing enabled. Approximate location will be appended by the server when the desktop agent is paired.]\n")
+    }
+    if (state.toolAccess != ToolAccessLevel.Auto) {
+        append("[Tool access: ${state.toolAccess.display} — ${state.toolAccess.description}]\n")
+    }
+}.trimEnd()
 
 /**
  * Read the bytes behind a content URI (camera capture output or gallery
@@ -473,6 +631,58 @@ private fun uriToAttachment(
         mimeType = mime,
         base64Data = Base64.encodeToString(bytes, Base64.NO_WRAP),
     )
+}
+
+/**
+ * Read a content URI and return a [ProviderChatMessage.FileAttachment].
+ * Used by the Add to Chat sheet's "Add files" entry (port #12).
+ *
+ * For text-shaped MIME types (`text/...`, JSON, XML, source files) we
+ * decode the bytes as UTF-8 (best-effort) and truncate to
+ * [ProviderChatMessage.FileAttachment.MAX_TEXT_BYTES]. For anything else
+ * we record a `skippedBinary` placeholder so the model still sees the
+ * file name in the prompt.
+ */
+private fun uriToFileAttachment(
+    uri: Uri,
+    contentResolver: ContentResolver,
+): ProviderChatMessage.FileAttachment? {
+    val mime = contentResolver.getType(uri) ?: "application/octet-stream"
+    val displayName = queryDisplayName(uri, contentResolver) ?: uri.lastPathSegment ?: "file"
+    val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return null
+    val isText = mime.startsWith("text/") ||
+        mime in setOf("application/json", "application/xml", "application/javascript", "application/x-yaml")
+    if (!isText) {
+        return ProviderChatMessage.FileAttachment(
+            displayName = displayName,
+            mimeType = mime,
+            text = "",
+            skippedBinary = true,
+        )
+    }
+    val cap = ProviderChatMessage.FileAttachment.MAX_TEXT_BYTES
+    val truncated = bytes.size > cap
+    val text = String(bytes, charset = Charsets.UTF_8).let {
+        if (truncated) it.substring(0, cap) + "\n…[truncated]" else it
+    }
+    return ProviderChatMessage.FileAttachment(
+        displayName = displayName,
+        mimeType = mime,
+        text = text,
+        skippedBinary = false,
+    )
+}
+
+private fun queryDisplayName(uri: Uri, contentResolver: ContentResolver): String? {
+    return runCatching {
+        contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
+            ?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val idx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    if (idx >= 0) cursor.getString(idx) else null
+                } else null
+            }
+    }.getOrNull()
 }
 
 /**
