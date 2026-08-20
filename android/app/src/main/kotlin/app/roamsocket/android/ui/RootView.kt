@@ -3,8 +3,6 @@ package app.roamsocket.android.ui
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
@@ -24,11 +22,11 @@ import app.roamsocket.android.ui.chat.ChatScreen
 import app.roamsocket.android.ui.code.CodeScreen
 import app.roamsocket.android.ui.placeholder.PlaceholderScreen
 import app.roamsocket.android.ui.settings.SettingsScreen
-import app.roamsocket.android.ui.sidebar.ChatHistoryStore
 import app.roamsocket.android.ui.sidebar.SidebarDestination
 import app.roamsocket.android.ui.sidebar.SidebarDestinationSaver
 import app.roamsocket.android.ui.sidebar.SidebarView
 import app.roamsocket.android.ui.sidebar.icon
+import app.roamsocket.android.ui.sidebar.rememberChatHistoryStore
 import kotlinx.coroutines.launch
 
 /**
@@ -45,12 +43,20 @@ val LocalOpenSidebar = compositionLocalOf<() -> Unit> { error("LocalOpenSidebar 
  *
  * Each top-level destination has either a real screen (Chat, Code) or a
  * `PlaceholderScreen` while the Android port catches up.
+ *
+ * The chat list and active chat id are owned here so the sidebar's
+ * Recents list and the `ChatScreen` can stay in sync (PR 1: chat
+ * history persistence).
  */
 @Composable
-fun RootView(history: ChatHistoryStore = remember { ChatHistoryStore() }) {
+fun RootView() {
+    val chatHistory = rememberChatHistoryStore()
     var current by rememberSaveable(stateSaver = SidebarDestinationSaver) {
         mutableStateOf<SidebarDestination>(SidebarDestination.Chats)
     }
+    // Stable id of the chat the user is currently looking at. Held here
+    // so sidebar taps + new-chat both flow into the ChatScreen.
+    var activeChatId by rememberSaveable { mutableStateOf<String?>(null) }
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
 
@@ -67,11 +73,20 @@ fun RootView(history: ChatHistoryStore = remember { ChatHistoryStore() }) {
                 drawerContainerColor = MaterialTheme.colorScheme.background,
             ) {
                 SidebarView(
-                    history = history,
+                    history = chatHistory,
                     onSelect = ::navigate,
                     onNewChat = {
-                        // Mirror the iOS "new chat" affordance: drop into a
-                        // fresh chat by clearing the current selection.
+                        // Mint a fresh chat in the repository and make it
+                        // the active one. The ChatScreen will resume it
+                        // once the first message lands (or just render an
+                        // empty composer for the blank draft).
+                        activeChatId = chatHistory.startNewChat()
+                        current = SidebarDestination.Chats
+                        scope.launch { drawerState.close() }
+                    },
+                    onOpenChat = { id ->
+                        chatHistory.openChat(id)
+                        activeChatId = id
                         current = SidebarDestination.Chats
                         scope.launch { drawerState.close() }
                     },
@@ -88,7 +103,7 @@ fun RootView(history: ChatHistoryStore = remember { ChatHistoryStore() }) {
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
                 when (current) {
-                    SidebarDestination.Chats, is SidebarDestination.Chat -> ChatScreen()
+                    SidebarDestination.Chats, is SidebarDestination.Chat -> ChatScreen(chatId = activeChatId)
                     SidebarDestination.Code -> CodeScreen()
                     SidebarDestination.Settings -> SettingsScreen()
                     else -> PlaceholderScreen(
