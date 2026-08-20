@@ -68,6 +68,7 @@ fun ChatScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
     var showKeyDialog by remember { mutableStateOf(false) }
+    var showModelPicker by remember { mutableStateOf(false) }
 
     // Auto-scroll the latest message into view.
     LaunchedEffect(state.messages.size, state.isStreaming) {
@@ -88,12 +89,14 @@ fun ChatScreen(
                 }
             },
             title = {
-                ModelPicker(
-                    currentProvider = state.provider,
-                    currentModel = state.model,
-                    models = state.modelsForProvider,
-                    onSelectProvider = viewModel::selectProvider,
-                    onSelectModel = viewModel::selectModel,
+                // Port #9: model picker moved out of the top bar and into
+                // the input bar (see [ModelPickerPill] below). The title is
+                // left intentionally generic; a future PR can replace this
+                // with a derived chat title.
+                Text(
+                    text = "Chat",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
             },
             actions = {
@@ -115,6 +118,17 @@ fun ChatScreen(
                     viewModel.saveApiKey(key)
                     showKeyDialog = false
                 },
+            )
+        }
+
+        if (showModelPicker) {
+            ModelPickerSheet(
+                currentProvider = state.provider,
+                currentModel = state.model,
+                models = state.modelsForProvider,
+                onSelectProvider = viewModel::selectProvider,
+                onSelectModel = viewModel::selectModel,
+                onDismiss = { showModelPicker = false },
             )
         }
 
@@ -150,11 +164,24 @@ fun ChatScreen(
             }
         }
 
+        val hasUsableModel = state.model.isNotBlank() && when (state.provider) {
+            is ProviderId.LocalMetal -> true
+            else -> state.hasApiKey
+        }
         ChatInputBar(
             draft = state.draft,
             isStreaming = state.isStreaming,
             onDraftChange = viewModel::updateDraft,
             onSend = { viewModel.send(state.draft) },
+            modelDisplayName = state.modelsForProvider
+                .firstOrNull { it.modelID == state.model }
+                ?.displayName
+                ?: state.model,
+            hasUsableModel = hasUsableModel,
+            onPickModel = { showModelPicker = true },
+            onAddModel = {
+                showKeyDialog = true
+            },
         )
     }
 }
@@ -240,37 +267,52 @@ private fun ChatInputBar(
     isStreaming: Boolean,
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
+    modelDisplayName: String,
+    hasUsableModel: Boolean,
+    onPickModel: () -> Unit,
+    onAddModel: () -> Unit,
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surface,
         tonalElevation = 2.dp,
         modifier = Modifier.imePadding(),
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
         ) {
-            OutlinedTextField(
-                value = draft,
-                onValueChange = onDraftChange,
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("Send a message…") },
-                enabled = !isStreaming,
-                singleLine = false,
-                maxLines = 4,
-                keyboardOptions = KeyboardOptions(
-                    capitalization = KeyboardCapitalization.Sentences,
-                    imeAction = ImeAction.Send,
-                ),
-            )
-            IconButton(
-                onClick = onSend,
-                enabled = !isStreaming && draft.isNotBlank(),
-            ) {
-                Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = "Send")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = onDraftChange,
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text("Send a message…") },
+                    enabled = !isStreaming,
+                    singleLine = false,
+                    maxLines = 4,
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Sentences,
+                        imeAction = ImeAction.Send,
+                    ),
+                )
+                IconButton(
+                    onClick = onSend,
+                    enabled = !isStreaming && draft.isNotBlank(),
+                ) {
+                    Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = "Send")
+                }
             }
+            // Port #9: model pill moved out of the top bar so the input bar
+            // mirrors the iOS composer (text + send on top, model chip below).
+            // The + button, camera, gallery and mic land in later PRs (#12, #7).
+            ModelPickerPill(
+                modelDisplayName = modelDisplayName,
+                hasUsableModel = hasUsableModel,
+                onPick = onPickModel,
+                onAddModel = onAddModel,
+                modifier = Modifier.padding(top = 6.dp),
+            )
         }
     }
 }
