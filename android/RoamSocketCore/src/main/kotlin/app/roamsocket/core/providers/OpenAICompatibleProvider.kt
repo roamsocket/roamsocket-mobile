@@ -23,8 +23,27 @@ public class OpenAICompatibleProvider(
 
     @Serializable
     private data class ModelList(val data: List<Model> = emptyList()) {
+        /**
+         * Wire shape for the `/v1/models` endpoint.
+         *
+         * OpenRouter enriches the response with `architecture.input_modalities`
+         * (an array containing strings like `"text"`, `"image"`, `"audio"`,
+         * `"video"`, `"pdf"`) — the source of truth for vision capability.
+         * Other OpenAI-compatible hosts (OpenAI, Groq, xAI, Mistral, MiniMax)
+         * just return `{"id": "..."}` so the `architecture` field is
+         * `null` and we fall back to the id-based heuristic.
+         */
         @Serializable
-        data class Model(val id: String)
+        data class Model(
+            val id: String,
+            val architecture: Architecture? = null,
+        ) {
+            @Serializable
+            data class Architecture(
+                @SerialName("input_modalities")
+                val inputModalities: List<String> = emptyList(),
+            )
+        }
     }
 
     override suspend fun listModels(apiKey: String): List<AIModel> {
@@ -39,7 +58,18 @@ public class OpenAICompatibleProvider(
             val list = Json { ignoreUnknownKeys = true }
                 .decodeFromString(ModelList.serializer(), response.body)
             list.data.map { m ->
-                AIModel(provider = id, modelID = m.id, displayName = AIModel.prettifiedDisplayName(m.id, id))
+                val supportsVision = when {
+                    // OpenRouter + similar: trust the API's input_modalities.
+                    m.architecture != null -> m.architecture.inputModalities.any { it.equals("image", ignoreCase = true) }
+                    // Fallback: per-provider id heuristic.
+                    else -> ModelCapabilities.supportsVisionByHeuristic(id, m.id)
+                }
+                AIModel(
+                    provider = id,
+                    modelID = m.id,
+                    displayName = AIModel.prettifiedDisplayName(m.id, id),
+                    supportsVision = supportsVision,
+                )
             }
         }.getOrElse { throw ProviderError.Decoding(it.message ?: it.javaClass.simpleName) }
     }
