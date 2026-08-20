@@ -26,8 +26,9 @@ class AppContainer(application: Application) {
     val httpClient: HTTPClient = OkHttpHTTPClient()
 
     /**
-     * Process-wide scope for long-lived collectors (e.g. the chat
-     * history mirror, NSD discovery, …). Use [viewModelScope] from
+     * Process-wide scope for long-lived collectors (chat history
+     * mirror, NSD discovery, code session persistence, …). Use
+     * [viewModelScope][androidx.lifecycle.viewModelScope] from
      * `androidx.lifecycle` for per-screen work.
      */
     val appScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -39,6 +40,14 @@ class AppContainer(application: Application) {
      */
     val chatHistoryRepository: ChatHistoryRepository =
         app.roamsocket.android.data.DataStoreChatHistoryRepository(application, flowScope = appScope)
+
+    /**
+     * Persisted coding sessions (Code home list). Same DataStore
+     * single-blob strategy as the chat history wrapper. Populated by
+     * the Session screen when a session starts / updates.
+     */
+    val codeSessionRepository: app.roamsocket.core.code.CodeSessionRepository =
+        app.roamsocket.android.data.DataStoreCodeSessionRepository(application, flowScope = appScope)
 
     /** Resolve a chat client for the given [providerId], or null if unsupported. */
     fun chatClientFor(providerId: app.roamsocket.core.providers.ProviderId) =
