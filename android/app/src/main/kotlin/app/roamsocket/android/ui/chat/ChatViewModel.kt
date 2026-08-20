@@ -1,6 +1,9 @@
 package app.roamsocket.android.ui.chat
 
 import android.app.Application
+import android.content.ContentResolver
+import android.net.Uri
+import android.util.Base64
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -14,11 +17,13 @@ import app.roamsocket.core.providers.AIModel
 import app.roamsocket.core.providers.ModelCatalog
 import app.roamsocket.core.providers.ProviderChatMessage
 import app.roamsocket.core.providers.ProviderId
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Drives the Chat tab. Loads the persisted provider + model, looks up the
@@ -109,13 +114,19 @@ class ChatViewModel(
         }
 
         val now = System.currentTimeMillis()
-        val userMsg = ChatMessage.User(trimmed, timestampMillis = now)
+        val attachedImages = _state.value.attachedImages
+        val userMsg = ChatMessage.User(
+            text = trimmed,
+            timestampMillis = now,
+            images = attachedImages,
+        )
         val nextMessages = _state.value.messages + userMsg
         _state.value = _state.value.copy(
             messages = nextMessages,
             draft = "",
             isStreaming = true,
             error = null,
+            attachedImages = emptyList(),
         )
 
         // Persist the user message immediately (bug fix: previously the
@@ -135,6 +146,7 @@ class ChatViewModel(
                     messages = failureMessages,
                     isStreaming = false,
                     error = "No API key for $provider.",
+                    attachedImages = attachedImages,
                 )
                 persistCurrent(failureMessages, lastUserPending = false)
                 return@launch
@@ -163,6 +175,9 @@ class ChatViewModel(
                     messages = failureMessages,
                     isStreaming = false,
                     error = reason,
+                    // Restore the images so the user can hit Retry (or
+                    // edit the message) without re-picking them.
+                    attachedImages = attachedImages,
                 )
                 persistCurrent(failureMessages, lastUserPending = false)
             }
@@ -183,6 +198,35 @@ class ChatViewModel(
 
     fun updateDraft(text: String) {
         _state.value = _state.value.copy(draft = text)
+    }
+
+    /**
+     * Append an image the user just attached (camera capture or gallery
+     * pick). The content URI is opened off the main thread, the bytes
+     * are base64-encoded, and the resulting `ImageAttachment` is added
+     * to the transient `attachedImages` list. Cleared by [send] on a
+     * successful dispatch.
+     */
+    fun attachImage(uri: Uri, contentResolver: ContentResolver) {
+        viewModelScope.launch {
+            val attachment = withContext(Dispatchers.IO) {
+                runCatching { uriToAttachment(uri, contentResolver) }.getOrNull()
+            }
+            if (attachment != null) {
+                _state.value = _state.value.copy(
+                    attachedImages = _state.value.attachedImages + attachment,
+                )
+            }
+        }
+    }
+
+    /** Remove a previously-attached image by index. */
+    fun removeAttachedImage(index: Int) {
+        val list = _state.value.attachedImages
+        if (index !in list.indices) return
+        _state.value = _state.value.copy(
+            attachedImages = list.toMutableList().apply { removeAt(index) },
+        )
     }
 
     fun dismissError() {
@@ -280,6 +324,12 @@ data class ChatUiState(
     val error: String? = null,
     /** True once we've confirmed the current provider has an API key configured. */
     val hasApiKey: Boolean = false,
+    /**
+     * Images the user has attached but not yet sent. Cleared on a
+     * successful [ChatViewModel.send]; restored on failure so the
+     * user can fix the message and retry without re-picking the photos.
+     */
+    val attachedImages: List<ProviderChatMessage.ImageAttachment> = emptyList(),
 )
 
 /** Sealed UI message. Mirrors the iOS `ChatMessage` rendering model. */
@@ -294,6 +344,13 @@ sealed interface ChatMessage {
         val delivery: Delivery = Delivery.SENT,
         /** Human-readable reason when [delivery] is FAILED. */
         val failureReason: String? = null,
+        /**
+         * Vision attachments the user dropped into the composer before
+         * sending. The list is in-memory only; we don't persist the raw
+         * base64 to disk because chats would balloon. Defaults to empty
+         * so existing call sites (tests, history-replay) keep working.
+         */
+        val images: List<ProviderChatMessage.ImageAttachment> = emptyList(),
     ) : ChatMessage {
         enum class Delivery { SENT, PENDING, FAILED }
     }
@@ -343,10 +400,31 @@ internal fun List<ChatMessage>.toProviderMessages(): List<ProviderChatMessage> =
         is ChatMessage.User -> ProviderChatMessage(
             role = ProviderChatMessage.Role.USER,
             content = msg.text,
+            images = msg.images,
         )
         is ChatMessage.Assistant -> ProviderChatMessage(
             role = ProviderChatMessage.Role.ASSISTANT,
             content = msg.text,
         )
     }
+}
+
+/**
+ * Read the bytes behind a content URI (camera capture output or gallery
+ * pick) and base64-encode them into a [ProviderChatMessage.ImageAttachment].
+ * Returns null on any failure (caller should swallow the error and
+ * surface a snackbar in a follow-up PR).
+ */
+private fun uriToAttachment(
+    uri: Uri,
+    contentResolver: ContentResolver,
+): ProviderChatMessage.ImageAttachment? {
+    val mime = contentResolver.getType(uri) ?: "image/jpeg"
+    // Reject non-image MIME types — gallery picker can return videos / PDFs.
+    if (!mime.startsWith("image/")) return null
+    val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return null
+    return ProviderChatMessage.ImageAttachment(
+        mimeType = mime,
+        base64Data = Base64.encodeToString(bytes, Base64.NO_WRAP),
+    )
 }

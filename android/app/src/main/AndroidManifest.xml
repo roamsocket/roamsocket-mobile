@@ -56,5 +56,20 @@
                 <data android:scheme="roamsocket" />
             </intent-filter>
         </activity>
+
+        <!-- Camera capture output. We hand the camera a content:// URI
+             into the app's cache dir; the FileProvider only exposes that
+             one path, nothing else. Mirrors iOS CameraCapture's
+             FileProvider-free approach (the OS grants capture-time
+             access to the URI we created). -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>
