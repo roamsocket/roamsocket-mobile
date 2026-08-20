@@ -5,6 +5,11 @@ import app.roamsocket.core.chats.PersistedChatMessage.Role.USER
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import app.roamsocket.core.providers.ProviderId
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -144,6 +149,27 @@ class InMemoryChatHistoryRepositoryTest {
         // Two starts should leave exactly one active blank draft in the
         // internal snapshot, not two.
         assertEquals(1, repo.snapshot().size)
+    }
+
+    @Test
+    fun setModelWritesProviderAndModelId() = runTest {
+        val repo = InMemoryChatHistoryRepository()
+        val id = repo.startNewChat()
+        repo.saveMessages(id, listOf(msg("u", USER, "hi")))
+        assertFalse(repo.snapshot().first().hasModelOverride)
+
+        repo.setModel(id, ProviderId.OpenAI, "gpt-4o")
+        val updated = repo.snapshot().first { it.id == id }
+        assertTrue(updated.hasModelOverride)
+        assertEquals(ProviderId.OpenAI, updated.resolvedProvider)
+        assertEquals("gpt-4o", updated.selectedModel)
+    }
+
+    @Test
+    fun setModelOnUnknownIdIsANoOp() = runTest {
+        val repo = InMemoryChatHistoryRepository()
+        repo.setModel("does-not-exist", ProviderId.Google, "gemini-2.0-flash")
+        assertTrue(repo.snapshot().isEmpty())
     }
 
     private fun msg(id: String, role: PersistedChatMessage.Role, text: String) =

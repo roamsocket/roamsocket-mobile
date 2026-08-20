@@ -1,11 +1,13 @@
 package app.roamsocket.android.ui.code
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -15,11 +17,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.DesktopWindows
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.SwapVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -59,9 +63,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.roamsocket.android.data.PairedServer
 import app.roamsocket.android.ui.LocalOpenSidebar
+import app.roamsocket.android.ui.codesessions.CodeSessionList
+import app.roamsocket.android.ui.repositories.RepositoryPickerSheet
 import app.roamsocket.android.ui.session.SessionConfig
 import app.roamsocket.android.ui.session.SessionModelSelection
 import app.roamsocket.android.ui.session.SessionScreen
+import app.roamsocket.core.code.CodeSession
+import app.roamsocket.core.github.GitHubRepo
 import app.roamsocket.core.protocol.RepoRef
 import app.roamsocket.core.providers.ProviderId
 import app.roamsocket.core.server.Endpoint
@@ -74,10 +82,14 @@ import kotlinx.coroutines.launch
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CodeScreen(viewModel: PairingViewModel = viewModel(factory = PairingViewModel.Factory)) {
+fun CodeScreen(
+    onNavigateToSettings: () -> Unit = {},
+    viewModel: PairingViewModel = viewModel(factory = PairingViewModel.Factory),
+) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val paired by viewModel.paired.collectAsStateWithLifecycle()
     val nearby by viewModel.nearbyEndpoints.collectAsStateWithLifecycle()
+    val sessions by viewModel.activeSessions.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
 
     var showNewSessionDialog by remember { mutableStateOf(false) }
@@ -129,6 +141,35 @@ fun CodeScreen(viewModel: PairingViewModel = viewModel(factory = PairingViewMode
                     )
                 }
             }
+            item {
+                CodeSessionList(
+                    sessions = sessions,
+                    onOpen = { session ->
+                        // Re-attach: rebuild a SessionConfig from the saved
+                        // session and launch SessionScreen. A later PR adds
+                        // proper "reattach to running session" semantics;
+                        // for now we just open a fresh session with the
+                        // same repo/branch.
+                        val p = paired
+                        if (p != null) {
+                            scope.launch {
+                                val base = viewModel.defaultSessionConfig()
+                                if (base != null) {
+                                    val config = base.copy(
+                                        repo = RepoRef(
+                                            fullName = session.repoFullName,
+                                            baseBranch = session.baseBranch,
+                                            workBranch = session.workBranch,
+                                        ),
+                                    )
+                                    activeConfig = config to p
+                                }
+                            }
+                        }
+                    },
+                    onArchive = { viewModel.archiveSession(it.id) },
+                )
+            }
             if (paired == null && nearby.isNotEmpty()) {
                 item {
                     Text(
@@ -152,6 +193,10 @@ fun CodeScreen(viewModel: PairingViewModel = viewModel(factory = PairingViewMode
             onStart = { config ->
                 showNewSessionDialog = false
                 activeConfig = config to paired!!
+            },
+            onNavigateToSettings = {
+                showNewSessionDialog = false
+                onNavigateToSettings()
             },
         )
     }
@@ -305,10 +350,12 @@ private fun NewSessionDialog(
     viewModel: PairingViewModel,
     onDismiss: () -> Unit,
     onStart: (SessionConfig) -> Unit,
+    onNavigateToSettings: () -> Unit,
 ) {
-    var repo by remember { mutableStateOf("owner/repo") }
-    var branch by remember { mutableStateOf("feat/new") }
+    var selectedRepo by remember { mutableStateOf<GitHubRepo?>(null) }
+    var branch by remember { mutableStateOf("") }
     var task by remember { mutableStateOf("") }
+    var showRepoPicker by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     var starting by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -318,19 +365,56 @@ private fun NewSessionDialog(
         title = { Text("New session") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = repo,
-                    onValueChange = { repo = it.trim() },
-                    label = { Text("Repository") },
-                    placeholder = { Text("owner/name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                // Repository — tap the field to open the picker sheet.
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showRepoPicker = true },
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.Outlined.Code,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(Modifier.size(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Repository",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                text = selectedRepo?.fullName ?: "Pick a repository…",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = if (selectedRepo != null) {
+                                    MaterialTheme.colorScheme.onSurface
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                                fontFamily = FontFamily.Monospace,
+                            )
+                        }
+                        Icon(
+                            Icons.Outlined.SwapVert,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+
                 OutlinedTextField(
                     value = branch,
                     onValueChange = { branch = it.trim() },
                     label = { Text("Work branch") },
-                    placeholder = { Text("feat/your-change") },
+                    placeholder = { Text(selectedRepo?.defaultBranch ?: "feat/your-change") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -355,8 +439,9 @@ private fun NewSessionDialog(
         confirmButton = {
             TextButton(
                 onClick = {
-                    if (repo.isBlank() || !repo.contains("/")) {
-                        error = "Repo must look like owner/name"
+                    val repo = selectedRepo
+                    if (repo == null) {
+                        error = "Pick a repository first"
                         return@TextButton
                     }
                     if (branch.isBlank()) {
@@ -373,7 +458,30 @@ private fun NewSessionDialog(
                             return@launch
                         }
                         val config = base.copy(
-                            repo = RepoRef(fullName = repo, workBranch = branch),
+                            repo = RepoRef(
+                                fullName = repo.fullName,
+                                baseBranch = repo.defaultBranch,
+                                workBranch = branch,
+                            ),
+                        )
+                        // Register the session so it shows up in the Code
+                        // home list. Title falls back to the repo + branch
+                        // when the user didn't type a first task; the
+                        // session screen can rename it on first message
+                        // (a later PR can swap in the iOS auto-titler).
+                        val now = System.currentTimeMillis()
+                        val sessionTitle = task.take(48).ifBlank { "${repo.fullName} · $branch" }
+                        viewModel.registerSession(
+                            CodeSession(
+                                id = config.id,
+                                title = sessionTitle,
+                                repoFullName = repo.fullName,
+                                baseBranch = repo.defaultBranch,
+                                workBranch = branch,
+                                status = CodeSession.Status.WORKING,
+                                createdAtMillis = now,
+                                updatedAtMillis = now,
+                            ),
                         )
                         onStart(config)
                     }
@@ -385,6 +493,23 @@ private fun NewSessionDialog(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
+
+    if (showRepoPicker) {
+        RepositoryPickerSheet(
+            onPick = { repo ->
+                selectedRepo = repo
+                // Prefill the work branch with the repo's default if the
+                // user hasn't typed anything yet.
+                if (branch.isBlank()) branch = repo.defaultBranch
+                showRepoPicker = false
+            },
+            onLinkGitHub = {
+                showRepoPicker = false
+                onNavigateToSettings()
+            },
+            onDismiss = { showRepoPicker = false },
+        )
+    }
 }
 
 @Composable

@@ -11,6 +11,8 @@ import app.roamsocket.android.RoamSocketApplication
 import app.roamsocket.android.data.PairedServer
 import app.roamsocket.android.data.PairedServerStore
 import app.roamsocket.android.net.ServerDiscovery
+import app.roamsocket.core.code.CodeSession
+import app.roamsocket.core.code.CodeSessionRepository
 import app.roamsocket.core.server.Endpoint
 import app.roamsocket.core.server.ServerClient
 import app.roamsocket.core.server.ServerClientException
@@ -21,6 +23,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.scan
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -37,6 +40,7 @@ class PairingViewModel(
         container.applicationContext,
     ),
     private val pairedStore: PairedServerStore = container.pairedServerStore,
+    private val codeSessions: CodeSessionRepository = container.codeSessionRepository,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(PairingUiState())
@@ -58,6 +62,27 @@ class PairingViewModel(
             started = SharingStarted.WhileSubscribed(5_000),
             initialValue = emptyList(),
         )
+
+    /** Persisted sessions for the Code home list. */
+    val activeSessions: StateFlow<List<CodeSession>> = codeSessions.active
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = emptyList(),
+        )
+
+    /** Add a freshly-started session to the persisted list. */
+    fun registerSession(session: CodeSession) {
+        codeSessions.add(session)
+    }
+
+    /** Move a session into the archived bucket. */
+    fun archiveSession(id: String) {
+        codeSessions.archive(id)
+    }
+
+    /** Look up a session by id. */
+    fun session(id: String): CodeSession? = codeSessions.snapshot().firstOrNull { it.id == id }
 
     fun setHostInput(input: String) {
         _state.value = _state.value.copy(hostInput = input)

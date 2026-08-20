@@ -5,12 +5,15 @@ import app.roamsocket.core.protocol.Effort
 import app.roamsocket.core.protocol.EnvironmentConfig
 import app.roamsocket.core.protocol.PermissionMode
 import app.roamsocket.core.protocol.RepoRef
+import java.util.UUID
 
 /**
  * Inputs the Code tab collects before opening a session. Mirrors
  * `ios/App/Sources/Features/Session/SessionConfig.swift`.
  */
 data class SessionConfig(
+    /** Stable id used by the Code home list to re-attach + persist the session. */
+    val id: String = UUID.randomUUID().toString(),
     val repo: RepoRef,
     val model: SessionModelSelection,
     val permissionMode: PermissionMode = PermissionMode.ACCEPT_EDITS,

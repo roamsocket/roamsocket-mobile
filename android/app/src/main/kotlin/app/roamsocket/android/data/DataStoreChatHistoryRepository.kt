@@ -84,6 +84,12 @@ class DataStoreChatHistoryRepository(
 
     override fun openChat(id: String) = inMemory.openChat(id)
 
+    override fun setModel(
+        id: String,
+        provider: app.roamsocket.core.providers.ProviderId,
+        model: String,
+    ) = inMemory.setModel(id, provider, model)
+
     override fun deleteChat(id: String) = inMemory.deleteChat(id)
 
     override fun discardActiveIfBlank() = inMemory.discardActiveIfBlank()

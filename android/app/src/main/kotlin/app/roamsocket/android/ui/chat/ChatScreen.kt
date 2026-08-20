@@ -2,7 +2,6 @@ package app.roamsocket.android.ui.chat
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -27,6 +26,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -39,7 +39,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
@@ -53,13 +52,9 @@ import app.roamsocket.core.providers.ProviderId
 
 /**
  * Chat tab — the default landing screen. Mirrors the iOS `ChatView` in
- * spirit (scrollable transcript + input bar) but is intentionally minimal
- * for the first Android port: no Markdown, no images, no streaming deltas.
- * Those land in subsequent PRs.
- *
- * @param chatId Stable id of the chat to resume. `null` = fresh blank
- * chat. When set, the view-model hydrates the persisted transcript and
- * persists the next send back to the chat history.
+ * spirit (scrollable transcript + input bar). Past PRs layered on
+ * Markdown rendering (PR #49) and the failed-send retry chip
+ * (PR #53); see the inline callouts.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -136,15 +131,22 @@ fun ChatScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             if (state.messages.isEmpty()) {
-                item("empty") { EmptyState(state.provider) }
+                item("empty") { EmptyState(state.provider, state.hasApiKey) }
             }
             items(state.messages, key = { msg ->
                 when (msg) {
-                    is ChatMessage.User -> "u:" + msg.text.hashCode()
-                    is ChatMessage.Assistant -> "a:" + msg.text.hashCode()
+                    is ChatMessage.User -> "u:" + msg.timestampMillis + ":" + msg.text.hashCode()
+                    is ChatMessage.Assistant -> "a:" + msg.timestampMillis + ":" + msg.text.hashCode()
                 }
             }) { message ->
-                MessageBubble(message)
+                val onRetry: (() -> Unit)? = if (
+                    message is ChatMessage.User &&
+                    message.delivery == ChatMessage.User.Delivery.FAILED &&
+                    !state.isStreaming
+                ) {
+                    { viewModel.retryLast() }
+                } else null
+                MessageBubble(message = message, onRetry = onRetry)
             }
         }
 
@@ -158,9 +160,14 @@ fun ChatScreen(
 }
 
 @Composable
-private fun MessageBubble(message: ChatMessage) {
+private fun MessageBubble(message: ChatMessage, onRetry: (() -> Unit)? = null) {
     val isUser = message is ChatMessage.User
-    val bubbleColor = if (isUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+    val isFailed = isUser && (message as ChatMessage.User).delivery == ChatMessage.User.Delivery.FAILED
+    val bubbleColor = when {
+        isFailed -> MaterialTheme.colorScheme.error
+        isUser -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.surfaceVariant
+    }
     val textColor = if (isUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
     val shape = RoundedCornerShape(
         topStart = 16.dp,
@@ -168,22 +175,27 @@ private fun MessageBubble(message: ChatMessage) {
         bottomStart = if (isUser) 16.dp else 4.dp,
         bottomEnd = if (isUser) 4.dp else 16.dp,
     )
-    Row(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
+        horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
     ) {
-        Surface(
-            color = bubbleColor,
-            shape = shape,
-            modifier = Modifier.padding(horizontal = 4.dp),
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
         ) {
             when (message) {
-                is ChatMessage.User -> Text(
-                    text = message.text,
-                    color = textColor,
-                    style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                )
+                is ChatMessage.User -> Surface(
+                    color = bubbleColor,
+                    shape = shape,
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                ) {
+                    Text(
+                        text = message.text,
+                        color = textColor,
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    )
+                }
                 is ChatMessage.Assistant -> {
                     // Port #8: assistant bubbles render their body as
                     // CommonMark / GFM via Markwon (mirrors iOS
@@ -195,6 +207,27 @@ private fun MessageBubble(message: ChatMessage) {
                         fontSize = 16.sp,
                         modifier = Modifier.padding(horizontal = 4.dp),
                     )
+                }
+            }
+        }
+        if (isFailed) {
+            val reason = (message as ChatMessage.User).failureReason
+            Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = reason?.let { "Couldn't send: $it" } ?: "Couldn't send this message.",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (onRetry != null) {
+                    TextButton(
+                        onClick = onRetry,
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                    ) { Text("Retry") }
                 }
             }
         }
@@ -277,17 +310,31 @@ private fun ErrorBanner(message: String, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun EmptyState(provider: ProviderId) {
-    Box(
+private fun EmptyState(provider: ProviderId, hasApiKey: Boolean) {
+    Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(32.dp),
-        contentAlignment = Alignment.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically),
     ) {
-        Text(
-            text = "Send a message to start chatting with ${provider.displayName}.",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        if (!hasApiKey) {
+            Text(
+                text = "Add an API key for ${provider.displayName}",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = "Tap the key icon in the top bar (or open Settings) to paste your ${provider.displayName} key. Messages you send before adding a key are saved here so you can resume once you're set up.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            Text(
+                text = "Send a message to start chatting with ${provider.displayName}.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
