@@ -43,10 +43,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.roamsocket.android.ui.LocalAppContainer
 import app.roamsocket.android.ui.LocalOpenSidebar
+import app.roamsocket.android.ui.markdown.MarkdownText
 import app.roamsocket.core.providers.ProviderId
 
 /**
@@ -175,15 +177,26 @@ private fun MessageBubble(message: ChatMessage) {
             shape = shape,
             modifier = Modifier.padding(horizontal = 4.dp),
         ) {
-            Text(
-                text = when (message) {
-                    is ChatMessage.User -> message.text
-                    is ChatMessage.Assistant -> message.text
-                },
-                color = textColor,
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-            )
+            when (message) {
+                is ChatMessage.User -> Text(
+                    text = message.text,
+                    color = textColor,
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                )
+                is ChatMessage.Assistant -> {
+                    // Port #8: assistant bubbles render their body as
+                    // CommonMark / GFM via Markwon (mirrors iOS
+                    // MarkdownContentView). The bubble loses the surface
+                    // fill for assistant messages because the markdown
+                    // renderer owns its own block / code-block backgrounds.
+                    MarkdownText(
+                        markdown = message.text,
+                        fontSize = 16.sp,
+                        modifier = Modifier.padding(horizontal = 4.dp),
+                    )
+                }
+            }
         }
     }
 }
