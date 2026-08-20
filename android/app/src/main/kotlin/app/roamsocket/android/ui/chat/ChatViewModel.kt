@@ -46,18 +46,8 @@ class ChatViewModel(
 
     init {
         viewModelScope.launch {
-            // Resume the persisted transcript when the screen opens on an
-            // existing chat id, and prefer the chat's saved (provider, model)
-            // over the global default (port #9: per-chat model selection).
-            val id = effectiveChatId
-            val repoItem = id?.let { container.chatHistoryRepository.snapshot().firstOrNull { c -> c.id == it } }
-            val (provider, model) = if (repoItem?.hasModelOverride == true) {
-                val p = repoItem.resolvedProvider!!
-                val m = repoItem.selectedModel!!
-                p to m
-            } else {
-                container.userSettings.currentProvider.first() to container.userSettings.currentModel.first()
-            }
+            val provider = container.userSettings.currentProvider.first()
+            val model = container.userSettings.currentModel.first()
             applySelection(provider, model)
 
             // Surface whether the current provider has an API key so the
@@ -66,9 +56,16 @@ class ChatViewModel(
             val apiKey = container.secretStore.readApiKey(provider)
             _state.value = _state.value.copy(hasApiKey = !apiKey.isNullOrEmpty())
 
-            if (id != null && repoItem != null) {
-                val resumed = repoItem.messages.map { it.toUi() }
-                _state.value = _state.value.copy(messages = resumed)
+            // Resume the persisted transcript when the screen opens on an
+            // existing chat id.
+            val id = effectiveChatId
+            if (id != null) {
+                val repoItem = container.chatHistoryRepository.snapshot()
+                    .firstOrNull { it.id == id }
+                if (repoItem != null) {
+                    val resumed = repoItem.messages.map { it.toUi() }
+                    _state.value = _state.value.copy(messages = resumed)
+                }
             }
         }
     }
@@ -78,7 +75,6 @@ class ChatViewModel(
         viewModelScope.launch {
             container.userSettings.setCurrent(provider, firstModel)
             applySelection(provider, firstModel)
-            persistModelForActiveChat(provider, firstModel)
         }
     }
 
@@ -87,7 +83,6 @@ class ChatViewModel(
         viewModelScope.launch {
             container.userSettings.setCurrent(provider, model)
             _state.value = _state.value.copy(model = model, modelsForProvider = availableModelsFor(provider))
-            persistModelForActiveChat(provider, model)
         }
     }
 
@@ -116,13 +111,25 @@ class ChatViewModel(
             error = null,
         )
 
+        // Persist the user message immediately (bug fix: previously the
+        // chat only saved on success, so a failed send dropped the user's
+        // text out of the sidebar entirely). The user message is marked
+        // PENDING; the success / failure paths below update it.
+        persistCurrent(nextMessages, lastUserPending = true)
+
         viewModelScope.launch {
             val apiKey = container.secretStore.readApiKey(provider)
             if (apiKey.isNullOrEmpty()) {
-                _state.value = _state.value.copy(
-                    isStreaming = false,
-                    error = "No API key for $provider. Tap the key icon to add one.",
+                val failureMessages = markLastUserFailed(
+                    nextMessages,
+                    "No API key for $provider. Add one in Settings, or use the key icon in the toolbar.",
                 )
+                _state.value = _state.value.copy(
+                    messages = failureMessages,
+                    isStreaming = false,
+                    error = "No API key for $provider.",
+                )
+                persistCurrent(failureMessages, lastUserPending = false)
                 return@launch
             }
             try {
@@ -136,19 +143,35 @@ class ChatViewModel(
                     text = reply,
                     timestampMillis = System.currentTimeMillis(),
                 )
-                val withReply = nextMessages + assistantMsg
+                val withReply = markLastUserSent(nextMessages) + assistantMsg
                 _state.value = _state.value.copy(
                     messages = withReply,
                     isStreaming = false,
                 )
-                persistCurrent(withReply)
+                persistCurrent(withReply, lastUserPending = false)
             } catch (t: Throwable) {
+                val reason = t.message ?: t.javaClass.simpleName
+                val failureMessages = markLastUserFailed(nextMessages, reason)
                 _state.value = _state.value.copy(
+                    messages = failureMessages,
                     isStreaming = false,
-                    error = t.message ?: t.javaClass.simpleName,
+                    error = reason,
                 )
+                persistCurrent(failureMessages, lastUserPending = false)
             }
         }
+    }
+
+    /**
+     * Retry the last failed user message. The last `User` row (whether
+     * currently FAILED or PENDING) is re-sent; any prior assistant
+     * content for the same user turn is dropped.
+     */
+    fun retryLast() {
+        val messages = _state.value.messages
+        val lastUser = messages.lastOrNull { it is ChatMessage.User && it.delivery == ChatMessage.User.Delivery.FAILED }
+            ?: return
+        send(lastUser.text)
     }
 
     fun updateDraft(text: String) {
@@ -181,24 +204,43 @@ class ChatViewModel(
     /**
      * Persist the current transcript for this chat. Lazily mints a new
      * chat id the first time the user sends a message.
+     *
+     * @param lastUserPending when true, the most recent `User` message
+     * is written with `Delivery.PENDING` (we're mid-flight on the API
+     * call). On success / failure the caller writes again with the
+     * final delivery state.
      */
-    private fun persistCurrent(messages: List<ChatMessage>) {
+    private fun persistCurrent(messages: List<ChatMessage>, lastUserPending: Boolean = false) {
         val repo: ChatHistoryRepository = container.chatHistoryRepository
         val id = effectiveChatId ?: repo.startNewChat().also { effectiveChatId = it }
-        val persisted = messages.map { it.toPersisted() }
+        val persisted = messages.mapIndexed { index, msg ->
+            val isLastUser = lastUserPending &&
+                index == messages.lastIndex &&
+                msg is ChatMessage.User
+            msg.toPersisted(markPending = isLastUser)
+        }
         repo.saveMessages(id, persisted)
     }
 
-<<<<<<< HEAD
-=======
-    /**
-     * Save the per-chat model selection. Mints a chat id lazily so the
-     * picker "sticks" to a chat the user hasn't sent a message in yet.
-     */
-    private fun persistModelForActiveChat(provider: ProviderId, model: String) {
-        val repo: ChatHistoryRepository = container.chatHistoryRepository
-        val id = effectiveChatId ?: repo.startNewChat().also { effectiveChatId = it }
-        repo.setModel(id, provider, model)
+    private fun markLastUserSent(messages: List<ChatMessage>): List<ChatMessage> {
+        if (messages.isEmpty()) return messages
+        val last = messages.lastIndex
+        val tail = messages[last]
+        if (tail !is ChatMessage.User) return messages
+        val updated = tail.copy(delivery = ChatMessage.User.Delivery.SENT)
+        return messages.toMutableList().apply { this[last] = updated }
+    }
+
+    private fun markLastUserFailed(messages: List<ChatMessage>, reason: String): List<ChatMessage> {
+        if (messages.isEmpty()) return messages
+        val last = messages.lastIndex
+        val tail = messages[last]
+        if (tail !is ChatMessage.User) return messages
+        val updated = tail.copy(
+            delivery = ChatMessage.User.Delivery.FAILED,
+            failureReason = reason,
+        )
+        return messages.toMutableList().apply { this[last] = updated }
     }
 
     companion object {
@@ -229,6 +271,8 @@ data class ChatUiState(
     val draft: String = "",
     val isStreaming: Boolean = false,
     val error: String? = null,
+    /** True once we've confirmed the current provider has an API key configured. */
+    val hasApiKey: Boolean = false,
 )
 
 /** Sealed UI message. Mirrors the iOS `ChatMessage` rendering model. */
@@ -239,7 +283,13 @@ sealed interface ChatMessage {
     data class User(
         override val text: String,
         override val timestampMillis: Long = System.currentTimeMillis(),
-    ) : ChatMessage
+        /** Delivery state — SENT for the happy path, FAILED on API error, PENDING mid-flight. */
+        val delivery: Delivery = Delivery.SENT,
+        /** Human-readable reason when [delivery] is FAILED. */
+        val failureReason: String? = null,
+    ) : ChatMessage {
+        enum class Delivery { SENT, PENDING, FAILED }
+    }
 
     data class Assistant(
         override val text: String,
@@ -247,12 +297,17 @@ sealed interface ChatMessage {
     ) : ChatMessage
 }
 
-private fun ChatMessage.toPersisted(): PersistedChatMessage = when (this) {
+internal fun ChatMessage.toPersisted(markPending: Boolean = false): PersistedChatMessage = when (this) {
     is ChatMessage.User -> PersistedChatMessage(
         id = "u:$timestampMillis:${text.hashCode()}",
         role = PersistedChatMessage.Role.USER,
         content = text,
         timestampMillis = timestampMillis,
+        delivery = when {
+            markPending -> PersistedChatMessage.Delivery.PENDING
+            delivery == ChatMessage.User.Delivery.FAILED -> PersistedChatMessage.Delivery.FAILED
+            else -> PersistedChatMessage.Delivery.SENT
+        },
     )
     is ChatMessage.Assistant -> PersistedChatMessage(
         id = "a:$timestampMillis:${text.hashCode()}",
@@ -262,8 +317,16 @@ private fun ChatMessage.toPersisted(): PersistedChatMessage = when (this) {
     )
 }
 
-private fun PersistedChatMessage.toUi(): ChatMessage = when (role) {
-    PersistedChatMessage.Role.USER -> ChatMessage.User(content, timestampMillis)
+internal fun PersistedChatMessage.toUi(): ChatMessage = when (role) {
+    PersistedChatMessage.Role.USER -> ChatMessage.User(
+        text = content,
+        timestampMillis = timestampMillis,
+        delivery = when (delivery) {
+            PersistedChatMessage.Delivery.PENDING -> ChatMessage.User.Delivery.PENDING
+            PersistedChatMessage.Delivery.FAILED -> ChatMessage.User.Delivery.FAILED
+            PersistedChatMessage.Delivery.SENT -> ChatMessage.User.Delivery.SENT
+        },
+    )
     PersistedChatMessage.Role.ASSISTANT -> ChatMessage.Assistant(content, timestampMillis)
     PersistedChatMessage.Role.SYSTEM -> ChatMessage.Assistant(content, timestampMillis)
 }
