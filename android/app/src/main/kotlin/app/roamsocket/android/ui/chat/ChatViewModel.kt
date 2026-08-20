@@ -8,6 +8,8 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import app.roamsocket.android.AppContainer
 import app.roamsocket.android.RoamSocketApplication
+import app.roamsocket.core.chats.ChatHistoryRepository
+import app.roamsocket.core.chats.PersistedChatMessage
 import app.roamsocket.core.providers.AIModel
 import app.roamsocket.core.providers.ModelCatalog
 import app.roamsocket.core.providers.ProviderChatMessage
@@ -21,24 +23,48 @@ import kotlinx.coroutines.launch
 /**
  * Drives the Chat tab. Loads the persisted provider + model, looks up the
  * matching API key, and exposes a state stream the Compose screen renders.
+ *
+ * Persistence (PR 1): each chat has a stable [chatId] (UUID). On open, the
+ * view-model hydrates `messages` from the [ChatHistoryRepository]. On every
+ * send, it persists the new transcript so the sidebar's Recents list and
+ * the next launch can resume the conversation.
  */
 class ChatViewModel(
     private val container: AppContainer,
+    /** Stable id of the chat being viewed. `null` = fresh blank chat. */
+    private val chatId: String? = null,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ChatUiState())
     val state: StateFlow<ChatUiState> = _state.asStateFlow()
+
+    /**
+     * Effective chat id. The view-model lazily creates a blank draft on
+     * the first send so the user can compose before deciding to commit.
+     */
+    private var effectiveChatId: String? = chatId
 
     init {
         viewModelScope.launch {
             val provider = container.userSettings.currentProvider.first()
             val model = container.userSettings.currentModel.first()
             applySelection(provider, model)
+
+            // Resume the persisted transcript when the screen opens on an
+            // existing chat id.
+            val id = effectiveChatId
+            if (id != null) {
+                val repoItem = container.chatHistoryRepository.snapshot()
+                    .firstOrNull { it.id == id }
+                if (repoItem != null) {
+                    val resumed = repoItem.messages.map { it.toUi() }
+                    _state.value = _state.value.copy(messages = resumed)
+                }
+            }
         }
     }
 
     fun selectProvider(provider: ProviderId) {
-        // Pick the first default model for the new provider.
         val firstModel = ModelCatalog.defaultsFor(provider).firstOrNull()?.modelID ?: ""
         viewModelScope.launch {
             container.userSettings.setCurrent(provider, firstModel)
@@ -69,7 +95,9 @@ class ChatViewModel(
             return
         }
 
-        val nextMessages = _state.value.messages + ChatMessage.User(trimmed)
+        val now = System.currentTimeMillis()
+        val userMsg = ChatMessage.User(trimmed, timestampMillis = now)
+        val nextMessages = _state.value.messages + userMsg
         _state.value = _state.value.copy(
             messages = nextMessages,
             draft = "",
@@ -93,10 +121,16 @@ class ChatViewModel(
                     messages = nextMessages.toProviderMessages(),
                     effort = null,
                 )
+                val assistantMsg = ChatMessage.Assistant(
+                    text = reply,
+                    timestampMillis = System.currentTimeMillis(),
+                )
+                val withReply = nextMessages + assistantMsg
                 _state.value = _state.value.copy(
-                    messages = _state.value.messages + ChatMessage.Assistant(reply),
+                    messages = withReply,
                     isStreaming = false,
                 )
+                persistCurrent(withReply)
             } catch (t: Throwable) {
                 _state.value = _state.value.copy(
                     isStreaming = false,
@@ -133,6 +167,17 @@ class ChatViewModel(
     private fun availableModelsFor(provider: ProviderId): List<AIModel> =
         ModelCatalog.defaultsFor(provider).ifEmpty { ModelCatalog.defaults }
 
+    /**
+     * Persist the current transcript for this chat. Lazily mints a new
+     * chat id the first time the user sends a message.
+     */
+    private fun persistCurrent(messages: List<ChatMessage>) {
+        val repo: ChatHistoryRepository = container.chatHistoryRepository
+        val id = effectiveChatId ?: repo.startNewChat().also { effectiveChatId = it }
+        val persisted = messages.map { it.toPersisted() }
+        repo.saveMessages(id, persisted)
+    }
+
     companion object {
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {
@@ -140,6 +185,15 @@ class ChatViewModel(
                 ChatViewModel(app.container)
             }
         }
+
+        /**
+         * Factory for a chat screen that resumes a specific chat id.
+         * Use this from [RootView] when the user taps a sidebar recent.
+         */
+        fun factoryFor(container: AppContainer, chatId: String?): ViewModelProvider.Factory =
+            viewModelFactory {
+                initializer { ChatViewModel(container, chatId) }
+            }
     }
 }
 
@@ -156,8 +210,39 @@ data class ChatUiState(
 
 /** Sealed UI message. Mirrors the iOS `ChatMessage` rendering model. */
 sealed interface ChatMessage {
-    data class User(val text: String) : ChatMessage
-    data class Assistant(val text: String) : ChatMessage
+    val text: String
+    val timestampMillis: Long
+
+    data class User(
+        override val text: String,
+        override val timestampMillis: Long = System.currentTimeMillis(),
+    ) : ChatMessage
+
+    data class Assistant(
+        override val text: String,
+        override val timestampMillis: Long = System.currentTimeMillis(),
+    ) : ChatMessage
+}
+
+private fun ChatMessage.toPersisted(): PersistedChatMessage = when (this) {
+    is ChatMessage.User -> PersistedChatMessage(
+        id = "u:$timestampMillis:${text.hashCode()}",
+        role = PersistedChatMessage.Role.USER,
+        content = text,
+        timestampMillis = timestampMillis,
+    )
+    is ChatMessage.Assistant -> PersistedChatMessage(
+        id = "a:$timestampMillis:${text.hashCode()}",
+        role = PersistedChatMessage.Role.ASSISTANT,
+        content = text,
+        timestampMillis = timestampMillis,
+    )
+}
+
+private fun PersistedChatMessage.toUi(): ChatMessage = when (role) {
+    PersistedChatMessage.Role.USER -> ChatMessage.User(content, timestampMillis)
+    PersistedChatMessage.Role.ASSISTANT -> ChatMessage.Assistant(content, timestampMillis)
+    PersistedChatMessage.Role.SYSTEM -> ChatMessage.Assistant(content, timestampMillis)
 }
 
 internal fun List<ChatMessage>.toProviderMessages(): List<ProviderChatMessage> = map { msg ->

@@ -47,11 +47,23 @@ exactly. When changing a message, update all three implementations and
 | EncryptedSharedPreferences-backed SecretStore | ✅ port #2 |
 | Chat tab UI (text-only, no streaming deltas yet) | ✅ port #2 |
 | Model + provider picker (basic) | ✅ port #2 |
-| Code session (server-paired WebSocket) | ⏳ next PR |
-| Settings (proper tab) | ⏳ |
-| GitHub / pairing / repositories | ⏳ |
+| iOS-style sidebar drawer | ✅ port #3 |
+| Code tab (NSD discovery, pairing, paired-server card) | ✅ port #4 |
+| Code session (WebSocket lifecycle, transcript, permissions) | ✅ port #5 |
+| Settings tab + GitHub PAT client | ✅ port #6 |
+| **Chat history persistence + resume (DataStore)** | ✅ **port #7 (this PR)** |
+| Markdown rendering in chat | ⏳ port #8 |
+| Per-chat model selection | ⏳ port #9 |
+| Token streaming (SSE) across providers | ⏳ port #10 |
+| Image attachments + vision (camera + gallery) | ⏳ port #11 |
+| Repository picker via GitHub | ⏳ port #12 |
+| Code home (session list, status filters) | ⏳ port #13 |
+| Incognito chat | ⏳ |
+| Memory store + auto-save | ⏳ |
 | Skills / Marketplace | ⏳ |
-| Voice, Vision, HealthKit (iOS-only features) | 🚫 no Android equivalent — skipped |
+| Artifacts | ⏳ |
+| Projects (group chats) | ⏳ |
+| Voice, HealthKit, Local Metal (iOS-only) | 🚫 no Android equivalent — skipped |
 
 iOS-only features (Metal/MLX on-device LLM, Apple HealthKit, Bonjour, ARKit)
 have no direct Android equivalent. Their corresponding Android slots are

@@ -45,6 +45,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import app.roamsocket.android.ui.LocalAppContainer
 import app.roamsocket.android.ui.LocalOpenSidebar
 import app.roamsocket.core.providers.ProviderId
 
@@ -53,10 +54,20 @@ import app.roamsocket.core.providers.ProviderId
  * spirit (scrollable transcript + input bar) but is intentionally minimal
  * for the first Android port: no Markdown, no images, no streaming deltas.
  * Those land in subsequent PRs.
+ *
+ * @param chatId Stable id of the chat to resume. `null` = fresh blank
+ * chat. When set, the view-model hydrates the persisted transcript and
+ * persists the next send back to the chat history.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatScreen(viewModel: ChatViewModel = viewModel(factory = ChatViewModel.Factory)) {
+fun ChatScreen(
+    chatId: String? = null,
+    viewModel: ChatViewModel = viewModel(
+        key = "ChatScreen:${chatId ?: "blank"}",
+        factory = ChatViewModel.factoryFor(LocalAppContainer.current, chatId),
+    ),
+) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
     var showKeyDialog by remember { mutableStateOf(false) }

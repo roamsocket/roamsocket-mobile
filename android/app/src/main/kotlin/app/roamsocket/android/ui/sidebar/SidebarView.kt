@@ -57,6 +57,7 @@ fun SidebarView(
     onSelect: (SidebarDestination) -> Unit,
     onNewChat: () -> Unit,
     onShowSettings: () -> Unit,
+    onOpenChat: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var studyMode by rememberSaveable { mutableStateOf(false) }
@@ -82,7 +83,7 @@ fun SidebarView(
 
             Recents(
                 history = history,
-                onSelectChat = { onSelect(SidebarDestination.Chat(it.id)) },
+                onSelectChat = { onOpenChat(it.id) },
             )
 
             // Pin download + bottom bar to the edge so they don't shift
