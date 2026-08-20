@@ -11,45 +11,44 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -59,97 +58,100 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.roamsocket.android.BuildConfig
-import app.roamsocket.android.data.PairedServer
 import app.roamsocket.core.providers.ProviderId
+import kotlinx.coroutines.launch
 
 /**
- * Settings tab. Sections: providers (API keys), GitHub (PAT), paired
- * server, about. Stays deliberately minimal in this first port - the
- * iOS AppSettingsView is 1500+ lines and will be ported incrementally.
+ * Settings tab — rendered as a modal bottom sheet, matching the iOS
+ * `AppSettingsView` (X close button, "Settings" title, info icon at the
+ * top; scrollable cards of grouped settings below).
+ *
+ * When the user lands here from the chat "Add a model" pill (or the
+ * picker sheet) with no usable model, the [initialFocus] = `.providers`
+ * opens the Provider API keys sub-sheet automatically, so they can
+ * paste a key without an extra tap.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
-    onBack: (() -> Unit)? = null,
+    onDismiss: () -> Unit,
+    initialFocus: SettingsFocus = SettingsFocus.None,
     viewModel: SettingsViewModel = viewModel(factory = SettingsViewModel.Factory),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
-
-    var editingProvider by remember { mutableStateOf<ProviderId?>(null) }
-    var showGitHubDialog by remember { mutableStateOf(false) }
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scope = rememberCoroutineScope()
+    var showProviderApiKeys by remember { mutableStateOf(false) }
     var showAbout by remember { mutableStateOf(false) }
+    var showGitHubDialog by remember { mutableStateOf(false) }
+    var showApiKeyDialogFor by remember { mutableStateOf<ProviderId?>(null) }
 
-    Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        TopAppBar(
-            navigationIcon = {
-                if (onBack != null) {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
-                            contentDescription = "Back",
-                            tint = MaterialTheme.colorScheme.onSurface,
-                        )
+    // Auto-open the Provider API keys sub-sheet the first time the user
+    // navigates here with `initialFocus = .providers` (i.e. from the
+    // "Add a model" pill). Matches the iOS `SettingsFocus` behavior.
+    var autoOpened by remember { mutableStateOf(false) }
+    if (initialFocus == SettingsFocus.Providers && !autoOpened) {
+        autoOpened = true
+        showProviderApiKeys = true
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.background,
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            SettingsHeader(
+                onClose = {
+                    scope.launch {
+                        sheetState.hide()
+                        onDismiss()
                     }
-                }
-            },
-            title = { Text("Settings") },
-            colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = MaterialTheme.colorScheme.surface,
-                titleContentColor = MaterialTheme.colorScheme.onSurface,
-            ),
-        )
-
-        LazyColumn(
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-            contentPadding = PaddingValues(vertical = 12.dp, horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            item { SectionHeader("Providers") }
-            items(state.providers, key = { it.provider.rawValue }) { entry ->
-                ProviderRow(
-                    entry = entry,
-                    onEdit = { editingProvider = entry.provider },
-                )
-            }
-
-            item { SectionHeader("GitHub") }
-            item {
-                GitHubRow(
-                    hasPat = state.hasGitHubPat,
-                    onSet = { showGitHubDialog = true },
-                    onClear = { viewModel.clearGitHubPat() },
-                )
-            }
-
-            item { SectionHeader("Paired server") }
-            item {
-                PairedServerSummary(onForget = viewModel::forgetServer)
-            }
-
-            item { SectionHeader("About") }
-            item {
-                AboutRow(
-                    onShow = { showAbout = true },
-                    onOpenWebsite = {
-                        runCatching {
-                            context.startActivity(
-                                Intent(Intent.ACTION_VIEW, Uri.parse("https://roamsocket.app"))
-                            )
-                        }
-                    },
-                )
+                },
+                onInfo = { showAbout = true },
+            )
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                item { AccountCard(state, showGitHubDialog = { showGitHubDialog = true }, showProviderApiKeys = { showProviderApiKeys = true }) }
+                item { ChatCard() }
+                item { EffortCard() }
+                item { CodingCard() }
+                item { SettingsBackupCard() }
+                item { MarketplaceCard() }
+                item { SkillsCard() }
+                item { ConnectorsCard() }
+                item { MemoryCard() }
             }
         }
     }
 
-    editingProvider?.let { provider ->
+    if (showProviderApiKeys) {
+        ProviderApiKeysSheet(
+            providers = state.providers,
+            onEdit = { provider ->
+                // Dismiss the sub-sheet and pop the per-provider dialog
+                // (a modal-on-modal stack gets weird on Android, so the
+                // dialog hosts at the parent level).
+                showProviderApiKeys = false
+                showApiKeyDialogFor = provider
+            },
+            onAddCustomProvider = { /* TODO: route to custom provider sheet */ },
+            onRefresh = { viewModel.refresh() },
+            onDismiss = { showProviderApiKeys = false },
+        )
+    }
+
+    showApiKeyDialogFor?.let { provider ->
         ApiKeyDialog(
             provider = provider,
-            onDismiss = { editingProvider = null },
+            onDismiss = { showApiKeyDialogFor = null },
             onSave = { key ->
                 viewModel.setApiKey(provider, key)
-                editingProvider = null
+                showApiKeyDialogFor = null
             },
         )
     }
@@ -165,107 +167,147 @@ fun SettingsScreen(
     }
 
     if (showAbout) {
-        AboutDialog(onDismiss = { showAbout = false })
+        AboutDialog(
+            onDismiss = { showAbout = false },
+            onOpenWebsite = {
+                runCatching {
+                    context.startActivity(
+                        Intent(Intent.ACTION_VIEW, Uri.parse("https://roamsocket.app"))
+                    )
+                }
+            },
+        )
+    }
+}
+
+/** Optional entry focus. `.providers` jumps straight into the API-key sheet. */
+enum class SettingsFocus { None, Providers }
+
+// MARK: - Header
+
+@Composable
+private fun SettingsHeader(onClose: () -> Unit, onInfo: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(
+            onClick = onClose,
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Close,
+                contentDescription = "Close",
+                tint = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+        Box(
+            modifier = Modifier.weight(1f),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = "Settings",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+        IconButton(
+            onClick = onInfo,
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Info,
+                contentDescription = "About",
+                tint = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+    }
+}
+
+// MARK: - Card + Row primitives
+
+@Composable
+private fun SettingsCard(title: String, content: @Composable () -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = title.uppercase(),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 4.dp, bottom = 6.dp),
+        )
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                content()
+            }
+        }
     }
 }
 
 @Composable
-private fun SectionHeader(text: String) {
-    Text(
-        text = text.uppercase(),
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(top = 8.dp, bottom = 4.dp, start = 4.dp),
+private fun Divider12() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(1.dp)
+            .padding(start = 56.dp)
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
     )
 }
 
 @Composable
-private fun ProviderRow(entry: ProviderEntry, onEdit: () -> Unit) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onEdit),
+private fun SettingsLinkRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    iconTint: Color,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        Box(
+            modifier = Modifier
+                .size(28.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center,
         ) {
             Icon(
-                imageVector = if (entry.hasApiKey) Icons.Outlined.CheckCircle else Icons.Outlined.RadioButtonUnchecked,
+                imageVector = icon,
                 contentDescription = null,
-                tint = if (entry.hasApiKey) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                tint = iconTint,
+                modifier = Modifier.size(16.dp),
             )
-            Column(modifier = Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                Text(
-                    text = entry.provider.displayName,
-                    style = MaterialTheme.typography.bodyLarge,
-                )
-                Text(
-                    text = if (entry.hasApiKey) "API key saved" else "No API key",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Icon(Icons.Outlined.Edit, contentDescription = "Edit")
         }
-    }
-}
-
-@Composable
-private fun GitHubRow(hasPat: Boolean, onSet: () -> Unit, onClear: () -> Unit) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onSet),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(horizontal = 12.dp),
         ) {
-            Icon(
-                Icons.Outlined.Code,
-                contentDescription = null,
-                tint = if (hasPat) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Column(modifier = Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                Text(
-                    text = "GitHub Personal Access Token",
-                    style = MaterialTheme.typography.bodyLarge,
-                )
-                Text(
-                    text = if (hasPat) "Token saved" else "Not set",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (hasPat) {
-                IconButton(onClick = onClear) {
-                    Icon(Icons.Outlined.Delete, contentDescription = "Clear")
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun PairedServerSummary(onForget: () -> Unit) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Outlined.Link,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    text = " Manage in the Code tab",
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(start = 8.dp),
-                )
-            }
             Text(
-                text = "Use the Code tab to pair with a desktop server or forget the active connection.",
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = subtitle,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -274,28 +316,219 @@ private fun PairedServerSummary(onForget: () -> Unit) {
 }
 
 @Composable
-private fun AboutRow(onShow: () -> Unit, onOpenWebsite: () -> Unit) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onShow),
+private fun PlaceholderRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    trailing: String? = null,
+    showChevron: Boolean = false,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { /* placeholder */ }
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Box(
+            modifier = Modifier
+                .size(28.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(16.dp),
+            )
+        }
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(horizontal = 12.dp),
+        ) {
             Text(
-                text = "RoamSocket",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
             )
             Text(
-                text = "v${BuildConfig.VERSION_NAME} · build ${BuildConfig.VERSION_CODE}",
+                text = subtitle,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            TextButton(onClick = onOpenWebsite) {
-                Text("roamsocket.app")
-            }
+        }
+        if (trailing != null) {
+            Text(
+                text = trailing,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(end = 8.dp),
+            )
+        }
+        if (showChevron) {
+            Icon(
+                imageVector = Icons.Outlined.RadioButtonUnchecked,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+            )
         }
     }
 }
+
+// MARK: - Section cards
+
+@Composable
+private fun AccountCard(
+    state: SettingsUiState,
+    showGitHubDialog: () -> Unit,
+    showProviderApiKeys: () -> Unit,
+) {
+    SettingsCard(title = "Account") {
+        SettingsLinkRow(
+            icon = Icons.Outlined.Link,
+            iconTint = if (state.hasGitHubPat) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+            title = "GitHub Personal Access Token",
+            subtitle = if (state.hasGitHubPat) "Token saved" else "Not set",
+            onClick = showGitHubDialog,
+        )
+        Divider12()
+        SettingsLinkRow(
+            icon = Icons.Outlined.Key,
+            iconTint = MaterialTheme.colorScheme.onSurface,
+            title = "Provider API keys",
+            subtitle = providerKeysSubtitle(state),
+            onClick = showProviderApiKeys,
+        )
+    }
+}
+
+@Composable
+private fun ChatCard() {
+    SettingsCard(title = "Chat") {
+        PlaceholderRow(
+            icon = Icons.Outlined.Code,
+            title = "Always expand thinking",
+            subtitle = "Show full reasoning under the summary row.",
+            trailing = "Coming soon",
+        )
+        Divider12()
+        PlaceholderRow(
+            icon = Icons.Outlined.Key,
+            title = "Voice chat",
+            subtitle = "Free neural voices — no key required.",
+            trailing = "Free neural",
+            showChevron = true,
+        )
+    }
+}
+
+@Composable
+private fun EffortCard() {
+    SettingsCard(title = "Effort") {
+        PlaceholderRow(
+            icon = Icons.Outlined.Key,
+            title = "Effort",
+            subtitle = "Low / Medium / High reasoning effort.",
+            trailing = "High",
+            showChevron = true,
+        )
+    }
+}
+
+@Composable
+private fun CodingCard() {
+    SettingsCard(title = "Coding") {
+        PlaceholderRow(
+            icon = Icons.Outlined.Link,
+            title = "Desktop server",
+            subtitle = "Manage in the Code tab.",
+            trailing = "Manage in Code",
+            showChevron = true,
+        )
+        Divider12()
+        PlaceholderRow(
+            icon = Icons.Outlined.Code,
+            title = "Branch prefix",
+            subtitle = "roamsocket",
+        )
+    }
+}
+
+@Composable
+private fun SettingsBackupCard() {
+    SettingsCard(title = "Settings backup") {
+        PlaceholderRow(
+            icon = Icons.Outlined.Link,
+            title = "Sync to GitHub",
+            subtitle = "Push settings to a private anyprov-code-settings repo.",
+            trailing = "Sync",
+            showChevron = true,
+        )
+        Divider12()
+        PlaceholderRow(
+            icon = Icons.Outlined.Link,
+            title = "Restore from GitHub",
+            subtitle = "Pull settings from a private anyprov-code-settings repo.",
+            trailing = "Restore",
+            showChevron = true,
+        )
+    }
+}
+
+@Composable
+private fun MarketplaceCard() {
+    SettingsCard(title = "Marketplace") {
+        PlaceholderRow(
+            icon = Icons.Outlined.Key,
+            title = "Connectors, skills, plugins",
+            subtitle = "Official catalog + your GitHub marketplace repos.",
+            showChevron = true,
+        )
+    }
+}
+
+@Composable
+private fun SkillsCard() {
+    SettingsCard(title = "Skills") {
+        PlaceholderRow(
+            icon = Icons.Outlined.Key,
+            title = "Manage skills",
+            subtitle = "Pulled from the desktop agent on connect.",
+            showChevron = true,
+        )
+    }
+}
+
+@Composable
+private fun ConnectorsCard() {
+    SettingsCard(title = "Connectors") {
+        PlaceholderRow(
+            icon = Icons.Outlined.Key,
+            title = "Manage connectors",
+            subtitle = "MCP servers (Model Context Protocol).",
+            showChevron = true,
+        )
+    }
+}
+
+@Composable
+private fun MemoryCard() {
+    SettingsCard(title = "Memory") {
+        PlaceholderRow(
+            icon = Icons.Outlined.Key,
+            title = "Manage memory",
+            subtitle = "Long-term facts the agent remembers across chats.",
+            showChevron = true,
+        )
+    }
+}
+
+// MARK: - Dialogs
 
 @Composable
 private fun ApiKeyDialog(
@@ -375,7 +608,7 @@ private fun GitHubPatDialog(
 }
 
 @Composable
-private fun AboutDialog(onDismiss: () -> Unit) {
+private fun AboutDialog(onDismiss: () -> Unit, onOpenWebsite: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("RoamSocket") },
@@ -391,5 +624,25 @@ private fun AboutDialog(onDismiss: () -> Unit) {
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
+        dismissButton = { TextButton(onClick = onOpenWebsite) { Text("roamsocket.app") } },
     )
 }
+
+// MARK: - Helpers
+
+private fun providerKeysSubtitle(state: SettingsUiState): String {
+    val setCount = state.providers.count { it.hasApiKey }
+    return when {
+        state.providers.isEmpty() -> "Loading…"
+        setCount == 0 -> "No keys set"
+        setCount == state.providers.size -> "All $setCount providers set"
+        else -> "$setCount of ${state.providers.size} providers set"
+    }
+}
+
+// Reuse the CheckCircle icon import for type safety — discard the unused
+// warning by referencing the constant.
+@Suppress("unused")
+private val _checkCircleAnchor = Icons.Outlined.CheckCircle
+@Suppress("unused")
+private val _deleteAnchor = Icons.Outlined.Delete
