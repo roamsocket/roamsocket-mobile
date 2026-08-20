@@ -28,49 +28,21 @@ import app.roamsocket.core.providers.ProviderId
  * Provider + model picker that opens from the chat top bar. Lets the user
  * flip between built-in providers (Anthropic, OpenAI, …) and pick a
  * default model for each one.
- *
- * When the upstream `/v1/models` fetch returns nothing (or has not yet
- * completed), the picker title switches to an "Add a model" CTA that opens
- * the API key dialog — so the user never sees a stale "Provider · model"
- * chip that won't actually work. Once models are pulled the title
- * reverts to the normal provider/model chip.
  */
 @Composable
 fun ModelPicker(
     currentProvider: ProviderId,
     currentModel: String,
     models: List<AIModel>,
-    /**
-     * Result of the live `/v1/models` fetch for the current provider.
-     * `null` = still loading (or never attempted); `[]` = upstream returned
-     * nothing (likely a 401); non-empty = real, usable model list.
-     */
-    liveModels: List<AIModel>?,
     onSelectProvider: (ProviderId) -> Unit,
     onSelectModel: (String) -> Unit,
-    onAddModel: () -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
     var pendingProvider by remember { mutableStateOf(currentProvider) }
 
-    // Show the "Add a model" pill when:
-    //   1. The provider requires an API key (no point showing it for Metal),
-    //      AND
-    //   2. There's no live model list yet (still loading or upstream empty).
-    // The user can still get to the dropdown via the menu icon in the toolbar
-    // — this just makes the *title* honest about what'll actually work.
-    val showAddModelCta =
-        currentProvider.requiresApiKey && (liveModels == null || liveModels.isEmpty())
-
     Box {
-        if (showAddModelCta) {
-            TextButton(onClick = onAddModel) {
-                Text("Add a model", color = MaterialTheme.colorScheme.primary)
-            }
-        } else {
-            TextButton(onClick = { open = true; pendingProvider = currentProvider }) {
-                Text("${currentProvider.displayName} · $currentModel")
-            }
+        TextButton(onClick = { open = true; pendingProvider = currentProvider }) {
+            Text("${currentProvider.displayName} · $currentModel")
         }
         DropdownMenu(
             expanded = open,
@@ -101,7 +73,7 @@ fun ModelPicker(
             val modelsForPending = models.filter { it.provider == pendingProvider }
             if (modelsForPending.isEmpty()) {
                 Text(
-                    text = "No models yet for $pendingProvider. Use the key icon to add an API key, then this list will refresh.",
+                    text = "No defaults for $pendingProvider yet.",
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 )

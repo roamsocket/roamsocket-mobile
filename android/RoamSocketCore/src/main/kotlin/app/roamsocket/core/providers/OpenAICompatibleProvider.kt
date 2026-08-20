@@ -21,9 +21,6 @@ public class OpenAICompatibleProvider(
     private val baseURL: String = id.defaultOpenAIBaseURL(),
 ) : ModelProvider {
 
-    /** Test-visible accessor for the resolved base URL. */
-    internal fun baseURLForTest(): String = baseURL
-
     @Serializable
     private data class ModelList(val data: List<Model> = emptyList()) {
         @Serializable
@@ -121,10 +118,6 @@ private fun ProviderId.defaultOpenAIBaseURL(): String = when (this) {
     ProviderId.OpenRouter -> "https://openrouter.ai/api/v1"
     ProviderId.XAI -> "https://api.x.ai/v1"
     ProviderId.Mistral -> "https://api.mistral.ai/v1"
-    // Mirrors `desktop-server/src/proxy/index.ts` and
-    // `ios/AnyProvCore/Sources/AnyProvCore/Providers/OpenAICompatibleProvider.swift`.
-    // The Android URL was historically `api.minimax.chat` which does NOT host the
-    // MiniMax LLM API and always returns 401 — keep all three surfaces in lockstep.
-    ProviderId.MiniMax -> "https://api.minimax.io/v1"
+    ProviderId.MiniMax -> "https://api.minimax.chat/v1"
     else -> error("Provider $this does not default to an OpenAI-compatible base URL")
 }
