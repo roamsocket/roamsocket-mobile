@@ -40,6 +40,18 @@ public interface ChatHistoryRepository {
     /** Move an existing chat to the top of Recents and make it active. */
     public fun openChat(id: String)
 
+    /**
+     * Persist the per-chat model selection (port #9). The model is
+     * stored as `(provider, model)` so the chat resumes with the
+     * right combination even if the catalog shifts between releases.
+     * No-op if the chat doesn't exist.
+     */
+    public fun setModel(
+        id: String,
+        provider: app.roamsocket.core.providers.ProviderId,
+        model: String,
+    )
+
     /** Forget the chat with [id]. No-op if it doesn't exist. */
     public fun deleteChat(id: String)
 
@@ -131,6 +143,21 @@ public class InMemoryChatHistoryRepository : ChatHistoryRepository {
                 )
             }
             _activeChatId = id
+        }
+    }
+
+    override fun setModel(
+        id: String,
+        provider: app.roamsocket.core.providers.ProviderId,
+        model: String,
+    ) {
+        mutate { list ->
+            val idx = list.indexOfFirst { it.id == id }
+            if (idx < 0) return@mutate
+            list[idx] = list[idx].copy(
+                selectedProvider = provider.rawValue,
+                selectedModel = model,
+            )
         }
     }
 

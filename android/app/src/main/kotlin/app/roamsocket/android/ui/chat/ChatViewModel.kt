@@ -46,20 +46,29 @@ class ChatViewModel(
 
     init {
         viewModelScope.launch {
-            val provider = container.userSettings.currentProvider.first()
-            val model = container.userSettings.currentModel.first()
+            // Resume the persisted transcript when the screen opens on an
+            // existing chat id, and prefer the chat's saved (provider, model)
+            // over the global default (port #9: per-chat model selection).
+            val id = effectiveChatId
+            val repoItem = id?.let { container.chatHistoryRepository.snapshot().firstOrNull { c -> c.id == it } }
+            val (provider, model) = if (repoItem?.hasModelOverride == true) {
+                val p = repoItem.resolvedProvider!!
+                val m = repoItem.selectedModel!!
+                p to m
+            } else {
+                container.userSettings.currentProvider.first() to container.userSettings.currentModel.first()
+            }
             applySelection(provider, model)
 
-            // Resume the persisted transcript when the screen opens on an
-            // existing chat id.
-            val id = effectiveChatId
-            if (id != null) {
-                val repoItem = container.chatHistoryRepository.snapshot()
-                    .firstOrNull { it.id == id }
-                if (repoItem != null) {
-                    val resumed = repoItem.messages.map { it.toUi() }
-                    _state.value = _state.value.copy(messages = resumed)
-                }
+            // Surface whether the current provider has an API key so the
+            // empty state can prompt the user to add one (rather than let
+            // them type a message and watch it silently fail).
+            val apiKey = container.secretStore.readApiKey(provider)
+            _state.value = _state.value.copy(hasApiKey = !apiKey.isNullOrEmpty())
+
+            if (id != null && repoItem != null) {
+                val resumed = repoItem.messages.map { it.toUi() }
+                _state.value = _state.value.copy(messages = resumed)
             }
         }
     }
@@ -69,6 +78,7 @@ class ChatViewModel(
         viewModelScope.launch {
             container.userSettings.setCurrent(provider, firstModel)
             applySelection(provider, firstModel)
+            persistModelForActiveChat(provider, firstModel)
         }
     }
 
@@ -77,6 +87,7 @@ class ChatViewModel(
         viewModelScope.launch {
             container.userSettings.setCurrent(provider, model)
             _state.value = _state.value.copy(model = model, modelsForProvider = availableModelsFor(provider))
+            persistModelForActiveChat(provider, model)
         }
     }
 
@@ -176,6 +187,18 @@ class ChatViewModel(
         val id = effectiveChatId ?: repo.startNewChat().also { effectiveChatId = it }
         val persisted = messages.map { it.toPersisted() }
         repo.saveMessages(id, persisted)
+    }
+
+<<<<<<< HEAD
+=======
+    /**
+     * Save the per-chat model selection. Mints a chat id lazily so the
+     * picker "sticks" to a chat the user hasn't sent a message in yet.
+     */
+    private fun persistModelForActiveChat(provider: ProviderId, model: String) {
+        val repo: ChatHistoryRepository = container.chatHistoryRepository
+        val id = effectiveChatId ?: repo.startNewChat().also { effectiveChatId = it }
+        repo.setModel(id, provider, model)
     }
 
     companion object {

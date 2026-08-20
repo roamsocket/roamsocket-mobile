@@ -29,6 +29,8 @@ class AppContainer(application: Application) {
      * Process-wide scope for long-lived collectors (chat history
      * mirror, NSD discovery, code session persistence, …). Use
      * [viewModelScope][androidx.lifecycle.viewModelScope] from
+     * Process-wide scope for long-lived collectors (e.g. the chat
+     * history mirror, NSD discovery, …). Use [viewModelScope] from
      * `androidx.lifecycle` for per-screen work.
      */
     val appScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
