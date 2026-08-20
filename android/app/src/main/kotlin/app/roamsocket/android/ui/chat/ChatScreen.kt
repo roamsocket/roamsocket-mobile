@@ -9,9 +9,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -21,6 +23,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -31,6 +34,7 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Key
+import androidx.compose.material.icons.outlined.Lightbulb
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -54,6 +58,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
@@ -726,6 +731,11 @@ private fun ErrorBanner(message: String, onDismiss: () -> Unit) {
     }
 }
 
+/**
+ * Empty-state copy shown above the input bar when the chat has no
+ * messages yet. Mirrors the iOS empty state (lightbulb + "What are we
+ * building today?") so the two apps feel consistent on first launch.
+ */
 @Composable
 private fun EmptyState(
     provider: ProviderId,
@@ -736,12 +746,15 @@ private fun EmptyState(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(32.dp),
+            .padding(horizontal = 32.dp, vertical = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically),
+        verticalArrangement = Arrangement.Center,
     ) {
         when {
-            // No key at all — full call-to-action.
+            // No key at all — full call-to-action (PR #57). The user has
+            // not added a provider key yet, so the empty state nudges
+            // them toward Settings (Providers is the first row) rather
+            // than the default "what are we building" hero.
             !hasApiKey -> {
                 Text(
                     text = "Add an API key for ${provider.displayName}",
@@ -779,10 +792,37 @@ private fun EmptyState(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            // Happy-path empty state. Lightbulb in a circular surface
+            // (matches the iOS reference screenshot 1) plus the
+            // "What are we building today?" headline and a one-line
+            // subtitle. Kept on-screen above the input bar so the
+            // composer stays in reach.
             else -> {
+                Box(
+                    modifier = Modifier
+                        .size(64.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Lightbulb,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(32.dp),
+                    )
+                }
+                Spacer(Modifier.size(16.dp))
                 Text(
-                    text = "Send a message to start chatting with ${provider.displayName}.",
-                    style = MaterialTheme.typography.bodyLarge,
+                    text = "What are we building today?",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.size(6.dp))
+                Text(
+                    text = "Ask anything. Add a photo, file, or tool via the + button.",
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
