@@ -59,6 +59,14 @@ fun ModelPickerPill(
     onAddModel: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // Port #9 (amended): the pill always opens the picker sheet, even when
+    // no usable model is configured. This is the only way the user can
+    // change the active provider from the chat surface — the Settings tab
+    // is read-only for default-provider selection. The sheet's provider
+    // list lets the user flip to a provider that *does* have a key
+    // configured (e.g. switching from Anthropic to MiniMax). If they pick
+    // a model for a provider without a key, the next send will surface
+    // a "No API key" error and prompt them to use the top-bar key icon.
     Surface(
         color = if (hasUsableModel) {
             MaterialTheme.colorScheme.surfaceContainerHigh
@@ -68,7 +76,7 @@ fun ModelPickerPill(
         shape = RoundedCornerShape(50),
         modifier = modifier
             .clip(RoundedCornerShape(50))
-            .clickable { if (hasUsableModel) onPick() else onAddModel() },
+            .clickable(onClick = onPick),
     ) {
         if (hasUsableModel) {
             Row(
@@ -104,7 +112,7 @@ fun ModelPickerPill(
                     modifier = Modifier.size(16.dp),
                 )
                 Text(
-                    text = "Add a model",
+                    text = "Select model",
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.primary,
