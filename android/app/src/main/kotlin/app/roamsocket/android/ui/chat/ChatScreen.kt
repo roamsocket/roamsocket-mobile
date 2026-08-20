@@ -26,6 +26,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Send
+import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Image
@@ -61,7 +62,9 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.roamsocket.android.ui.LocalAppContainer
+import app.roamsocket.android.ui.LocalNavigateToCode
 import app.roamsocket.android.ui.LocalNavigateToSettings
+import app.roamsocket.android.ui.LocalNavigateToSidebar
 import app.roamsocket.android.ui.LocalOpenSidebar
 import app.roamsocket.android.ui.markdown.MarkdownText
 import app.roamsocket.core.providers.AIModel
@@ -92,6 +95,9 @@ fun ChatScreen(
     val context = LocalContext.current
     var showKeyDialog by remember { mutableStateOf(false) }
     var showModelPicker by remember { mutableStateOf(false) }
+    // Port #12: Add to Chat sheet. The `+` button toggles this; the
+    // sheet's callback chain also dismisses the sheet on selection.
+    var showAddToChat by remember { mutableStateOf(false) }
     // Pending camera output URI. We mint it on demand and feed it to
     // `TakePicture`; the camera writes the JPEG to this URI on success.
     var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
@@ -123,6 +129,16 @@ fun ChatScreen(
         val uri = createCameraOutputUri(context)
         pendingCameraUri = uri
         cameraLauncher.launch(uri)
+    }
+
+    // Port #12: file-attachment launcher. Storage Access Framework via
+    // OpenMultipleDocuments, so we get a per-URI grant the user can read
+    // off the main thread (the model gets a `[Attached file: name]` block
+    // inlined into the user message).
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris ->
+        if (uris.isNotEmpty()) viewModel.addFiles(uris, context.contentResolver)
     }
 
     // Auto-scroll the latest message into view.
@@ -197,6 +213,47 @@ fun ChatScreen(
             )
         }
 
+        // Port #12: capture the navigation lambdas into local vars
+        // because `compositionLocalOf.current` is a @Composable getter
+        // and we need to invoke the result from inside non-composable
+        // sheet callbacks below.
+        val navigateToCode = LocalNavigateToCode.current
+        val navigateToSidebar = LocalNavigateToSidebar.current
+
+        if (showAddToChat) {
+            AddToChatSheet(
+                researchEnabled = state.researchEnabled,
+                webSearchEnabled = state.webSearchEnabled,
+                locationEnabled = state.locationEnabled,
+                toolAccess = state.toolAccess,
+                onDismiss = { showAddToChat = false },
+                onStartCodingSession = navigateToCode,
+                onAddFiles = {
+                    // Use the SAF file picker with a permissive MIME
+                    // filter so the user can attach anything from
+                    // markdown notes to source code to PDFs. The
+                    // attachment helper decides what to do with each
+                    // type at read time.
+                    filePickerLauncher.launch(arrayOf("*/*"))
+                },
+                onAddToProject = {
+                    // "Projects" is a placeholder destination on the
+                    // sidebar in this port; jumping to it is the
+                    // cheapest thing that "works" without inventing a
+                    // full project picker sheet.
+                    navigateToSidebar(app.roamsocket.android.ui.sidebar.SidebarDestination.Projects)
+                },
+                onShowConnectors = {
+                    // Connectors is also a sidebar placeholder for now.
+                    navigateToSidebar(app.roamsocket.android.ui.sidebar.SidebarDestination.Browser)
+                },
+                onSetResearchEnabled = viewModel::setResearchEnabled,
+                onSetWebSearchEnabled = viewModel::setWebSearchEnabled,
+                onSetLocationEnabled = viewModel::setLocationEnabled,
+                onSetToolAccess = viewModel::setToolAccess,
+            )
+        }
+
         state.error?.let { err ->
             ErrorBanner(message = err, onDismiss = viewModel::dismissError)
         }
@@ -255,6 +312,7 @@ fun ChatScreen(
             draft = state.draft,
             isStreaming = state.isStreaming,
             attachedImages = state.attachedImages,
+            attachedFiles = state.attachedFiles,
             onDraftChange = viewModel::updateDraft,
             onSend = { viewModel.send(state.draft) },
             modelDisplayName = state.modelsForProvider
@@ -268,7 +326,9 @@ fun ChatScreen(
             },
             onAttachCamera = { onLaunchCamera() },
             onAttachGallery = { onLaunchGallery() },
+            onOpenAddToChat = { showAddToChat = true },
             onRemoveAttachment = { index -> viewModel.removeAttachedImage(index) },
+            onRemoveFile = { index -> viewModel.removeAttachedFile(index) },
         )
     }
 }
@@ -360,8 +420,11 @@ private fun ChatInputBar(
     onAddModel: () -> Unit,
     onAttachCamera: () -> Unit,
     onAttachGallery: () -> Unit,
+    onOpenAddToChat: () -> Unit,
     onRemoveAttachment: (Int) -> Unit,
+    onRemoveFile: (Int) -> Unit,
     attachedImages: List<ProviderChatMessage.ImageAttachment>,
+    attachedFiles: List<ProviderChatMessage.FileAttachment>,
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surface,
@@ -384,6 +447,16 @@ private fun ChatInputBar(
                     modifier = Modifier.padding(bottom = 6.dp),
                 )
             }
+            // Port #12: file attachments (Add to Chat → Add files). The
+            // chip row sits between the image row and the text field so
+            // the user can see what they've queued regardless of order.
+            if (attachedFiles.isNotEmpty()) {
+                AttachedFilesRow(
+                    files = attachedFiles,
+                    onRemove = onRemoveFile,
+                    modifier = Modifier.padding(bottom = 6.dp),
+                )
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(
                     value = draft,
@@ -400,13 +473,13 @@ private fun ChatInputBar(
                 )
                 IconButton(
                     onClick = onSend,
-                    enabled = !isStreaming && (draft.isNotBlank() || attachedImages.isNotEmpty()),
+                    enabled = !isStreaming && (draft.isNotBlank() || attachedImages.isNotEmpty() || attachedFiles.isNotEmpty()),
                 ) {
                     Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = "Send")
                 }
             }
-            // Port #9 (model pill) + Port #7 (camera + gallery). The +
-            // button and mic land in later PRs (#12 + future).
+            // Port #12: + button (Add to Chat sheet).
+            // Port #9 (model pill) + Port #7 (camera + gallery).
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -414,6 +487,16 @@ private fun ChatInputBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
+                IconButton(
+                    onClick = onOpenAddToChat,
+                    enabled = !isStreaming,
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Add,
+                        contentDescription = "Add to Chat",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 IconButton(
                     onClick = onAttachCamera,
                     enabled = !isStreaming,
@@ -488,6 +571,61 @@ private fun AttachedImagesRow(
                     Icon(
                         imageVector = Icons.Outlined.Close,
                         contentDescription = "Remove image ${index + 1}",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Chip row for the files the user picked via the Add to Chat sheet
+ * (port #12 → "Add files"). Mirrors [AttachedImagesRow] but uses a
+ * document icon and the file's display name. Tap-to-remove a chip.
+ */
+@Composable
+private fun AttachedFilesRow(
+    files: List<ProviderChatMessage.FileAttachment>,
+    onRemove: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        files.forEachIndexed { index, file ->
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                shape = RoundedCornerShape(50),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .clickable { onRemove(index) },
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Add,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Text(
+                        text = file.displayName,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                    )
+                    Icon(
+                        imageVector = Icons.Outlined.Close,
+                        contentDescription = "Remove ${file.displayName}",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(16.dp),
                     )

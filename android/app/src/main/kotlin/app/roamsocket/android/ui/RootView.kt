@@ -45,6 +45,24 @@ val LocalOpenSidebar = compositionLocalOf<() -> Unit> { error("LocalOpenSidebar 
 val LocalNavigateToSettings = compositionLocalOf<() -> Unit> { error("LocalNavigateToSettings not provided") }
 
 /**
+ * `CompositionLocal` carrying a lambda that switches the top-level
+ * destination to the Code tab. Used by the chat's "Add to Chat → Start
+ * coding session" entry (port #12) to jump into the desktop agent
+ * without making the chat composable aware of the navigation graph.
+ */
+val LocalNavigateToCode = compositionLocalOf<() -> Unit> { error("LocalNavigateToCode not provided") }
+
+/**
+ * `CompositionLocal` carrying a lambda that switches the top-level
+ * destination to an arbitrary [SidebarDestination]. Used by the chat's
+ * Add to Chat sheet (port #12) to route to Projects, Connectors, and
+ * any future placeholder destinations.
+ */
+val LocalNavigateToSidebar = compositionLocalOf<(SidebarDestination) -> Unit> {
+    error("LocalNavigateToSidebar not provided")
+}
+
+/**
  * Top-level shell. Mirrors the iOS `RootView` (sidebar drawer + content)
  * using a Compose `ModalNavigationDrawer` so the Android app presents the
  * same left-edge navigation as the iOS app.
@@ -109,6 +127,8 @@ fun RootView() {
         CompositionLocalProvider(
             LocalOpenSidebar provides { scope.launch { drawerState.open() } },
             LocalNavigateToSettings provides { current = SidebarDestination.Settings },
+            LocalNavigateToCode provides { current = SidebarDestination.Code },
+            LocalNavigateToSidebar provides { dest -> navigate(dest) },
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
                 when (current) {
