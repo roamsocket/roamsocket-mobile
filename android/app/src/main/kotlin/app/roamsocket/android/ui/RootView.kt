@@ -37,6 +37,14 @@ import kotlinx.coroutines.launch
 val LocalOpenSidebar = compositionLocalOf<() -> Unit> { error("LocalOpenSidebar not provided") }
 
 /**
+ * `CompositionLocal` carrying a lambda that switches the top-level
+ * destination to Settings. Used by the chat's "Add a model" pill (and
+ * the picker's empty state) to take the user to the Providers section
+ * of Settings when no API key is configured.
+ */
+val LocalNavigateToSettings = compositionLocalOf<() -> Unit> { error("LocalNavigateToSettings not provided") }
+
+/**
  * Top-level shell. Mirrors the iOS `RootView` (sidebar drawer + content)
  * using a Compose `ModalNavigationDrawer` so the Android app presents the
  * same left-edge navigation as the iOS app.
@@ -100,6 +108,7 @@ fun RootView() {
     ) {
         CompositionLocalProvider(
             LocalOpenSidebar provides { scope.launch { drawerState.open() } },
+            LocalNavigateToSettings provides { current = SidebarDestination.Settings },
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
                 when (current) {
@@ -109,7 +118,9 @@ fun RootView() {
                     SidebarDestination.Code -> CodeScreen(
                         onNavigateToSettings = { current = SidebarDestination.Settings },
                     )
-                    SidebarDestination.Settings -> SettingsScreen()
+                    SidebarDestination.Settings -> SettingsScreen(
+                        onBack = { current = SidebarDestination.Chats },
+                    )
                     else -> PlaceholderScreen(
                         title = labelFor(current),
                         icon = current.icon(),
