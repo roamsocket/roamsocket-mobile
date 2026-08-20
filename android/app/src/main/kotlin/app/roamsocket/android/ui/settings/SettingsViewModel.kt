@@ -64,16 +64,18 @@ class SettingsViewModel(
         viewModelScope.launch { container.pairedServerStore.clear() }
     }
 
-    private suspend fun refresh() {
-        val providers = ProviderId.BUILT_IN.map { provider ->
-            val hasKey = !container.secretStore.readApiKey(provider).isNullOrEmpty()
-            ProviderEntry(provider, hasApiKey = hasKey)
+    fun refresh() {
+        viewModelScope.launch {
+            val providers = ProviderId.BUILT_IN.map { provider ->
+                val hasKey = !container.secretStore.readApiKey(provider).isNullOrEmpty()
+                ProviderEntry(provider, hasApiKey = hasKey)
+            }
+            val githubPat = !container.secretStore.readSecret(KEY_GITHUB_PAT).isNullOrEmpty()
+            _state.value = _state.value.copy(
+                providers = providers,
+                hasGitHubPat = githubPat,
+            )
         }
-        val githubPat = !container.secretStore.readSecret(KEY_GITHUB_PAT).isNullOrEmpty()
-        _state.value = _state.value.copy(
-            providers = providers,
-            hasGitHubPat = githubPat,
-        )
     }
 
     companion object {

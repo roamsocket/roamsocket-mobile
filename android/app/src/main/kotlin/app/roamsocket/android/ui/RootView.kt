@@ -21,6 +21,7 @@ import androidx.compose.ui.Modifier
 import app.roamsocket.android.ui.chat.ChatScreen
 import app.roamsocket.android.ui.code.CodeScreen
 import app.roamsocket.android.ui.placeholder.PlaceholderScreen
+import app.roamsocket.android.ui.settings.SettingsFocus
 import app.roamsocket.android.ui.settings.SettingsScreen
 import app.roamsocket.android.ui.sidebar.SidebarDestination
 import app.roamsocket.android.ui.sidebar.SidebarDestinationSaver
@@ -63,6 +64,14 @@ val LocalNavigateToSidebar = compositionLocalOf<(SidebarDestination) -> Unit> {
 }
 
 /**
+ * `CompositionLocal` carrying the initial focus for the next Settings
+ * presentation. The chat's "Add a model" pill sets this to
+ * [SettingsFocus.Providers] before navigating, so the modal opens
+ * straight into the API-key editor — matching the iOS flow.
+ */
+val LocalSettingsFocus = compositionLocalOf<SettingsFocus> { SettingsFocus.None }
+
+/**
  * Top-level shell. Mirrors the iOS `RootView` (sidebar drawer + content)
  * using a Compose `ModalNavigationDrawer` so the Android app presents the
  * same left-edge navigation as the iOS app.
@@ -83,6 +92,10 @@ fun RootView() {
     // Stable id of the chat the user is currently looking at. Held here
     // so sidebar taps + new-chat both flow into the ChatScreen.
     var activeChatId by rememberSaveable { mutableStateOf<String?>(null) }
+    // Initial focus for the next Settings presentation. The chat's
+    // "Add a model" pill writes [SettingsFocus.Providers] here before
+    // navigating so the modal opens straight into the API-key editor.
+    var initialSettingsFocus by remember { mutableStateOf<SettingsFocus>(SettingsFocus.None) }
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
 
@@ -129,6 +142,7 @@ fun RootView() {
             LocalNavigateToSettings provides { current = SidebarDestination.Settings },
             LocalNavigateToCode provides { current = SidebarDestination.Code },
             LocalNavigateToSidebar provides { dest -> navigate(dest) },
+            LocalSettingsFocus provides initialSettingsFocus.also { initialSettingsFocus = SettingsFocus.None },
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
                 when (current) {
@@ -139,7 +153,8 @@ fun RootView() {
                         onNavigateToSettings = { current = SidebarDestination.Settings },
                     )
                     SidebarDestination.Settings -> SettingsScreen(
-                        onBack = { current = SidebarDestination.Chats },
+                        onDismiss = { current = SidebarDestination.Chats },
+                        initialFocus = LocalSettingsFocus.current,
                     )
                     else -> PlaceholderScreen(
                         title = labelFor(current),
