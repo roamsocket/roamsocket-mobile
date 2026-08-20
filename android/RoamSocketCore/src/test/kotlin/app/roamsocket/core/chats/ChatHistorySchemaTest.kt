@@ -73,4 +73,30 @@ class ChatHistorySchemaTest {
         val decoded = json.decodeFromString(PersistedChatMessage.serializer(), encoded)
         assertEquals(msg, decoded)
     }
+
+    @Test
+    fun failedDeliveryRoundtrips() {
+        val msg = PersistedChatMessage(
+            id = "m-fail",
+            role = PersistedChatMessage.Role.USER,
+            content = "Why?",
+            timestampMillis = 7L,
+            delivery = PersistedChatMessage.Delivery.FAILED,
+        )
+        val encoded = json.encodeToString(PersistedChatMessage.serializer(), msg)
+        assertTrue(
+            "expected failed delivery to serialize as 'failed', got: $encoded",
+            encoded.contains("\"delivery\":\"failed\""),
+        )
+        val decoded = json.decodeFromString(PersistedChatMessage.serializer(), encoded)
+        assertEquals(msg, decoded)
+    }
+
+    @Test
+    fun legacyRowsWithoutDeliveryDefaultToSent() {
+        // Hand-written legacy JSON (no `delivery` key) must deserialize.
+        val legacy = """{"id":"x","role":"user","content":"hi","timestampMillis":1}"""
+        val decoded = json.decodeFromString(PersistedChatMessage.serializer(), legacy)
+        assertEquals(PersistedChatMessage.Delivery.SENT, decoded.delivery)
+    }
 }
