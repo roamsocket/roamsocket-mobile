@@ -103,8 +103,14 @@ fun RootView() {
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
                 when (current) {
+                    // Both branches agree: CodeScreen takes the
+                    // onNavigateToSettings callback (from the repo
+                    // picker flow). Keep the chat-history chatId
+                    // wire (HEAD).
                     SidebarDestination.Chats, is SidebarDestination.Chat -> ChatScreen(chatId = activeChatId)
-                    SidebarDestination.Code -> CodeScreen()
+                    SidebarDestination.Code -> CodeScreen(
+                        onNavigateToSettings = { current = SidebarDestination.Settings },
+                    )
                     SidebarDestination.Settings -> SettingsScreen()
                     else -> PlaceholderScreen(
                         title = labelFor(current),
