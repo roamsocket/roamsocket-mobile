@@ -1,9 +1,18 @@
 package app.roamsocket.core.providers
 
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+
 /**
- * Static fallback list of known-good models per provider. Mirrors
- * `ios/AnyProvCore/.../ModelCatalog.swift`. Used when the user has not
- * yet listed live models from the provider API.
+ * Static fallback list + live catalog fetcher.
+ *
+ * Mirrors `ios/AnyProvCore/.../ModelCatalog.swift`. The static [defaults]
+ * are used when the user has not yet listed live models (offline
+ * cold-start, no API key yet, or a provider errored). [fetchAll] is the
+ * dynamic path: it asks every provider that has a key for its model
+ * list, in parallel, and returns per-provider results (including
+ * failures, surfaced as the [ProviderResult.error] field).
  */
 public object ModelCatalog {
 
@@ -37,4 +46,53 @@ public object ModelCatalog {
     /** Defaults filtered to a single provider, sorted by display name. */
     public fun defaultsFor(provider: ProviderId): List<AIModel> =
         defaults.filter { it.provider == provider }.sortedBy { it.displayName }
+
+    /**
+     * Per-provider outcome of a catalog fetch. [models] is the live
+     * listing (possibly empty if the provider errored); [error] is a
+     * human-readable message when the fetch failed, null otherwise.
+     */
+    public data class ProviderResult(
+        val provider: ProviderId,
+        val models: List<AIModel>,
+        val error: String? = null,
+    ) {
+        /** True if the provider errored or returned no models. */
+        val isEmpty: Boolean get() = models.isEmpty() && error == null
+    }
+
+    /**
+     * Fetch models from every provider in [keys] that has a non-empty
+     * key, concurrently. Providers with no client registered (e.g.
+     * on-device Metal on Android) or no key are skipped. The returned
+     * list is in the same order as the input.
+     *
+     * Failures are captured per-provider (not thrown), so the UI can
+     * show one provider's models even if another 500s.
+     */
+    public suspend fun fetchAll(
+        keys: Map<ProviderId, String>,
+        http: HTTPClient = OkHttpHTTPClient(),
+    ): List<ProviderResult> = coroutineScope {
+        val configured = keys.filter { it.value.isNotEmpty() }
+        configured.entries.map { (id, key) ->
+            async {
+                val client = ProviderRegistry.client(id, http)
+                if (client == null) {
+                    ProviderResult(id, models = emptyList(), error = "No client for $id")
+                } else {
+                    try {
+                        val models = client.listModels(key)
+                        ProviderResult(id, models = models)
+                    } catch (e: Throwable) {
+                        ProviderResult(
+                            id,
+                            models = emptyList(),
+                            error = e.message ?: e.javaClass.simpleName,
+                        )
+                    }
+                }
+            }
+        }.awaitAll()
+    }
 }

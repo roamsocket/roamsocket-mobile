@@ -20,14 +20,17 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,18 +41,21 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import app.roamsocket.core.providers.AIModel
+import app.roamsocket.core.providers.ModelCatalog
 import app.roamsocket.core.providers.ProviderId
 
 /**
  * Capsule-shaped button rendered in the chat input bar that opens the
- * model picker sheet. Mirrors the iOS `ModelSelectorPill`:
- *  - shows the current model display name + chevron when a model is selected
- *  - shows an accent-tinted "Add a model" CTA when no usable model is set
- *    (caller supplies [onAddModel] to route the tap to provider settings)
+ * model picker sheet. Mirrors the iOS `ModelSelectorPill`.
  *
- * The pill is intentionally small and left-aligned so the surrounding
- * text field + send button keep their existing layout.
+ * - With a usable model: shows the model name + chevron and opens the
+ *   picker sheet on tap.
+ * - Without a usable model: shows an accent-tinted "Add a model" CTA
+ *   and routes the tap to [onAddModel] (which takes the user to the
+ *   Settings tab's Providers section so they can add a key).
  */
 @Composable
 fun ModelPickerPill(
@@ -59,14 +65,6 @@ fun ModelPickerPill(
     onAddModel: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // Port #9 (amended): the pill always opens the picker sheet, even when
-    // no usable model is configured. This is the only way the user can
-    // change the active provider from the chat surface — the Settings tab
-    // is read-only for default-provider selection. The sheet's provider
-    // list lets the user flip to a provider that *does* have a key
-    // configured (e.g. switching from Anthropic to MiniMax). If they pick
-    // a model for a provider without a key, the next send will surface
-    // a "No API key" error and prompt them to use the top-bar key icon.
     Surface(
         color = if (hasUsableModel) {
             MaterialTheme.colorScheme.surfaceContainerHigh
@@ -76,7 +74,7 @@ fun ModelPickerPill(
         shape = RoundedCornerShape(50),
         modifier = modifier
             .clip(RoundedCornerShape(50))
-            .clickable(onClick = onPick),
+            .clickable { if (hasUsableModel) onPick() else onAddModel() },
     ) {
         if (hasUsableModel) {
             Row(
@@ -112,7 +110,7 @@ fun ModelPickerPill(
                     modifier = Modifier.size(16.dp),
                 )
                 Text(
-                    text = "Select model",
+                    text = "Add a model",
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.primary,
@@ -124,39 +122,50 @@ fun ModelPickerPill(
 }
 
 /**
- * "Select model" bottom sheet. Mirrors the iOS `ModelPickerSheet` in
- * spirit: a two-section list (Provider, then Model) where the model list
- * is filtered by the selected provider. Tapping a model selects it and
- * dismisses the sheet.
+ * "Select model" bottom sheet. Driven by [ModelCatalogViewModel] which
+ * fetches the live provider catalog (skipping providers without API
+ * keys). Each provider that returns at least one model is shown in the
+ * top list; tapping it reveals that provider's models below.
  *
- * The provider list intentionally hides `LocalMetal` (iOS-only on-device
- * provider) and excludes iOS-only ergonomics like Metal load controls.
- *
- * @param currentProvider the provider the view-model currently has
- * @param currentModel the model id the view-model currently has
- * @param models all known models for the catalog (per-provider, used to
- *   populate the model list for the active provider)
- * @param onSelectProvider invoked when the user changes provider
- * @param onSelectModel invoked when the user picks a model
- * @param onDismiss invoked when the sheet is closed without a pick
+ * Per-provider errors (e.g. invalid key, 5xx) are surfaced in a
+ * collapsed section at the bottom — same UX as iOS
+ * `ModelPickerSheet.errorRow`. When the catalog comes back empty (no
+ * configured providers, or every provider errored), the sheet shows an
+ * "Add a model" CTA that takes the user to Settings.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ModelPickerSheet(
     currentProvider: ProviderId,
     currentModel: String,
-    models: List<AIModel>,
     onSelectProvider: (ProviderId) -> Unit,
     onSelectModel: (String) -> Unit,
+    onAddModel: () -> Unit,
     onDismiss: () -> Unit,
+    viewModel: ModelCatalogViewModel = viewModel(factory = ModelCatalogViewModel.Factory),
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    // Local override for the provider shown in the sheet so the user can
-    // scroll the provider list without immediately firing the chat's
-    // selection. The actual selection only commits when they tap a model.
-    var pendingProvider by remember(currentProvider) { mutableStateOf(currentProvider) }
-    val pendingModels = remember(pendingProvider, models) {
-        models.filter { it.provider == pendingProvider }
+    val state by viewModel.state.collectAsStateWithLifecycle()
+
+    LaunchedEffect(Unit) {
+        // Re-fetch every time the sheet opens so a freshly added key
+        // shows up without the user having to close + reopen the chat.
+        viewModel.load(force = state.results.isEmpty())
+    }
+
+    // Split results into "has models" vs "error / empty".
+    val usable = remember(state.results) {
+        state.results.filter { it.models.isNotEmpty() }
+    }
+    val errors = remember(state.results) {
+        state.results.filter { it.models.isEmpty() && it.error != null }
+    }
+    val pendingProvider: ProviderId? = remember(usable, currentProvider) {
+        if (usable.any { it.provider == currentProvider }) currentProvider
+        else usable.firstOrNull()?.provider
+    }
+    val pendingModels: List<AIModel> = remember(pendingProvider, usable) {
+        usable.firstOrNull { it.provider == pendingProvider }?.models.orEmpty()
     }
 
     ModalBottomSheet(
@@ -167,7 +176,7 @@ fun ModelPickerSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(max = 640.dp)
+                .heightIn(max = 720.dp)
                 .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {
             Text(
@@ -177,56 +186,149 @@ fun ModelPickerSheet(
                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
             )
 
-            SectionLabel("Provider")
+            when {
+                state.isLoading && usable.isEmpty() -> LoadingState()
+                usable.isEmpty() -> EmptyConfiguredState(
+                    errors = errors,
+                    onAddModel = {
+                        onAddModel()
+                        onDismiss()
+                    },
+                )
+                else -> {
+                    SectionLabel("Provider")
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 220.dp),
+                        contentPadding = PaddingValues(vertical = 4.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        items(usable, key = { it.provider.rawValue }) { result ->
+                            ProviderRow(
+                                provider = result.provider,
+                                isSelected = pendingProvider == result.provider,
+                                onClick = { onSelectProvider(result.provider) },
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+                    SectionLabel("Model")
+                    if (pendingModels.isEmpty()) {
+                        Text(
+                            text = "No models available for ${pendingProvider?.displayName ?: "this provider"}.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 12.dp),
+                        )
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 360.dp),
+                            contentPadding = PaddingValues(vertical = 4.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            items(pendingModels, key = { it.modelID }) { model ->
+                                ModelRow(
+                                    model = model,
+                                    isSelected = pendingProvider == currentProvider && model.modelID == currentModel,
+                                    onClick = {
+                                        if (pendingProvider != null) {
+                                            onSelectProvider(pendingProvider)
+                                            onSelectModel(model.modelID)
+                                            onDismiss()
+                                        }
+                                    },
+                                )
+                            }
+                        }
+                    }
+
+                    if (errors.isNotEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        SectionLabel("Errors")
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 140.dp),
+                            contentPadding = PaddingValues(vertical = 4.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            items(errors, key = { it.provider.rawValue }) { result ->
+                                ErrorProviderRow(result)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LoadingState() {
+    Box(modifier = Modifier.fillMaxWidth().padding(vertical = 40.dp), contentAlignment = Alignment.Center) {
+        CircularProgressIndicator()
+    }
+}
+
+@Composable
+private fun ErrorState(message: String) {
+    // Kept for forward compatibility (e.g. a future per-sheet global
+    // error banner). The current `when` branch in [ModelPickerSheet]
+    // routes "no usable providers" through [EmptyConfiguredState]
+    // instead, so this is unused for now.
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp, horizontal = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = message,
+            color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+    }
+}
+
+@Composable
+private fun EmptyConfiguredState(
+    errors: List<ModelCatalog.ProviderResult>,
+    onAddModel: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp, horizontal = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(
+            text = if (errors.isEmpty()) "No providers configured" else "Couldn't load any providers",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+            text = if (errors.isEmpty()) {
+                "Add an API key in Settings to choose a model."
+            } else {
+                "Every configured provider returned an error. Check your API keys in Settings."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        TextButton(onClick = onAddModel) {
+            Text("Go to Settings", fontWeight = FontWeight.SemiBold)
+        }
+        if (errors.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
             LazyColumn(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 220.dp),
+                modifier = Modifier.fillMaxWidth().heightIn(max = 160.dp),
                 contentPadding = PaddingValues(vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                val providers = ProviderId.BUILT_IN
-                    .filter { it !is ProviderId.LocalMetal }
-                items(providers, key = { it.rawValue }) { id ->
-                    ProviderRow(
-                        provider = id,
-                        isSelected = pendingProvider == id,
-                        onClick = {
-                            pendingProvider = id
-                            onSelectProvider(id)
-                        },
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(8.dp))
-            SectionLabel("Model")
-            if (pendingModels.isEmpty()) {
-                Text(
-                    text = "No defaults for ${pendingProvider.displayName} yet. Add an API key in Settings, or extend the catalog.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 12.dp),
-                )
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 320.dp),
-                    contentPadding = PaddingValues(vertical = 4.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    items(pendingModels, key = { it.modelID }) { model ->
-                        ModelRow(
-                            model = model,
-                            isSelected = pendingProvider == currentProvider && model.modelID == currentModel,
-                            onClick = {
-                                onSelectProvider(pendingProvider)
-                                onSelectModel(model.modelID)
-                                onDismiss()
-                            },
-                        )
-                    }
+                items(errors, key = { it.provider.rawValue }) { result ->
+                    ErrorProviderRow(result)
                 }
             }
         }
@@ -334,6 +436,29 @@ private fun ModelRow(
                     modifier = Modifier.size(18.dp),
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun ErrorProviderRow(result: ModelCatalog.ProviderResult) {
+    Surface(
+        color = MaterialTheme.colorScheme.errorContainer,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+            Text(
+                text = result.provider.displayName,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+            Text(
+                text = result.error.orEmpty(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
         }
     }
 }

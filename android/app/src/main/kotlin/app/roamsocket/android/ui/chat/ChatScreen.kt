@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.roamsocket.android.ui.LocalAppContainer
+import app.roamsocket.android.ui.LocalNavigateToSettings
 import app.roamsocket.android.ui.LocalOpenSidebar
 import app.roamsocket.android.ui.markdown.MarkdownText
 import app.roamsocket.core.providers.ProviderId
@@ -125,9 +126,9 @@ fun ChatScreen(
             ModelPickerSheet(
                 currentProvider = state.provider,
                 currentModel = state.model,
-                models = state.modelsForProvider,
                 onSelectProvider = viewModel::selectProvider,
                 onSelectModel = viewModel::selectModel,
+                onAddModel = LocalNavigateToSettings.current,
                 onDismiss = { showModelPicker = false },
             )
         }
@@ -310,7 +311,7 @@ private fun ChatInputBar(
                 modelDisplayName = modelDisplayName,
                 hasUsableModel = hasUsableModel,
                 onPick = onPickModel,
-                onAddModel = onAddModel,
+                onAddModel = LocalNavigateToSettings.current,
                 modifier = Modifier.padding(top = 6.dp),
             )
         }
