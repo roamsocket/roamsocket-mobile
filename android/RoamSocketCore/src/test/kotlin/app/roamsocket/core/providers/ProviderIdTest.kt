@@ -54,6 +54,17 @@ class ProviderIdTest {
     }
 
     @Test
+    fun `MiniMax base URL matches iOS and desktop server`() {
+        // Regression guard for the wrong-host 401: historically the Android
+        // client pointed at api.minimax.chat which is not the MiniMax LLM
+        // endpoint. All three surfaces must agree.
+        val androidURL = OpenAICompatibleProvider(
+            id = ProviderId.MiniMax,
+        ).baseURLForTest()
+        assertEquals("https://api.minimax.io/v1", androidURL)
+    }
+
+    @Test
     fun `prettifiedDisplayName drops openrouter org prefix`() {
         val pretty = AIModel.prettifiedDisplayName("openai/gpt-4o", ProviderId.OpenRouter)
         assertEquals("GPT 4o", pretty)

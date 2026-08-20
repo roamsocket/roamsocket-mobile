@@ -55,6 +55,7 @@ class ChatViewModel(
             // them type a message and watch it silently fail).
             val apiKey = container.secretStore.readApiKey(provider)
             _state.value = _state.value.copy(hasApiKey = !apiKey.isNullOrEmpty())
+            refreshLiveModels(provider, apiKey)
 
             // Resume the persisted transcript when the screen opens on an
             // existing chat id.
@@ -71,10 +72,11 @@ class ChatViewModel(
     }
 
     fun selectProvider(provider: ProviderId) {
-        val firstModel = ModelCatalog.defaultsFor(provider).firstOrNull()?.modelID ?: ""
         viewModelScope.launch {
+            val firstModel = ModelCatalog.defaultsFor(provider).firstOrNull()?.modelID ?: ""
             container.userSettings.setCurrent(provider, firstModel)
             applySelection(provider, firstModel)
+            refreshLiveModels(provider, container.secretStore.readApiKey(provider))
         }
     }
 
@@ -83,6 +85,48 @@ class ChatViewModel(
         viewModelScope.launch {
             container.userSettings.setCurrent(provider, model)
             _state.value = _state.value.copy(model = model, modelsForProvider = availableModelsFor(provider))
+        }
+    }
+
+    /**
+     * Pull the live model list for [provider] from the upstream `/v1/models`
+     * endpoint. The picker uses this as the source of truth — the static
+     * `ModelCatalog` is only a fallback when the live fetch fails or the
+     * provider has no API to call.
+     *
+     * State semantics on [ChatUiState.liveModelsForProvider]:
+     * - `null` — fetch has not completed yet (or is in flight)
+     * - `[]`   — fetch completed, returned no models
+     * - `[…]`  — fetch completed, these are the usable models
+     */
+    private fun refreshLiveModels(provider: ProviderId, apiKey: String?) {
+        // Surface "still loading" so the picker can render an explicit
+        // "Loading models…" state instead of pretending nothing is there.
+        _state.value = _state.value.copy(liveModelsForProvider = null)
+        viewModelScope.launch {
+            val client = container.chatClientFor(provider)
+            // Local providers (Metal, Apple Foundation, custom-without-base-URL)
+            // don't expose a listModels endpoint; treat them as "no live list"
+            // and let the static catalog drive the picker.
+            if (client == null || apiKey.isNullOrEmpty()) {
+                _state.value = _state.value.copy(liveModelsForProvider = emptyList())
+                return@launch
+            }
+            val live = runCatching { client.listModels(apiKey) }
+                .getOrElse { emptyList() }
+            _state.value = _state.value.copy(liveModelsForProvider = live)
+        }
+    }
+
+    /**
+     * Public hook used by the UI to retry a live model fetch — e.g. after the
+     * user pastes a fresh API key in the dialog. Exposed as its own method so
+     * the dialog "Save" path can call it without duplicating the fetch logic.
+     */
+    fun retryLiveModelsFetch() {
+        val provider = _state.value.provider
+        viewModelScope.launch {
+            refreshLiveModels(provider, container.secretStore.readApiKey(provider))
         }
     }
 
@@ -187,6 +231,8 @@ class ChatViewModel(
         val provider = _state.value.provider
         viewModelScope.launch {
             container.secretStore.writeApiKey(provider, apiKey)
+            _state.value = _state.value.copy(hasApiKey = apiKey.isNotEmpty())
+            refreshLiveModels(provider, apiKey)
         }
     }
 
@@ -198,8 +244,16 @@ class ChatViewModel(
         )
     }
 
-    private fun availableModelsFor(provider: ProviderId): List<AIModel> =
-        ModelCatalog.defaultsFor(provider).ifEmpty { ModelCatalog.defaults }
+    private fun availableModelsFor(provider: ProviderId): List<AIModel> {
+        // Prefer the live list when it has anything; fall back to the static
+        // catalog so the picker isn't empty when the upstream is unreachable
+        // (e.g. offline / 401). The picker itself gates on
+        // `liveModelsForProvider` to decide whether to render the "Add a
+        // model" CTA — this list is just the data the dropdown iterates over.
+        val live = _state.value.liveModelsForProvider
+        if (!live.isNullOrEmpty()) return live
+        return ModelCatalog.defaultsFor(provider).ifEmpty { ModelCatalog.defaults }
+    }
 
     /**
      * Persist the current transcript for this chat. Lazily mints a new
@@ -267,6 +321,13 @@ data class ChatUiState(
     val provider: ProviderId = ProviderId.Anthropic,
     val model: String = "",
     val modelsForProvider: List<AIModel> = emptyList(),
+    /**
+     * Models the upstream `/v1/models` endpoint returned for [provider]. The
+     * model picker renders an "Add a model" CTA when this is `null`
+     * (loading) or `[]` (fetch returned nothing / 401'd) so the user always
+     * knows whether they're seeing a real list or a static fallback.
+     */
+    val liveModelsForProvider: List<AIModel>? = null,
     val messages: List<ChatMessage> = emptyList(),
     val draft: String = "",
     val isStreaming: Boolean = false,

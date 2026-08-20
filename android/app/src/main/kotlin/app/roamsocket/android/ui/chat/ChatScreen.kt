@@ -48,6 +48,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import app.roamsocket.android.ui.LocalAppContainer
 import app.roamsocket.android.ui.LocalOpenSidebar
 import app.roamsocket.android.ui.markdown.MarkdownText
+import app.roamsocket.core.providers.AIModel
 import app.roamsocket.core.providers.ProviderId
 
 /**
@@ -76,6 +77,16 @@ fun ChatScreen(
         }
     }
 
+    // First-visit nudge: if the active provider needs an API key and we
+    // don't have one yet, pop the key dialog the moment we have enough
+    // state to know that. Avoids the user hunting for the key icon when
+    // they tap MiniMax / OpenAI / etc. for the first time.
+    LaunchedEffect(state.provider, state.hasApiKey) {
+        if (state.provider.requiresApiKey && !state.hasApiKey && !showKeyDialog) {
+            showKeyDialog = true
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         TopAppBar(
             navigationIcon = {
@@ -92,8 +103,10 @@ fun ChatScreen(
                     currentProvider = state.provider,
                     currentModel = state.model,
                     models = state.modelsForProvider,
+                    liveModels = state.liveModelsForProvider,
                     onSelectProvider = viewModel::selectProvider,
                     onSelectModel = viewModel::selectModel,
+                    onAddModel = { showKeyDialog = true },
                 )
             },
             actions = {
@@ -131,7 +144,14 @@ fun ChatScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             if (state.messages.isEmpty()) {
-                item("empty") { EmptyState(state.provider, state.hasApiKey) }
+                item("empty") {
+                    EmptyState(
+                        provider = state.provider,
+                        hasApiKey = state.hasApiKey,
+                        liveModels = state.liveModelsForProvider,
+                        onAddKey = { showKeyDialog = true },
+                    )
+                }
             }
             items(state.messages, key = { msg ->
                 when (msg) {
@@ -310,7 +330,12 @@ private fun ErrorBanner(message: String, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun EmptyState(provider: ProviderId, hasApiKey: Boolean) {
+private fun EmptyState(
+    provider: ProviderId,
+    hasApiKey: Boolean,
+    liveModels: List<AIModel>?,
+    onAddKey: () -> Unit,
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -318,23 +343,52 @@ private fun EmptyState(provider: ProviderId, hasApiKey: Boolean) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically),
     ) {
-        if (!hasApiKey) {
-            Text(
-                text = "Add an API key for ${provider.displayName}",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                text = "Tap the key icon in the top bar (or open Settings) to paste your ${provider.displayName} key. Messages you send before adding a key are saved here so you can resume once you're set up.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        } else {
-            Text(
-                text = "Send a message to start chatting with ${provider.displayName}.",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        when {
+            // No key at all — full call-to-action.
+            !hasApiKey -> {
+                Text(
+                    text = "Add an API key for ${provider.displayName}",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = "Tap the key icon in the top bar (or open Settings) to paste your ${provider.displayName} key. Messages you send before adding a key are saved here so you can resume once you're set up.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            // Key is set but the upstream returned no models. Most likely a 401
+            // (wrong/expired key) — surface a way to fix it without burying it
+            // in a Dismiss-only error banner.
+            liveModels != null && liveModels.isEmpty() -> {
+                Text(
+                    text = "Couldn't load models for ${provider.displayName}",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = "Your API key may be invalid or expired. Tap below to update it; we'll re-fetch the model list automatically.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                TextButton(onClick = onAddKey) { Text("Update API key") }
+            }
+            // Still loading live models — quiet placeholder so the screen
+            // doesn't blink an empty state for half a second.
+            liveModels == null -> {
+                Text(
+                    text = "Loading ${provider.displayName} models…",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            else -> {
+                Text(
+                    text = "Send a message to start chatting with ${provider.displayName}.",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
