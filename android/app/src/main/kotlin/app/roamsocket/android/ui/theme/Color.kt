@@ -31,6 +31,13 @@ internal object Palette {
     val Danger = Color(0xFFE07485)
     val Info = Color(0xFF6AA9FF)
 
+    // Synonyms used by code rendered through Markwon (port #8). Aliased
+    // here so callers in `ui/markdown/` don't need to know which surface
+    // token backs a code block.
+    val SurfaceVariant = SurfaceElevated
+    val Separator = Divider
+    val CodeToken = Color(0xFFE6B86A)
+
     // Light scheme (rare — Android system theme). Mirrors the iOS light
     // palette in case the device's system theme wins.
     val BackgroundLight = Color(0xFFFAFBFC)

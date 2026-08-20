@@ -84,6 +84,16 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.okhttp.logging)
 
+    // Markdown rendering for assistant chat bubbles (port #8: iOS uses
+    // MarkdownUI; the Android port uses Markwon — the most popular
+    // CommonMark + GFM renderer on Android, on Maven Central).
+    implementation(libs.markwon.core)
+    implementation(libs.markwon.ext.tables)
+    implementation(libs.markwon.ext.strikethrough)
+    implementation(libs.markwon.ext.tasklist)
+    implementation(libs.markwon.linkify)
+    implementation(libs.markwon.html)
+
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.graphics)
