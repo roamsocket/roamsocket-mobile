@@ -15,6 +15,7 @@ material3 = "1.3.1"
 datastore = "1.1.1"
 security-crypto = "1.1.0-alpha06"
 okhttp = "4.12.0"
+markwon = "4.6.2"
 junit = "4.13.2"
 robolectric = "4.13"
 turbine = "1.2.0"
@@ -56,6 +57,14 @@ kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 # Networking
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 okhttp-logging = { group = "com.squareup.okhttp3", name = "logging-interceptor", version.ref = "okhttp" }
+
+# Markdown rendering (CommonMark + GFM via the mature Markwon library).
+markwon-core = { group = "io.noties.markwon", name = "core", version.ref = "markwon" }
+markwon-ext-tables = { group = "io.noties.markwon", name = "ext-tables", version.ref = "markwon" }
+markwon-ext-strikethrough = { group = "io.noties.markwon", name = "ext-strikethrough", version.ref = "markwon" }
+markwon-ext-tasklist = { group = "io.noties.markwon", name = "ext-tasklist", version.ref = "markwon" }
+markwon-linkify = { group = "io.noties.markwon", name = "linkify", version.ref = "markwon" }
+markwon-html = { group = "io.noties.markwon", name = "html", version.ref = "markwon" }
 
 # Test
 junit = { group = "junit", name = "junit", version.ref = "junit" }
