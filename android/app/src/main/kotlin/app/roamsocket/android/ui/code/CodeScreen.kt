@@ -17,11 +17,15 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.DesktopWindows
 import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -35,7 +39,12 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -48,13 +57,18 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.roamsocket.android.data.PairedServer
+import app.roamsocket.android.ui.session.SessionConfig
+import app.roamsocket.android.ui.session.SessionModelSelection
+import app.roamsocket.android.ui.session.SessionScreen
+import app.roamsocket.core.protocol.RepoRef
+import app.roamsocket.core.providers.ProviderId
 import app.roamsocket.core.server.Endpoint
+import kotlinx.coroutines.launch
 
 /**
  * Code tab — pair with a desktop server, see the active connection, and
- * start a session. Session creation is not wired up yet (it lands in the
- * next PR); the screen shows the paired server so the user can verify
- * pairing worked.
+ * start a coding session. The session itself is handled by [SessionScreen]
+ * which we navigate to once the user confirms a [SessionConfig].
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -62,6 +76,10 @@ fun CodeScreen(viewModel: PairingViewModel = viewModel(factory = PairingViewMode
     val state by viewModel.state.collectAsStateWithLifecycle()
     val paired by viewModel.paired.collectAsStateWithLifecycle()
     val nearby by viewModel.nearbyEndpoints.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+
+    var showNewSessionDialog by remember { mutableStateOf(false) }
+    var activeConfig by remember { mutableStateOf<Pair<SessionConfig, PairedServer>?>(null) }
 
     Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         TopAppBar(
@@ -84,7 +102,11 @@ fun CodeScreen(viewModel: PairingViewModel = viewModel(factory = PairingViewMode
             item {
                 val current = paired
                 if (current != null) {
-                    PairedServerCard(server = current, onForget = viewModel::forget)
+                    PairedServerCard(
+                        server = current,
+                        onForget = viewModel::forget,
+                        onStartSession = { showNewSessionDialog = true },
+                    )
                 } else {
                     PairForm(
                         state = state,
@@ -110,6 +132,25 @@ fun CodeScreen(viewModel: PairingViewModel = viewModel(factory = PairingViewMode
                 }
             }
         }
+    }
+
+    if (showNewSessionDialog && paired != null) {
+        NewSessionDialog(
+            viewModel = viewModel,
+            onDismiss = { showNewSessionDialog = false },
+            onStart = { config ->
+                showNewSessionDialog = false
+                activeConfig = config to paired!!
+            },
+        )
+    }
+
+    activeConfig?.let { (config, server) ->
+        SessionScreen(
+            config = config,
+            paired = server,
+            onBack = { activeConfig = null },
+        )
     }
 }
 
@@ -183,7 +224,11 @@ private fun PairForm(
 }
 
 @Composable
-private fun PairedServerCard(server: PairedServer, onForget: () -> Unit) {
+private fun PairedServerCard(
+    server: PairedServer,
+    onForget: () -> Unit,
+    onStartSession: () -> Unit,
+) {
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         modifier = Modifier.fillMaxWidth(),
@@ -233,16 +278,102 @@ private fun PairedServerCard(server: PairedServer, onForget: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                 )
             }
+            Button(onClick = onStartSession, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Outlined.PlayArrow, contentDescription = null)
+                Text(" Start a coding session", modifier = Modifier.padding(start = 8.dp))
+            }
             OutlinedButton(onClick = onForget, modifier = Modifier.fillMaxWidth()) {
                 Text("Forget this server")
             }
-            Text(
-                text = "Starting a session lands in the next PR.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
     }
+}
+
+@Composable
+private fun NewSessionDialog(
+    viewModel: PairingViewModel,
+    onDismiss: () -> Unit,
+    onStart: (SessionConfig) -> Unit,
+) {
+    var repo by remember { mutableStateOf("owner/repo") }
+    var branch by remember { mutableStateOf("feat/new") }
+    var task by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
+    var starting by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("New session") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = repo,
+                    onValueChange = { repo = it.trim() },
+                    label = { Text("Repository") },
+                    placeholder = { Text("owner/name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = branch,
+                    onValueChange = { branch = it.trim() },
+                    label = { Text("Work branch") },
+                    placeholder = { Text("feat/your-change") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = task,
+                    onValueChange = { task = it },
+                    label = { Text("First task (optional)") },
+                    placeholder = { Text("What do you want the agent to do?") },
+                    minLines = 2,
+                    maxLines = 4,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                error?.let {
+                    Text(
+                        text = it,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    if (repo.isBlank() || !repo.contains("/")) {
+                        error = "Repo must look like owner/name"
+                        return@TextButton
+                    }
+                    if (branch.isBlank()) {
+                        error = "Pick a work branch"
+                        return@TextButton
+                    }
+                    starting = true
+                    error = null
+                    scope.launch {
+                        val base = viewModel.defaultSessionConfig()
+                        if (base == null) {
+                            starting = false
+                            error = "Add an API key for the current provider in Chat first."
+                            return@launch
+                        }
+                        val config = base.copy(
+                            repo = RepoRef(fullName = repo, workBranch = branch),
+                        )
+                        onStart(config)
+                    }
+                },
+                enabled = !starting,
+            ) { Text("Start") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }
 
 @Composable

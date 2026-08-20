@@ -14,10 +14,13 @@ import app.roamsocket.android.net.ServerDiscovery
 import app.roamsocket.core.server.Endpoint
 import app.roamsocket.core.server.ServerClient
 import app.roamsocket.core.server.ServerClientException
+import app.roamsocket.android.ui.session.SessionConfig
+import app.roamsocket.android.ui.session.SessionModelSelection
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.scan
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -122,6 +125,29 @@ class PairingViewModel(
 
     fun dismissError() {
         _state.value = _state.value.copy(error = null)
+    }
+
+    /** True iff the device is currently paired and ready to start a session. */
+    fun isPaired(): Boolean = paired.value != null
+
+    /** Build a default [SessionConfig] from the user's current settings. */
+    suspend fun defaultSessionConfig(): SessionConfig? {
+        val p = paired.value ?: return null
+        val provider = container.userSettings.currentProvider.first()
+        val modelId = container.userSettings.currentModel.first()
+        val apiKey = container.secretStore.readApiKey(provider).orEmpty()
+        if (apiKey.isEmpty()) return null
+        return SessionConfig(
+            repo = app.roamsocket.core.protocol.RepoRef(
+                fullName = "owner/repo",
+                workBranch = "feat/new",
+            ),
+            model = SessionModelSelection(
+                provider = provider,
+                model = modelId,
+                apiKey = apiKey,
+            ),
+        )
     }
 
     private fun deviceName(): String {
