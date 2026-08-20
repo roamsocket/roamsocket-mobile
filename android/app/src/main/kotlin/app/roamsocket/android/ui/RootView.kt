@@ -89,7 +89,9 @@ fun RootView(history: ChatHistoryStore = remember { ChatHistoryStore() }) {
             Box(modifier = Modifier.fillMaxSize()) {
                 when (current) {
                     SidebarDestination.Chats, is SidebarDestination.Chat -> ChatScreen()
-                    SidebarDestination.Code -> CodeScreen()
+                    SidebarDestination.Code -> CodeScreen(
+                        onNavigateToSettings = { current = SidebarDestination.Settings },
+                    )
                     SidebarDestination.Settings -> SettingsScreen()
                     else -> PlaceholderScreen(
                         title = labelFor(current),
