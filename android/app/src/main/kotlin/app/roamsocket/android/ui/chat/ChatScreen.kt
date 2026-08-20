@@ -27,6 +27,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Menu
@@ -187,6 +188,17 @@ fun ChatScreen(
 
         state.error?.let { err ->
             ErrorBanner(message = err, onDismiss = viewModel::dismissError)
+        }
+
+        // Port #9: contextual hint above the input field — e.g. "your
+        // current model doesn't support vision" when the user just
+        // dropped a photo. Distinct from the top ErrorBanner, which
+        // covers network / API failures.
+        state.inlineError?.let { inline ->
+            InlineErrorBanner(
+                inline = inline,
+                onDismiss = { viewModel.setInlineError(null) },
+            )
         }
 
         LazyColumn(
@@ -462,6 +474,63 @@ private fun AttachedImagesRow(
                         modifier = Modifier.size(16.dp),
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun InlineErrorBanner(
+    inline: InlineError,
+    onDismiss: () -> Unit,
+) {
+    // Subtle dark-fill banner; the message is the primary content and
+    // the action pill (if any) lives on the right. Pairs visually with
+    // the model-pill capsule below it.
+    Surface(
+        color = MaterialTheme.colorScheme.errorContainer,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.ErrorOutline,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.size(18.dp),
+            )
+            Text(
+                text = inline.message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.weight(1f),
+            )
+            if (inline.actionLabel != null && inline.onAction != null) {
+                TextButton(
+                    onClick = {
+                        inline.onAction.invoke()
+                        onDismiss()
+                    },
+                ) {
+                    Text(inline.actionLabel)
+                }
+            }
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier.size(28.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Close,
+                    contentDescription = "Dismiss",
+                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.size(16.dp),
+                )
             }
         }
     }

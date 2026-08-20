@@ -72,6 +72,8 @@ class ChatViewModel(
                     _state.value = _state.value.copy(messages = resumed)
                 }
             }
+            // Compute the inline error last so it sees the final state.
+            refreshInlineError()
         }
     }
 
@@ -87,6 +89,7 @@ class ChatViewModel(
             // provider.)
             val apiKey = container.secretStore.readApiKey(provider)
             _state.value = _state.value.copy(hasApiKey = !apiKey.isNullOrEmpty())
+            refreshInlineError()
         }
     }
 
@@ -95,6 +98,7 @@ class ChatViewModel(
         viewModelScope.launch {
             container.userSettings.setCurrent(provider, model)
             _state.value = _state.value.copy(model = model, modelsForProvider = availableModelsFor(provider))
+            refreshInlineError()
         }
     }
 
@@ -216,6 +220,7 @@ class ChatViewModel(
                 _state.value = _state.value.copy(
                     attachedImages = _state.value.attachedImages + attachment,
                 )
+                refreshInlineError()
             }
         }
     }
@@ -226,11 +231,34 @@ class ChatViewModel(
         if (index !in list.indices) return
         _state.value = _state.value.copy(
             attachedImages = list.toMutableList().apply { removeAt(index) },
+            inlineError = null, // Removing the last image clears the inline error too.
         )
     }
 
     fun dismissError() {
         _state.value = _state.value.copy(error = null)
+    }
+
+    /**
+     * Set the contextual inline error shown above the input field. This
+     * is a separate channel from [dismissError] (which clears the top
+     * `ErrorBanner`) so the user sees the message where their attention
+     * already is — next to the composer — when the issue is about
+     * what they just did (e.g. dropped a photo into a model that
+     * doesn't accept images).
+     */
+    fun setInlineError(inlineError: InlineError?) {
+        _state.value = _state.value.copy(inlineError = inlineError)
+    }
+
+    /**
+     * Convenience that recomputes the inline error from the current
+     * state — call after every model / provider / attachment change so
+     * the banner reflects what the user can actually do right now.
+     */
+    fun refreshInlineError() {
+        val state = _state.value
+        _state.value = state.copy(inlineError = computeInlineError(state))
     }
 
     /** Persist [apiKey] for the current provider. */
@@ -330,6 +358,24 @@ data class ChatUiState(
      * user can fix the message and retry without re-picking the photos.
      */
     val attachedImages: List<ProviderChatMessage.ImageAttachment> = emptyList(),
+    /**
+     * Contextual hint shown right above the input field. Distinct from
+     * [error] (the top ErrorBanner) so the user sees the message next
+     * to the composer when the issue is about what they just did — e.g.
+     * a photo attached to a model that doesn't accept vision.
+     */
+    val inlineError: InlineError? = null,
+)
+
+/**
+ * Inline hint rendered between the message list and the input bar.
+ * [actionLabel] is optional — when present the row shows a tappable
+ * pill that runs [onAction].
+ */
+data class InlineError(
+    val message: String,
+    val actionLabel: String? = null,
+    val onAction: (() -> Unit)? = null,
 )
 
 /** Sealed UI message. Mirrors the iOS `ChatMessage` rendering model. */
@@ -427,4 +473,48 @@ private fun uriToAttachment(
         mimeType = mime,
         base64Data = Base64.encodeToString(bytes, Base64.NO_WRAP),
     )
+}
+
+/**
+ * Heuristic vision-capability table. The real source of truth lives in
+ * the iOS `ModelCatalog`; once we move the per-model `supportsVision`
+ * flag into `AIModel` (next pass), this collapses to `model.supportsVision`.
+ *
+ * Today the only provider that is *known* to be vision-less in this
+ * catalog is MiniMax (no MiniMax model currently accepts images).
+ * Everyone else — Anthropic, OpenAI, Google, Groq, OpenRouter, xAI,
+ * Mistral — has at least one vision-capable model in their default
+ * set, so we treat the provider as vision-capable. The list is
+ * explicitly enumerated (instead of "all except MiniMax") so that
+ * adding a new provider forces a deliberate vision decision.
+ */
+private fun providerSupportsVision(provider: ProviderId): Boolean = when (provider) {
+    ProviderId.MiniMax -> false
+    ProviderId.Anthropic,
+    ProviderId.OpenAI,
+    ProviderId.Google,
+    ProviderId.Groq,
+    ProviderId.OpenRouter,
+    ProviderId.XAI,
+    ProviderId.Mistral,
+    ProviderId.LocalMetal -> true
+    is ProviderId.Custom -> true
+}
+
+/**
+ * Inspect the current state and return the inline error to show above
+ * the input bar, or null when the user is in a happy path. Called by
+ * [ChatViewModel.refreshInlineError] after every model / provider /
+ * attachment change.
+ */
+private fun computeInlineError(state: ChatUiState): InlineError? {
+    if (state.attachedImages.isEmpty()) return null
+    if (providerSupportsVision(state.provider)) return null
+    val message = when (state.provider) {
+        ProviderId.MiniMax ->
+            "${state.provider.displayName} doesn't ship a vision model in this catalog. Try Anthropic, OpenAI, or Google."
+        else ->
+            "${state.provider.displayName} doesn't support images in this catalog. Try a vision-capable model."
+    }
+    return InlineError(message = message, actionLabel = null, onAction = null)
 }
