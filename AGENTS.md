@@ -4,12 +4,12 @@ Instructions for AI coding agents (Codex, Cursor, Grok, etc.) working in this re
 
 ## What this project is
 
-**RoamSocket** is an open-source, native **iOS** client plus a **desktop companion** that runs the coding agent.
+**RoamSocket** is an open-source, native **iOS** and **Android** client plus a **desktop companion** that runs the coding agent.
 
 | Mode | Path | Needs server? |
 |------|------|----------------|
-| **Chat** | iOS app → provider `/v1` APIs with the user's API key | No |
-| **Code** | iOS app ↔ desktop server over WebSocket | Yes — clones repos, runs tools, streams diffs, opens PRs |
+| **Chat** | iOS / Android app → provider `/v1` APIs with the user's API key | No |
+| **Code** | iOS / Android app ↔ desktop server over WebSocket | Yes — clones repos, runs tools, streams diffs, opens PRs |
 
 BYOK: Anthropic, OpenAI, Ollama/OpenAI-compatible, Groq, OpenRouter, xAI, Mistral, MiniMax (Google chat/listing only for agent).
 
@@ -23,6 +23,11 @@ roamsocket/  (repo may still be checked out as code-mobile-ai)
 │   ├── project.yml           # XcodeGen source of truth
 │   ├── RoamSocket.xcodeproj/  # GENERATED — do not hand-edit
 │   └── scripts/              # watch-xcode.sh, xcode helpers
+├── android/                  # Jetpack Compose app + RoamSocketCore module
+│   ├── app/                  # UI: Compose screens, Application, MainActivity
+│   ├── RoamSocketCore/       # Pure-Kotlin (no Android): providers, protocol, etc.
+│   ├── gradle/libs.versions.toml  # version catalog
+│   └── gradlew[.bat]         # Gradle wrapper (8.10.2)
 ├── desktop-server/           # Node/TS companion + Electron UI
 │   ├── src/                  # server, agent, tools, electron, renderer
 │   └── scripts/smoke.ts      # offline e2e protocol test
@@ -56,6 +61,17 @@ Pure Foundation (no SwiftUI). Safe to build/test without Xcode:
 - `Server/` — Codable protocol + WebSocket client (**must mirror** TS)  
 - `Marketplace/` — multi-source catalog (connectors, skills, plugins, Metal)  
 - `Skills/`, `Artifacts/`, `Sync/`
+
+### RoamSocketCore (`android/RoamSocketCore`)
+
+Pure Kotlin/JVM (no Android dependencies). Mirrors `ios/AnyProvCore` so the
+two apps stay in lockstep on wire format and provider logic:
+
+- `protocol/` — kotlinx.serialization models that mirror `desktop-server/src/protocol.ts` and `ios/AnyProvCore/.../Server/Protocol.swift`
+- `providers/`, `github/`, `server/` — ported from AnyProvCore (incremental)
+- `marketplace/`, `skills/`, `sync/` — see iOS side for scope
+
+Run JVM tests with `cd android && ./gradlew :RoamSocketCore:test`.
 
 ### Desktop server (`desktop-server/src`)
 
@@ -93,9 +109,10 @@ Default port: **4319**.
 
 ## Critical invariants
 
-1. **Protocol triple must stay in sync** when changing wire messages:
+1. **Protocol quadruple must stay in sync** when changing wire messages:
    - `desktop-server/src/protocol.ts` (canonical)
    - `ios/AnyProvCore/.../Server/Protocol.swift`
+   - `android/RoamSocketCore/.../protocol/` (Protocol.kt, ClientMessage.kt, ServerMessage.kt)
    - `docs/protocol.md`
 2. **Xcode project is generated.** After adding/removing Swift files under `ios/App/Sources` or editing `ios/project.yml`, run:
    ```bash
@@ -106,6 +123,7 @@ Default port: **4319**.
 4. **Secrets:** keys/tokens on iOS go in Keychain (`KeychainSecretStore`). Server holds provider/GitHub tokens only for the session (Electron may use safeStorage for UI-entered keys). Never log full API keys.
 5. **Theme:** cool blue-grey shared with Electron. Tokens live in:
    - `ios/App/Sources/DesignSystem/Theme.swift`
+   - `android/app/src/main/kotlin/.../ui/theme/Color.kt`
    - `desktop-server/src/renderer/styles.css` (`:root` CSS variables)  
    Accent is `#6aa9ff`, not terracotta. Keep them aligned when changing UI colors.
 6. **Formatting/lint baseline is enforced.** Before opening a PR, run the
@@ -178,6 +196,20 @@ swift test                        # protocol + provider tests
 # optional continuous regen while adding files
 ./ios/scripts/watch-xcode.sh
 ```
+
+### Android
+
+```bash
+cd android
+./gradlew :RoamSocketCore:test     # JVM unit tests (protocol, providers)
+./gradlew assembleDebug           # build app-debug.apk
+./gradlew installDebug            # install to a connected device/emulator
+```
+
+Prereqs: JDK 17 (set `JAVA_HOME`), Android SDK with `platforms;android-34` and
+`build-tools;34.0.0` installed. `android/local.properties` should point at your
+SDK (`sdk.dir=...`) and is gitignored. CI runs `./gradlew assembleDebug` and
+`./gradlew :RoamSocketCore:test` on the same JDK + SDK.
 
 ### Format / lint (run before opening a PR)
 
@@ -277,7 +309,9 @@ commands:
 | Electron types | `cd desktop-server && npm run typecheck:electron` |
 | AnyProvCore | `cd ios/AnyProvCore && swift test` |
 | iOS UI | Build in Xcode simulator after `xcodegen generate` |
-| Protocol | TS + Swift + `docs/protocol.md` still agree |
+| RoamSocketCore | `cd android && ./gradlew :RoamSocketCore:test` |
+| Android UI | `cd android && ./gradlew assembleDebug` |
+| Protocol | TS + Swift + Kotlin + `docs/protocol.md` still agree |
 
 ## Further reading
 

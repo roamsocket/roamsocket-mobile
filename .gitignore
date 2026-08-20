@@ -128,3 +128,21 @@ temp/
 .dev.vars
 **/.wrangler/
 *.tgz
+
+# ---------- Android / Gradle ----------
+# Per-developer SDK path — never commit.
+android/local.properties
+# Gradle
+android/.gradle/
+android/build/
+android/**/build/
+# IntelliJ / Android Studio
+android/.idea/
+android/.kotlin/
+android/**/.cxx/
+# Captures (profiling, ANR, etc.)
+android/captures/
+# Keystore (signing secrets) — keep the .example file only.
+*.jks
+*.keystore
+!*.keystore.example

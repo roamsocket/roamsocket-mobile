@@ -14,18 +14,21 @@
 
 - [ ] iOS app (`ios/App/Sources`)
 - [ ] AnyProvCore (`ios/AnyProvCore`)
+- [ ] Android app (`android/app`)
+- [ ] RoamSocketCore (`android/RoamSocketCore`)
 - [ ] Desktop server (`desktop-server/src`)
-- [ ] Wire protocol (`desktop-server/src/protocol.ts` + Swift mirror + `docs/protocol.md`)
+- [ ] Wire protocol (TS + Swift + Kotlin + `docs/protocol.md`)
 - [ ] Theme / shared UI
 - [ ] Marketplace / Skills / MCP
 - [ ] Docs only
 
 ## Protocol changes (if applicable)
 
-A protocol change is **not one-sided**. All three must update together:
+A protocol change is **not one-sided**. All four must update together:
 
 - [ ] `desktop-server/src/protocol.ts`
 - [ ] `ios/AnyProvCore/.../Server/Protocol.swift`
+- [ ] `android/RoamSocketCore/.../protocol/`
 - [ ] `docs/protocol.md`
 
 ## Verification
@@ -38,6 +41,8 @@ Run the smallest relevant check from [AGENTS.md](./AGENTS.md#verification-checkl
 
 - [ ] `npm run typecheck:server`
 - [ ] `cd ios/AnyProvCore && swift test`
+- [ ] `cd android && ./gradlew :RoamSocketCore:test`
+- [ ] `cd android && ./gradlew assembleDebug`
 - [ ] `npm run smoke` (if protocol / server / tools touched)
 - [ ] `npm run xcodegen` (if iOS sources / `project.yml` changed)
 - [ ] Other (describe)

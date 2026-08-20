@@ -1,10 +1,11 @@
 # Wire protocol
 
-The iOS app and the desktop server speak a small JSON protocol. Pairing is over
-HTTP; the coding session runs over a WebSocket. The canonical definitions live
-in `desktop-server/src/protocol.ts` (zod) and are mirrored by the Swift Codable
-types in `ios/AnyProvCore/Sources/AnyProvCore/Server/Protocol.swift`. Keep all
-three in sync.
+The iOS and Android apps and the desktop server speak a small JSON protocol.
+Pairing is over HTTP; the coding session runs over a WebSocket. The canonical
+definitions live in `desktop-server/src/protocol.ts` (zod) and are mirrored by
+the Swift Codable types in `ios/AnyProvCore/Sources/AnyProvCore/Server/Protocol.swift`
+and the kotlinx.serialization types in `android/RoamSocketCore/src/main/kotlin/app/roamsocket/core/protocol/`.
+Keep all four in sync.
 
 ## Local discovery (Bonjour / mDNS)
 
