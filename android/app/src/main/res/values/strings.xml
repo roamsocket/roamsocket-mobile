@@ -5,6 +5,27 @@
     <string name="tab_settings">Settings</string>
     <string name="tab_skills">Skills</string>
 
+    <!-- Sidebar -->
+    <string name="sidebar_title">RoamSocket</string>
+    <string name="sidebar_chats">Chats</string>
+    <string name="sidebar_vision">Vision</string>
+    <string name="sidebar_projects">Projects</string>
+    <string name="sidebar_artifacts">Artifacts</string>
+    <string name="sidebar_code">Code</string>
+    <string name="sidebar_browser">Browser</string>
+    <string name="sidebar_settings">Settings</string>
+    <string name="sidebar_models">Models</string>
+    <string name="sidebar_classes">Classes</string>
+    <string name="sidebar_scan_questions">Scan questions</string>
+    <string name="sidebar_decks">Decks</string>
+    <string name="sidebar_recents">Recents</string>
+    <string name="sidebar_recents_empty">Your recent chats will appear here.</string>
+    <string name="sidebar_new_chat">New chat</string>
+    <string name="sidebar_enter_study">Enter Study mode</string>
+    <string name="sidebar_exit_study">Exit Study mode</string>
+    <string name="sidebar_open">Open sidebar</string>
+    <string name="cd_back">Back</string>
+
     <!-- Pairing -->
     <string name="pair_title">Pair with desktop</string>
     <string name="pair_subtitle">Open the desktop server and enter the 6-character code shown there.</string>

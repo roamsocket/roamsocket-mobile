@@ -2,87 +2,121 @@ package app.roamsocket.android.ui
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.ChatBubbleOutline
-import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.outlined.Tune
-import androidx.compose.material3.Icon
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
-import app.roamsocket.android.R
 import app.roamsocket.android.ui.chat.ChatScreen
 import app.roamsocket.android.ui.code.CodeScreen
+import app.roamsocket.android.ui.placeholder.PlaceholderScreen
+import app.roamsocket.android.ui.sidebar.ChatHistoryStore
+import app.roamsocket.android.ui.sidebar.SidebarDestination
+import app.roamsocket.android.ui.sidebar.SidebarDestinationSaver
+import app.roamsocket.android.ui.sidebar.SidebarView
+import app.roamsocket.android.ui.sidebar.icon
+import kotlinx.coroutines.launch
 
 /**
- * Top-level shell mirroring the iOS `RootView` (sidebar + tab bar) but
- * using Android's bottom NavigationBar since Android has no
- * NavigationSplitView idiomatic in Compose Material 3 yet. Real navigation
- * will be wired up alongside the Chat feature port in the next PR.
+ * `CompositionLocal` carrying a lambda that opens the left-edge sidebar
+ * drawer. Every top-level screen installs the hamburger in its own
+ * `TopAppBar` and calls this when the user taps the leading icon.
+ */
+val LocalOpenSidebar = compositionLocalOf<() -> Unit> { error("LocalOpenSidebar not provided") }
+
+/**
+ * Top-level shell. Mirrors the iOS `RootView` (sidebar drawer + content)
+ * using a Compose `ModalNavigationDrawer` so the Android app presents the
+ * same left-edge navigation as the iOS app.
+ *
+ * Each top-level destination has either a real screen (Chat, Code) or a
+ * `PlaceholderScreen` while the Android port catches up.
  */
 @Composable
-fun RootView() {
-    val tabs = listOf(
-        TabSpec.Tab(R.string.tab_chat, Icons.Outlined.ChatBubbleOutline),
-        TabSpec.Tab(R.string.tab_code, Icons.Outlined.Code),
-        TabSpec.Tab(R.string.tab_skills, Icons.Outlined.Tune),
-        TabSpec.Tab(R.string.tab_settings, Icons.Outlined.Settings),
-    )
+fun RootView(history: ChatHistoryStore = remember { ChatHistoryStore() }) {
+    var current by rememberSaveable(stateSaver = SidebarDestinationSaver) {
+        mutableStateOf<SidebarDestination>(SidebarDestination.Chats)
+    }
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
 
-    var current by rememberSaveable { mutableStateOf(0) }
+    fun navigate(to: SidebarDestination) {
+        current = to
+        scope.launch { drawerState.close() }
+    }
 
-    Scaffold(
-        bottomBar = {
-            NavigationBar {
-                tabs.forEachIndexed { index, tab ->
-                    NavigationBarItem(
-                        selected = current == index,
-                        onClick = { current = index },
-                        icon = { Icon(tab.icon, contentDescription = null) },
-                        label = { Text(stringResource(tab.labelRes)) },
-                    )
-                }
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet(
+                modifier = Modifier.fillMaxWidth(0.82f),
+                drawerContainerColor = MaterialTheme.colorScheme.background,
+            ) {
+                SidebarView(
+                    history = history,
+                    onSelect = ::navigate,
+                    onNewChat = {
+                        // Mirror the iOS "new chat" affordance: drop into a
+                        // fresh chat by clearing the current selection.
+                        current = SidebarDestination.Chats
+                        scope.launch { drawerState.close() }
+                    },
+                    onShowSettings = {
+                        navigate(SidebarDestination.Settings)
+                    },
+                )
             }
         },
-    ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-            when (current) {
-                0 -> ChatScreen()
-                1 -> CodeScreen()
-                else -> PlaceholderTab(label = stringResource(tabs[current].labelRes))
+        scrimColor = MaterialTheme.colorScheme.scrim.copy(alpha = 0.55f),
+    ) {
+        CompositionLocalProvider(
+            LocalOpenSidebar provides { scope.launch { drawerState.open() } },
+        ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                when (current) {
+                    SidebarDestination.Chats, is SidebarDestination.Chat -> ChatScreen()
+                    SidebarDestination.Code -> CodeScreen()
+                    SidebarDestination.Settings -> PlaceholderScreen(
+                        title = "Settings",
+                        icon = Icons.Outlined.Settings,
+                        onBack = { current = SidebarDestination.Chats },
+                    )
+                    else -> PlaceholderScreen(
+                        title = labelFor(current),
+                        icon = current.icon(),
+                        onBack = { current = SidebarDestination.Chats },
+                    )
+                }
             }
         }
     }
 }
 
-@Composable
-private fun PlaceholderTab(label: String) {
-    Box(
-        modifier = Modifier.fillMaxSize().padding(32.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = "$label — port coming in a later PR.",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-private sealed interface TabSpec {
-    data class Tab(val labelRes: Int, val icon: ImageVector) : TabSpec
+private fun labelFor(dest: SidebarDestination): String = when (dest) {
+    SidebarDestination.Chats -> "Chats"
+    SidebarDestination.Vision -> "Vision"
+    SidebarDestination.Projects -> "Projects"
+    SidebarDestination.Artifacts -> "Artifacts"
+    SidebarDestination.Code -> "Code"
+    SidebarDestination.Browser -> "Browser"
+    SidebarDestination.Settings -> "Settings"
+    SidebarDestination.Models -> "Models"
+    SidebarDestination.Classes -> "Classes"
+    SidebarDestination.ScanQuestions -> "Scan questions"
+    SidebarDestination.Study -> "Decks"
+    is SidebarDestination.Chat -> "Chat"
+    is SidebarDestination.Project -> "Project"
 }

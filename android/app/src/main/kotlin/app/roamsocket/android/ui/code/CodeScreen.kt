@@ -17,6 +17,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.DesktopWindows
 import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -48,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.roamsocket.android.data.PairedServer
+import app.roamsocket.android.ui.LocalOpenSidebar
 import app.roamsocket.core.server.Endpoint
 
 /**
@@ -65,6 +67,15 @@ fun CodeScreen(viewModel: PairingViewModel = viewModel(factory = PairingViewMode
 
     Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         TopAppBar(
+            navigationIcon = {
+                IconButton(onClick = LocalOpenSidebar.current) {
+                    Icon(
+                        imageVector = Icons.Outlined.Menu,
+                        contentDescription = "Open sidebar",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            },
             title = { Text("Code") },
             colors = TopAppBarDefaults.topAppBarColors(
                 containerColor = MaterialTheme.colorScheme.surface,
