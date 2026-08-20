@@ -25,6 +25,10 @@ $RECYCLE.BIN/
 # Worktrees created by AI coding agents (Claude Code, Codex, etc.) at the
 # repo root. Keep them out of git so multi-session runs don't pollute history.
 .worktrees/
+# Per-session scratch files (smoke test screenshots, adb helper scripts, etc.)
+screenshots/
+inspect.py
+open_pr.py
 # Agent scratch / per-session memory files
 .aider*
 .continue/
