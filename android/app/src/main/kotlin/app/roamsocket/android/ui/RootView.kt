@@ -23,6 +23,7 @@ import androidx.compose.ui.Modifier
 import app.roamsocket.android.ui.chat.ChatScreen
 import app.roamsocket.android.ui.code.CodeScreen
 import app.roamsocket.android.ui.placeholder.PlaceholderScreen
+import app.roamsocket.android.ui.settings.SettingsScreen
 import app.roamsocket.android.ui.sidebar.ChatHistoryStore
 import app.roamsocket.android.ui.sidebar.SidebarDestination
 import app.roamsocket.android.ui.sidebar.SidebarDestinationSaver
@@ -89,11 +90,7 @@ fun RootView(history: ChatHistoryStore = remember { ChatHistoryStore() }) {
                 when (current) {
                     SidebarDestination.Chats, is SidebarDestination.Chat -> ChatScreen()
                     SidebarDestination.Code -> CodeScreen()
-                    SidebarDestination.Settings -> PlaceholderScreen(
-                        title = "Settings",
-                        icon = Icons.Outlined.Settings,
-                        onBack = { current = SidebarDestination.Chats },
-                    )
+                    SidebarDestination.Settings -> SettingsScreen()
                     else -> PlaceholderScreen(
                         title = labelFor(current),
                         icon = current.icon(),
