@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Camera capture output. We give the camera a content:// URI that
+         resolves into this directory; FileProvider only exposes this
+         one path, nothing else. -->
+    <cache-path
+        name="camera_captures"
+        path="camera/" />
+    <!-- Any future shared media writes (e.g. share-in to chat) can
+         resolve into the same cache directory. -->
+    <external-cache-path
+        name="external_camera_captures"
+        path="camera/" />
+</paths>

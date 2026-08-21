@@ -21,6 +21,7 @@ import androidx.compose.ui.Modifier
 import app.roamsocket.android.ui.chat.ChatScreen
 import app.roamsocket.android.ui.code.CodeScreen
 import app.roamsocket.android.ui.placeholder.PlaceholderScreen
+import app.roamsocket.android.ui.settings.SettingsFocus
 import app.roamsocket.android.ui.settings.SettingsScreen
 import app.roamsocket.android.ui.sidebar.SidebarDestination
 import app.roamsocket.android.ui.sidebar.SidebarDestinationSaver
@@ -35,6 +36,40 @@ import kotlinx.coroutines.launch
  * `TopAppBar` and calls this when the user taps the leading icon.
  */
 val LocalOpenSidebar = compositionLocalOf<() -> Unit> { error("LocalOpenSidebar not provided") }
+
+/**
+ * `CompositionLocal` carrying a lambda that switches the top-level
+ * destination to Settings. Used by the chat's "Add a model" pill (and
+ * the picker's empty state) to take the user to the Providers section
+ * of Settings when no API key is configured.
+ */
+val LocalNavigateToSettings = compositionLocalOf<() -> Unit> { error("LocalNavigateToSettings not provided") }
+
+/**
+ * `CompositionLocal` carrying a lambda that switches the top-level
+ * destination to the Code tab. Used by the chat's "Add to Chat → Start
+ * coding session" entry (port #12) to jump into the desktop agent
+ * without making the chat composable aware of the navigation graph.
+ */
+val LocalNavigateToCode = compositionLocalOf<() -> Unit> { error("LocalNavigateToCode not provided") }
+
+/**
+ * `CompositionLocal` carrying a lambda that switches the top-level
+ * destination to an arbitrary [SidebarDestination]. Used by the chat's
+ * Add to Chat sheet (port #12) to route to Projects, Connectors, and
+ * any future placeholder destinations.
+ */
+val LocalNavigateToSidebar = compositionLocalOf<(SidebarDestination) -> Unit> {
+    error("LocalNavigateToSidebar not provided")
+}
+
+/**
+ * `CompositionLocal` carrying the initial focus for the next Settings
+ * presentation. The chat's "Add a model" pill sets this to
+ * [SettingsFocus.Providers] before navigating, so the modal opens
+ * straight into the API-key editor — matching the iOS flow.
+ */
+val LocalSettingsFocus = compositionLocalOf<SettingsFocus> { SettingsFocus.None }
 
 /**
  * Top-level shell. Mirrors the iOS `RootView` (sidebar drawer + content)
@@ -57,6 +92,10 @@ fun RootView() {
     // Stable id of the chat the user is currently looking at. Held here
     // so sidebar taps + new-chat both flow into the ChatScreen.
     var activeChatId by rememberSaveable { mutableStateOf<String?>(null) }
+    // Initial focus for the next Settings presentation. The chat's
+    // "Add a model" pill writes [SettingsFocus.Providers] here before
+    // navigating so the modal opens straight into the API-key editor.
+    var initialSettingsFocus by remember { mutableStateOf<SettingsFocus>(SettingsFocus.None) }
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
 
@@ -100,6 +139,10 @@ fun RootView() {
     ) {
         CompositionLocalProvider(
             LocalOpenSidebar provides { scope.launch { drawerState.open() } },
+            LocalNavigateToSettings provides { current = SidebarDestination.Settings },
+            LocalNavigateToCode provides { current = SidebarDestination.Code },
+            LocalNavigateToSidebar provides { dest -> navigate(dest) },
+            LocalSettingsFocus provides initialSettingsFocus.also { initialSettingsFocus = SettingsFocus.None },
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
                 when (current) {
@@ -109,7 +152,10 @@ fun RootView() {
                     SidebarDestination.Code -> CodeScreen(
                         onNavigateToSettings = { current = SidebarDestination.Settings },
                     )
-                    SidebarDestination.Settings -> SettingsScreen()
+                    SidebarDestination.Settings -> SettingsScreen(
+                        onDismiss = { current = SidebarDestination.Chats },
+                        initialFocus = LocalSettingsFocus.current,
+                    )
                     else -> PlaceholderScreen(
                         title = labelFor(current),
                         icon = current.icon(),
