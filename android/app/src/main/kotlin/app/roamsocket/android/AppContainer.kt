@@ -1,6 +1,7 @@
 package app.roamsocket.android
 
 import android.app.Application
+import app.roamsocket.android.data.AppAppearance
 import app.roamsocket.android.data.EncryptedPrefsSecretStore
 import app.roamsocket.android.data.UserSettings
 import app.roamsocket.core.chats.ChatHistoryRepository
@@ -24,6 +25,13 @@ class AppContainer(application: Application) {
     val pairedServerStore: app.roamsocket.android.data.PairedServerStore =
         app.roamsocket.android.data.PairedServerStore(application)
     val httpClient: HTTPClient = OkHttpHTTPClient()
+
+    /**
+     * Default [AppAppearance] used as the [collectAsStateWithLifecycle]
+     * seed before the DataStore's first read lands. Mirrors the
+     * `UserSettings.appearance` default ([AppAppearance.System]).
+     */
+    val defaultAppearance: AppAppearance = AppAppearance.System
 
     /**
      * Process-wide scope for long-lived collectors (chat history
