@@ -43,6 +43,7 @@ import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.outlined.WorkspacePremium
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -153,7 +154,7 @@ fun SettingsScreen(
                 item { ChatCard(state, onToggle = viewModel::setAlwaysExpandThinking, onOpenVoice = { showVoiceSettings = true }) }
                 item { EffortCard(state, onSetEffort = viewModel::setEffort) }
                 item { CodingCard(state, onSetBranchPrefix = viewModel::setBranchPrefix) }
-                item { SettingsBackupCard(state) }
+                item { SettingsBackupCard(state, onPush = viewModel::pushSettings, onPull = viewModel::pullSettings) }
                 item { MarketplaceCard { showMarketplaceSheet = true } }
                 item { SkillsCard { showSkillsSheet = true } }
                 item { ConnectorsCard { showConnectorsSheet = true } }
@@ -693,14 +694,18 @@ private fun CodingCard(
 }
 
 @Composable
-private fun SettingsBackupCard(state: SettingsUiState) {
+private fun SettingsBackupCard(
+    state: SettingsUiState,
+    onPush: () -> Unit,
+    onPull: () -> Unit,
+) {
     SettingsCard(title = "Settings backup") {
         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             Text(
                 text = if (state.hasGitHubPat) {
-                    "We create a private anyprov-code-settings repo in your account and push settings, memory, and chats there."
+                    "We create a private roamsocket-mobile-settings repo in your account and push every setting (preferences, voice, model) there."
                 } else {
-                    "Add a GitHub PAT above, then sync to push settings to a private anyprov-code-settings repo."
+                    "Add a GitHub PAT above, then sync to push settings to a private roamsocket-mobile-settings repo."
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -710,17 +715,70 @@ private fun SettingsBackupCard(state: SettingsUiState) {
                 FilledChipButton(
                     label = "Sync to GitHub",
                     icon = Icons.Outlined.Sync,
-                    enabled = state.hasGitHubPat,
-                    onClick = { /* wired in GitHub sync PR */ },
+                    enabled = state.hasGitHubPat && !state.syncInFlight,
+                    onClick = onPush,
                     modifier = Modifier.weight(1f),
                 )
                 OutlinedChipButton(
                     label = "Restore",
                     icon = Icons.Outlined.Sync,
-                    enabled = state.hasGitHubPat,
-                    onClick = { /* wired in GitHub sync PR */ },
+                    enabled = state.hasGitHubPat && !state.syncInFlight,
+                    onClick = onPull,
                     modifier = Modifier.weight(1f),
                 )
+            }
+            if (state.syncInFlight) {
+                Spacer(Modifier.size(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        strokeWidth = 2.dp,
+                    )
+                    Spacer(Modifier.size(8.dp))
+                    Text(
+                        text = "Talking to GitHub…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            state.syncMessage?.let { msg ->
+                Spacer(Modifier.size(6.dp))
+                Text(
+                    text = msg,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+            state.syncError?.let { err ->
+                Spacer(Modifier.size(6.dp))
+                Text(
+                    text = err,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            if (state.syncStatuses.isNotEmpty()) {
+                Spacer(Modifier.size(6.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    state.syncStatuses.forEach { (kind, line) ->
+                        Row(verticalAlignment = Alignment.Top) {
+                            Text(
+                                text = "$kind",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.width(96.dp),
+                            )
+                            Spacer(Modifier.size(6.dp))
+                            Text(
+                                text = line,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
             }
         }
     }
