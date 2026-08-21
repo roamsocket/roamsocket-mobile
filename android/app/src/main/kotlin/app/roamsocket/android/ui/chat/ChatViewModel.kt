@@ -11,12 +11,14 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import app.roamsocket.android.AppContainer
 import app.roamsocket.android.RoamSocketApplication
+import app.roamsocket.android.data.EffortLevel
 import app.roamsocket.android.data.ToolAccessLevel
 import app.roamsocket.core.chats.ChatHistoryRepository
 import app.roamsocket.core.chats.PersistedChatMessage
 import app.roamsocket.core.providers.AIModel
 import app.roamsocket.core.providers.ModelCatalog
 import app.roamsocket.core.providers.ProviderChatMessage
+import app.roamsocket.core.protocol.Effort
 import app.roamsocket.core.providers.ProviderId
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -71,6 +73,8 @@ class ChatViewModel(
                 webSearchEnabled = container.userSettings.webSearchEnabled.first(),
                 locationEnabled = container.userSettings.locationEnabled.first(),
                 toolAccess = container.userSettings.toolAccess.first(),
+                alwaysExpandThinking = container.userSettings.alwaysExpandThinking.first(),
+                effort = container.userSettings.effort.first(),
             )
 
             // Resume the persisted transcript when the screen opens on an
@@ -221,11 +225,15 @@ class ChatViewModel(
                 return@launch
             }
             try {
+                // Effort comes from the global Settings slider (port from
+                // iOS `AppState.effort`). Providers that don't honour the
+                // field simply ignore it.
+                val effort = _state.value.effort.toCore()
                 val reply = client.chat(
                     model = model,
                     apiKey = apiKey,
                     messages = nextMessages.toProviderMessages(prompt = prompt),
-                    effort = null,
+                    effort = effort,
                     webSearchQuery = if (_state.value.webSearchEnabled) trimmed else null,
                 )
                 val assistantMsg = ChatMessage.Assistant(
@@ -356,6 +364,21 @@ class ChatViewModel(
     fun setToolAccess(level: ToolAccessLevel) {
         _state.value = _state.value.copy(toolAccess = level)
         viewModelScope.launch { container.userSettings.setToolAccess(level) }
+    }
+
+    /** Toggle the chat's "always expand thinking" preference (port from
+     *  iOS `state.alwaysExpandThinking`). Persisted across launches. */
+    fun setAlwaysExpandThinking(enabled: Boolean) {
+        _state.value = _state.value.copy(alwaysExpandThinking = enabled)
+        viewModelScope.launch { container.userSettings.setAlwaysExpandThinking(enabled) }
+    }
+
+    /** Update the chat's default reasoning effort (port from iOS
+     *  `AppState.effort`). The next [send] will pass this to the
+     *  provider's `chat(..., effort = ...)` call. */
+    fun setEffort(level: EffortLevel) {
+        _state.value = _state.value.copy(effort = level)
+        viewModelScope.launch { container.userSettings.setEffort(level) }
     }
 
     fun dismissError() {
@@ -520,6 +543,13 @@ data class ChatUiState(
     val locationEnabled: Boolean = false,
     /** Desktop agent's tool access level (Auto / Read-only / Full). */
     val toolAccess: ToolAccessLevel = ToolAccessLevel.Auto,
+    // ----- Settings parity (PR — settings wiring) -----
+    /** When true, the transcript always shows the model's reasoning trace
+     *  under the summary row. Mirrors iOS `alwaysExpandThinking`. */
+    val alwaysExpandThinking: Boolean = false,
+    /** Default reasoning effort for outgoing chat messages. Mirrors
+     *  iOS `AppState.effort` (port from the Settings "Effort" card). */
+    val effort: EffortLevel = EffortLevel.High,
 )
 
 /**
@@ -757,6 +787,19 @@ private fun queryDisplayName(uri: Uri, contentResolver: ContentResolver): String
  */
 private fun selectedModelSupportsVision(state: ChatUiState): Boolean? =
     state.modelsForProvider.firstOrNull { it.modelID == state.model }?.supportsVision
+
+/**
+ * Map the app-layer [EffortLevel] (Light / Medium / Heavy) to the
+ * core provider-layer [Effort] enum the [ModelProvider] chat API
+ * expects. Providers that don't honour the field just ignore the
+ * argument — the mapping only matters for Anthropic, OpenAI, and
+ * Google's reasoning knobs.
+ */
+private fun EffortLevel.toCore(): Effort? = when (this) {
+    EffortLevel.Low -> Effort.LOW
+    EffortLevel.Medium -> Effort.MEDIUM
+    EffortLevel.High -> Effort.HIGH
+}
 
 @Suppress("unused")
 private fun _displayNameAnchor(fn: (android.net.Uri, android.content.ContentResolver) -> String?) = fn  // keep the helper reachable
