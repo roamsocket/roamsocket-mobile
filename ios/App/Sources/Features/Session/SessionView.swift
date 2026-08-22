@@ -23,7 +23,11 @@ struct SessionView: View {
     @State private var showServerPairing = false
     /// Snapshot of `serverToken` when the pairing sheet opens — used to detect a successful re-pair.
     @State private var tokenWhenPairingPresented: String?
-    @State private var detailTool: SessionViewModel.Item?
+    /// Tool history payload for the currently presented `ActionHistorySheet`.
+    /// Driven by `showActionHistory` — set together so the sheet has a stable
+    /// snapshot of which group the user tapped.
+    @State private var actionHistoryTools: [SessionViewModel.Item] = []
+    @State private var showActionHistory = false
     @State private var browserBusy = false
     @State private var showTasksSheet = false
 
@@ -300,10 +304,10 @@ struct SessionView: View {
             NavigationStack { ServerPairingView() }
                 .environmentObject(state)
         }
-        .sheet(item: $detailTool) { item in
-            if case let .tool(_, tool, summary, ok, output) = item {
-                ToolDetailSheet(tool: tool, summary: summary, ok: ok, output: output)
-            }
+        .sheet(isPresented: $showActionHistory) {
+            // Snapshot a defensive copy of the group at tap time so the
+            // sheet doesn't shift as new tool calls stream in.
+            ActionHistorySheet(tools: actionHistoryTools)
         }
         .sheet(isPresented: $showTasksSheet) {
             AgentTasksSheet(tasks: model.agentTasks)
@@ -497,11 +501,14 @@ struct SessionView: View {
     }
 
     private var transcript: some View {
-        ScrollViewReader { proxy in
+        // Pre-compute the collapsed segments once per render so a long
+        // transcript doesn't re-walk `model.items` for every row.
+        let segments = TranscriptSegment.segments(from: model.items)
+        return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(model.items) { item in
-                        row(for: item).id(item.id)
+                    ForEach(segments) { segment in
+                        segmentRow(for: segment).id(segment.id)
                     }
                     if shouldShowTypingIndicator {
                         AssistantTypingIndicator()
@@ -599,13 +606,12 @@ struct SessionView: View {
                 alwaysExpandThinking: state.alwaysExpandThinking
             )
 
-        case let .tool(_, tool, summary, ok, output):
-            ToolCard(
-                tool: tool,
-                summary: summary,
-                ok: ok,
-                output: output,
-                onOpenDetail: { detailTool = item }
+        case .tool:
+            // Single tool calls now flow through the action-group path too,
+            // so the inline transcript never shows two different card styles.
+            ActionGroupCard(
+                tools: [item],
+                onOpenHistory: { presentActionHistory(for: [item]) }
             )
 
         case let .diff(_, path, patch, added, removed):
@@ -617,6 +623,29 @@ struct SessionView: View {
                 .foregroundStyle(Theme.textTertiary)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    /// Render a transcript segment: single items go through the original
+    /// `row(for:)` path; action groups are collapsed into one card that
+    /// opens the full history on tap.
+    @ViewBuilder
+    private func segmentRow(for segment: TranscriptSegment) -> some View {
+        switch segment {
+        case .item(let item):
+            row(for: item)
+        case .actions(_, let tools):
+            ActionGroupCard(tools: tools) {
+                presentActionHistory(for: tools)
+            }
+        }
+    }
+
+    /// Snapshot the group and present the history sheet. The snapshot is
+    /// intentionally a value copy so the sheet stays stable as new tool
+    /// calls stream in while it's open.
+    private func presentActionHistory(for tools: [SessionViewModel.Item]) {
+        actionHistoryTools = tools
+        showActionHistory = true
     }
 
     private func permissionBar(_ permission: SessionViewModel.PendingPermission) -> some View {
@@ -1142,202 +1171,6 @@ private struct SessionAssistantMessage: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-/// Collapsible tool-call card. Summary row is always visible; command output
-/// stays collapsed until the user taps to expand. Long-press opens full detail.
-private struct ToolCard: View {
-    let tool: String
-    let summary: String
-    let ok: Bool?
-    let output: String?
-    var onOpenDetail: (() -> Void)? = nil
-    @State private var expanded = false
-
-    private var hasOutput: Bool {
-        guard let output else { return false }
-        return !output.isEmpty
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Button {
-                guard hasOutput else {
-                    onOpenDetail?()
-                    return
-                }
-                withAnimation(.spring(response: 0.32, dampingFraction: 0.88)) {
-                    expanded.toggle()
-                }
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: statusIcon)
-                        .foregroundStyle(statusColor)
-                    Text(summary)
-                        .font(.system(size: 14, design: .monospaced))
-                        .foregroundStyle(Theme.textPrimary)
-                        .lineLimit(expanded ? nil : 1)
-                        .multilineTextAlignment(.leading)
-                    Spacer(minLength: 0)
-                    if hasOutput {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(Theme.textTertiary)
-                            .rotationEffect(.degrees(expanded ? 90 : 0))
-                    }
-                }
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(hasOutput
-                ? (expanded ? "Collapse command output" : "Expand command output")
-                : summary)
-            .accessibilityHint(hasOutput ? "Shows the tool’s full output" : "No output yet")
-
-            if expanded, let output, !output.isEmpty {
-                Text(output)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(Theme.textSecondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-                    .padding(.top, 2)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-        }
-        .padding(12)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
-        .contentShape(RoundedRectangle(cornerRadius: 12))
-        .onLongPressGesture(minimumDuration: 0.4) {
-            onOpenDetail?()
-        }
-        .contextMenu {
-            if onOpenDetail != nil {
-                Button {
-                    onOpenDetail?()
-                } label: {
-                    Label("View details", systemImage: "doc.text.magnifyingglass")
-                }
-            }
-            if hasOutput, let output {
-                Button {
-                    #if canImport(UIKit)
-                    UIPasteboard.general.string = output
-                    #endif
-                } label: {
-                    Label("Copy output", systemImage: "doc.on.doc")
-                }
-            }
-        }
-    }
-
-    private var statusIcon: String {
-        switch ok {
-        case .some(true): return "checkmark.circle.fill"
-        case .some(false): return "xmark.circle.fill"
-        case .none: return "circle.dotted"
-        }
-    }
-    private var statusColor: Color {
-        switch ok {
-        case .some(true): return .green
-        case .some(false): return .red
-        case .none: return Theme.textTertiary
-        }
-    }
-}
-
-/// Detail sheet for a single tool invocation. Shows the command/summary
-/// at the top and the full output (with syntax-style highlighting for
-/// `git`-style output) below.
-private struct ToolDetailSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    let tool: String
-    let summary: String
-    let ok: Bool?
-    let output: String?
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("Command")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(Theme.textSecondary)
-                        Spacer()
-                        if let ok {
-                            Text(ok ? "OK" : "Failed")
-                                .font(.system(size: 12, weight: .semibold))
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 2)
-                                .background((ok ? Color.green : Color.red).opacity(0.2), in: Capsule())
-                                .foregroundStyle(ok ? .green : .red)
-                        }
-                    }
-                    Text(displayName)
-                        .font(.system(size: 14, design: .monospaced))
-                        .foregroundStyle(Theme.textPrimary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
-                        .padding(12)
-                        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
-                    if let output, !output.isEmpty {
-                        Text("Output")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(Theme.textSecondary)
-                        ScrollView(.horizontal) {
-                            VStack(alignment: .leading, spacing: 0) {
-                                ForEach(Array(output.split(separator: "\n", omittingEmptySubsequences: false).enumerated()), id: \.offset) { _, line in
-                                    Text(String(line))
-                                        .font(.system(size: 12, design: .monospaced))
-                                        .foregroundStyle(color(for: String(line)))
-                                        .textSelection(.enabled)
-                                }
-                            }
-                            .padding(12)
-                        }
-                        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
-                    } else {
-                        Text("No output yet.")
-                            .font(.system(size: 14))
-                            .foregroundStyle(Theme.textTertiary)
-                    }
-                }
-                .padding(16)
-            }
-            .background(Theme.background)
-            .navigationTitle(toolLabel)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
-        }
-        .presentationDetents([.medium, .large])
-    }
-
-    private var toolLabel: String {
-        switch tool {
-        case "bash": return "Bash"
-        case "read_file", "write_file", "edit_file": return "File"
-        default: return tool.capitalized
-        }
-    }
-
-    private var displayName: String {
-        // The summary field carries the human summary; the raw command is
-        // in the `input` blob stored on the model. For now we just show
-        // the summary.
-        summary
-    }
-
-    private func color(for line: String) -> Color {
-        if line.hasPrefix("+") { return .green }
-        if line.hasPrefix("-") { return .red }
-        if line.hasPrefix("On branch ") || line.hasPrefix("----") { return Theme.textSecondary }
-        if line.contains("nothing to commit") || line.contains("working tree clean") { return Theme.textSecondary }
-        return Theme.textPrimary
     }
 }
 
