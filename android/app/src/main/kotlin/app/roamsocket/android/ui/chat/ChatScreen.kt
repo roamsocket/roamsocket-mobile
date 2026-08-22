@@ -58,6 +58,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -302,7 +303,18 @@ fun ChatScreen(
                 ) {
                     { viewModel.retryLast() }
                 } else null
-                MessageBubble(message = message, onRetry = onRetry)
+                // Mirrors iOS `ChatMessageView.assistantMessageContent`:
+                // the last assistant message is the one being streamed,
+                // so the typing indicator only shows while that exact row
+                // is empty.
+                val isLastAssistant = message is ChatMessage.Assistant &&
+                    state.messages.lastOrNull() === message
+                MessageBubble(
+                    message = message,
+                    onRetry = onRetry,
+                    alwaysExpandThinking = state.alwaysExpandThinking,
+                    isStreaming = state.isStreaming && isLastAssistant,
+                )
             }
         }
 
@@ -336,7 +348,12 @@ fun ChatScreen(
 }
 
 @Composable
-private fun MessageBubble(message: ChatMessage, onRetry: (() -> Unit)? = null) {
+private fun MessageBubble(
+    message: ChatMessage,
+    onRetry: (() -> Unit)? = null,
+    alwaysExpandThinking: Boolean = false,
+    isStreaming: Boolean = false,
+) {
     val isUser = message is ChatMessage.User
     val isFailed = isUser && (message as ChatMessage.User).delivery == ChatMessage.User.Delivery.FAILED
     val bubbleColor = when {
@@ -373,16 +390,39 @@ private fun MessageBubble(message: ChatMessage, onRetry: (() -> Unit)? = null) {
                     )
                 }
                 is ChatMessage.Assistant -> {
-                    // Port #8: assistant bubbles render their body as
-                    // CommonMark / GFM via Markwon (mirrors iOS
-                    // MarkdownContentView). The bubble loses the surface
-                    // fill for assistant messages because the markdown
-                    // renderer owns its own block / code-block backgrounds.
-                    MarkdownText(
-                        markdown = message.text,
-                        fontSize = 16.sp,
-                        modifier = Modifier.padding(horizontal = 4.dp),
-                    )
+                    // Parity with iOS `ChatMessageView.assistantMessageContent`:
+                    // extract `<think>…</think>` blocks via the iOS-port
+                    // [ThinkingExtractor] and render the reasoning as a
+                    // collapsed row (clock + grey summary + tap-to-open
+                    // Thought process sheet). The visible body goes through
+                    // Markwon (Port #8) the same way it did before.
+                    val parsed = ThinkingExtractor.extract(message.text)
+                    val cleaned = ThinkingExtractor
+                        .stripControlTokens(parsed.content)
+                        .let { ThinkingExtractor.stripToolCallXml(it) }
+                    Column(modifier = Modifier.padding(horizontal = 4.dp)) {
+                        parsed.thinking?.let { thinking ->
+                            ThinkingBlock(
+                                text = thinking,
+                                expanded = alwaysExpandThinking,
+                            )
+                            Spacer(Modifier.size(8.dp))
+                        }
+                        if (cleaned.isNotBlank()) {
+                            MarkdownText(
+                                markdown = cleaned,
+                                fontSize = 16.sp,
+                            )
+                        }
+                        // While the assistant is mid-turn and there's no
+                        // visible progress yet, surface a typing indicator
+                        // so the user knows the agent is still working
+                        // (mirrors iOS `shouldShowTypingIndicator`).
+                        if (isStreaming && parsed.thinking == null && cleaned.isBlank()) {
+                            Spacer(Modifier.size(4.dp))
+                            AssistantTypingIndicator()
+                        }
+                    }
                 }
             }
         }
@@ -791,9 +831,10 @@ private fun EmptyState(
             }
             // Happy-path empty state. Lightbulb in a circular surface
             // (matches the iOS reference screenshot 1) plus the
-            // "What are we building today?" headline and a one-line
-            // subtitle. Kept on-screen above the input bar so the
-            // composer stays in reach.
+            // time-of-day greeting (port of iOS `ChatGreeting.phrase(at:)`)
+            // rendered in a serif font for the iOS "literary" feel. The
+            // line rotates by hour + day so it doesn't always say the
+            // same thing.
             else -> {
                 Box(
                     modifier = Modifier
@@ -811,10 +852,13 @@ private fun EmptyState(
                 }
                 Spacer(Modifier.size(16.dp))
                 Text(
-                    text = "What are we building today?",
-                    style = MaterialTheme.typography.headlineSmall,
+                    text = ChatGreeting.phrase(),
+                    style = MaterialTheme.typography.headlineSmall.copy(
+                        fontFamily = FontFamily.Serif,
+                        fontWeight = FontWeight.Normal,
+                    ),
                     color = MaterialTheme.colorScheme.onSurface,
-                    fontWeight = FontWeight.SemiBold,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 )
                 Spacer(Modifier.size(6.dp))
                 Text(

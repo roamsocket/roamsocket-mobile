@@ -1,17 +1,23 @@
 package app.roamsocket.android.ui.session
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -22,18 +28,22 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.Cancel
 import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.DataObject
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material.icons.outlined.NetworkCheck
 import androidx.compose.material.icons.outlined.QuestionMark
 import androidx.compose.material.icons.outlined.Stop
+import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -44,18 +54,31 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.roamsocket.android.data.PairedServer
+import app.roamsocket.android.ui.chat.AssistantTypingIndicator
+import app.roamsocket.android.ui.chat.ThinkingBlock
+import app.roamsocket.android.ui.chat.ThinkingExtractor
+import app.roamsocket.android.ui.markdown.MarkdownText
+import app.roamsocket.android.ui.settings.ServerPairingSheet
+import app.roamsocket.android.ui.theme.Palette
+import app.roamsocket.core.server.Endpoint
 
 /**
  * Live session transcript + composer. Mirrors `ios/.../SessionView.swift`
@@ -82,6 +105,49 @@ fun SessionScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
 
+    // Workspace sheets — pick exactly one at a time so they don't stack.
+    // Mirrors the iOS `showTerminal` / `showFiles` / `showPorts` / `showGitSheet`
+    // state in `SessionView`.
+    var showTerminalSheet by remember { mutableStateOf(false) }
+    var showFilesSheet by remember { mutableStateOf(false) }
+    var showPortsSheet by remember { mutableStateOf(false) }
+    var showGitSheet by remember { mutableStateOf(false) }
+    var pendingGitAction by remember { mutableStateOf<GitAction?>(null) }
+    var openFile by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
+    var showRePairSheet by remember { mutableStateOf(false) }
+    var workspaceMenuExpanded by remember { mutableStateOf(false) }
+
+    // Track the token snapshot the pairing sheet was opened with so we
+    // only re-connect when pairing actually produced a new token.
+    val pairTokenAtOpen = remember { mutableStateOf(paired.token) }
+
+    // Auto-prompt for re-pair when the session surfaces `needsRePair`
+    // (e.g. desktop rejected the saved token). Mirrors the iOS
+    // `.onChange(of: model.needsRePair)` → `presentPairingSheet()` hook.
+    LaunchedEffect(state.needsRePair) {
+        if (state.needsRePair) {
+            pairTokenAtOpen.value = paired.token
+            showRePairSheet = true
+        }
+    }
+
+    val endpoint = remember(paired.endpoint) { Endpoint.fromHost(paired.endpoint) }
+
+    // Slash-command suggestions while the composer is mid-`/goal …`.
+    // Mirrors iOS `SessionView.slashCommands` / `slashSuggestions`. The
+    // tap inserts the full token into the draft.
+    val slashSuggestions: List<SlashCommand> = remember(state.draft) {
+        val t = state.draft.trimStart()
+        if (!t.startsWith("/") || state.draft.contains('\n')) emptyList()
+        else SLASH_COMMANDS.filter { c ->
+            c.token.startsWith(t, ignoreCase = true) ||
+                (t.startsWith("/g") && c.token.startsWith("/goal", ignoreCase = true))
+        }
+    }
+    val showSlashMenu by remember {
+        derivedStateOf { state.isSessionReady && slashSuggestions.isNotEmpty() && state.draft.trimStart().startsWith("/") }
+    }
+
     LaunchedEffect(state.transcript.size, state.isRunning) {
         if (state.transcript.isNotEmpty()) {
             listState.animateScrollToItem(state.transcript.size - 1)
@@ -96,6 +162,8 @@ fun SessionScreen(
                         text = config.repo.fullName,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                     Text(
                         text = state.connectionStatusLine ?: "",
@@ -113,16 +181,115 @@ fun SessionScreen(
                 }
             },
             actions = {
+                // Diff stats badge — iOS mirrors the same `+N −M` chip
+                // in the top bar so the user can see total local change
+                // at a glance.
+                if (state.hasDiffs) {
+                    val stats = state.totalDiffStats
+                    Text(
+                        text = "+${stats.added} -${stats.removed}",
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                        color = Palette.Accent,
+                        modifier = Modifier.padding(end = 4.dp),
+                    )
+                }
+                // Tasks progress chip — iOS uses a checklist + ratio.
+                if (state.hasAgentTasks) {
+                    val progress = state.taskProgress
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(end = 8.dp),
+                    ) {
+                        Text(
+                            text = "${progress.done}/${progress.total}",
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.SemiBold,
+                            ),
+                            color = Palette.Accent,
+                        )
+                    }
+                }
                 if (state.isRunning) {
                     IconButton(onClick = viewModel::interrupt) {
                         Icon(Icons.Outlined.Stop, contentDescription = "Interrupt")
                     }
                 } else {
                     AssistChip(
-                        onClick = viewModel::createPR,
-                        label = { Text("Create PR") },
+                        onClick = {
+                            if (state.prUrl != null) {
+                                // iOS opens the PR URL directly when a PR is
+                                // already published.
+                                // (best-effort) the URL is shown in the
+                                // PR banner; tapping it opens in browser.
+                            } else {
+                                pendingGitAction = GitAction.All
+                                showGitSheet = true
+                            }
+                        },
+                        label = { Text(if (state.prUrl != null) "View PR" else "Finish · PR") },
                         enabled = state.isSessionReady,
                     )
+                }
+                // Workspace menu (mirrors iOS `Menu` in the top bar).
+                Box {
+                    IconButton(onClick = { workspaceMenuExpanded = true }) {
+                        Icon(Icons.Outlined.Menu, contentDescription = "Workspace menu")
+                    }
+                    androidx.compose.material3.DropdownMenu(
+                        expanded = workspaceMenuExpanded,
+                        onDismissRequest = { workspaceMenuExpanded = false },
+                    ) {
+                        androidx.compose.material3.DropdownMenuItem(
+                            text = { Text("Shell") },
+                            leadingIcon = { Icon(Icons.Outlined.Terminal, contentDescription = null) },
+                            enabled = endpoint != null && state.isSessionReady,
+                            onClick = {
+                                workspaceMenuExpanded = false
+                                showTerminalSheet = true
+                            },
+                        )
+                        androidx.compose.material3.DropdownMenuItem(
+                            text = { Text("Files") },
+                            leadingIcon = { Icon(Icons.Outlined.Description, contentDescription = null) },
+                            enabled = endpoint != null && state.isSessionReady,
+                            onClick = {
+                                workspaceMenuExpanded = false
+                                showFilesSheet = true
+                            },
+                        )
+                        androidx.compose.material3.DropdownMenuItem(
+                            text = { Text("Open ports") },
+                            leadingIcon = { Icon(Icons.Outlined.NetworkCheck, contentDescription = null) },
+                            enabled = endpoint != null && state.isSessionReady,
+                            onClick = {
+                                workspaceMenuExpanded = false
+                                showPortsSheet = true
+                            },
+                        )
+                        androidx.compose.material3.DropdownMenuItem(
+                            text = { Text("Commit") },
+                            leadingIcon = { Icon(Icons.Outlined.Check, contentDescription = null) },
+                            enabled = state.isSessionReady,
+                            onClick = {
+                                workspaceMenuExpanded = false
+                                pendingGitAction = GitAction.Commit
+                                showGitSheet = true
+                            },
+                        )
+                        androidx.compose.material3.DropdownMenuItem(
+                            text = { Text("Re-pair…") },
+                            leadingIcon = { Icon(Icons.Outlined.Link, contentDescription = null) },
+                            onClick = {
+                                workspaceMenuExpanded = false
+                                pairTokenAtOpen.value = paired.token
+                                showRePairSheet = true
+                            },
+                        )
+                    }
                 }
             },
             colors = TopAppBarDefaults.topAppBarColors(
@@ -135,8 +302,76 @@ fun SessionScreen(
             ErrorRow(message = err, onDismiss = viewModel::dismissError)
         }
 
+        // Re-pair CTA — the iOS sheet is auto-presented on `needsRePair`
+        // but we also surface a manual "Enter pairing code" button in the
+        // error row when the token is bad.
+        if (state.needsRePair) {
+            Surface(
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable {
+                        pairTokenAtOpen.value = paired.token
+                        showRePairSheet = true
+                    },
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Link,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onError,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "Desktop rejected the pairing token. Tap to re-pair.",
+                        color = MaterialTheme.colorScheme.onError,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+            }
+        }
+
         if (state.prUrl != null) {
             PrBanner(url = state.prUrl!!, onDismiss = { /* keep around until next */ })
+        }
+
+        // Environment connection pill — iOS parity.
+        EnvironmentConnectionPill(
+            environment = config.environment,
+            connectionPath = if (state.connectionStatusLine?.startsWith("Re-pair", ignoreCase = true) == true) {
+                ConnectionPath.Offline
+            } else if (state.isSessionReady) {
+                ConnectionPath.Local
+            } else {
+                ConnectionPath.Offline
+            },
+        )
+
+        // Mirrors the iOS banner stack: goal → model status → agent
+        // tasks. Banners are mutually independent so a session can
+        // show all three at once.
+        if (state.showsGoalBanner) {
+            GoalBanner(
+                goal = state.goalStatus!!,
+                hasActiveGoal = state.hasActiveGoal,
+                onClear = { viewModel.send("/goal clear") },
+            )
+        }
+        state.modelStatus?.let { ms ->
+            ModelStatusBanner(status = ms)
+        }
+        if (state.hasAgentTasks) {
+            AgentTasksBanner(
+                progress = state.taskProgress,
+                tasks = state.agentTasks,
+            )
         }
 
         LazyColumn(
@@ -156,22 +391,17 @@ fun SessionScreen(
                 }
             }
             items(state.transcript, key = { it.key() }) { item ->
-                TranscriptRow(item)
+                TranscriptRow(item = item, isRunning = state.isRunning)
             }
-            if (state.isRunning) {
+            // Live typing indicator while the agent is mid-turn and
+            // nothing else at the tail of the transcript already
+            // signals progress (matches iOS
+            // `shouldShowTypingIndicator`).
+            if (shouldShowTypingIndicator(state)) {
                 item("running") {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(14.dp),
-                            strokeWidth = 1.5.dp,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                        Text(
-                            text = " Agent is thinking…",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                    AssistantTypingIndicator(
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+                    )
                 }
             }
         }
@@ -182,6 +412,15 @@ fun SessionScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+        }
+
+        if (showSlashMenu) {
+            SlashCommandMenu(
+                suggestions = slashSuggestions,
+                onSelect = { token ->
+                    viewModel.updateDraft(if (token.endsWith(' ')) token else "$token ")
+                },
             )
         }
 
@@ -196,14 +435,172 @@ fun SessionScreen(
     state.pendingPermission?.let { perm ->
         PermissionDialog(permission = perm, onDecision = viewModel::respondPermission)
     }
+
+    // Workspace sheets (iOS parity).
+    if (showTerminalSheet && endpoint != null) {
+        SheetContainer(onDismiss = { showTerminalSheet = false }, title = "Shell") {
+            TerminalPane(
+                sessionId = state.sessionId ?: "",
+                endpoint = endpoint,
+                token = paired.token,
+            )
+        }
+    }
+    if (showFilesSheet && endpoint != null) {
+        SheetContainer(onDismiss = { showFilesSheet = false }, title = "Files") {
+            FileExplorerPane(
+                sessionId = state.sessionId ?: "",
+                endpoint = endpoint,
+                token = paired.token,
+                onOpenFile = { path, preferDiff ->
+                    openFile = path to preferDiff
+                },
+            )
+        }
+    }
+    openFile?.let { (path, preferDiff) ->
+        if (endpoint != null) {
+            SheetContainer(onDismiss = { openFile = null }, title = path.substringAfterLast('/')) {
+                FileViewerPane(
+                    sessionId = state.sessionId ?: "",
+                    path = path,
+                    endpoint = endpoint,
+                    token = paired.token,
+                    preferDiff = preferDiff,
+                    onClose = { openFile = null },
+                )
+            }
+        } else {
+            openFile = null
+        }
+    }
+    if (showPortsSheet && endpoint != null) {
+        SheetContainer(onDismiss = { showPortsSheet = false }, title = "Open ports") {
+            PortManagerPane(
+                sessionId = state.sessionId ?: "",
+                endpoint = endpoint,
+                token = paired.token,
+            )
+        }
+    }
+    if (showGitSheet && pendingGitAction != null) {
+        SheetContainer(
+            onDismiss = { showGitSheet = false; pendingGitAction = null },
+            title = pendingGitAction!!.title,
+        ) {
+            GitSheet(
+                action = pendingGitAction!!,
+                sessionId = state.sessionId ?: "",
+                endpoint = endpoint,
+                token = paired.token,
+                firstUserMessage = state.firstUserMessage,
+                transcript = state.transcript.map { it.toPersisted() },
+                diffSummary = null,
+                diffStats = state.totalDiffStats,
+                onDismiss = { showGitSheet = false; pendingGitAction = null },
+                onPublished = { _ ->
+                    showGitSheet = false
+                    pendingGitAction = null
+                },
+            )
+        }
+    }
+    if (showRePairSheet) {
+        ServerPairingSheet(
+            initialHost = paired.endpoint,
+            initialCode = "",
+            title = "Re-pair desktop",
+            description = "Open the desktop server, then type the 6-character code shown there.",
+            showCancel = true,
+            onDismiss = { showRePairSheet = false },
+            onPaired = { server ->
+                showRePairSheet = false
+                // Only re-connect if the token actually changed.
+                if (server.token != pairTokenAtOpen.value) {
+                    viewModel.applyRePair(
+                        endpoint = server.endpoint,
+                        token = server.token,
+                        serverName = server.serverName,
+                    )
+                }
+            },
+        )
+    }
 }
 
 @Composable
-private fun TranscriptRow(item: TranscriptItem) {
+private fun SheetContainer(
+    onDismiss: () -> Unit,
+    title: String,
+    content: @Composable () -> Unit,
+) {
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            color = MaterialTheme.colorScheme.background,
+            modifier = Modifier
+                .fillMaxSize(),
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Palette.Surface)
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                ) {
+                    TextButton(onClick = onDismiss) { Text("Done") }
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        text = title,
+                        color = Palette.TextPrimary,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(Modifier.weight(1f))
+                    // Spacer to keep the title centred (matches Done width).
+                    TextButton(onClick = {}, enabled = false) { Text("Done") }
+                }
+                content()
+            }
+        }
+    }
+}
+
+/**
+ * True while the agent is mid-turn and nothing else at the tail of the
+ * transcript already signals progress (live assistant text, thinking
+ * row, or an in-flight tool card). Mirrors the iOS
+ * `shouldShowTypingIndicator` computed property.
+ */
+private fun shouldShowTypingIndicator(state: SessionUiState): Boolean {
+    if (!state.isRunning) return false
+    // A live model_status banner is already a progress signal.
+    if (state.modelStatus != null) return false
+    val last = state.transcript.lastOrNull() ?: return true
+    return when (last) {
+        is TranscriptItem.User, is TranscriptItem.Diff -> true
+        is TranscriptItem.Assistant -> {
+            val parsed = ThinkingExtractor.extract(last.text)
+            val cleaned = ThinkingExtractor.stripControlTokens(parsed.content)
+                .let { ThinkingExtractor.stripToolCallXml(it) }
+            // Visible body or any thinking already shows progress.
+            if (cleaned.isNotBlank()) return false
+            if (parsed.thinking != null) return false
+            true
+        }
+        is TranscriptItem.Tool -> last.ok != null
+    }
+}
+
+@Composable
+private fun TranscriptRow(item: TranscriptItem, isRunning: Boolean) {
     when (item) {
         is TranscriptItem.User -> UserBubble(item.text)
-        is TranscriptItem.Assistant -> AssistantBubble(item.text)
-        is TranscriptItem.Tool -> ToolRow(item)
+        is TranscriptItem.Assistant -> AssistantBubble(item.text, isRunning = isRunning)
+        is TranscriptItem.Tool -> ToolCard(item)
         is TranscriptItem.Diff -> DiffRow(item)
     }
 }
@@ -227,64 +624,100 @@ private fun UserBubble(text: String) {
 }
 
 @Composable
-private fun AssistantBubble(text: String) {
+private fun AssistantBubble(text: String, isRunning: Boolean) {
     if (text.isEmpty()) return
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceVariant,
-            shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = 4.dp, bottomEnd = 16.dp),
-            modifier = Modifier.padding(horizontal = 4.dp),
-        ) {
-            Text(
-                text = text,
-                color = MaterialTheme.colorScheme.onSurface,
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-            )
+    // Parity with iOS `SessionAssistantMessage`: pull `<think>` blocks
+    // out via [ThinkingExtractor] and render the body as Markwon
+    // markdown (same MarkdownText the chat uses).
+    val parsed = ThinkingExtractor.extract(text)
+    val cleaned = ThinkingExtractor
+        .stripControlTokens(parsed.content)
+        .let { ThinkingExtractor.stripToolCallXml(it) }
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)) {
+        parsed.thinking?.let { thinking ->
+            ThinkingBlock(text = thinking)
+            Spacer(Modifier.size(8.dp))
+        }
+        if (cleaned.isNotBlank()) {
+            MarkdownText(markdown = cleaned, fontSize = 16.sp)
+        }
+        if (isRunning && parsed.thinking == null && cleaned.isBlank()) {
+            Spacer(Modifier.size(4.dp))
+            AssistantTypingIndicator()
         }
     }
 }
 
+/**
+ * Collapsible tool-call card. Summary row is always visible; command
+ * output stays collapsed until the user taps to expand. Mirrors the
+ * iOS `ToolCard` in `SessionView.swift`.
+ */
 @Composable
-private fun ToolRow(item: TranscriptItem.Tool) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+private fun ToolCard(item: TranscriptItem.Tool) {
+    var expanded by remember { mutableStateOf(false) }
+    val hasOutput = !item.output.isNullOrEmpty()
+    val (statusIcon, statusTint) = when (item.ok) {
+        null -> Icons.Outlined.DataObject to Palette.TextSecondary
+        true -> Icons.Outlined.Check to Palette.Success
+        false -> Icons.Outlined.Cancel to Palette.Danger
+    }
+    val rotation by animateFloatAsState(
+        targetValue = if (expanded) 90f else 0f,
+        animationSpec = tween(durationMillis = 180),
+        label = "tool-chevron",
+    )
+    Surface(
+        color = Palette.Surface,
+        shape = RoundedCornerShape(10.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable {
+                        if (hasOutput) expanded = !expanded
+                    },
+            ) {
                 Icon(
-                    Icons.Outlined.DataObject,
+                    imageVector = statusIcon,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
+                    tint = statusTint,
                     modifier = Modifier.size(16.dp),
                 )
+                Spacer(Modifier.width(8.dp))
                 Text(
-                    text = " ${item.tool}",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(start = 4.dp),
+                    text = item.summary.ifBlank { item.tool },
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Medium,
+                    ),
+                    color = Palette.TextPrimary,
+                    maxLines = if (expanded) Int.MAX_VALUE else 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
                 )
-                item.ok?.let { ok ->
-                    val color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
-                    Text(
-                        text = if (ok) " · ok" else " · failed",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = color,
+                if (hasOutput) {
+                    Icon(
+                        imageVector = Icons.Outlined.ChevronRight,
+                        contentDescription = if (expanded) "Collapse output" else "Expand output",
+                        tint = Palette.TextTertiary,
+                        modifier = Modifier
+                            .size(14.dp)
+                            .rotate(rotation),
                     )
                 }
             }
-            Text(
-                text = item.summary,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            item.output?.let { out ->
+            AnimatedVisibility(visible = expanded && hasOutput) {
                 Text(
-                    text = out.take(800),
+                    text = item.output.orEmpty().take(2_000),
                     style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    color = Palette.TextSecondary,
                     modifier = Modifier
-                        .padding(top = 4.dp)
+                        .padding(top = 8.dp)
                         .heightIn(max = 200.dp),
                 )
             }
@@ -437,4 +870,262 @@ private fun TranscriptItem.key(): String = when (this) {
     is TranscriptItem.Assistant -> "a:" + text.hashCode()
     is TranscriptItem.Tool -> "t:" + id
     is TranscriptItem.Diff -> "d:" + id
+}
+
+// MARK: - Banners (parity with iOS `goalBanner` / `modelLoadingBanner`
+//  / `agentTasksBanner`).
+
+@Composable
+private fun GoalBanner(
+    goal: GoalStatusUi,
+    hasActiveGoal: Boolean,
+    onClear: () -> Unit,
+) {
+    Surface(
+        color = Palette.SurfaceElevated,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            verticalAlignment = Alignment.Top,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+        ) {
+            Text(
+                text = "◎",
+                color = Palette.Accent,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(end = 8.dp, top = 2.dp),
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = if (goal.state == app.roamsocket.core.protocol.GoalState.ACHIEVED) "Goal achieved" else "/goal active",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Palette.TextPrimary,
+                )
+                if (!goal.condition.isNullOrBlank()) {
+                    Text(
+                        text = goal.condition,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Palette.TextSecondary,
+                        maxLines = 2,
+                    )
+                }
+                if (!goal.reason.isNullOrBlank()) {
+                    Text(
+                        text = goal.reason,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Palette.TextTertiary,
+                        maxLines = 2,
+                    )
+                }
+            }
+            if (hasActiveGoal) {
+                TextButton(onClick = onClear) {
+                    Text(
+                        "Clear",
+                        color = Palette.Accent,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ModelStatusBanner(status: ModelStatusUi) {
+    Surface(
+        color = Palette.SurfaceElevated,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(14.dp),
+                strokeWidth = 1.5.dp,
+                color = Palette.Accent,
+            )
+            Spacer(Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = if (status.isLoading) "Loading model…" else "Generating…",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Palette.TextPrimary,
+                )
+                val detail = status.message?.takeIf { it.isNotBlank() }
+                    ?: status.hubId?.takeIf { it.isNotBlank() }
+                if (detail != null) {
+                    Text(
+                        text = detail,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = if (status.hubId != null && status.message.isNullOrBlank())
+                                FontFamily.Monospace else FontFamily.Default,
+                        ),
+                        color = Palette.TextTertiary,
+                        maxLines = 1,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AgentTasksBanner(
+    progress: TaskProgress,
+    tasks: List<app.roamsocket.core.protocol.AgentTaskItem>,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val fraction = progress.fraction
+    val active = tasks.firstOrNull { it.status == app.roamsocket.core.protocol.AgentTaskStatus.IN_PROGRESS }
+    Surface(
+        color = Palette.SurfaceElevated,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { expanded = !expanded },
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "✓",
+                    color = Palette.Accent,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "Tasks",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Palette.TextPrimary,
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "${progress.done}/${progress.total}",
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.SemiBold,
+                    ),
+                    color = Palette.TextSecondary,
+                )
+                Spacer(Modifier.weight(1f))
+                Icon(
+                    imageVector = Icons.Outlined.ChevronRight,
+                    contentDescription = if (expanded) "Collapse tasks" else "Expand tasks",
+                    tint = Palette.TextTertiary,
+                    modifier = Modifier
+                        .size(14.dp)
+                        .rotate(if (expanded) 90f else 0f),
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            LinearProgressIndicator(
+                progress = { fraction },
+                color = Palette.Accent,
+                trackColor = Palette.Divider,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (active != null && !expanded) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = active.content,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Palette.TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            AnimatedVisibility(visible = expanded) {
+                Column(modifier = Modifier.padding(top = 6.dp)) {
+                    tasks.forEach { task ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(vertical = 2.dp),
+                        ) {
+                            val (mark, tint) = when (task.status) {
+                                app.roamsocket.core.protocol.AgentTaskStatus.COMPLETED -> "✓" to Palette.Success
+                                app.roamsocket.core.protocol.AgentTaskStatus.IN_PROGRESS -> "•" to Palette.Accent
+                                app.roamsocket.core.protocol.AgentTaskStatus.CANCELLED -> "–" to Palette.TextTertiary
+                                app.roamsocket.core.protocol.AgentTaskStatus.PENDING -> "·" to Palette.TextTertiary
+                            }
+                            Text(
+                                text = mark,
+                                color = tint,
+                                fontSize = 13.sp,
+                                modifier = Modifier.width(16.dp),
+                            )
+                            Text(
+                                text = task.content,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (task.status == app.roamsocket.core.protocol.AgentTaskStatus.COMPLETED)
+                                    Palette.TextTertiary else Palette.TextSecondary,
+                                textDecoration = if (task.status == app.roamsocket.core.protocol.AgentTaskStatus.COMPLETED)
+                                    androidx.compose.ui.text.style.TextDecoration.LineThrough else null,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Slash commands
+
+private data class SlashCommand(val token: String, val detail: String)
+
+private val SLASH_COMMANDS: List<SlashCommand> = listOf(
+    SlashCommand("/goal ", "Keep working until a condition is met"),
+    SlashCommand("/goal", "Show current goal status"),
+    SlashCommand("/goal clear", "Clear the active goal"),
+)
+
+@Composable
+private fun SlashCommandMenu(
+    suggestions: List<SlashCommand>,
+    onSelect: (String) -> Unit,
+) {
+    Surface(
+        color = Palette.SurfaceElevated,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+    ) {
+        Column {
+            suggestions.forEach { cmd ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelect(cmd.token) }
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                ) {
+                    Text(
+                        text = cmd.token,
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                        color = Palette.Accent,
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        text = cmd.detail,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Palette.TextSecondary,
+                        maxLines = 1,
+                    )
+                }
+            }
+        }
+    }
 }

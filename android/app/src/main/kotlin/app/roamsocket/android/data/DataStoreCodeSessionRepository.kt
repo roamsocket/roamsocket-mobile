@@ -8,6 +8,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import app.roamsocket.core.code.CodeSession
 import app.roamsocket.core.code.CodeSessionRepository
 import app.roamsocket.core.code.InMemoryCodeSessionRepository
+import app.roamsocket.core.code.SessionTranscriptLine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -36,7 +37,12 @@ class DataStoreCodeSessionRepository(
     init {
         flowScope.launch {
             val items = readFromDisk()
-            inMemory.replaceAll(items)
+            // Agent mid-turn state does not survive process restart (the
+            // socket is gone; user would see a phantom "Working" pill).
+            // Matches iOS `CodeSessionStore.load`.
+            val normalized = items.map { it.copy(agentActive = false) }
+            inMemory.replaceAll(normalized)
+            if (normalized != items) writeToDisk(normalized)
             ready.value = true
         }
         // Persist on every active/archived change. Same coalescing story
@@ -60,6 +66,11 @@ class DataStoreCodeSessionRepository(
     override fun add(session: CodeSession) = inMemory.add(session)
     override fun update(id: String, mutate: (CodeSession) -> CodeSession) = inMemory.update(id, mutate)
     override fun archive(id: String) = inMemory.archive(id)
+    override fun archive(id: String, disconnectWhenDone: Boolean) = inMemory.archive(id, disconnectWhenDone)
+    override fun unarchive(id: String) = inMemory.unarchive(id)
+    override fun setAgentActive(id: String, active: Boolean) = inMemory.setAgentActive(id, active)
+    override fun saveTranscript(id: String, lines: List<SessionTranscriptLine>) = inMemory.saveTranscript(id, lines)
+    override fun rename(id: String, title: String) = inMemory.rename(id, title)
     override fun delete(id: String) = inMemory.delete(id)
     override fun replaceAll(sessions: List<CodeSession>) = inMemory.replaceAll(sessions)
     override fun snapshot(): List<CodeSession> = inMemory.snapshot()
