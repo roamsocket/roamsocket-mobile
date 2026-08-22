@@ -58,10 +58,7 @@ public object ModelCatalog {
         val provider: ProviderId,
         val models: List<AIModel>,
         val error: String? = null,
-    ) {
-        /** True if the provider errored or returned no models. */
-        val isEmpty: Boolean get() = models.isEmpty() && error == null
-    }
+    )
 
     /**
      * Fetch models from every provider in [keys] that has a non-empty

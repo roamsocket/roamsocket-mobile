@@ -115,11 +115,23 @@ public class OpenAICompatibleProvider(
                 body = Json.encodeToString(ChatRequest.serializer(), body),
             ),
         )
-        return runCatching {
+        return try {
             val parsed = Json { ignoreUnknownKeys = true }
                 .decodeFromString(ChatResponse.serializer(), response.body)
-            parsed.choices.firstOrNull()?.message?.content.orEmpty()
-        }.getOrElse { throw ProviderError.Decoding(it.message ?: it.javaClass.simpleName) }
+            val content = parsed.choices.firstOrNull()?.message?.content
+            if (content.isNullOrEmpty()) {
+                // An HTTP 200 with no choices (or an empty content field) is a
+                // provider-side refusal / safety block / upstream outage. Surface
+                // it as a real error so the user sees a message instead of an
+                // empty assistant bubble that looks like a successful reply.
+                throw ProviderError.Http(200, "Provider returned no choices or empty content.")
+            }
+            content
+        } catch (e: ProviderError) {
+            throw e
+        } catch (e: Throwable) {
+            throw ProviderError.Decoding(e.message ?: e.javaClass.simpleName)
+        }
     }
 
     private fun toOpenAIMessage(m: ProviderChatMessage): JsonObject = buildJsonObject {

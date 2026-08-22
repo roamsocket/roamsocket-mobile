@@ -210,12 +210,16 @@ class ChatViewModel(
                     nextMessages,
                     "No API key for $provider. Add one in Settings, or use the key icon in the toolbar.",
                 )
-                _state.value = _state.value.copy(
+                // The user may have attached new images / files while the key
+                // lookup was happening; preserve those AND the ones the failed
+                // send used so the next attempt doesn't drop user work.
+                val liveState = _state.value
+                _state.value = liveState.copy(
                     messages = failureMessages,
                     isStreaming = false,
                     error = "No API key for $provider.",
-                    attachedImages = attachedImages,
-                    attachedFiles = attachedFiles,
+                    attachedImages = liveState.attachedImages + attachedImages,
+                    attachedFiles = liveState.attachedFiles + attachedFiles,
                 )
                 persistCurrent(failureMessages, lastUserPending = false)
                 return@launch
@@ -241,14 +245,16 @@ class ChatViewModel(
             } catch (t: Throwable) {
                 val reason = t.message ?: t.javaClass.simpleName
                 val failureMessages = markLastUserFailed(nextMessages, reason)
-                _state.value = _state.value.copy(
+                // Restore the captured attachments AND keep any new ones the
+                // user added during the in-flight request, so Retry (or a
+                // manual resend) can include everything they prepared.
+                val liveState = _state.value
+                _state.value = liveState.copy(
                     messages = failureMessages,
                     isStreaming = false,
                     error = reason,
-                    // Restore the images so the user can hit Retry (or
-                    // edit the message) without re-picking them.
-                    attachedImages = attachedImages,
-                    attachedFiles = attachedFiles,
+                    attachedImages = liveState.attachedImages + attachedImages,
+                    attachedFiles = liveState.attachedFiles + attachedFiles,
                 )
                 persistCurrent(failureMessages, lastUserPending = false)
             }
