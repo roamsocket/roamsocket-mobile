@@ -19,7 +19,9 @@ struct GitHubLinkView: View {
                     LabeledContent("Enter this code", value: code.userCode)
                         .font(.system(.body, design: .monospaced))
                     Button("Open github.com/login/device") {
-                        openURL(URL(string: code.verificationURI)!)
+                        if let url = URL(string: code.verificationURI) {
+                            openURL(url)
+                        }
                     }
                     if busy { ProgressView() }
                     if !status.isEmpty {

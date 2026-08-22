@@ -1,8 +1,9 @@
 /**
  * Git helpers for a session: clone a GitHub repo, create the work branch,
  * commit changes, push, and produce a compare/PR URL. Uses the system `git`
- * binary. A GitHub token, when provided, is injected via an ephemeral
- * credential helper so it never lands in the remote URL or on disk.
+ * binary. A GitHub token, when provided, is embedded in the `origin` remote
+ * URL so we don't rely on a bash-askpass credential helper (which is fragile
+ * on Windows and used to interpolate the token into a shell function string).
  */
 import { spawn } from 'node:child_process';
 
@@ -20,18 +21,9 @@ export interface GitResult {
   stderr: string;
 }
 
-function run(args: string[], opts: { cwd?: string; token?: string } = {}): Promise<GitResult> {
+function run(args: string[], opts: { cwd?: string } = {}): Promise<GitResult> {
   return new Promise((resolve) => {
-    const env = { ...process.env };
-    // Feed the token to git without persisting it: an askpass script echoes it.
-    if (opts.token) {
-      env.GIT_ASKPASS = 'echo';
-      env.GIT_TERMINAL_PROMPT = '0';
-      // The username is arbitrary for token auth; the token is the password.
-      env.GIT_CONFIG_COUNT = '1';
-      env.GIT_CONFIG_KEY_0 = 'credential.helper';
-      env.GIT_CONFIG_VALUE_0 = `!f() { echo username=x-access-token; echo password=${opts.token}; }; f`;
-    }
+    const env = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
     const child = spawn('git', args, { cwd: opts.cwd, env });
     let stdout = '';
     let stderr = '';
@@ -42,20 +34,32 @@ function run(args: string[], opts: { cwd?: string; token?: string } = {}): Promi
   });
 }
 
-function remoteUrl(fullName: string): string {
+function remoteUrl(fullName: string, token?: string): string {
   // Accept explicit URLs / local paths (used for offline testing) as-is;
   // otherwise treat "owner/name" as a github.com HTTPS remote.
+  let base: string;
   if (fullName.includes('://') || fullName.startsWith('/') || fullName.startsWith('file:')) {
-    return fullName;
+    base = fullName;
+  } else {
+    base = `https://github.com/${fullName}.git`;
   }
-  return `https://github.com/${fullName}.git`;
+  if (!token) return base;
+  // Auth via the URL so we don't need a credential helper.
+  try {
+    const u = new URL(base);
+    if (!u.username) {
+      u.username = 'x-access-token';
+      u.password = token;
+    }
+    return u.toString();
+  } catch {
+    return base;
+  }
 }
 
 /** Clone the repo into `dir` and check out (or create) the work branch. */
 export async function cloneAndBranch(spec: RepoSpec, dir: string): Promise<{ baseBranch: string }> {
-  const clone = await run(['clone', '--depth', '50', remoteUrl(spec.fullName), dir], {
-    token: spec.githubToken,
-  });
+  const clone = await run(['clone', '--depth', '50', remoteUrl(spec.fullName, spec.githubToken), dir]);
   if (clone.code !== 0) {
     throw new Error(`git clone failed: ${clone.stderr.trim()}`);
   }
@@ -66,7 +70,7 @@ export async function cloneAndBranch(spec: RepoSpec, dir: string): Promise<{ bas
     const head = await run(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: dir });
     baseBranch = head.stdout.trim() || 'main';
   } else {
-    await run(['checkout', baseBranch], { cwd: dir, token: spec.githubToken });
+    await run(['checkout', baseBranch], { cwd: dir });
   }
 
   // Prefer an existing remote work branch (cold resume after desktop restart
@@ -80,7 +84,7 @@ export async function cloneAndBranch(spec: RepoSpec, dir: string): Promise<{ bas
       '--depth',
       '50',
     ],
-    { cwd: dir, token: spec.githubToken }
+    { cwd: dir }
   );
   if (fetchWork.code === 0) {
     const co = await run(['checkout', spec.workBranch], { cwd: dir });
@@ -116,10 +120,7 @@ export function compareURL(spec: RepoSpec): string {
 
 /** Push the work branch and return a GitHub compare URL for opening a PR. */
 export async function pushBranch(spec: RepoSpec, dir: string): Promise<string> {
-  const push = await run(['push', '-u', 'origin', spec.workBranch], {
-    cwd: dir,
-    token: spec.githubToken,
-  });
+  const push = await run(['push', '-u', 'origin', spec.workBranch], { cwd: dir });
   if (push.code !== 0) throw new Error(`git push failed: ${push.stderr.trim()}`);
   return compareURL(spec);
 }

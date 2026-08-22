@@ -1,12 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Disable auto-backup of the keystore + provider keys. The user stores
-     secrets in EncryptedSharedPreferences; cloud backups would defeat that. -->
+     secrets in EncryptedSharedPreferences; cloud backups would defeat that.
+
+     `roamsocket_secure_prefs.xml` is the encrypted-at-rest file.
+
+     `roamsocket_secure_prefs_unsafe_fallback.xml` is written by
+     EncryptedPrefsSecretStore ONLY when the AndroidKeyStore is unhealthy
+     (e.g. just after a FBE reset). It stores the same secrets in PLAINTEXT
+     as a last-resort fallback so the app keeps launching. Excluding it from
+     cloud backup is critical — otherwise the unencrypted keys would sync to
+     Google Drive. -->
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="sharedpref" path="roamsocket_secure_prefs.xml" />
+        <exclude domain="sharedpref" path="roamsocket_secure_prefs_unsafe_fallback.xml" />
         <exclude domain="database" path="roamsocket.db" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="roamsocket_secure_prefs.xml" />
+        <exclude domain="sharedpref" path="roamsocket_secure_prefs_unsafe_fallback.xml" />
     </device-transfer>
 </data-extraction-rules>
