@@ -60,7 +60,7 @@ export function localDirFor(repoUrl: string, root: string = defaultRoot()): stri
   return path.join(root, repoNameFromUrl(repoUrl));
 }
 
-async function injectToken(url: string, token: string | undefined): Promise<string> {
+function injectToken(url: string, token: string | undefined): string {
   if (!token) return url;
   if (!url.startsWith('https://') && !url.startsWith('http://')) return url;
   try {
@@ -83,36 +83,37 @@ async function isRepo(dir: string): Promise<boolean> {
   }
 }
 
-export async function pullOrClone(config: RepoConfig, token?: string): Promise<string> {
-  const dir = await ensureDir(localDirFor(config.url));
-  const authed = await injectToken(config.url, token);
-  const env = tokenEnv(token);
-  if (!(await isRepo(dir))) {
-    await run(path.dirname(dir), ['clone', '--branch', config.branch, authed, dir], env);
-    return dir;
-  }
-  // Make sure the branch exists locally; create from origin/branch if missing.
-  try {
-    await run(dir, ['checkout', config.branch], env);
-  } catch {
-    await run(dir, ['checkout', '-b', config.branch, `origin/${config.branch}`], env);
-  }
-  await run(dir, ['fetch', 'origin'], env);
-  await run(dir, ['reset', '--hard', `origin/${config.branch}`], env);
-  return dir;
+/**
+ * Rewrite the local clone's `origin` remote so the authed URL is what git
+ * actually uses for fetch/push. This avoids the bash-askpass credential
+ * helper (which is fragile on Windows and embeds the token in a shell
+ * function string).
+ */
+async function setAuthedOrigin(dir: string, url: string, token: string | undefined): Promise<void> {
+  const authed = injectToken(url, token);
+  // `git remote set-url origin <url>` works on every platform git ships for.
+  await run(dir, ['remote', 'set-url', 'origin', authed]);
 }
 
-function tokenEnv(token?: string): Record<string, string> {
-  if (!token) return {};
-  // Inject the token as a credential helper so it never lands in the
-  // remote URL or on disk. Mirrors the helper used in git/github.ts.
-  return {
-    GIT_ASKPASS: '/bin/echo',
-    GIT_TERMINAL_PROMPT: '0',
-    GIT_CONFIG_COUNT: '1',
-    GIT_CONFIG_KEY_0: 'credential.helper',
-    GIT_CONFIG_VALUE_0: `!f() { echo username=x-access-token; echo password=${token}; }; f`,
-  };
+export async function pullOrClone(config: RepoConfig, token?: string): Promise<string> {
+  const dir = await ensureDir(localDirFor(config.url));
+  const authed = injectToken(config.url, token);
+  if (!(await isRepo(dir))) {
+    await run(path.dirname(dir), ['clone', '--branch', config.branch, authed, dir]);
+    return dir;
+  }
+  // Existing clone — make sure the local origin is the authed URL so the
+  // subsequent fetch / reset / push don't need a credential helper.
+  await setAuthedOrigin(dir, config.url, token);
+  // Make sure the branch exists locally; create from origin/branch if missing.
+  try {
+    await run(dir, ['checkout', config.branch]);
+  } catch {
+    await run(dir, ['checkout', '-b', config.branch, `origin/${config.branch}`]);
+  }
+  await run(dir, ['fetch', 'origin']);
+  await run(dir, ['reset', '--hard', `origin/${config.branch}`]);
+  return dir;
 }
 
 export interface CommitOptions {
@@ -128,20 +129,21 @@ export interface CommitOptions {
  */
 export async function commitAndPush(opts: CommitOptions): Promise<string> {
   const dir = localDirFor(opts.config.url);
-  const env = tokenEnv(opts.token);
 
-  await run(dir, ['config', 'user.name', opts.author.name], env);
-  await run(dir, ['config', 'user.email', opts.author.email], env);
-  await run(dir, ['add', '-A'], env);
-  await run(dir, ['commit', '-m', opts.message, '--allow-empty'], env);
+  await run(dir, ['config', 'user.name', opts.author.name]);
+  await run(dir, ['config', 'user.email', opts.author.email]);
+  // Auth via the remote URL so we don't need a cross-platform askpass helper.
+  await setAuthedOrigin(dir, opts.config.url, opts.token);
+  await run(dir, ['add', '-A']);
+  await run(dir, ['commit', '-m', opts.message, '--allow-empty']);
 
   try {
-    await run(dir, ['push', 'origin', opts.config.branch], env);
+    await run(dir, ['push', 'origin', opts.config.branch]);
   } catch (err) {
-    await run(dir, ['pull', '--rebase', 'origin', opts.config.branch], env);
-    await run(dir, ['push', 'origin', opts.config.branch], env);
+    await run(dir, ['pull', '--rebase', 'origin', opts.config.branch]);
+    await run(dir, ['push', 'origin', opts.config.branch]);
   }
-  return await run(dir, ['rev-parse', 'HEAD'], env);
+  return await run(dir, ['rev-parse', 'HEAD']);
 }
 
 export async function writeFile(
