@@ -153,15 +153,12 @@ fun ChatScreen(
         }
     }
 
-    // First-visit nudge: if the active provider needs an API key and we
-    // don't have one yet, pop the key dialog the moment we have enough
-    // state to know that. Avoids the user hunting for the key icon when
-    // they tap MiniMax / OpenAI / etc. for the first time.
-    LaunchedEffect(state.provider, state.hasApiKey) {
-        if (state.provider.requiresApiKey && !state.hasApiKey && !showKeyDialog) {
-            showKeyDialog = true
-        }
-    }
+    // Note: we used to auto-pop the API key dialog on first launch when the
+    // active provider needed a key. That modal interrupted every cold start
+    // (including the common "I just want to look at Recents" case) and pushed
+    // users to add a key before they'd decided to chat. The dialog is still
+    // reachable explicitly: the key icon in the top bar, the "Add API key"
+    // CTA in the empty state, and Settings → Providers.
 
     Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         TopAppBar(
