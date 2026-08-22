@@ -281,7 +281,8 @@ public struct GitHubClient: Sendable {
     /// True when a repo is reachable with this token. Used to auto-detect
     /// whether `anyprov-code-settings` already exists.
     public func repoExists(token: String, fullName: String) async throws -> Bool {
-        var req = URLRequest(url: URL(string: "https://api.github.com/repos/\(fullName)")!)
+        let url = try makeRepoURL(fullName: fullName, suffix: nil)
+        var req = URLRequest(url: url)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.setValue("anyprov-code", forHTTPHeaderField: "User-Agent")
@@ -322,9 +323,10 @@ public struct GitHubClient: Sendable {
         path: String,
         ref: String? = nil
     ) async throws -> [RepoEntry] {
-        var components = URLComponents(string: "https://api.github.com/repos/\(fullName)/contents/\(path)")!
+        var components = try makeRepoContentsComponents(fullName: fullName, path: path)
         if let ref { components.queryItems = [URLQueryItem(name: "ref", value: ref)] }
-        var req = URLRequest(url: components.url!)
+        guard let url = components.url else { throw GitHubError.decoding("Invalid contents URL") }
+        var req = URLRequest(url: url)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.setValue("anyprov-code", forHTTPHeaderField: "User-Agent")
@@ -346,9 +348,10 @@ public struct GitHubClient: Sendable {
         path: String,
         ref: String? = nil
     ) async throws -> RepoFile? {
-        var components = URLComponents(string: "https://api.github.com/repos/\(fullName)/contents/\(path)")!
+        var components = try makeRepoContentsComponents(fullName: fullName, path: path)
         if let ref { components.queryItems = [URLQueryItem(name: "ref", value: ref)] }
-        var req = URLRequest(url: components.url!)
+        guard let url = components.url else { throw GitHubError.decoding("Invalid contents URL") }
+        var req = URLRequest(url: url)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.setValue("anyprov-code", forHTTPHeaderField: "User-Agent")
@@ -375,9 +378,10 @@ public struct GitHubClient: Sendable {
         sha: String? = nil,
         branch: String? = nil
     ) async throws {
-        var components = URLComponents(string: "https://api.github.com/repos/\(fullName)/contents/\(path)")!
+        var components = try makeRepoContentsComponents(fullName: fullName, path: path)
         if let branch { components.queryItems = [URLQueryItem(name: "branch", value: branch)] }
-        var req = URLRequest(url: components.url!)
+        guard let url = components.url else { throw GitHubError.decoding("Invalid contents URL") }
+        var req = URLRequest(url: url)
         req.httpMethod = "PUT"
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
@@ -394,6 +398,42 @@ public struct GitHubClient: Sendable {
     }
 
     // MARK: Helpers
+
+    /// Build `https://api.github.com/repos/<fullName>[/suffix]`, percent-encoding
+    /// the user-controlled `fullName` so a malformed value (e.g. containing `?`,
+    /// `#`, or spaces) cannot produce a crash on `URL(string:)` or silently
+    /// rewrite the request path.
+    private func makeRepoURL(fullName: String, suffix: String?) throws -> URL {
+        let encoded = fullName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? fullName
+        let path: String
+        if let suffix, !suffix.isEmpty {
+            let encodedSuffix = suffix.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? suffix
+            path = "https://api.github.com/repos/\(encoded)/\(encodedSuffix)"
+        } else {
+            path = "https://api.github.com/repos/\(encoded)"
+        }
+        guard let url = URL(string: path) else {
+            throw GitHubError.decoding("Invalid GitHub repo path: \(fullName)")
+        }
+        return url
+    }
+
+    /// Build a `URLComponents` for the Contents API. Percent-encodes both
+    /// `fullName` and `path` (the latter is a multi-segment repo path, so
+    /// we split on `/` and re-join to keep `/` as a path separator while
+    /// escaping everything else).
+    private func makeRepoContentsComponents(fullName: String, path: String) throws -> URLComponents {
+        let encodedFullName = fullName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? fullName
+        let encodedPath = path
+            .split(separator: "/", omittingEmptySubsequences: false)
+            .map { String($0).addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? String($0) }
+            .joined(separator: "/")
+        let raw = "https://api.github.com/repos/\(encodedFullName)/contents/\(encodedPath)"
+        guard let components = URLComponents(string: raw) else {
+            throw GitHubError.decoding("Invalid GitHub contents path: \(fullName)/\(path)")
+        }
+        return components
+    }
 
     private func formBody(_ params: [String: String]) -> Data {
         params
