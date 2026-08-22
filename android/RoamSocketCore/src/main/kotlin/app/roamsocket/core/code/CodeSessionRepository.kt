@@ -32,6 +32,31 @@ public interface CodeSessionRepository {
     /** Mark the session with [id] as [CodeSession.Status.ARCHIVED]. */
     public fun archive(id: String)
 
+    /**
+     * Mark archived with the iOS `disconnectWhenDone` flag — if true, the
+     * desktop agent is allowed to keep running until idle; the phone
+     * disconnects on next idle. Mirrors iOS `archive(_:disconnectWhenDone:)`.
+     */
+    public fun archive(id: String, disconnectWhenDone: Boolean)
+
+    /** Restore an archived session to the active list. */
+    public fun unarchive(id: String)
+
+    /**
+     * Toggle the per-session mid-turn flag without bumping `updatedAt`
+     * (the sidebar sort uses updatedAt, so a streaming chat shouldn't
+     * shuffle to the top just because it's running). Promotes status
+     * to `WORKING` when active unless archived. Matches iOS
+     * `setAgentActive(_:_:)`.
+     */
+    public fun setAgentActive(id: String, active: Boolean)
+
+    /** Persist the latest transcript lines onto the session row. */
+    public fun saveTranscript(id: String, lines: List<SessionTranscriptLine>)
+
+    /** Rename a session (no-op if the trimmed title is empty). */
+    public fun rename(id: String, title: String)
+
     /** Permanently remove the session. */
     public fun delete(id: String)
 
@@ -40,6 +65,10 @@ public interface CodeSessionRepository {
 
     /** Snapshot of the full list (active + archived) for persistence. */
     public fun snapshot(): List<CodeSession>
+
+    /** Look up a session by id. */
+    public fun session(id: String): CodeSession? =
+        snapshot().firstOrNull { it.id == id }
 }
 
 /**
@@ -66,7 +95,55 @@ public class InMemoryCodeSessionRepository : CodeSessionRepository {
     }
 
     override fun archive(id: String) {
-        update(id) { it.copy(status = CodeSession.Status.ARCHIVED, updatedAtMillis = System.currentTimeMillis()) }
+        archive(id, disconnectWhenDone = false)
+    }
+
+    override fun archive(id: String, disconnectWhenDone: Boolean) {
+        update(id) {
+            it.copy(
+                status = CodeSession.Status.ARCHIVED,
+                disconnectWhenDone = disconnectWhenDone,
+                updatedAtMillis = System.currentTimeMillis(),
+            )
+        }
+    }
+
+    override fun unarchive(id: String) {
+        update(id) {
+            it.copy(
+                status = CodeSession.Status.COMPLETED,
+                disconnectWhenDone = false,
+                updatedAtMillis = System.currentTimeMillis(),
+            )
+        }
+    }
+
+    override fun setAgentActive(id: String, active: Boolean) {
+        mutate { list ->
+            val idx = list.indexOfFirst { it.id == id }
+            if (idx < 0) return@mutate
+            val current = list[idx]
+            if (current.agentActive == active) return@mutate
+            val promotedStatus = if (active && current.status != CodeSession.Status.ARCHIVED) {
+                CodeSession.Status.WORKING
+            } else {
+                current.status
+            }
+            // Note: do NOT bump updatedAt here — a running session should
+            // not shuffle to the top of the sidebar. Matches iOS
+            // `setAgentActive(_:_:)`.
+            list[idx] = current.copy(agentActive = active, status = promotedStatus)
+        }
+    }
+
+    override fun saveTranscript(id: String, lines: List<SessionTranscriptLine>) {
+        update(id) { it.copy(transcript = lines) }
+    }
+
+    override fun rename(id: String, title: String) {
+        val trimmed = title.trim()
+        if (trimmed.isEmpty()) return
+        update(id) { it.copy(title = trimmed) }
     }
 
     override fun delete(id: String) {
