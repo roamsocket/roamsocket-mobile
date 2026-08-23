@@ -115,10 +115,56 @@ class ChatViewModel(
                         isIncognito = repoItem.isIncognito,
                         incognitoLifetime = repoItem.incognitoLifetime,
                     )
+                    // Port #9: restore this chat's per-chat model selection.
+                    // When the row carries a `(provider, model)` override we
+                    // override the global default — the same iOS
+                    // `ChatViewModel.restoreSelectedModel(_:)` flow at
+                    // `ios/App/Sources/Features/Chat/ChatViewModel.swift`
+                    // lines 1084-1103. We resolve synchronously here because
+                    // the live model list is fetched asynchronously above
+                    // and may not have landed yet; the model id is what
+                    // matters for the pill + next send, and any fresher
+                    // display name arrives with the live list.
+                    if (repoItem.hasModelOverride) {
+                        val restoredProvider = repoItem.resolvedProvider
+                            ?: container.userSettings.currentProvider.first()
+                        val restoredModel = repoItem.selectedModel ?: ""
+                        // Re-key hasApiKey on the new provider so the empty
+                        // state, the picker CTA, and the "No API key" error
+                        // path all stay accurate.
+                        val restoredKey = container.secretStore.readApiKey(restoredProvider)
+                        applySelection(restoredProvider, restoredModel)
+                        _state.value = _state.value.copy(
+                            hasApiKey = !restoredKey.isNullOrEmpty(),
+                        )
+                        // Keep the global default in lock-step so a fresh
+                        // blank chat opened after this one inherits the
+                        // same provider/model (matches iOS where
+                        // `state.selectedProvider/selectedModel` drives
+                        // the next new chat as well).
+                        container.userSettings.setCurrent(restoredProvider, restoredModel)
+                    }
                 }
             }
             // Compute the inline error last so it sees the final state.
             refreshInlineError()
+        }
+    }
+
+    /**
+     * Port #9: stamp the current `(provider, model)` onto the active chat
+     * row in the repo. Called from [selectProvider] / [selectModel] so a
+     * user-driven change survives a relaunch. No-op while the chat is a
+     * blank draft (no id yet) — the first [persistCurrent] will mint the
+     * id and stamp the selection onto the new row in one go.
+     *
+     * Mirrors iOS `ChatViewModel.persistSelectedModel(_:)` at
+     * `ios/App/Sources/Features/Chat/ChatViewModel.swift` lines 1074-1082.
+     */
+    private fun persistModelForActiveChat(provider: ProviderId, model: String) {
+        val id = effectiveChatId ?: return
+        viewModelScope.launch {
+            container.chatHistoryRepository.setModel(id, provider, model)
         }
     }
 
@@ -137,6 +183,10 @@ class ChatViewModel(
             val apiKey = container.secretStore.readApiKey(provider)
             _state.value = _state.value.copy(hasApiKey = !apiKey.isNullOrEmpty())
             refreshLiveModels(provider, apiKey)
+            // Port #9: persist the new (provider, "") pair onto the active
+            // chat row so reopen restores it. Skipped automatically when
+            // the chat is a still-untouched blank draft.
+            persistModelForActiveChat(provider, "")
             refreshInlineError()
         }
     }
@@ -146,6 +196,11 @@ class ChatViewModel(
         viewModelScope.launch {
             container.userSettings.setCurrent(provider, model)
             _state.value = _state.value.copy(model = model, modelsForProvider = availableModelsFor(provider))
+            // Port #9: mirror the new model id onto the active chat row so
+            // a relaunch resumes with the same model. No-op for blank
+            // drafts — the first send stamps the selection via
+            // [persistCurrent].
+            persistModelForActiveChat(provider, model)
             refreshInlineError()
         }
     }
@@ -661,6 +716,17 @@ class ChatViewModel(
             msg.toPersisted(markPending = isLastUser)
         }
         repo.saveMessages(id, persisted)
+        // Port #9: stamp the current (provider, model) onto the chat row
+        // so a relaunch resumes with the right combination. `setModel`
+        // is a no-op on unknown id and just overwrites otherwise, so it
+        // is safe to call every time. On the first send for a brand-new
+        // blank chat the id was just minted by `startNewChat()` above —
+        // this is the one place that flips the per-chat override on.
+        // Mirrors the implicit "stamp on first send" behaviour in iOS
+        // where `persistSelectedModel(model)` runs unconditionally inside
+        // `send()`.
+        val s = _state.value
+        repo.setModel(id, s.provider, s.model)
     }
 
     private fun markLastUserSent(messages: List<ChatMessage>): List<ChatMessage> {
