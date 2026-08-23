@@ -75,6 +75,11 @@ template, tuned to our stack: Swift (iOS), Kotlin (Android), TypeScript /
 Node (desktop server), Electron renderer, and a triplicated wire protocol.
 There is no React, no Vite, no SCSS, and no Firebase here.
 
+The long-form companion doc — with more examples, decision rationale, and
+a quick-reference decision tree for AI agents — lives at
+[`docs/naming-conventions.md`](./docs/naming-conventions.md). When the
+contract here and the long form disagree, **this file wins**.
+
 ### TL;DR
 
 | Thing | Format | Example |
