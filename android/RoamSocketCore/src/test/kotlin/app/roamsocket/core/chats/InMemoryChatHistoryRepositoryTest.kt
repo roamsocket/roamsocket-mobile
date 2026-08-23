@@ -11,6 +11,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -170,6 +171,107 @@ class InMemoryChatHistoryRepositoryTest {
         val repo = InMemoryChatHistoryRepository()
         repo.setModel("does-not-exist", ProviderId.Google, "gemini-2.0-flash")
         assertTrue(repo.snapshot().isEmpty())
+    }
+
+    @Test
+    fun startIncognitoChatFlagsTheRowAndSetsForgetDeadline() = runTest {
+        val repo = InMemoryChatHistoryRepository()
+        val id = repo.startIncognitoChat(IncognitoLifetime.ONE_HOUR)
+        val row = repo.snapshot().first { it.id == id }
+        assertTrue(row.isIncognito)
+        assertEquals(IncognitoLifetime.ONE_HOUR, row.incognitoLifetime)
+        // One hour from "now" — give it a generous window so the test
+        // isn't flakey on slow CI.
+        val now = System.currentTimeMillis()
+        assertNotNull(row.forgetAtMillis)
+        assertTrue(row.forgetAtMillis!! in now..(now + 65 * 60 * 1000L))
+    }
+
+    @Test
+    fun onExitIncognitoHasNoForgetDeadline() = runTest {
+        val repo = InMemoryChatHistoryRepository()
+        val id = repo.startIncognitoChat(IncognitoLifetime.ON_EXIT)
+        val row = repo.snapshot().first { it.id == id }
+        assertTrue(row.isIncognito)
+        assertEquals(IncognitoLifetime.ON_EXIT, row.incognitoLifetime)
+        assertNull(row.forgetAtMillis)
+    }
+
+    @Test
+    fun saveMessagesResetsTheIncognitoCountdown() = runTest {
+        val repo = InMemoryChatHistoryRepository()
+        val id = repo.startIncognitoChat(IncognitoLifetime.ONE_HOUR)
+        val original = repo.snapshot().first { it.id == id }.forgetAtMillis!!
+        // Sleep a beat so the reset is strictly later, then save a message.
+        Thread.sleep(2)
+        repo.saveMessages(id, listOf(msg("u", USER, "hi")))
+        val after = repo.snapshot().first { it.id == id }.forgetAtMillis!!
+        assertTrue(after > original)
+    }
+
+    @Test
+    fun setIncognitoLifetimeResetsToTheNewWindow() = runTest {
+        val repo = InMemoryChatHistoryRepository()
+        val id = repo.startIncognitoChat(IncognitoLifetime.ONE_HOUR)
+        val before = repo.snapshot().first { it.id == id }.forgetAtMillis!!
+        Thread.sleep(2)
+        repo.setIncognitoLifetime(id, IncognitoLifetime.SIX_HOURS)
+        val row = repo.snapshot().first { it.id == id }
+        assertEquals(IncognitoLifetime.SIX_HOURS, row.incognitoLifetime)
+        assertTrue(row.forgetAtMillis!! > before)
+    }
+
+    @Test
+    fun forgetChatNowDropsIncognitoAndClearsActive() = runTest {
+        val repo = InMemoryChatHistoryRepository()
+        val id = repo.startIncognitoChat(IncognitoLifetime.ONE_HOUR)
+        repo.saveMessages(id, listOf(msg("u", USER, "secret")))
+        assertEquals(1, repo.recents.value.size)
+        repo.forgetChatNow(id)
+        assertTrue(repo.recents.value.isEmpty())
+        assertNull(repo.activeChatId)
+    }
+
+    @Test
+    fun forgetActiveIfOnExitOnlyDropsOnExitChats() = runTest {
+        val onExitRepo = InMemoryChatHistoryRepository()
+        val onExitId = onExitRepo.startIncognitoChat(IncognitoLifetime.ON_EXIT)
+        onExitRepo.saveMessages(onExitId, listOf(msg("u", USER, "burn after reading")))
+        onExitRepo.forgetActiveIfOnExit()
+        assertNull(onExitRepo.activeChatId)
+        assertTrue(onExitRepo.recents.value.isEmpty())
+
+        val timedRepo = InMemoryChatHistoryRepository()
+        val timedId = timedRepo.startIncognitoChat(IncognitoLifetime.ONE_HOUR)
+        timedRepo.saveMessages(timedId, listOf(msg("u", USER, "still here for an hour")))
+        timedRepo.forgetActiveIfOnExit()
+        // The timed chat stays put — it has a real deadline, not on-exit.
+        assertEquals(timedId, timedRepo.activeChatId)
+        assertEquals(1, timedRepo.recents.value.size)
+    }
+
+    @Test
+    fun pruneExpiredIncognitoDropsOverdueChats() = runTest {
+        val repo = InMemoryChatHistoryRepository()
+        val expired = repo.startIncognitoChat(IncognitoLifetime.ONE_HOUR)
+        // Save the first message BEFORE starting a second incognito —
+        // mirrors the real usage pattern (user types, then opens a
+        // new incognito) and the second `startIncognitoChat` would
+        // otherwise discard the first as a blank draft.
+        repo.saveMessages(expired, listOf(msg("u", USER, "old")))
+        val fresh = repo.startIncognitoChat(IncognitoLifetime.ONE_HOUR)
+        repo.saveMessages(fresh, listOf(msg("u", USER, "new")))
+        // Hand-roll an "expired" row by rewriting the snapshot — that's
+        // the only way to simulate the passage of time in a unit test.
+        val now = System.currentTimeMillis()
+        val overwritten = repo.snapshot().map { item ->
+            if (item.id == expired) item.copy(forgetAtMillis = now - 1000L) else item
+        }
+        repo.replaceAll(overwritten)
+        val dropped = repo.pruneExpiredIncognito()
+        assertEquals(listOf(expired), dropped)
+        val remaining = repo.recents.value.map { it.id }
+        assertEquals(listOf(fresh), remaining)
     }
 
     private fun msg(id: String, role: PersistedChatMessage.Role, text: String) =

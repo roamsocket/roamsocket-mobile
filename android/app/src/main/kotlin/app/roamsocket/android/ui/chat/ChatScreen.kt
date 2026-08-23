@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.PhotoCamera
+import androidx.compose.material.icons.outlined.TheaterComedy
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -105,6 +106,11 @@ fun ChatScreen(
     // Port #12: Add to Chat sheet. The `+` button toggles this; the
     // sheet's callback chain also dismisses the sheet on selection.
     var showAddToChat by remember { mutableStateOf(false) }
+    // PR #76: Incognito sheet. Toggled by the masks icon in the top bar.
+    // When opened from a regular chat it starts a new incognito session;
+    // when opened from an incognito chat it lets the user change the
+    // lifetime or forget the chat immediately.
+    var showIncognitoSheet by remember { mutableStateOf(false) }
     // Pending camera output URI. We mint it on demand and feed it to
     // `TakePicture`; the camera writes the JPEG to this URI on success.
     var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
@@ -155,6 +161,17 @@ fun ChatScreen(
         }
     }
 
+    // PR #76: when the chat screen is leaving composition (user
+    // navigated to Code / sidebar / killed the activity), ask the
+    // viewmodel to forget the active chat if it is an ON_EXIT
+    // incognito. `DisposableEffect` on `Unit` fires `onDispose` once
+    // on unmount, which is exactly the lifecycle event we want.
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose {
+            viewModel.forgetActiveIfOnExit()
+        }
+    }
+
     // Note: we used to auto-pop the API key dialog on first launch when the
     // active provider needed a key. That modal interrupted every cold start
     // (including the common "I just want to look at Recents" case) and pushed
@@ -185,6 +202,24 @@ fun ChatScreen(
                 )
             },
             actions = {
+                // PR #76: incognito toggle. Tinted accent when the
+                // active chat is already incognito so the user can see
+                // they're in a private session at a glance.
+                IconButton(onClick = { showIncognitoSheet = true }) {
+                    Icon(
+                        imageVector = Icons.Outlined.TheaterComedy,
+                        contentDescription = if (state.isIncognito) {
+                            "Incognito chat (active)"
+                        } else {
+                            "Start incognito chat"
+                        },
+                        tint = if (state.isIncognito) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
+                    )
+                }
                 IconButton(onClick = { showKeyDialog = true }) {
                     Icon(Icons.Outlined.Key, contentDescription = "API key")
                 }
@@ -255,6 +290,27 @@ fun ChatScreen(
                 onSetWebSearchEnabled = viewModel::setWebSearchEnabled,
                 onSetLocationEnabled = viewModel::setLocationEnabled,
                 onSetToolAccess = viewModel::setToolAccess,
+            )
+        }
+
+        // PR #76: incognito sheet. When the active chat is regular,
+        // `onSelect` starts a new incognito chat with the chosen
+        // lifetime. When the active chat is already incognito,
+        // `onSelect` updates the existing lifetime in place and the
+        // sheet's "Forget this chat now" button drops the chat and
+        // reverts to a blank regular draft.
+        if (showIncognitoSheet) {
+            IncognitoChatSheet(
+                activeLifetime = state.incognitoLifetime,
+                onSelect = { lifetime ->
+                    if (state.isIncognito) {
+                        viewModel.setIncognitoLifetime(lifetime)
+                    } else {
+                        viewModel.startIncognitoChat(lifetime)
+                    }
+                },
+                onForgetNow = { viewModel.forgetActiveIncognitoChat() },
+                onDismiss = { showIncognitoSheet = false },
             )
         }
 

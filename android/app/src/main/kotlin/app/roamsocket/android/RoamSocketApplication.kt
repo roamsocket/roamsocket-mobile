@@ -1,6 +1,7 @@
 package app.roamsocket.android
 
 import android.app.Application
+import kotlinx.coroutines.launch
 
 /**
  * App entry point. Keep this thin — feature wiring lives in MainActivity and
@@ -14,6 +15,12 @@ class RoamSocketApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // PR #76: prune any incognito chats whose countdown elapsed while
+        // the app was killed. Runs on the process-scoped appScope so the
+        // DataStore write completes even if the UI hasn't mounted yet.
+        container.appScope.launch {
+            container.chatHistoryRepository.pruneExpiredIncognito()
+        }
         // Reserved for future setup (DI graph, crash reporter, telemetry opt-in,
         // push registration, etc). See AGENTS.md for the iOS equivalent.
     }
