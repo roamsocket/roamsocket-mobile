@@ -11,6 +11,12 @@
     <uses-permission
         android:name="android.permission.CAMERA"
         tools:node="merge" />
+    <!-- Vision mode is camera-first, gallery-second. The camera is not
+         required (the gallery picker always works), so declare the
+         feature as optional — keeps Chrome OS / tablet listings honest. -->
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission
         android:name="android.permission.READ_MEDIA_IMAGES"

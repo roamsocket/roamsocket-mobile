@@ -16,6 +16,7 @@ datastore = "1.1.1"
 security-crypto = "1.1.0-alpha06"
 okhttp = "4.12.0"
 markwon = "4.6.2"
+camerax = "1.3.4"
 junit = "4.13.2"
 robolectric = "4.13"
 turbine = "1.2.0"
@@ -57,6 +58,12 @@ kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 # Networking
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 okhttp-logging = { group = "com.squareup.okhttp3", name = "logging-interceptor", version.ref = "okhttp" }
+
+# Camera (live viewfinder for Vision mode)
+camerax-core = { group = "androidx.camera", name = "camera-core", version.ref = "camerax" }
+camerax-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "camerax" }
+camerax-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camerax" }
+camerax-view = { group = "androidx.camera", name = "camera-view", version.ref = "camerax" }
 
 # Markdown rendering (CommonMark + GFM via the mature Markwon library).
 markwon-core = { group = "io.noties.markwon", name = "core", version.ref = "markwon" }
