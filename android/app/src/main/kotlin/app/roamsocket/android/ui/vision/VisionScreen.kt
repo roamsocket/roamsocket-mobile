@@ -136,22 +136,128 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 // ---------------------------------------------------------------------
-// Vision mode selection (mirrors iOS presets)
+// Vision mode selection (mirrors iOS VisionPromptStore.builtInPresets)
 // ---------------------------------------------------------------------
 
-/** The task mode that shapes the first analysis prompt. */
+/**
+ * The task mode that shapes the first analysis prompt.
+ *
+ * Prompt copy is ported verbatim from the iOS built-ins
+ * (`VisionPromptStore.builtInPresets`); "General analysis" carries the
+ * iOS `VisionViewModel.defaultAnalysisPrompt` fallback used when a
+ * preset's prompt is empty. Entry order matches iOS `sortOrder`.
+ */
 enum class VisionMode(val label: String, val systemInstruction: String) {
     GENERAL(
         label = "General analysis",
-        systemInstruction = "Analyze this photo for the user. Start with the key takeaway or identification in 1–3 short sentences, then add brief supporting details: notable objects, readable text, layout, or anything useful. Be concise.",
+        systemInstruction = """
+            Analyze this photo for the user.
+
+            **If this is a quiz, test, worksheet, or homework** (true/false, multiple choice, short answer, or several discrete questions), use this layout instead of the general one:
+
+            1. One-line intro naming the question type and count (e.g. “Here are the answers to the four true/false questions on your screen.”).
+            2. For each question:
+
+            ## Question N
+
+            - **Text:** Restate the full question (and options if multiple choice).
+            - **Answer:** Bold the correct choice, True/False, number, or short phrase.
+            - **Reason:** One or two concise sentences of explanation.
+
+            Separate questions with `---`. Do not open with a photo description.
+
+            **Otherwise** (general photos), structure your reply like this:
+
+            ## Answer
+            Start with the key takeaway, result, identification, or recommendation in 1–3 short sentences (or a tight bullet list). Put what the user needs first — not a scenic description.
+
+            ## Details
+            Brief supporting facts: notable objects, readable text (transcribe if useful), layout, materials, condition, or risks.
+
+            ## Notes (optional)
+            Uncertainty, missing context, or follow-up suggestions only if helpful.
+
+            Be concise. Never open with “This photo shows…” or a long scene description before the answer.
+        """.trimIndent(),
     ),
     TRANSCRIBE(
         label = "Transcribe text",
-        systemInstruction = "Look carefully for any text visible in this photo. Transcribe all text exactly as it appears, preserving line breaks and any formatting cues. If no text is visible, say so.",
+        systemInstruction = """
+            Transcribe all readable text in this photo.
+
+            ## Transcript
+            Put the full transcription first, preserving layout with line breaks where helpful.
+
+            ## Notes
+            Only after the transcript: note anything partially obscured, uncertain, or unreadable. Do not invent text that is not visible.
+        """.trimIndent(),
     ),
     IDENTIFY(
-        label = "Identify object",
-        systemInstruction = "Identify the main subject or objects in this photo. Provide a brief name, category, and any distinguishing characteristics. Also note any other notable items in the frame.",
+        label = "Identify objects",
+        systemInstruction = """
+            Identify what is in this photo.
+
+            ## Answer
+            Lead with a short inventory of the main objects, brands, products, and materials (bullets).
+
+            ## Details
+            For each item, add useful detail only if needed (color, condition, type). Mark guesses clearly.
+        """.trimIndent(),
+    ),
+    QUIZ_HOMEWORK(
+        label = "Quiz / homework",
+        systemInstruction = """
+            This photo shows a quiz, worksheet, test, or homework (true/false, multiple choice, short answer, or mixed).
+
+            Break down every visible question. Structure your reply exactly like this:
+
+            1. **One-line intro** (no heading): e.g. “Here are the answers to the four true/false questions on your screen.” Name the question type and count when clear.
+
+            2. **Then for each question**, use this per-item layout (repeat for Q1, Q2, …):
+
+            ## Question N
+
+            - **Text:** Restate the full question (and options if multiple choice).
+            - **Answer:** The correct choice, True/False, number, or short phrase — bold the key answer.
+            - **Reason:** One or two concise sentences explaining why (definition, concept, or quick calculation). Not a lecture.
+
+            Separate questions with a horizontal rule (`---`).
+
+            **Multiple choice tip:** In **Answer**, put the letter/label and the option text (e.g. **B — Online retail**). You may also bold the chosen phrase inside **Text** if that reads cleaner.
+
+            Rules:
+            - Answer every fully visible question. If the crop cuts something off, still answer what is visible and note what is missing at the end.
+            - Do not open with a photo description (“This image shows…”, “I can see a worksheet…”).
+            - Prefer scannable bullets over long paragraphs. Keep reasons short.
+            - If only one question is visible, still use the Question / Text / Answer / Reason layout.
+            - End with a brief optional line only if helpful (e.g. “Take another clear photo for the next section.”).
+        """.trimIndent(),
+    ),
+    ACCESSIBILITY(
+        label = "Accessibility",
+        systemInstruction = """
+            Write a clear accessibility description for someone who cannot see this photo.
+
+            ## Summary
+            One short sentence with the essential subject and setting first.
+
+            ## Details
+            Then cover important text, colors, spatial layout, and secondary elements. Be concise but complete.
+        """.trimIndent(),
+    ),
+    SAFETY_CHECK(
+        label = "Safety check",
+        systemInstruction = """
+            Assess practical hazards or safety issues in this photo.
+
+            ## Findings
+            Lead with the risk list by severity (or “No obvious hazards” if clear).
+
+            ## Next steps
+            Suggest simple actions when relevant.
+
+            Do not open with a general description of the scene.
+        """.trimIndent(),
     ),
     ;
 
@@ -305,11 +411,10 @@ private fun LiveView(
                 contentDescription = "Close Vision",
                 icon = Icons.Outlined.Close,
             )
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.weight(1f))
             ModelPill(
                 label = state.selectedModel?.let { AIModel.prettifiedDisplayName(it.modelID) } ?: "Choose model",
                 onClick = { showModelPicker = true },
-                modifier = Modifier.weight(1f),
             )
         }
 
@@ -1542,6 +1647,8 @@ private fun ModelPill(
                 color = Color.White,
                 style = MaterialTheme.typography.bodyMedium,
                 maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 180.dp),
             )
             Icon(
                 imageVector = Icons.Outlined.ChevronRight,

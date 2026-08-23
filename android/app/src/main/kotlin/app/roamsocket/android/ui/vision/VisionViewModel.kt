@@ -93,7 +93,7 @@ class VisionViewModel(
         /** True if the current provider has no API key (drives a CTA). */
         val missingApiKey: Boolean = false,
         /** The analysis mode used for the last (or current) capture. */
-        val selectedMode: Int = 0, // VisionMode index: 0=GENERAL, 1=TRANSCRIBE, 2=IDENTIFY
+        val selectedMode: Int = 0, // VisionMode ordinal — see VisionScreen.kt
     ) {
         /**
          * Equality is content-based for [imageBytes] (ByteArray equality
@@ -391,18 +391,6 @@ class VisionViewModel(
     }
 
     companion object {
-        /**
-         * Built-in fallback prompt for the first analysis pass. We don't
-         * tell the model to format a quiz answer etc. (iOS does) — the
-         * Android MVP keeps it general; users can add the same prompt
-         * library in a follow-up.
-         */
-        private const val DEFAULT_PROMPT: String =
-            "Analyze this photo for the user. Start with the key takeaway or " +
-                "identification in 1–3 short sentences, then add brief " +
-                "supporting details: notable objects, readable text, " +
-                "layout, or anything useful. Be concise."
-
         private const val MISSING_KEY_HINT: String =
             "Add an API key for a vision-capable provider in Settings to get started."
 
