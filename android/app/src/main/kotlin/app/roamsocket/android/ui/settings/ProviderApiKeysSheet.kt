@@ -79,7 +79,6 @@ fun ProviderApiKeysSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
-    var editingProvider by remember { mutableStateOf<ProviderId?>(null) }
     var isRefreshing by remember { mutableStateOf(false) }
 
     ModalBottomSheet(
@@ -147,8 +146,8 @@ fun ProviderApiKeysSheet(
                         modifier = Modifier.padding(start = 4.dp, bottom = 4.dp),
                     )
                 }
-                item { ChatCodingProvidersCard(providers, onEdit = { editingProvider = it }) }
-                item { VoiceModelsCard(providers, onEdit = { editingProvider = it }) }
+                item { ChatCodingProvidersCard(providers, onEdit = onEdit) }
+                item { VoiceModelsCard(providers, onEdit = onEdit) }
                 item { CustomProvidersCard(isRefreshing, onAdd = onAddCustomProvider, onRefresh = {
                     isRefreshing = true
                     onRefresh()
@@ -167,17 +166,6 @@ fun ProviderApiKeysSheet(
                 }
             }
         }
-    }
-
-    editingProvider?.let { provider ->
-        ApiKeyDialog(
-            provider = provider,
-            onDismiss = { editingProvider = null },
-            onSave = { key ->
-                onEdit(provider)
-                editingProvider = null
-            },
-        )
     }
 }
 
@@ -434,40 +422,6 @@ private fun Divider12() {
     )
 }
 
-@Composable
-private fun ApiKeyDialog(
-    provider: ProviderId,
-    onDismiss: () -> Unit,
-    onSave: (String) -> Unit,
-) {
-    var value by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("${provider.displayName} API key") },
-        text = {
-            OutlinedTextField(
-                value = value,
-                onValueChange = { value = it },
-                label = { Text("API key") },
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Password,
-                    capitalization = KeyboardCapitalization.None,
-                    imeAction = ImeAction.Done,
-                ),
-                modifier = Modifier.fillMaxWidth(),
-            )
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { onSave(value.trim()) },
-                enabled = value.trim().isNotEmpty(),
-            ) { Text("Save") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
-}
 
 /** Per-provider help URL used by the "open in browser" arrow icon. */
 private val ProviderId.keyHelpUrl: String

@@ -149,8 +149,8 @@ fun ModelPickerSheet(
 
     LaunchedEffect(Unit) {
         // Re-fetch every time the sheet opens so a freshly added key
-        // shows up without the user having to close + reopen the chat.
-        viewModel.load(force = state.results.isEmpty())
+        // shows up immediately and we rely on live API data.
+        viewModel.load(force = true)
     }
 
     // Split results into "has models" vs "error / empty".
@@ -415,18 +415,20 @@ private fun ModelRow(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = model.displayName,
+                    text = AIModel.prettifiedDisplayName(model.modelID),
                     style = MaterialTheme.typography.bodyLarge,
                     fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
                     color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 )
-                model.organization?.takeIf { it.isNotBlank() }?.let { org ->
-                    Text(
-                        text = org,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                Text(
+                    text = model.modelID,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                )
             }
             if (isSelected) {
                 Icon(

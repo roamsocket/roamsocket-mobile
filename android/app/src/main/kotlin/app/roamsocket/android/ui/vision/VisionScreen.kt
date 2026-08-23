@@ -307,7 +307,7 @@ private fun LiveView(
             )
             Spacer(Modifier.width(12.dp))
             ModelPill(
-                label = state.selectedModel?.displayName ?: "Choose model",
+                label = state.selectedModel?.let { AIModel.prettifiedDisplayName(it.modelID) } ?: "Choose model",
                 onClick = { showModelPicker = true },
                 modifier = Modifier.weight(1f),
             )
@@ -719,7 +719,7 @@ private fun AnalysisBottomSheet(
                 // Header row: title + toolbar buttons + model picker.
                 AnalysisHeader(
                     isLoading = isLoading,
-                    modelName = state.selectedModel?.displayName ?: "—",
+                    modelName = state.selectedModel?.let { AIModel.prettifiedDisplayName(it.modelID) } ?: "—",
                     analysisText = state.turns.lastOrNull()?.text
                         ?: state.analysisText,
                     onCopy = { text -> onCopyAnalysis(text) },
@@ -1274,10 +1274,12 @@ private fun VisionModelPickerSheet(
                                 Column(modifier = Modifier.weight(1f)) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text(
-                                            text = model.displayName,
+                                            text = AIModel.prettifiedDisplayName(model.modelID),
                                             style = MaterialTheme.typography.bodyLarge,
                                             color = Color.White,
                                             fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                            maxLines = 1,
+                                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                         )
                                         Spacer(Modifier.width(8.dp))
                                         // "Vision" badge.
@@ -1294,9 +1296,11 @@ private fun VisionModelPickerSheet(
                                         }
                                     }
                                     Text(
-                                        text = model.id,
+                                        text = model.modelID,
                                         style = MaterialTheme.typography.bodySmall,
                                         color = Color.White.copy(alpha = 0.45f),
+                                        maxLines = 1,
+                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                     )
                                 }
                                 if (isSelected) {
