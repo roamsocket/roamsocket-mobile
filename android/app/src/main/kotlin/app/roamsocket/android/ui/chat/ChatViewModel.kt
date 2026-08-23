@@ -48,6 +48,14 @@ class ChatViewModel(
     val state: StateFlow<ChatUiState> = _state.asStateFlow()
 
     /**
+     * PR #79: shared in-memory store for user-memory auto-save.
+     * Survives the chat's lifetime (the application-scoped container
+     * is rebuilt per process) so multiple chats can read + write the
+     * same map. Persistence across launches is a follow-up.
+     */
+    val memoryStore: MemoryStore = MemoryStore()
+
+    /**
      * Effective chat id. The view-model lazily creates a blank draft on
      * the first send so the user can compose before deciding to commit.
      */
@@ -373,11 +381,32 @@ class ChatViewModel(
                     timestampMillis = System.currentTimeMillis(),
                 )
                 val withReply = markLastUserSent(nextMessages) + assistantMsg
+                // PR #79: parse <memory ... /> tags out of the reply,
+                // apply them to the local store, and strip them from
+                // the visible text. Mirrors the iOS
+                // `memoryAutoSavePrompt` + `MemoryTagParser.stripTags`
+                // flow in `ChatViewModel.handleAssistantDelta`.
+                val tags = MemoryTagParser.parse(reply)
+                val visibleReply = if (tags.isNotEmpty()) {
+                    MemoryTagParser.stripTags(reply)
+                } else {
+                    reply
+                }
+                val finalAssistantMsg = if (visibleReply != reply) {
+                    ChatMessage.Assistant(
+                        text = visibleReply,
+                        timestampMillis = assistantMsg.timestampMillis,
+                    )
+                } else {
+                    assistantMsg
+                }
+                tags.forEach { tag -> memoryStore.apply(tag) }
+                val finalMessages = withReply.dropLast(1) + finalAssistantMsg
                 _state.value = _state.value.copy(
-                    messages = withReply,
+                    messages = finalMessages,
                     isStreaming = false,
                 )
-                persistCurrent(withReply, lastUserPending = false)
+                persistCurrent(finalMessages, lastUserPending = false)
             } catch (t: Throwable) {
                 val reason = t.message ?: t.javaClass.simpleName
                 val failureMessages = markLastUserFailed(nextMessages, reason)

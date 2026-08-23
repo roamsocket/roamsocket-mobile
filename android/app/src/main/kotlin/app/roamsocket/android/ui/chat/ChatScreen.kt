@@ -52,6 +52,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -376,6 +377,12 @@ fun ChatScreen(
                     onRetry = onRetry,
                     alwaysExpandThinking = state.alwaysExpandThinking,
                     isStreaming = state.isStreaming && isLastAssistant,
+                    isLatestAssistant = isLastAssistant,
+                    // PR #79: pass the in-memory memory store so the
+                    // bubble can surface a "Saved to memory" card
+                    // under the assistant message that triggered the
+                    // auto-save.
+                    memoryStore = viewModel.memoryStore,
                 )
             }
         }
@@ -449,6 +456,13 @@ private fun MessageBubble(
     onRetry: (() -> Unit)? = null,
     alwaysExpandThinking: Boolean = false,
     isStreaming: Boolean = false,
+    /** PR #79: when true, this assistant row is the latest in the transcript
+     *  and gets to host the trailing memory hint card. */
+    isLatestAssistant: Boolean = false,
+    /** PR #79: shared memory store; when non-null and this is the
+     *  latest assistant row, the trailing "Saved to memory" card renders
+     *  under the bubble. */
+    memoryStore: MemoryStore? = null,
 ) {
     val isUser = message is ChatMessage.User
     val isFailed = isUser && (message as ChatMessage.User).delivery == ChatMessage.User.Delivery.FAILED
@@ -517,6 +531,24 @@ private fun MessageBubble(
                         if (isStreaming && parsed.thinking == null && cleaned.isBlank()) {
                             Spacer(Modifier.size(4.dp))
                             AssistantTypingIndicator()
+                        }
+                        // PR #79: surface the most recent memory
+                        // activity row as a "Saved to memory" card
+                        // under the trailing assistant message. The
+                        // activity log is global; we pair it with the
+                        // latest assistant row so a long transcript
+                        // doesn't end up with every old card stacked
+                        // on the final bubble.
+                        if (memoryStore != null && isLatestAssistant) {
+                            val latest = memoryStore.activity.collectAsState().value
+                                .lastOrNull()
+                            if (latest != null) {
+                                Spacer(Modifier.size(8.dp))
+                                MemoryHintCard(
+                                    memory = memoryStore,
+                                    activityID = latest.id,
+                                )
+                            }
                         }
                     }
                 }
