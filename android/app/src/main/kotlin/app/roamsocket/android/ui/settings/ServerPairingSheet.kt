@@ -66,6 +66,7 @@ fun ServerPairingSheet(
     title: String = "Pair with desktop",
     description: String = "Open the desktop server, then type the 6-character code shown there.",
     showCancel: Boolean = true,
+    enableQrScan: Boolean = true,
     onDismiss: () -> Unit,
     onPaired: (PairedServer) -> Unit,
 ) {
@@ -75,6 +76,7 @@ fun ServerPairingSheet(
     var status by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var showScanner by remember { mutableStateOf(false) }
 
     val endpoint = remember(host) { Endpoint.fromHost(host) }
     val canPair = !busy && code.trim().length == 6 && endpoint != null
@@ -219,21 +221,38 @@ fun ServerPairingSheet(
                     )
                 }
                 Spacer(Modifier.size(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Outlined.QrCodeScanner,
-                        contentDescription = null,
-                        tint = Palette.TextTertiary,
-                        modifier = Modifier.size(16.dp),
-                    )
-                    Spacer(Modifier.size(6.dp))
-                    Text(
-                        text = "QR scanning lives in the desktop app — pair with the desktop's 6-character code for now.",
-                        color = Palette.TextTertiary,
-                        fontSize = 12.sp,
-                    )
+                if (enableQrScan) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Outlined.QrCodeScanner,
+                            contentDescription = null,
+                            tint = Palette.TextTertiary,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.size(6.dp))
+                        Text(
+                            text = "Or scan the QR shown in the desktop app:",
+                            color = Palette.TextTertiary,
+                            fontSize = 12.sp,
+                        )
+                        Spacer(Modifier.size(6.dp))
+                        TextButton(
+                            onClick = { showScanner = true },
+                        ) { Text("Scan QR", color = Palette.Accent) }
+                    }
                 }
             }
         }
+    }
+
+    if (showScanner) {
+        QrScannerSheet(
+            onDismiss = { showScanner = false },
+            onScanned = { payload ->
+                showScanner = false
+                if (payload.isHost) host = payload.host
+                if (payload.code.isNotEmpty()) code = payload.code
+            },
+        )
     }
 }
