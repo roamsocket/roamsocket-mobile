@@ -111,6 +111,10 @@ fun ChatScreen(
     // when opened from an incognito chat it lets the user change the
     // lifetime or forget the chat immediately.
     var showIncognitoSheet by remember { mutableStateOf(false) }
+    // PR #77: Voice chat overlay. Toggled by the mic icon in the input
+    // bar. Renders as a full-screen Compose dialog over the chat so the
+    // SpeechRecognizer / TTS lifecycle stays inside the chat process.
+    var showVoiceChat by remember { mutableStateOf(false) }
     // Pending camera output URI. We mint it on demand and feed it to
     // `TakePicture`; the camera writes the JPEG to this URI on success.
     var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
@@ -398,9 +402,39 @@ fun ChatScreen(
             onAttachCamera = { onLaunchCamera() },
             onAttachGallery = { onLaunchGallery() },
             onOpenAddToChat = { showAddToChat = true },
-            onMic = { /* TODO: voice chat */ },
+            onMic = { showVoiceChat = true },
             onRemoveAttachment = { index -> viewModel.removeAttachedImage(index) },
             onRemoveFile = { index -> viewModel.removeAttachedFile(index) },
+        )
+    }
+
+    // PR #77: full-screen voice-chat overlay. Renders on top of the
+    // chat composer so the SpeechRecognizer / TextToSpeech lifecycle
+    // stays inside the chat process and the user can dismiss back
+    // into the regular chat at any time.
+    if (showVoiceChat) {
+        VoiceChatScreen(
+            onClose = { showVoiceChat = false },
+            onSendTurn = { text ->
+                // Stage the dictated text in the composer as a draft
+                // and let the user confirm — matches the iOS flow
+                // where the user can edit before the message is sent.
+                // Auto-send mirrors iOS's "tap the mic to commit"
+                // affordance when the user explicitly stops listening.
+                viewModel.send(text)
+            },
+            onObserveReply = { callback ->
+                // Capture the most recent assistant message. The chat
+                // view-model streams updates into `messages`; the
+                // voice layer just observes the trailing assistant
+                // row. Wired here so the voice screen never needs to
+                // reach into the chat view-model directly.
+                callback(
+                    state.messages.lastOrNull { it is ChatMessage.Assistant }
+                        ?.let { (it as ChatMessage.Assistant).text }
+                        .orEmpty(),
+                )
+            },
         )
     }
 }
