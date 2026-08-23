@@ -81,7 +81,7 @@ import app.roamsocket.android.ui.LocalAppContainer
 import app.roamsocket.android.ui.chat.AssistantTypingIndicator
 import app.roamsocket.android.ui.chat.ThinkingBlock
 import app.roamsocket.android.ui.chat.ThinkingExtractor
-import app.roamsocket.android.ui.markdown.MarkdownText
+import app.roamsocket.android.ui.markdown.MarkdownContentView
 import app.roamsocket.android.ui.settings.ServerPairingSheet
 import app.roamsocket.android.ui.theme.Palette
 import app.roamsocket.core.server.Endpoint
@@ -791,7 +791,7 @@ private fun AssistantBubble(text: String, isRunning: Boolean) {
             Spacer(Modifier.size(8.dp))
         }
         if (cleaned.isNotBlank()) {
-            MarkdownText(markdown = cleaned, fontSize = 16.sp)
+            MarkdownContentView(text = cleaned, fontSize = 16.sp)
         }
         if (isRunning && parsed.thinking == null && cleaned.isBlank()) {
             Spacer(Modifier.size(4.dp))
