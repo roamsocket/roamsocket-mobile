@@ -77,7 +77,7 @@ import app.roamsocket.android.ui.LocalNavigateToCode
 import app.roamsocket.android.ui.LocalNavigateToSettings
 import app.roamsocket.android.ui.LocalNavigateToSidebar
 import app.roamsocket.android.ui.LocalOpenSidebar
-import app.roamsocket.android.ui.markdown.MarkdownText
+import app.roamsocket.android.ui.markdown.MarkdownContentView
 import app.roamsocket.core.providers.AIModel
 import app.roamsocket.core.providers.ProviderChatMessage
 import app.roamsocket.core.providers.ProviderId
@@ -551,8 +551,8 @@ private fun MessageBubble(
                             Spacer(Modifier.size(8.dp))
                         }
                         if (cleaned.isNotBlank()) {
-                            MarkdownText(
-                                markdown = cleaned,
+                            MarkdownContentView(
+                                text = cleaned,
                                 fontSize = 16.sp,
                             )
                         }

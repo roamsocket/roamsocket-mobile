@@ -121,7 +121,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.roamsocket.android.ui.LocalNavigateToSettings
-import app.roamsocket.android.ui.markdown.MarkdownText
+import app.roamsocket.android.ui.markdown.MarkdownContentView
 import app.roamsocket.core.providers.AIModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -1558,7 +1558,7 @@ private fun TurnBubble(turn: VisionViewModel.Turn) {
                 )
             } else {
                 Box(modifier = Modifier.padding(12.dp)) {
-                    MarkdownText(markdown = turn.text)
+                    MarkdownContentView(text = turn.text)
                 }
             }
         }
