@@ -94,6 +94,16 @@ dependencies {
     implementation(libs.markwon.linkify)
     implementation(libs.markwon.html)
 
+    // CameraX + ML Kit barcode scanning — used by the pairing QR scanner
+    // (parity with iOS `PairQRScannerView`). The barcode model is
+    // downloaded lazily via Play Services; we use `barcode-scanning`
+    // because it ships the QR model out of the box.
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
+    implementation(libs.mlkit.barcode.scanning)
+
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.graphics)
