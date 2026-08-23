@@ -54,6 +54,10 @@ export class SessionManager {
       existing.agent.emitTaskList();
       // Replay active / last achieved /goal status.
       existing.agent.emitGoalStatusReplay();
+      // Pull the rolling transcript so the app can render what happened while
+      // its socket was down. The agent keeps running on the server; this
+      // backfills the phone, then live events continue on the same WS.
+      existing.agent.emitTranscriptReplay();
       return;
     }
 

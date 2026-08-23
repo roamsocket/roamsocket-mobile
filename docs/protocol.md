@@ -209,6 +209,7 @@ fall back to the built-in OpenAI / Anthropic cloud hosts.
 | `diff`               | `sessionId`, `path`, `patch`, `added`, `removed` |
 | `permission_request` | `sessionId`, `requestId`, `tool`, `summary` |
 | `session_done`       | `sessionId`, `stopReason?` |
+| `transcript_replay`  | `sessionId`, `events` (`TranscriptEvent[]`), `truncated` (bool), `isLive` (bool) — emitted on WebSocket reattach to backfill the phone with what happened while its socket was down; live events then continue on the same connection |
 | `pr_created`         | `sessionId`, `url` |
 | `git_result`         | `sessionId`, `action`, `ok`, `detail`, `url?` |
 | `file_list_result`   | `sessionId`, `path`, `entries[]`, `diff?`, `changes?` |
@@ -265,6 +266,35 @@ After each successful call the server emits a full `task_list` snapshot:
 
 `status` is one of `pending`, `in_progress`, `completed`, `cancelled`. On
 session reattach the server re-sends the current list when non-empty.
+
+### Resume / transcript replay
+
+The agent runs in the **desktop** process. When the phone's WebSocket drops
+(or the app is backgrounded and the OS tears the socket down), the desktop
+keeps working — the `AgentSession` lives in `globalSessions` and continues
+streaming events. The phone never gets those events until it reconnects.
+
+On reattach (the app re-opens a recent session by sending `create_session`
+with the same `sessionId`), the server sends, in order:
+
+1. `session_created` (re-emitted with the same workdir / branches)
+2. `task_list` (if any)
+3. `goal_status` (active or last-achieved)
+4. `transcript_replay` (if any events buffered)
+
+`transcript_replay.events` is an ordered list of the events the phone
+missed. Each event uses the same `type` discriminator as the live wire
+(`assistant_delta`, `tool_call`, `tool_result`, `diff`) plus a `user`
+event carrying the prompt the agent received for that turn — the server's
+authoritative view, which may include messages the user typed while the
+app was disconnected.
+
+`truncated: true` means the rolling buffer dropped earlier events to stay
+under the server-side cap. `isLive: true` means the agent is still
+working on the current turn (no terminal `session_done` yet) so the
+client can show the running indicator without waiting for the next live
+event. After the replay, the same WebSocket continues to receive new
+events normally.
 
 ### `/goal` completion condition
 

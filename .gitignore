@@ -76,6 +76,9 @@ desktop-server/out/make/
 *.pem
 *.key
 secrets.*
+# Allow the legacy CLI secrets source file (matches the .gitignore above
+# only by name; this is code, not user credentials).
+!desktop-server/src/cli/secrets.ts
 
 # ---------- Xcode / iOS ----------
 build/

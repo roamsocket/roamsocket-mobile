@@ -465,6 +465,104 @@ public enum ServerMessage: Decodable, Sendable {
         hubID: String?,
         message: String?
     )
+    /// Replay of a live session's transcript on WebSocket reattach. Lets the
+    /// phone see what happened while its socket was down before live events
+    /// resume on the same connection.
+    case transcriptReplay(
+        sessionId: String,
+        events: [TranscriptEvent],
+        truncated: Bool,
+        isLive: Bool
+    )
+
+    /// One event in `transcriptReplay.events`. Mirrors the server's
+    /// `TranscriptEvent` discriminated union: `user` carries the prompt the
+    /// agent received; the remaining cases mirror the live wire types so the
+    /// iOS handler can rebuild the items array through the same code path.
+    public enum TranscriptEvent: Codable, Hashable, Sendable {
+        case user(ts: Double, text: String)
+        case assistantDelta(sessionId: String, text: String)
+        case toolCall(sessionId: String, callId: String, tool: String, summary: String)
+        case toolResult(sessionId: String, callId: String, ok: Bool, output: String)
+        case diff(sessionId: String, path: String, patch: String, added: Int, removed: Int)
+
+        private enum K: String, CodingKey {
+            case type, sessionId, text, callId, tool, summary, ok, output
+            case path, patch, added, removed
+            case ts
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: K.self)
+            let kind = try c.decode(String.self, forKey: .type)
+            switch kind {
+            case "user":
+                self = .user(
+                    ts: try c.decode(Double.self, forKey: .ts),
+                    text: try c.decode(String.self, forKey: .text))
+            case "assistant_delta":
+                self = .assistantDelta(
+                    sessionId: try c.decode(String.self, forKey: .sessionId),
+                    text: try c.decode(String.self, forKey: .text))
+            case "tool_call":
+                self = .toolCall(
+                    sessionId: try c.decode(String.self, forKey: .sessionId),
+                    callId: try c.decode(String.self, forKey: .callId),
+                    tool: try c.decode(String.self, forKey: .tool),
+                    summary: try c.decode(String.self, forKey: .summary))
+            case "tool_result":
+                self = .toolResult(
+                    sessionId: try c.decode(String.self, forKey: .sessionId),
+                    callId: try c.decode(String.self, forKey: .callId),
+                    ok: try c.decode(Bool.self, forKey: .ok),
+                    output: try c.decode(String.self, forKey: .output))
+            case "diff":
+                self = .diff(
+                    sessionId: try c.decode(String.self, forKey: .sessionId),
+                    path: try c.decode(String.self, forKey: .path),
+                    patch: try c.decode(String.self, forKey: .patch),
+                    added: try c.decode(Int.self, forKey: .added),
+                    removed: try c.decode(Int.self, forKey: .removed))
+            default:
+                throw DecodingError.dataCorruptedError(
+                    forKey: .type, in: c,
+                    debugDescription: "Unknown transcript event type: \(kind)")
+            }
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: K.self)
+            switch self {
+            case let .user(ts, text):
+                try c.encode("user", forKey: .type)
+                try c.encode(ts, forKey: .ts)
+                try c.encode(text, forKey: .text)
+            case let .assistantDelta(sessionId, text):
+                try c.encode("assistant_delta", forKey: .type)
+                try c.encode(sessionId, forKey: .sessionId)
+                try c.encode(text, forKey: .text)
+            case let .toolCall(sessionId, callId, tool, summary):
+                try c.encode("tool_call", forKey: .type)
+                try c.encode(sessionId, forKey: .sessionId)
+                try c.encode(callId, forKey: .callId)
+                try c.encode(tool, forKey: .tool)
+                try c.encode(summary, forKey: .summary)
+            case let .toolResult(sessionId, callId, ok, output):
+                try c.encode("tool_result", forKey: .type)
+                try c.encode(sessionId, forKey: .sessionId)
+                try c.encode(callId, forKey: .callId)
+                try c.encode(ok, forKey: .ok)
+                try c.encode(output, forKey: .output)
+            case let .diff(sessionId, path, patch, added, removed):
+                try c.encode("diff", forKey: .type)
+                try c.encode(sessionId, forKey: .sessionId)
+                try c.encode(path, forKey: .path)
+                try c.encode(patch, forKey: .patch)
+                try c.encode(added, forKey: .added)
+                try c.encode(removed, forKey: .removed)
+            }
+        }
+    }
 
     public struct AgentTaskPayload: Codable, Hashable, Sendable, Identifiable {
         public let id: String
@@ -567,6 +665,7 @@ public enum ServerMessage: Decodable, Sendable {
         case tasks
         case condition, reason, turnsEvaluated, startedAt, elapsedMs
         case hubID
+        case events, isLive
     }
 
     // CodingKeys already cover remote_endpoint fields: status, url, provider, error
@@ -700,6 +799,12 @@ public enum ServerMessage: Decodable, Sendable {
                 status: try c.decode(String.self, forKey: .status),
                 hubID: try c.decodeIfPresent(String.self, forKey: .hubID),
                 message: try c.decodeIfPresent(String.self, forKey: .message))
+        case "transcript_replay":
+            self = .transcriptReplay(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                events: try c.decode([TranscriptEvent].self, forKey: .events),
+                truncated: try c.decodeIfPresent(Bool.self, forKey: .truncated) ?? false,
+                isLive: try c.decodeIfPresent(Bool.self, forKey: .isLive) ?? false)
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .type, in: c, debugDescription: "Unknown server message type: \(type)")
