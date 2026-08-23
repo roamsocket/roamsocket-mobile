@@ -436,6 +436,7 @@ struct VisionView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Vision model")
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
     }
 

@@ -95,9 +95,11 @@ class ChatViewModel(
 
     fun selectProvider(provider: ProviderId) {
         viewModelScope.launch {
-            val firstModel = ModelCatalog.defaultsFor(provider).firstOrNull()?.modelID ?: ""
-            container.userSettings.setCurrent(provider, firstModel)
-            applySelection(provider, firstModel)
+            // Clear the model until the API returns the live list.
+            // The pill will show "Select model" and the send button is gated
+            // on a non-blank model, so the user is never silently blocked.
+            container.userSettings.setCurrent(provider, "")
+            applySelection(provider, "")
             // Re-check the API key for the newly selected provider so the
             // empty-state copy, the model pill's "Add a model" CTA, and
             // the "No API key" error path all stay accurate after a
@@ -121,9 +123,9 @@ class ChatViewModel(
 
     /**
      * Pull the live model list for [provider] from the upstream `/v1/models`
-     * endpoint. The picker uses this as the source of truth — the static
-     * `ModelCatalog` is only a fallback when the live fetch fails or the
-     * provider has no API to call.
+     * endpoint. The picker uses this as the source of truth — no preset lists
+     * are used. If the API returns no models, the picker stays empty and the
+     * user must configure a provider that returns models.
      *
      * State semantics on [ChatUiState.liveModelsForProvider]:
      * - `null` — fetch has not completed yet (or is in flight)
@@ -137,8 +139,7 @@ class ChatViewModel(
         viewModelScope.launch {
             val client = container.chatClientFor(provider)
             // Local providers (Metal, Apple Foundation, custom-without-base-URL)
-            // don't expose a listModels endpoint; treat them as "no live list"
-            // and let the static catalog drive the picker.
+            // don't expose a listModels endpoint; treat them as "no live list".
             if (client == null || apiKey.isNullOrEmpty()) {
                 _state.value = _state.value.copy(liveModelsForProvider = emptyList())
                 return@launch
@@ -146,6 +147,13 @@ class ChatViewModel(
             val live = runCatching { client.listModels(apiKey) }
                 .getOrElse { emptyList() }
             _state.value = _state.value.copy(liveModelsForProvider = live)
+            // Auto-select the first model from the live list when the current
+            // model is blank (e.g. after a provider switch that cleared it).
+            if (live.isNotEmpty() && _state.value.model.isBlank()) {
+                val first = live.first().modelID
+                container.userSettings.setCurrent(provider, first)
+                _state.value = _state.value.copy(model = first)
+            }
         }
     }
 
@@ -432,19 +440,9 @@ class ChatViewModel(
     }
 
     private fun availableModelsFor(provider: ProviderId): List<AIModel> {
-        // Prefer the live list when it has anything. If we have an API key,
-        // we rely on the live list results (even if empty) to avoid showing
-        // hard-coded defaults that the user's key might not support.
-        val live = _state.value.liveModelsForProvider
-        if (!live.isNullOrEmpty()) return live
-
-        // Fall back to the static catalog ONLY when we don't have a key
-        // configured yet, so the user sees something in the picker.
-        if (!_state.value.hasApiKey) {
-            return ModelCatalog.defaultsFor(provider).ifEmpty { ModelCatalog.defaults }
-        }
-
-        return emptyList()
+        // Only ever return the live API list. No preset fallback — if the
+        // API hasn't responded yet or returned nothing, the picker is empty.
+        return _state.value.liveModelsForProvider ?: emptyList()
     }
 
     /**
