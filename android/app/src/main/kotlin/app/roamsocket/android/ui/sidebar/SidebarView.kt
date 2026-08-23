@@ -26,10 +26,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,7 +38,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.roamsocket.android.R
+import app.roamsocket.android.ui.LocalAppContainer
 import app.roamsocket.android.ui.theme.Palette
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.launch
 
 /**
  * The left-edge navigation drawer. Mirrors iOS `SidebarView` 1:1 in
@@ -60,7 +63,9 @@ fun SidebarView(
     onOpenChat: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    var studyMode by rememberSaveable { mutableStateOf(false) }
+    val container = LocalAppContainer.current
+    val studyMode by container.userSettings.studyModeEnabled.collectAsState(initial = false)
+    val scope = rememberCoroutineScope()
 
     Surface(
         modifier = modifier.fillMaxSize(),
@@ -72,7 +77,12 @@ fun SidebarView(
                 .padding(horizontal = 16.dp)
                 .padding(top = 8.dp, bottom = 8.dp),
         ) {
-            Header(studyMode = studyMode, onToggleStudy = { studyMode = !studyMode })
+            Header(
+                studyMode = studyMode,
+                onToggleStudy = {
+                    scope.launch { container.userSettings.setStudyModeEnabled(!studyMode) }
+                },
+            )
 
             Spacer(modifier = Modifier.height(16.dp))
 

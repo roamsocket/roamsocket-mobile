@@ -39,6 +39,7 @@ import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material.icons.outlined.TheaterComedy
+import androidx.compose.material.icons.outlined.LibraryBooks
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -405,6 +406,9 @@ fun ChatScreen(
             onMic = { showVoiceChat = true },
             onRemoveAttachment = { index -> viewModel.removeAttachedImage(index) },
             onRemoveFile = { index -> viewModel.removeAttachedFile(index) },
+            // PR #78: study mode surfaces a locked "Sources" chip above
+            // the input. Mirrors iOS `contextChips` / `studyMode` row.
+            studyModeEnabled = state.studyModeEnabled,
         )
     }
 
@@ -560,6 +564,8 @@ private fun ChatInputBar(
     onRemoveFile: (Int) -> Unit,
     attachedImages: List<ProviderChatMessage.ImageAttachment>,
     attachedFiles: List<ProviderChatMessage.FileAttachment>,
+    /** PR #78: when true, the composer shows a locked "Sources" chip. */
+    studyModeEnabled: Boolean = false,
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surface,
@@ -571,6 +577,35 @@ private fun ChatInputBar(
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
+            // PR #78: locked "Sources" chip when Study mode is on.
+            // Mirrors iOS `contextChips` / `studyMode` row above the
+            // composer. The chip is non-tappable (the flag is
+            // toggled from the sidebar graduation-cap) and just
+            // signals to the user that the reply will cite.
+            if (studyModeEnabled) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.padding(bottom = 6.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.LibraryBooks,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Text(
+                        text = "Sources on",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        text = "Study mode forces citations on every reply.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             // Port #7: image attachments. Render a horizontal row of
             // removable chips above the text field when the user has
             // picked images but not sent them yet. Clearing all

@@ -84,6 +84,11 @@ class ChatViewModel(
                 toolAccess = container.userSettings.toolAccess.first(),
                 alwaysExpandThinking = container.userSettings.alwaysExpandThinking.first(),
                 effort = container.userSettings.effort.first(),
+                // PR #78: study mode is a cross-chat flag stored in
+                // UserSettings (mirrors the iOS `@AppStorage("studyMode.v1")`).
+                // The chat view-model force-enables web search on every
+                // text send when this is on so the answer always cites.
+                studyModeEnabled = container.userSettings.studyModeEnabled.first(),
             )
 
             // Resume the persisted transcript when the screen opens on an
@@ -354,7 +359,14 @@ class ChatViewModel(
                     apiKey = apiKey,
                     messages = nextMessages.toProviderMessages(prompt = prompt),
                     effort = effort,
-                    webSearchQuery = if (_state.value.webSearchEnabled) trimmed else null,
+                    // PR #78: study mode forces web search on every text
+                    // send so the reply always carries citations. Mirrors
+                    // iOS `let sourcesForced = studyModeEnabled && !text.isEmpty`.
+                    webSearchQuery = if (_state.value.webSearchEnabled || _state.value.studyModeEnabled) {
+                        trimmed
+                    } else {
+                        null
+                    },
                 )
                 val assistantMsg = ChatMessage.Assistant(
                     text = reply,
@@ -474,6 +486,18 @@ class ChatViewModel(
     fun setWebSearchEnabled(enabled: Boolean) {
         _state.value = _state.value.copy(webSearchEnabled = enabled)
         viewModelScope.launch { container.userSettings.setWebSearchEnabled(enabled) }
+    }
+
+    /**
+     * PR #78: toggle the global Study mode flag. When on, the chat
+     * composer shows a locked "Sources" chip and every text send
+     * forces web search so the answer always cites. Mirrors the
+     * iOS sidebar graduation-cap toggle that pokes the
+     * `studyMode.v1` AppStorage key.
+     */
+    fun setStudyModeEnabled(enabled: Boolean) {
+        _state.value = _state.value.copy(studyModeEnabled = enabled)
+        viewModelScope.launch { container.userSettings.setStudyModeEnabled(enabled) }
     }
 
     /** Toggle sharing approximate location with the model. */
@@ -682,6 +706,12 @@ data class ChatUiState(
     val researchEnabled: Boolean = false,
     /** Provider-native web search. */
     val webSearchEnabled: Boolean = false,
+    /**
+     * PR #78: persistent Study mode. When on, the chat view-model
+     * forces web search on every text send and the composer shows
+     * a locked "Sources" chip. Mirrors iOS `@AppStorage("studyMode.v1")`.
+     */
+    val studyModeEnabled: Boolean = false,
     /** Share approximate location with the model. */
     val locationEnabled: Boolean = false,
     /** Desktop agent's tool access level (Auto / Read-only / Full). */
