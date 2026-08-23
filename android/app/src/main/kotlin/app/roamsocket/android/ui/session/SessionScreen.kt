@@ -666,6 +666,9 @@ private fun shouldShowTypingIndicator(state: SessionUiState): Boolean {
             true
         }
         is TranscriptItem.Tool -> last.ok != null
+        // A trailing notice is informational only; the agent is still
+        // working (otherwise the indicator would be off entirely).
+        is TranscriptItem.Notice -> true
     }
 }
 
@@ -676,6 +679,7 @@ private fun TranscriptRow(item: TranscriptItem, isRunning: Boolean) {
         is TranscriptItem.Assistant -> AssistantBubble(item.text, isRunning = isRunning)
         is TranscriptItem.Tool -> ToolCard(item)
         is TranscriptItem.Diff -> DiffRow(item)
+        is TranscriptItem.Notice -> NoticeRow(item)
     }
 }
 
@@ -825,6 +829,23 @@ private fun DiffRow(item: TranscriptItem.Diff) {
     }
 }
 
+/**
+ * Low-emphasis informational row — e.g. "Synced 7 events from desktop"
+ * after a `transcript_replay` lands. Mirrors iOS `SessionView.swift`
+ * `.notice` case: a small grey line that doesn't claim a bubble.
+ */
+@Composable
+private fun NoticeRow(item: TranscriptItem.Notice) {
+    Text(
+        text = item.text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+    )
+}
+
 @Composable
 private fun Composer(
     draft: String,
@@ -944,6 +965,7 @@ private fun TranscriptItem.key(): String = when (this) {
     is TranscriptItem.Assistant -> "a:" + text.hashCode()
     is TranscriptItem.Tool -> "t:" + id
     is TranscriptItem.Diff -> "d:" + id
+    is TranscriptItem.Notice -> "n:" + text.hashCode()
 }
 
 // MARK: - Banners (parity with iOS `goalBanner` / `modelLoadingBanner`

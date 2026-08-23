@@ -19,6 +19,7 @@ import app.roamsocket.core.protocol.PermissionDecision
 import app.roamsocket.core.protocol.PermissionMode
 import app.roamsocket.core.protocol.RepoRef
 import app.roamsocket.core.protocol.ServerMessage
+import app.roamsocket.core.protocol.TranscriptEvent
 import app.roamsocket.core.server.Endpoint
 import app.roamsocket.core.server.ServerClient
 import app.roamsocket.core.server.Session
@@ -307,6 +308,7 @@ class SessionViewModel(
             is ServerMessage.TaskList -> onTaskList(message)
             is ServerMessage.GoalStatus -> onGoalStatus(message)
             is ServerMessage.ModelStatus -> onModelStatus(message)
+            is ServerMessage.TranscriptReplay -> onTranscriptReplay(message)
             is ServerMessage.GitResult,
             is ServerMessage.SkillsSync,
             is ServerMessage.MCPSync,
@@ -388,6 +390,87 @@ class SessionViewModel(
                 removed = m.removed,
             )
         )
+    }
+
+    /**
+     * Server replayed the rolling transcript because the phone's socket
+     * dropped while the agent kept running on the desktop. Mirrors
+     * `ios/.../SessionViewModel.handle(...)` case `.transcriptReplay`:
+     * replace the locally-cached items with the authoritative server
+     * view, then resume streaming live events on the same connection.
+     * `isLive` drives the "Working" indicator; `truncated` is surfaced
+     * as a notice so the user knows earlier events are gone.
+     */
+    private fun onTranscriptReplay(m: ServerMessage.TranscriptReplay) {
+        val rebuilt = rebuildItemsFromReplay(m.events)
+        _state.update {
+            it.copy(
+                transcript = rebuilt,
+                isRunning = m.isLive,
+            )
+        }
+        setAgentRunning(m.isLive)
+        val suffix = if (m.truncated) " (earlier events trimmed)" else ""
+        appendNotice("Synced ${m.events.size} events from desktop$suffix.")
+        scheduleTranscriptSave()
+    }
+
+    /**
+     * Mirror the live `handleServerMessage` semantics: assistant deltas
+     * coalesce into a single rolling row, tool results update the
+     * matching call, diffs append verbatim. SessionDone is intentionally
+     * ignored here — the `isLive` flag on the replay drives running
+     * state instead. Mirrors `ios/.../SessionViewModel.rebuildItems(...)`.
+     */
+    private fun rebuildItemsFromReplay(events: List<TranscriptEvent>): List<TranscriptItem> {
+        val out = mutableListOf<TranscriptItem>()
+        for (event in events) {
+            when (event) {
+                is TranscriptEvent.User -> {
+                    out += TranscriptItem.User(event.text)
+                }
+                is TranscriptEvent.AssistantDelta -> {
+                    val last = out.lastOrNull()
+                    if (last is TranscriptItem.Assistant) {
+                        out[out.size - 1] = last.copy(text = last.text + event.text)
+                    } else {
+                        out += TranscriptItem.Assistant(event.text)
+                    }
+                }
+                is TranscriptEvent.ToolCall -> {
+                    out += TranscriptItem.Tool(
+                        id = event.callId,
+                        tool = event.tool,
+                        summary = event.summary,
+                    )
+                }
+                is TranscriptEvent.ToolResult -> {
+                    val idx = out.indexOfLast { it is TranscriptItem.Tool && it.id == event.callId }
+                    if (idx >= 0) {
+                        val current = out[idx] as TranscriptItem.Tool
+                        out[idx] = current.copy(ok = event.ok, output = event.output)
+                    }
+                }
+                is TranscriptEvent.Diff -> {
+                    out += TranscriptItem.Diff(
+                        id = UUID.randomUUID().toString(),
+                        path = event.path,
+                        added = event.added,
+                        removed = event.removed,
+                    )
+                }
+            }
+        }
+        return out
+    }
+
+    /**
+     * Append a low-emphasis informational line to the transcript
+     * (e.g. a reattach notice). The firstUserMessage tracker ignores
+     * notices, so they never poison the auto-commit subject.
+     */
+    private fun appendNotice(text: String) {
+        appendTranscript(TranscriptItem.Notice(text))
     }
 
     private fun onPermissionRequest(m: ServerMessage.PermissionRequest) {
@@ -516,7 +599,9 @@ class SessionViewModel(
                         added = line.added ?: 0,
                         removed = line.removed ?: 0,
                     )
-                    SessionTranscriptLine.Kind.NOTICE -> null
+                    // Notices survive the round-trip so a reattach notice
+                    // written before app close is still shown on resume.
+                    SessionTranscriptLine.Kind.NOTICE -> TranscriptItem.Notice(line.text)
                 }
             }
             if (items.isNotEmpty()) {
@@ -863,6 +948,13 @@ sealed interface TranscriptItem {
         val added: Int,
         val removed: Int,
     ) : TranscriptItem
+    /**
+     * Out-of-band informational row — e.g. "Synced 7 events from desktop"
+     * after a reattach replay. Rendered as a low-emphasis grey line in the
+     * transcript; never updates tool counts, agent running state, or the
+     * auto-commit subject.
+     */
+    data class Notice(val text: String) : TranscriptItem
 }
 
 /**
@@ -895,5 +987,13 @@ internal fun TranscriptItem.toPersisted(): SessionTranscriptLine = when (this) {
         path = path,
         added = added,
         removed = removed,
+    )
+    is TranscriptItem.Notice -> SessionTranscriptLine(
+        // Hash the text so the same notice appended twice is treated as
+        // the same persisted row; collisions only collapse identical
+        // notice strings, which is exactly what we want.
+        id = "n:" + text.hashCode(),
+        kind = SessionTranscriptLine.Kind.NOTICE,
+        text = text,
     )
 }
