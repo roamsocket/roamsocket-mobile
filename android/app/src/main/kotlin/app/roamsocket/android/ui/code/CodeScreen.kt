@@ -24,7 +24,6 @@ import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.SwapVert
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -187,7 +186,7 @@ fun CodeScreen(
     }
 
     if (showNewSessionDialog && paired != null) {
-        NewSessionDialog(
+        NewSessionSheet(
             viewModel = viewModel,
             onDismiss = { showNewSessionDialog = false },
             onStart = { config ->
@@ -342,173 +341,6 @@ private fun PairedServerCard(
                 Text("Forget this server")
             }
         }
-    }
-}
-
-@Composable
-private fun NewSessionDialog(
-    viewModel: PairingViewModel,
-    onDismiss: () -> Unit,
-    onStart: (SessionConfig) -> Unit,
-    onNavigateToSettings: () -> Unit,
-) {
-    var selectedRepo by remember { mutableStateOf<GitHubRepo?>(null) }
-    var branch by remember { mutableStateOf("") }
-    var task by remember { mutableStateOf("") }
-    var showRepoPicker by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-    var starting by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("New session") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                // Repository — tap the field to open the picker sheet.
-                Surface(
-                    color = MaterialTheme.colorScheme.surface,
-                    shape = MaterialTheme.shapes.small,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { showRepoPicker = true },
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(
-                            Icons.Outlined.Code,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(18.dp),
-                        )
-                        Spacer(Modifier.size(10.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Repository",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Text(
-                                text = selectedRepo?.fullName ?: "Pick a repository…",
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = if (selectedRepo != null) {
-                                    MaterialTheme.colorScheme.onSurface
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                },
-                                fontFamily = FontFamily.Monospace,
-                            )
-                        }
-                        Icon(
-                            Icons.Outlined.SwapVert,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(18.dp),
-                        )
-                    }
-                }
-
-                OutlinedTextField(
-                    value = branch,
-                    onValueChange = { branch = it.trim() },
-                    label = { Text("Work branch") },
-                    placeholder = { Text(selectedRepo?.defaultBranch ?: "feat/your-change") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = task,
-                    onValueChange = { task = it },
-                    label = { Text("First task (optional)") },
-                    placeholder = { Text("What do you want the agent to do?") },
-                    minLines = 2,
-                    maxLines = 4,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                error?.let {
-                    Text(
-                        text = it,
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    val repo = selectedRepo
-                    if (repo == null) {
-                        error = "Pick a repository first"
-                        return@TextButton
-                    }
-                    if (branch.isBlank()) {
-                        error = "Pick a work branch"
-                        return@TextButton
-                    }
-                    starting = true
-                    error = null
-                    scope.launch {
-                        val base = viewModel.defaultSessionConfig()
-                        if (base == null) {
-                            starting = false
-                            error = "Add an API key for the current provider in Chat first."
-                            return@launch
-                        }
-                        val config = base.copy(
-                            repo = RepoRef(
-                                fullName = repo.fullName,
-                                baseBranch = repo.defaultBranch,
-                                workBranch = branch,
-                            ),
-                        )
-                        // Register the session so it shows up in the Code
-                        // home list. Title falls back to the repo + branch
-                        // when the user didn't type a first task; the
-                        // session screen can rename it on first message
-                        // (a later PR can swap in the iOS auto-titler).
-                        val now = System.currentTimeMillis()
-                        val sessionTitle = task.take(48).ifBlank { "${repo.fullName} · $branch" }
-                        viewModel.registerSession(
-                            CodeSession(
-                                id = config.id,
-                                title = sessionTitle,
-                                repoFullName = repo.fullName,
-                                baseBranch = repo.defaultBranch,
-                                workBranch = branch,
-                                status = CodeSession.Status.WORKING,
-                                createdAtMillis = now,
-                                updatedAtMillis = now,
-                            ),
-                        )
-                        onStart(config)
-                    }
-                },
-                enabled = !starting,
-            ) { Text("Start") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        },
-    )
-
-    if (showRepoPicker) {
-        RepositoryPickerSheet(
-            onPick = { repo ->
-                selectedRepo = repo
-                // Prefill the work branch with the repo's default if the
-                // user hasn't typed anything yet.
-                if (branch.isBlank()) branch = repo.defaultBranch
-                showRepoPicker = false
-            },
-            onLinkGitHub = {
-                showRepoPicker = false
-                onNavigateToSettings()
-            },
-            onDismiss = { showRepoPicker = false },
-        )
     }
 }
 
