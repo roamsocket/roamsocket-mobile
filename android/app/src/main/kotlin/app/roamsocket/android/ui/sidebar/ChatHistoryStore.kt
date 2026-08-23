@@ -9,6 +9,7 @@ import app.roamsocket.android.AppContainer
 import app.roamsocket.android.ui.LocalAppContainer
 import app.roamsocket.core.chats.ChatHistoryItem as CoreChatHistoryItem
 import app.roamsocket.core.chats.ChatHistoryRepository
+import app.roamsocket.core.chats.IncognitoLifetime
 import app.roamsocket.core.chats.PersistedChatMessage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -132,13 +133,47 @@ class ChatHistoryStore internal constructor(
 
     /** Start a new blank chat. Returns the new id. */
     fun startNewChat(): String = repository.startNewChat()
+
+    /**
+     * Start a new blank incognito chat with the chosen forget schedule.
+     * Mirrors `ios/.../ChatHistoryStore.startIncognitoChat(...)`. The
+     * new chat becomes the active one and appears in Recents (with the
+     * incognito dot) until the user exits or its `forgetAtMillis`
+     * deadline passes.
+     */
+    fun startIncognitoChat(lifetime: IncognitoLifetime): String =
+        repository.startIncognitoChat(lifetime)
+
+    /**
+     * Change the forget schedule of an existing incognito chat. No-op
+     * for regular chats.
+     */
+    fun setIncognitoLifetime(id: String, lifetime: IncognitoLifetime) =
+        repository.setIncognitoLifetime(id, lifetime)
+
+    /**
+     * Immediately drop the active chat if it is an `ON_EXIT` incognito
+     * chat. The host calls this when the user navigates away from a
+     * chat (or the activity is paused), so the transcript dies on
+     * schedule. No-op for regular chats and for timed incognito chats.
+     */
+    fun forgetActiveIfOnExit() = repository.forgetActiveIfOnExit()
+
+    /**
+     * Walk the persisted list and drop every incognito chat whose
+     * `forgetAtMillis` has passed. Called once at app startup so the
+     * user doesn't see zombie incognito rows from yesterday.
+     */
+    fun pruneExpiredIncognito(): List<String> = repository.pruneExpiredIncognito()
 }
 
 private fun toDisplayItem(p: CoreChatHistoryItem): ChatHistoryItem = ChatHistoryItem(
     id = p.id,
     title = p.title,
     isStarred = false, // PR 5+: pull from the persisted item.
-    isIncognito = false, // PR 14+: pull from the persisted item.
+    // PR #76: surface the persisted incognito flag so the sidebar dot
+    // lights up for the user.
+    isIncognito = p.isIncognito,
     isToolCall = p.messages.isNotEmpty(),
     updatedAtMillis = p.lastMessageAtMillis,
 )

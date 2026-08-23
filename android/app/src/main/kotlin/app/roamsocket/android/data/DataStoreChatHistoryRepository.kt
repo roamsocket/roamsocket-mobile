@@ -98,6 +98,20 @@ class DataStoreChatHistoryRepository(
 
     override fun snapshot(): List<ChatHistoryItem> = inMemory.snapshot()
 
+    override fun startIncognitoChat(lifetime: app.roamsocket.core.chats.IncognitoLifetime): String =
+        inMemory.startIncognitoChat(lifetime)
+
+    override fun setIncognitoLifetime(
+        id: String,
+        lifetime: app.roamsocket.core.chats.IncognitoLifetime,
+    ) = inMemory.setIncognitoLifetime(id, lifetime)
+
+    override fun forgetChatNow(id: String) = inMemory.forgetChatNow(id)
+
+    override fun forgetActiveIfOnExit() = inMemory.forgetActiveIfOnExit()
+
+    override fun pruneExpiredIncognito(): List<String> = inMemory.pruneExpiredIncognito()
+
     /** Force a synchronous load (mostly useful for tests). */
     suspend fun awaitReady() {
         if (ready.value) return

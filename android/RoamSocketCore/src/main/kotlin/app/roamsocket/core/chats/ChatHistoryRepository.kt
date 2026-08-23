@@ -71,6 +71,42 @@ public interface ChatHistoryRepository {
      * may be a blank draft the user has yet to type into).
      */
     public fun snapshot(): List<ChatHistoryItem>
+
+    /**
+     * Start a blank incognito chat with the chosen forget schedule.
+     * The new chat is created at the top of Recents and made active.
+     * Mirrors `ios/.../ChatHistory.startIncognitoChat(...)`.
+     */
+    public fun startIncognitoChat(lifetime: IncognitoLifetime): String
+
+    /**
+     * Change the forget schedule of an existing incognito chat. The
+     * countdown restarts from "now" so an actively-used chat isn't
+     * silently deleted. No-op for regular chats.
+     */
+    public fun setIncognitoLifetime(id: String, lifetime: IncognitoLifetime)
+
+    /**
+     * Immediately delete an incognito chat (and its transcript).
+     * No-op if [id] isn't an incognito chat or doesn't exist.
+     */
+    public fun forgetChatNow(id: String)
+
+    /**
+     * Forget the active chat if it is an `ON_EXIT` incognito chat.
+     * Called by the host when the user navigates away from a chat
+     * (or quits the app) so the transcript dies on schedule.
+     * No-op for regular chats and for timed incognito chats.
+     */
+    public fun forgetActiveIfOnExit()
+
+    /**
+     * Walk the in-memory list and drop every incognito chat whose
+     * [ChatHistoryItem.forgetAtMillis] has passed. Called by the
+     * app at startup and after every active-chat change. Returns
+     * the ids of the chats that were dropped (useful for tests).
+     */
+    public fun pruneExpiredIncognito(): List<String>
 }
 
 /**
@@ -116,10 +152,20 @@ public class InMemoryChatHistoryRepository : ChatHistoryRepository {
             } else {
                 current.title
             }
+            // Reset the incognito countdown on every new message so an
+            // actively-used chat isn't silently deleted. Mirrors
+            // iOS `ChatHistoryStore.touch(chatID:)` for incognito rows.
+            val resetForgetAt = if (current.isIncognito) {
+                current.incognitoLifetime?.timeIntervalSeconds
+                    ?.let { System.currentTimeMillis() + it * 1000L }
+            } else {
+                current.forgetAtMillis
+            }
             val updated = current.copy(
                 messages = messages,
                 lastMessageAtMillis = lastMessageAt,
                 title = derivedTitle,
+                forgetAtMillis = resetForgetAt,
             )
             list.removeAt(idx)
             list.add(0, updated)
@@ -186,6 +232,73 @@ public class InMemoryChatHistoryRepository : ChatHistoryRepository {
     }
 
     override fun snapshot(): List<ChatHistoryItem> = _all.value
+
+    override fun startIncognitoChat(lifetime: IncognitoLifetime): String {
+        mutate { list ->
+            // Mirrors iOS `discardBlankDrafts()`: any unsent "New chat"
+            // rows are removed so Recents doesn't accumulate empty
+            // drafts after the user moves on. Already-populated chats
+            // (including other incognito chats the user typed into)
+            // stay put.
+            list.removeAll { it.isBlankDraft }
+            val now = System.currentTimeMillis()
+            val interval = lifetime.timeIntervalSeconds
+            val item = ChatHistoryItem(
+                id = newID(),
+                title = ChatHistoryItem.DEFAULT_TITLE,
+                lastMessageAtMillis = now,
+                isIncognito = true,
+                incognitoLifetime = lifetime,
+                forgetAtMillis = interval?.let { now + it * 1000L },
+            )
+            list.add(0, item)
+            _activeChatId = item.id
+        }
+        return _activeChatId!!
+    }
+
+    override fun setIncognitoLifetime(id: String, lifetime: IncognitoLifetime) {
+        mutate { list ->
+            val idx = list.indexOfFirst { it.id == id && it.isIncognito }
+            if (idx < 0) return@mutate
+            val now = System.currentTimeMillis()
+            val interval = lifetime.timeIntervalSeconds
+            list[idx] = list[idx].copy(
+                incognitoLifetime = lifetime,
+                forgetAtMillis = interval?.let { now + it * 1000L },
+            )
+        }
+    }
+
+    override fun forgetChatNow(id: String) {
+        mutate { list ->
+            val before = list.size
+            list.removeAll { it.id == id && it.isIncognito }
+            if (list.size != before && _activeChatId == id) _activeChatId = null
+        }
+    }
+
+    override fun forgetActiveIfOnExit() {
+        val id = _activeChatId ?: return
+        val item = _all.value.firstOrNull { it.id == id } ?: return
+        if (!item.isIncognito || item.incognitoLifetime != IncognitoLifetime.ON_EXIT) return
+        forgetChatNow(id)
+    }
+
+    override fun pruneExpiredIncognito(): List<String> {
+        val now = System.currentTimeMillis()
+        val expiredIds = _all.value
+            .asSequence()
+            .filter { it.isIncognitoExpired }
+            .map { it.id }
+            .toList()
+        if (expiredIds.isEmpty()) return emptyList()
+        mutate { list ->
+            list.removeAll { it.id in expiredIds }
+            if (_activeChatId in expiredIds) _activeChatId = null
+        }
+        return expiredIds
+    }
 
     /**
      * Single funnel for every mutation. Updates [_all], then re-publishes

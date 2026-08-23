@@ -14,6 +14,7 @@ import app.roamsocket.android.RoamSocketApplication
 import app.roamsocket.android.data.EffortLevel
 import app.roamsocket.android.data.ToolAccessLevel
 import app.roamsocket.core.chats.ChatHistoryRepository
+import app.roamsocket.core.chats.IncognitoLifetime
 import app.roamsocket.core.chats.PersistedChatMessage
 import app.roamsocket.core.providers.AIModel
 import app.roamsocket.core.providers.ModelCatalog
@@ -52,6 +53,14 @@ class ChatViewModel(
      */
     private var effectiveChatId: String? = chatId
 
+    /** PR #76: convenience accessor used by [persistCurrent]. */
+    private val isIncognitoActive: Boolean
+        get() = _state.value.isIncognito && _state.value.incognitoLifetime != null
+
+    /** PR #76: the forget schedule of the active incognito chat, or null. */
+    private val activeIncognitoLifetime: IncognitoLifetime?
+        get() = _state.value.incognitoLifetime
+
     init {
         viewModelScope.launch {
             val provider = container.userSettings.currentProvider.first()
@@ -85,7 +94,14 @@ class ChatViewModel(
                     .firstOrNull { it.id == id }
                 if (repoItem != null) {
                     val resumed = repoItem.messages.map { it.toUi() }
-                    _state.value = _state.value.copy(messages = resumed)
+                    _state.value = _state.value.copy(
+                        messages = resumed,
+                        // PR #76: surface the persisted incognito flag so
+                        // the chat header pill lights up and the viewmodel
+                        // can keep skipping saveMessages.
+                        isIncognito = repoItem.isIncognito,
+                        incognitoLifetime = repoItem.incognitoLifetime,
+                    )
                 }
             }
             // Compute the inline error last so it sees the final state.
@@ -118,6 +134,98 @@ class ChatViewModel(
             container.userSettings.setCurrent(provider, model)
             _state.value = _state.value.copy(model = model, modelsForProvider = availableModelsFor(provider))
             refreshInlineError()
+        }
+    }
+
+    /**
+     * PR #76: start a blank incognito chat. Clears the current message
+     * list (the user explicitly asked for a private session) and flips
+     * the incognito flag so the viewmodel will skip future
+     * `saveMessages` calls. The persisted row is created on the first
+     * send — see [persistCurrent].
+     */
+    fun startIncognitoChat(lifetime: IncognitoLifetime) {
+        _state.value = _state.value.copy(
+            messages = emptyList(),
+            draft = "",
+            isStreaming = false,
+            error = null,
+            isIncognito = true,
+            incognitoLifetime = lifetime,
+        )
+        // The persisted row gets allocated in `persistCurrent` on the
+        // first send so an incognito chat the user never types into
+        // never even touches DataStore.
+        effectiveChatId = null
+    }
+
+    /**
+     * PR #76: change the forget schedule of the active incognito chat.
+     * No-op for regular chats. Resets the countdown on the persisted
+     * row so an actively-used chat isn't silently deleted.
+     */
+    fun setIncognitoLifetime(lifetime: IncognitoLifetime) {
+        val s = _state.value
+        if (!s.isIncognito) return
+        _state.value = s.copy(incognitoLifetime = lifetime)
+        val id = effectiveChatId ?: return
+        viewModelScope.launch {
+            container.chatHistoryRepository.setIncognitoLifetime(id, lifetime)
+        }
+    }
+
+    /**
+     * PR #76: drop the active incognito chat immediately and start a
+     * blank regular chat in its place. Mirrors the iOS
+     * "Forget this chat now" + `onStartFresh()` flow in
+     * `IncognitoChatSheet`. No-op if the active chat isn't incognito.
+     */
+    fun forgetActiveIncognitoChat() {
+        val id = effectiveChatId
+        if (id == null) {
+            // User never sent a message — just clear the local incognito
+            // flag and stay on the blank draft.
+            _state.value = _state.value.copy(
+                isIncognito = false,
+                incognitoLifetime = null,
+            )
+            return
+        }
+        viewModelScope.launch {
+            container.chatHistoryRepository.forgetChatNow(id)
+            // Reset the in-memory chat to a blank regular draft so the
+            // user lands somewhere usable after the wipe.
+            effectiveChatId = null
+            _state.value = _state.value.copy(
+                messages = emptyList(),
+                draft = "",
+                isStreaming = false,
+                error = null,
+                isIncognito = false,
+                incognitoLifetime = null,
+            )
+        }
+    }
+
+    /**
+     * PR #76: called by the host when the chat screen is leaving view
+     * (or the activity is paused) so an `ON_EXIT` incognito chat is
+     * forgotten on schedule. No-op for regular chats and for timed
+     * incognito chats (which carry their own deadline).
+     */
+    fun forgetActiveIfOnExit() {
+        viewModelScope.launch {
+            val activeId = effectiveChatId ?: return@launch
+            val s = _state.value
+            if (!s.isIncognito) return@launch
+            if (s.incognitoLifetime != IncognitoLifetime.ON_EXIT) return@launch
+            container.chatHistoryRepository.forgetChatNow(activeId)
+            effectiveChatId = null
+            _state.value = _state.value.copy(
+                messages = emptyList(),
+                isIncognito = false,
+                incognitoLifetime = null,
+            )
         }
     }
 
@@ -456,6 +564,18 @@ class ChatViewModel(
      */
     private fun persistCurrent(messages: List<ChatMessage>, lastUserPending: Boolean = false) {
         val repo: ChatHistoryRepository = container.chatHistoryRepository
+        // PR #76: never persist an incognito chat's transcript — the whole
+        // point is that the on-disk shape disappears. The repo still gets a
+        // `startIncognitoChat` call so the row exists for the duration of
+        // the session, but `saveMessages` is skipped entirely.
+        if (isIncognitoActive) {
+            if (effectiveChatId == null) {
+                // `isIncognitoActive` already proves the lifetime is non-null.
+                val lifetime = activeIncognitoLifetime!!
+                effectiveChatId = repo.startIncognitoChat(lifetime)
+            }
+            return
+        }
         val id = effectiveChatId ?: repo.startNewChat().also { effectiveChatId = it }
         val persisted = messages.mapIndexed { index, msg ->
             val isLastUser = lastUserPending &&
@@ -524,6 +644,20 @@ data class ChatUiState(
     val error: String? = null,
     /** True once we've confirmed the current provider has an API key configured. */
     val hasApiKey: Boolean = false,
+    /**
+     * True when the current chat is an incognito chat (PR #76). The
+     * viewmodel skips `saveMessages` while this is on so the transcript
+     * never touches DataStore; the in-memory state still drives the UI
+     * so the user can have a normal conversation.
+     */
+    val isIncognito: Boolean = false,
+    /**
+     * Forget schedule of the active incognito chat. Mirrors the
+     * `IncognitoLifetime` the user picked from the sheet. Drives the
+     * incognito header pill in the chat UI and lets the
+     * "Forget this chat now" button know which lifetime is current.
+     */
+    val incognitoLifetime: IncognitoLifetime? = null,
     /**
      * Images the user has attached but not yet sent. Cleared on a
      * successful [ChatViewModel.send]; restored on failure so the
