@@ -198,6 +198,22 @@ class UserSettings(context: Context) {
         store.edit { prefs -> prefs[KEY_VOICE_OPENAI_MODEL] = safe }
     }
 
+    // ----- Study mode (PR #78) -----
+
+    /**
+     * Persistent Study mode flag. Mirrors the iOS
+     * `@AppStorage("studyMode.v1")` storage. When on, the chat view-model
+     * forces web search on every text send so answers always carry
+     * citations, and the chat composer shows a locked "Sources" chip.
+     */
+    val studyModeEnabled: Flow<Boolean> = store.data.map { prefs ->
+        prefs[KEY_STUDY_MODE] ?: false
+    }
+
+    suspend fun setStudyModeEnabled(enabled: Boolean) {
+        store.edit { prefs -> prefs[KEY_STUDY_MODE] = enabled }
+    }
+
     private companion object {
         val KEY_PROVIDER: Preferences.Key<String> = stringPreferencesKey("current_provider")
         val KEY_MODEL: Preferences.Key<String> = stringPreferencesKey("current_model")
@@ -214,6 +230,10 @@ class UserSettings(context: Context) {
         val KEY_VOICE_PROVIDER: Preferences.Key<String> = stringPreferencesKey("voice_provider")
         val KEY_VOICE_OPENAI_MODEL: Preferences.Key<String> =
             stringPreferencesKey("voice_openai_model")
+        // Mirrors the iOS @AppStorage("studyMode.v1") key exactly so
+        // the two apps stay in lockstep on this flag.
+        val KEY_STUDY_MODE: Preferences.Key<Boolean> =
+            booleanPreferencesKey("studyMode.v1")
 
         const val DEFAULT_MODEL = "claude-3-5-sonnet-20241022"
         const val DEFAULT_BRANCH_PREFIX = "roamsocket"
