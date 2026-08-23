@@ -52,8 +52,8 @@ exactly. When changing a message, update all three implementations and
 | Code session (WebSocket lifecycle, transcript, permissions) | ✅ port #5 |
 | Settings tab + GitHub PAT client | ✅ port #6 |
 | **Chat history persistence + resume (DataStore)** | ✅ **port #7 (this PR)** |
-| Markdown rendering in chat | ⏳ port #8 |
-| Per-chat model selection | ⏳ port #9 |
+| Markdown rendering in chat | ✅ port #8 |
+| Per-chat model selection | ✅ port #9 |
 | Token streaming (SSE) across providers | ⏳ port #10 |
 | Image attachments + vision (camera + gallery) | ⏳ port #11 |
 | Repository picker via GitHub | ⏳ port #12 |
