@@ -52,6 +52,9 @@ android {
     }
 
     packaging {
+        jniLibs {
+            useLegacyPackaging = false
+        }
         resources {
             excludes += setOf(
                 "META-INF/AL2.0",
@@ -83,6 +86,16 @@ dependencies {
 
     implementation(libs.okhttp)
     implementation(libs.okhttp.logging)
+
+    // Camera (live viewfinder for Vision mode). CameraX gives us a Compose
+    // `PreviewView` that mounts the rear camera with permission handling
+    // built in; we capture stills via `ImageCapture` and hand the JPEG
+    // bytes to the same `ProviderChatMessage.ImageAttachment` pipeline
+    // the chat composer uses.
+    implementation(libs.camerax.core)
+    implementation(libs.camerax.camera2)
+    implementation(libs.camerax.lifecycle)
+    implementation(libs.camerax.view)
 
     // Markdown rendering for assistant chat bubbles (port #8: iOS uses
     // MarkdownUI; the Android port uses Markwon — the most popular

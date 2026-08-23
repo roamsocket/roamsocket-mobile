@@ -129,7 +129,9 @@ public object ModelCapabilities {
                     id.contains("claude-sonnet-4") || id.contains("claude-opus-4")
             }
             ProviderId.OpenAI -> {
-                id.contains("gpt-4o") || id.contains("vision") ||
+                id.contains("gpt-4o") || id.contains("gpt-4.1") ||
+                    id.contains("gpt-4-turbo") || id.contains("gpt-4-vision") ||
+                    id.contains("gpt-5") || id.contains("vision") ||
                     id.startsWith("o1") || id.startsWith("o3") || id.startsWith("o4") ||
                     id.contains("chatgpt-4o")
             }
@@ -137,7 +139,12 @@ public object ModelCapabilities {
                 // Gemini 1.5 / 2.0 / 2.5 all support images. text-embedding-* / *-text-* don't.
                 id.contains("gemini") && !id.contains("embedding")
             }
-            ProviderId.XAI -> id.contains("vision") || id.contains("grok-2")
+            ProviderId.XAI ->
+                // xAI Grok multimodal family — any grok-* id that is
+                // not the text-only or image-gen variant accepts
+                // image input. Mirrors the iOS `VisionCapability`.
+                (id.contains("grok") && !id.contains("text") && !id.contains("imagine")) ||
+                    id.contains("vision")
             ProviderId.OpenRouter -> {
                 // Best-effort: most OpenRouter models follow the same naming as
                 // the upstream provider. The live `architecture.input_modalities`
@@ -151,5 +158,67 @@ public object ModelCapabilities {
             is ProviderId.Custom -> true
             ProviderId.Groq, ProviderId.Mistral, ProviderId.MiniMax -> false
         }
+    }
+
+    /**
+     * Models that never accept images (embeddings, audio, image-gen, …).
+     * Mirrors the iOS `VisionCapability.isClearlyNonVisionModelID` so both
+     * clients filter out the same junk ids when listing.
+     */
+    public fun isClearlyNonVisionModelID(modelID: String): Boolean {
+        val id = modelID.lowercase()
+        return id.contains("whisper") ||
+            id.contains("embed") ||
+            id.contains("tts") ||
+            id.contains("moderation") ||
+            id.contains("transcri") ||
+            id.contains("dall-e") ||
+            id.contains("tts-") ||
+            id.contains("realtime") ||
+            id.contains("text-embedding") ||
+            id.contains("rerank")
+    }
+
+    /**
+     * Pick the best vision-capable model for the Vision mode entry point.
+     * Honors the current selection if it is already a vision model, else
+     * falls back to a known-flagship id, then to the first vision-capable
+     * entry. Mirrors the iOS `VisionCapability.preferredVisionModel`.
+     *
+     * @param isVision Override for callers that compute vision a different
+     *   way (e.g. custom provider's `supportsVision` flag). Defaults to the
+     *   [supportsVisionByHeuristic] + [isClearlyNonVisionModelID] combo.
+     */
+    public fun preferredVisionModel(
+        models: List<AIModel>,
+        current: AIModel? = null,
+        isVision: (AIModel) -> Boolean = { supportsVision(it) },
+    ): AIModel? {
+        if (current != null && isVision(current)) return current
+        val vision = models.filter(isVision)
+        val preferred = listOf(
+            // Cloud flagships
+            "gpt-5", "gpt-4o", "gpt-4.1", "claude-sonnet-4", "claude-opus",
+            "claude-sonnet", "grok-4", "grok-2-vision", "pixtral",
+        )
+        for (needle in preferred) {
+            val match = vision.firstOrNull { it.modelID.lowercase().contains(needle) }
+            if (match != null) return match
+        }
+        return vision.firstOrNull()
+    }
+
+    /**
+     * Convenience — same as [AIModel.supportsVision] but called on the
+     * model directly. Combines the heuristic with the negative filter
+     * (so e.g. an OpenAI `gpt-4-vision-preview` is fine but a `whisper-*`
+     * is always text-only).
+     */
+    public fun supportsVision(model: AIModel): Boolean {
+        if (model.supportsVision) {
+            if (isClearlyNonVisionModelID(model.modelID)) return false
+            return true
+        }
+        return supportsVisionByHeuristic(model.provider, model.modelID)
     }
 }

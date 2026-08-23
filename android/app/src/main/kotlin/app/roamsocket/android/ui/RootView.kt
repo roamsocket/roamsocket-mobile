@@ -28,6 +28,7 @@ import app.roamsocket.android.ui.sidebar.SidebarDestinationSaver
 import app.roamsocket.android.ui.sidebar.SidebarView
 import app.roamsocket.android.ui.sidebar.icon
 import app.roamsocket.android.ui.sidebar.rememberChatHistoryStore
+import app.roamsocket.android.ui.vision.VisionScreen
 import kotlinx.coroutines.launch
 
 /**
@@ -151,6 +152,9 @@ fun RootView() {
                     SidebarDestination.Chats, is SidebarDestination.Chat -> ChatScreen(chatId = activeChatId)
                     SidebarDestination.Code -> CodeScreen(
                         onNavigateToSettings = { current = SidebarDestination.Settings },
+                    )
+                    SidebarDestination.Vision -> VisionScreen(
+                        onClose = { current = SidebarDestination.Chats },
                     )
                     SidebarDestination.Settings -> SettingsScreen(
                         onDismiss = { current = SidebarDestination.Chats },

@@ -432,14 +432,19 @@ class ChatViewModel(
     }
 
     private fun availableModelsFor(provider: ProviderId): List<AIModel> {
-        // Prefer the live list when it has anything; fall back to the static
-        // catalog so the picker isn't empty when the upstream is unreachable
-        // (e.g. offline / 401). The picker itself gates on
-        // `liveModelsForProvider` to decide whether to render the "Add a
-        // model" CTA — this list is just the data the dropdown iterates over.
+        // Prefer the live list when it has anything. If we have an API key,
+        // we rely on the live list results (even if empty) to avoid showing
+        // hard-coded defaults that the user's key might not support.
         val live = _state.value.liveModelsForProvider
         if (!live.isNullOrEmpty()) return live
-        return ModelCatalog.defaultsFor(provider).ifEmpty { ModelCatalog.defaults }
+
+        // Fall back to the static catalog ONLY when we don't have a key
+        // configured yet, so the user sees something in the picker.
+        if (!_state.value.hasApiKey) {
+            return ModelCatalog.defaultsFor(provider).ifEmpty { ModelCatalog.defaults }
+        }
+
+        return emptyList()
     }
 
     /**

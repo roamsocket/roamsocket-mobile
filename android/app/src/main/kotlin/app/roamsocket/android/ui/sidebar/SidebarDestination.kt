@@ -12,6 +12,7 @@ import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.ui.graphics.vector.ImageVector
 
 /**
@@ -45,7 +46,7 @@ sealed class SidebarDestination {
 /** Material icon for a destination — keeps `SidebarView` declarative. */
 fun SidebarDestination.icon(): ImageVector = when (this) {
     SidebarDestination.Chats -> Icons.Outlined.ChatBubbleOutline
-    SidebarDestination.Vision -> Icons.Outlined.Image
+    SidebarDestination.Vision -> Icons.Outlined.Visibility
     SidebarDestination.Projects -> Icons.Outlined.Folder
     SidebarDestination.Artifacts -> Icons.Outlined.Layers
     SidebarDestination.Code -> Icons.Outlined.Code
