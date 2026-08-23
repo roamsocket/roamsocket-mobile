@@ -529,6 +529,30 @@ class ChatViewModel(
         viewModelScope.launch { container.userSettings.setStudyModeEnabled(enabled) }
     }
 
+    // MARK: - Message actions (PR #80)
+
+    /**
+     * Drop a single message from the in-memory transcript and
+     * re-persist. Mirrors iOS `ChatViewModel.deleteMessage(...)`.
+     * No-op for messages that aren't in the transcript.
+     */
+    fun deleteMessage(message: ChatMessage) {
+        val current = _state.value.messages
+        val updated = current.filterNot { it === message }
+        if (updated.size == current.size) return
+        _state.value = _state.value.copy(messages = updated)
+        persistCurrent(updated)
+    }
+
+    /**
+     * Return the shareable text for a single message. The actual
+     * `Intent.ACTION_SEND` is fired by the Compose layer so the
+     * view-model stays UI-agnostic. Mirrors iOS
+     * `ChatViewModel.shareItems(for:)`.
+     */
+    fun shareableText(message: ChatMessage): String =
+        message.text.trim().ifEmpty { "" }
+
     /** Toggle sharing approximate location with the model. */
     fun setLocationEnabled(enabled: Boolean) {
         _state.value = _state.value.copy(locationEnabled = enabled)

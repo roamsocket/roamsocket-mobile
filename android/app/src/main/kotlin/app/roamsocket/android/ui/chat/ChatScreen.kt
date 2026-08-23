@@ -7,6 +7,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -117,6 +118,11 @@ fun ChatScreen(
     // bar. Renders as a full-screen Compose dialog over the chat so the
     // SpeechRecognizer / TTS lifecycle stays inside the chat process.
     var showVoiceChat by remember { mutableStateOf(false) }
+    // PR #80: Message actions sheet. Toggled by long-pressing a
+    // message bubble. Carries the message the user long-pressed so
+    // the sheet can render the preview + call the right view-model
+    // methods (Copy / Share / Delete).
+    var actionsTarget by remember { mutableStateOf<ChatMessage?>(null) }
     // Pending camera output URI. We mint it on demand and feed it to
     // `TakePicture`; the camera writes the JPEG to this URI on success.
     var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
@@ -383,6 +389,10 @@ fun ChatScreen(
                     // under the assistant message that triggered the
                     // auto-save.
                     memoryStore = viewModel.memoryStore,
+                    // PR #80: long-press to open the message actions
+                    // sheet (Copy / Share / Delete). Mirrors the iOS
+                    // inline action-button row that appears on hover.
+                    onLongPress = { actionsTarget = message },
                 )
             }
         }
@@ -448,8 +458,23 @@ fun ChatScreen(
             },
         )
     }
+
+    // PR #80: message actions sheet (Copy / Share / Delete). Shown
+    // when the user long-presses a message bubble. We render the
+    // sheet on a single `actionsTarget` so the user can dismiss it
+    // by tapping the scrim without losing the rest of the chat.
+    actionsTarget?.let { target ->
+        MessageActionsSheet(
+            message = target,
+            onCopy = { /* clipboard write is handled inside the sheet */ },
+            onShare = { /* share intent is fired inside the sheet */ },
+            onDelete = { viewModel.deleteMessage(target) },
+            onDismiss = { actionsTarget = null },
+        )
+    }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun MessageBubble(
     message: ChatMessage,
@@ -463,6 +488,8 @@ private fun MessageBubble(
      *  latest assistant row, the trailing "Saved to memory" card renders
      *  under the bubble. */
     memoryStore: MemoryStore? = null,
+    /** PR #80: long-press the bubble to open the message actions sheet. */
+    onLongPress: (() -> Unit)? = null,
 ) {
     val isUser = message is ChatMessage.User
     val isFailed = isUser && (message as ChatMessage.User).delivery == ChatMessage.User.Delivery.FAILED
@@ -483,7 +510,12 @@ private fun MessageBubble(
         horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .combinedClickable(
+                    onClick = { /* tap is a no-op; long-press is the affordance */ },
+                    onLongClick = onLongPress,
+                ),
             horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
         ) {
             when (message) {
