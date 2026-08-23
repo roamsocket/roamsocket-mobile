@@ -740,6 +740,49 @@ export const ModelStatusMsg = z.object({
 });
 export type ModelStatusMsg = z.infer<typeof ModelStatusMsg>;
 
+/**
+ * One event in the agent's transcript that the server replays when the app
+ * reattaches to a live session. `assistant_delta` / `tool_call` / `tool_result`
+ * / `diff` mirror the live wire types verbatim; `user` carries the prompt
+ * the agent received for this turn (the server's authoritative view, which
+ * may include messages the app typed while the socket was down).
+ */
+export const TranscriptEvent = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('user'),
+    /** Unix ms when the server received the user message. */
+    ts: z.number(),
+    text: z.string(),
+  }),
+  AssistantDeltaMsg,
+  ToolCallMsg,
+  ToolResultMsg,
+  DiffMsg,
+]);
+export type TranscriptEvent = z.infer<typeof TranscriptEvent>;
+
+/**
+ * Replay of a live session's transcript, sent immediately after
+ * `session_created` when the app reattaches to a session the desktop still
+ * has in memory. Lets the phone see what happened while it was away, then
+ * continue receiving live events on the same WebSocket.
+ *
+ * The server caps the buffer (oldest events dropped first) and reports
+ * truncation via `truncated`. `isLive` is true when the agent is currently
+ * mid-turn (no terminal `session_done` yet) so the client can show the
+ * running indicator without waiting for the next live event.
+ */
+export const TranscriptReplayMsg = z.object({
+  type: z.literal('transcript_replay'),
+  sessionId: z.string(),
+  events: z.array(TranscriptEvent),
+  /** True if the buffer dropped earlier events to stay under the cap. */
+  truncated: z.boolean().default(false),
+  /** True while the agent is still working on the current turn. */
+  isLive: z.boolean().default(false),
+});
+export type TranscriptReplayMsg = z.infer<typeof TranscriptReplayMsg>;
+
 export const ServerMessage = z.discriminatedUnion('type', [
   SessionCreatedMsg,
   AssistantDeltaMsg,
@@ -766,6 +809,7 @@ export const ServerMessage = z.discriminatedUnion('type', [
   TaskListMsg,
   GoalStatusMsg,
   ModelStatusMsg,
+  TranscriptReplayMsg,
 ]);
 export type ServerMessage = z.infer<typeof ServerMessage>;
 

@@ -203,6 +203,61 @@ public sealed class ServerMessage {
         val hubId: String? = null,
         val message: String? = null,
     ) : ServerMessage()
+
+    @Serializable
+    @SerialName("transcript_replay")
+    public data class TranscriptReplay(
+        val sessionId: String,
+        val events: List<TranscriptEvent>,
+        val truncated: Boolean = false,
+        val isLive: Boolean = false,
+    ) : ServerMessage()
+}
+
+/**
+ * One event in a [ServerMessage.TranscriptReplay] payload. Mirrors the TS
+ * `TranscriptEvent` discriminated union so the server can replay the same
+ * shape on reattach that it would have streamed live.
+ */
+@OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+@JsonClassDiscriminator("type")
+@Serializable
+public sealed class TranscriptEvent {
+    @Serializable
+    @SerialName("user")
+    public data class User(val ts: Long, val text: String) : TranscriptEvent()
+
+    @Serializable
+    @SerialName("assistant_delta")
+    public data class AssistantDelta(val sessionId: String, val text: String) : TranscriptEvent()
+
+    @Serializable
+    @SerialName("tool_call")
+    public data class ToolCall(
+        val sessionId: String,
+        val callId: String,
+        val tool: String,
+        val summary: String,
+    ) : TranscriptEvent()
+
+    @Serializable
+    @SerialName("tool_result")
+    public data class ToolResult(
+        val sessionId: String,
+        val callId: String,
+        val ok: Boolean,
+        val output: String,
+    ) : TranscriptEvent()
+
+    @Serializable
+    @SerialName("diff")
+    public data class Diff(
+        val sessionId: String,
+        val path: String,
+        val patch: String,
+        val added: Int,
+        val removed: Int,
+    ) : TranscriptEvent()
 }
 
 @Serializable

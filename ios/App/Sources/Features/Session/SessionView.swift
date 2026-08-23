@@ -8,6 +8,7 @@ struct SessionView: View {
     @EnvironmentObject var state: AppState
     @Environment(\.openURL) private var openURL
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var model: SessionViewModel
     @State private var followUp = ""
     @State private var showGitSheet = false
@@ -152,6 +153,15 @@ struct SessionView: View {
         }
         .onDisappear {
             model.persistTranscript()
+        }
+        // Reconnect when the app comes back to the foreground: iOS may have
+        // torn down the WebSocket while backgrounded, but the desktop agent
+        // keeps running. The server replays the transcript on reattach so we
+        // see everything that happened while we were away.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                model.reconnectIfStale()
+            }
         }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {

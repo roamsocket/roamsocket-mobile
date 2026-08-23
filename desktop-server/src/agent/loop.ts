@@ -76,6 +76,13 @@ Do not stop early with a plan-only reply while a goal is active.`;
 
 const MAX_ROUNDS = 24;
 
+/**
+ * Cap on the in-memory transcript buffer the server keeps per session so
+ * `transcript_replay` stays bounded. Older events are dropped first when the
+ * cap is hit; the client is told via `truncated: true` on the replay.
+ */
+const TRANSCRIPT_BUFFER_MAX = 1000;
+
 /** Where the agent is being driven from — affects system prompt wording only. */
 export type AgentSurface = 'phone' | 'cli';
 
@@ -114,6 +121,14 @@ export class AgentSession {
   private activeGoal: ActiveGoal | null = null;
   /** Last achieved goal this session (for `/goal` status). */
   private achievedGoal: AchievedGoal | null = null;
+  /**
+   * Rolling transcript of events the phone would have seen live, kept so a
+   * reattached client can pull the log when it comes back. Trimmed to
+   * `TRANSCRIPT_BUFFER_MAX` entries (FIFO); truncation is reported on replay.
+   */
+  private transcript: import('../protocol.js').TranscriptEvent[] = [];
+  /** True while a turn is in flight (between user accept and `session_done`). */
+  private isLive = false;
 
   constructor(deps: AgentDeps) {
     this.deps = deps;
@@ -164,6 +179,43 @@ export class AgentSession {
         endedAt: this.achievedGoal.endedAt,
       });
     }
+  }
+
+  /**
+   * Replay the rolling transcript buffer to a freshly attached app so it can
+   * render what happened while it was away, then continue from the live tail.
+   * No-op when the buffer is empty (e.g. a brand-new session before the first
+   * user message, or after a desktop restart where state is in-memory only).
+   */
+  emitTranscriptReplay(): void {
+    if (this.transcript.length === 0) return;
+    const overflow = this.transcript.length >= TRANSCRIPT_BUFFER_MAX;
+    this.deps.emit({
+      type: 'transcript_replay',
+      sessionId: this.deps.sessionId,
+      events: this.transcript.slice(),
+      truncated: overflow,
+      isLive: this.isLive,
+    });
+  }
+
+  /**
+   * Append an event to the rolling transcript buffer. The buffer is the
+   * source of truth for `transcript_replay`; the live `emit` already pushed
+   * the same event to any open WebSocket.
+   */
+  private recordTranscript(event: import('../protocol.js').TranscriptEvent): void {
+    this.transcript.push(event);
+    if (this.transcript.length > TRANSCRIPT_BUFFER_MAX) {
+      // Drop the oldest entries; report `truncated: true` on the next replay
+      // so the client knows it missed the start of the session.
+      this.transcript.splice(0, this.transcript.length - TRANSCRIPT_BUFFER_MAX);
+    }
+  }
+
+  /** Mark the agent as between user accept and `session_done` for replay purposes. */
+  private setLive(live: boolean): void {
+    this.isLive = live;
   }
 
   /**
@@ -395,150 +447,169 @@ export class AgentSession {
   private async runAgentTurn(userText: string): Promise<void> {
     this.messages.push({ role: 'user', text: userText });
     const sessionId = this.deps.sessionId;
+    // From here until the matching `session_done` the agent is "live" — used
+    // by `transcript_replay` so a reattaching phone shows the running state
+    // immediately, without waiting for the next event.
+    this.setLive(true);
+    this.recordTranscript({ type: 'user', ts: Date.now(), text: userText });
 
-    for (let round = 0; round < MAX_ROUNDS; round++) {
-      if (this.deps.signal.aborted) return;
+    try {
+      for (let round = 0; round < MAX_ROUNDS; round++) {
+        if (this.deps.signal.aborted) return;
 
-      let assistantText = '';
-      const toolCalls: { id: string; name: string; input: Record<string, unknown> }[] = [];
-      let stopReason = 'end_turn';
+        let assistantText = '';
+        const toolCalls: { id: string; name: string; input: Record<string, unknown> }[] = [];
+        let stopReason = 'end_turn';
 
-      const stream = this.adapter.stream(
-        {
-          model: this.deps.model.model,
-          apiKey: this.deps.model.apiKey,
-          system: this.systemPrompt,
-          messages: this.messages,
-          tools: Object.values(TOOLS),
-          effort: this.deps.model.effort,
-        },
-        this.deps.signal
-      );
+        const stream = this.adapter.stream(
+          {
+            model: this.deps.model.model,
+            apiKey: this.deps.model.apiKey,
+            system: this.systemPrompt,
+            messages: this.messages,
+            tools: Object.values(TOOLS),
+            effort: this.deps.model.effort,
+          },
+          this.deps.signal
+        );
 
-      for await (const ev of stream) {
-        if (ev.kind === 'text') {
-          assistantText += ev.text;
-          this.deps.emit({ type: 'assistant_delta', sessionId, text: ev.text });
-        } else if (ev.kind === 'model_status') {
-          this.deps.emit({
-            type: 'model_status',
-            sessionId,
-            status: ev.status,
-            hubID: ev.hubID,
-            message: ev.message,
-          });
-        } else if (ev.kind === 'tool_call') {
-          toolCalls.push(ev.call);
-        } else if (ev.kind === 'done') {
-          stopReason = ev.stopReason;
+        for await (const ev of stream) {
+          if (ev.kind === 'text') {
+            assistantText += ev.text;
+            const msg = { type: 'assistant_delta' as const, sessionId, text: ev.text };
+            this.deps.emit(msg);
+            this.recordTranscript(msg);
+          } else if (ev.kind === 'model_status') {
+            this.deps.emit({
+              type: 'model_status',
+              sessionId,
+              status: ev.status,
+              hubID: ev.hubID,
+              message: ev.message,
+            });
+          } else if (ev.kind === 'tool_call') {
+            toolCalls.push(ev.call);
+          } else if (ev.kind === 'done') {
+            stopReason = ev.stopReason;
+          }
         }
-      }
 
-      // Record the assistant turn (text + any tool calls).
-      this.messages.push({ role: 'assistant', text: assistantText, toolCalls });
+        // Record the assistant turn (text + any tool calls).
+        this.messages.push({ role: 'assistant', text: assistantText, toolCalls });
 
-      if (toolCalls.length === 0) {
-        void stopReason;
-        return;
-      }
+        if (toolCalls.length === 0) {
+          void stopReason;
+          return;
+        }
 
-      // Execute each requested tool call in order.
-      for (const call of toolCalls) {
-        const tool = TOOLS[call.name];
-        const summary = tool ? tool.summarize(call.input) : `${call.name}`;
-        this.deps.emit({
-          type: 'tool_call',
-          sessionId,
-          callId: call.id,
-          tool: call.name,
-          summary,
-          input: call.input,
-        });
-
-        let result = { ok: false, output: `Unknown tool: ${call.name}` };
-        if (tool) {
-          const gated = MUTATING_TOOLS.has(call.name);
-          // Do NOT stream tool stdout as assistant_delta — that dumped `ls` /
-          // build logs into the chat transcript. Capture completes in
-          // `tool_result` and the iOS ToolCard shows it collapsed-by-default.
-          const baseCtx = {
-            workdir: this.deps.workdir,
-            network: this.deps.environment
-              ? {
-                  access: this.deps.environment.networkAccess,
-                  allowedDomains: this.deps.environment.allowedDomains ?? [],
-                }
-              : undefined,
+        // Execute each requested tool call in order.
+        for (const call of toolCalls) {
+          const tool = TOOLS[call.name];
+          const summary = tool ? tool.summarize(call.input) : `${call.name}`;
+          const callMsg = {
+            type: 'tool_call' as const,
+            sessionId,
+            callId: call.id,
+            tool: call.name,
+            summary,
+            input: call.input,
           };
-          if (gated && this.deps.permissionMode === 'plan') {
-            result = { ok: true, output: '[plan mode] change described but not executed.' };
-          } else if (gated && this.deps.permissionMode === 'ask') {
-            const requestId = randomUUID();
-            const decision = await this.deps.requestPermission(requestId, call.name, summary);
-            if (decision === 'deny') {
-              result = { ok: false, output: 'Denied by user.' };
+          this.deps.emit(callMsg);
+          this.recordTranscript(callMsg);
+
+          let result = { ok: false, output: `Unknown tool: ${call.name}` };
+          if (tool) {
+            const gated = MUTATING_TOOLS.has(call.name);
+            // Do NOT stream tool stdout as assistant_delta — that dumped `ls` /
+            // build logs into the chat transcript. Capture completes in
+            // `tool_result` and the iOS ToolCard shows it collapsed-by-default.
+            const baseCtx = {
+              workdir: this.deps.workdir,
+              network: this.deps.environment
+                ? {
+                    access: this.deps.environment.networkAccess,
+                    allowedDomains: this.deps.environment.allowedDomains ?? [],
+                  }
+                : undefined,
+            };
+            if (gated && this.deps.permissionMode === 'plan') {
+              result = { ok: true, output: '[plan mode] change described but not executed.' };
+            } else if (gated && this.deps.permissionMode === 'ask') {
+              const requestId = randomUUID();
+              const decision = await this.deps.requestPermission(requestId, call.name, summary);
+              if (decision === 'deny') {
+                result = { ok: false, output: 'Denied by user.' };
+              } else {
+                result = await tool.execute(call.input, baseCtx);
+              }
             } else {
               result = await tool.execute(call.input, baseCtx);
             }
-          } else {
-            result = await tool.execute(call.input, baseCtx);
+
+            // Apply checklist state after a successful update_tasks call and
+            // push a full snapshot so the phone checklist stays live.
+            if (call.name === 'update_tasks' && result.ok) {
+              this.agentTasks = applyTaskUpdate(this.agentTasks, call.input);
+              result = {
+                ok: true,
+                output: formatTaskChecklist(this.agentTasks),
+              };
+              this.deps.emit({
+                type: 'task_list',
+                sessionId,
+                tasks: this.agentTasks,
+              });
+            }
           }
 
-          // Apply checklist state after a successful update_tasks call and
-          // push a full snapshot so the phone checklist stays live.
-          if (call.name === 'update_tasks' && result.ok) {
-            this.agentTasks = applyTaskUpdate(this.agentTasks, call.input);
-            result = {
-              ok: true,
-              output: formatTaskChecklist(this.agentTasks),
-            };
-            this.deps.emit({
-              type: 'task_list',
-              sessionId,
-              tasks: this.agentTasks,
-            });
-          }
+          const resultMsg = {
+            type: 'tool_result' as const,
+            sessionId,
+            callId: call.id,
+            ok: result.ok,
+            output: result.output,
+          };
+          this.deps.emit(resultMsg);
+          this.recordTranscript(resultMsg);
+          this.messages.push({
+            role: 'tool',
+            toolCallId: call.id,
+            name: call.name,
+            output: result.output,
+            ok: result.ok,
+          });
         }
 
-        this.deps.emit({
-          type: 'tool_result',
-          sessionId,
-          callId: call.id,
-          ok: result.ok,
-          output: result.output,
-        });
-        this.messages.push({
-          role: 'tool',
-          toolCallId: call.id,
-          name: call.name,
-          output: result.output,
-          ok: result.ok,
-        });
-      }
-
-      // Emit per-file diffs after this round's mutations.
-      if (this.deps.permissionMode !== 'plan') {
-        try {
-          for (const d of await diffFiles(this.deps.workdir)) {
-            this.deps.emit({
-              type: 'diff',
-              sessionId,
-              path: d.path,
-              patch: d.patch,
-              added: d.added,
-              removed: d.removed,
-            });
+        // Emit per-file diffs after this round's mutations.
+        if (this.deps.permissionMode !== 'plan') {
+          try {
+            for (const d of await diffFiles(this.deps.workdir)) {
+              const diffMsg = {
+                type: 'diff' as const,
+                sessionId,
+                path: d.path,
+                patch: d.patch,
+                added: d.added,
+                removed: d.removed,
+              };
+              this.deps.emit(diffMsg);
+              this.recordTranscript(diffMsg);
+            }
+          } catch {
+            // Non-fatal: diffs are best-effort (e.g. workdir not a git repo).
           }
-        } catch {
-          // Non-fatal: diffs are best-effort (e.g. workdir not a git repo).
         }
       }
+
+      this.deps.emit({
+        type: 'error',
+        sessionId,
+        message: `Stopped after ${MAX_ROUNDS} rounds.`,
+      });
+    } finally {
+      // Mark idle regardless of how the turn ended (normal, abort, error) so
+      // a reattaching client doesn't see `isLive: true` forever.
+      this.setLive(false);
     }
-
-    this.deps.emit({
-      type: 'error',
-      sessionId,
-      message: `Stopped after ${MAX_ROUNDS} rounds.`,
-    });
   }
 }

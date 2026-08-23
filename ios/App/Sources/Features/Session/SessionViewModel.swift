@@ -217,6 +217,20 @@ final class SessionViewModel: ObservableObject {
         start()
     }
 
+    /// Foreground reconnect: reconnect only when the WebSocket is unhealthy.
+    /// Called from `SessionView` when `scenePhase` flips to `.active` so the
+    /// phone picks up the desktop's live progress (transcript replay) after
+    /// being backgrounded. Idempotent — safe to call on every activation.
+    func reconnectIfStale() {
+        // streamTask stays non-nil while the loop is running; only reconnect
+        // when it's missing or the run() loop already exited (cancelled
+        // socket / failed handshake).
+        let needsReconnect = !isSessionReady && connectionError != nil
+        if needsReconnect || streamTask == nil {
+            retryConnection()
+        }
+    }
+
     private func run() async {
         let token = state?.serverToken ?? config.token
         // Refresh API key / model from current settings when resuming so
@@ -870,10 +884,58 @@ final class SessionViewModel: ObservableObject {
                 )
             }
 
+        case let .transcriptReplay(_, events, truncated, isLive):
+            // Server replayed the rolling transcript because the phone's
+            // socket dropped while the agent kept running on the desktop.
+            // Replace the locally-cached items with the authoritative
+            // server view, then resume streaming live events on the same
+            // connection.
+            items = rebuildItems(fromReplay: events)
+            if isLive {
+                setAgentRunning(true)
+            } else {
+                setAgentRunning(false)
+            }
+            let suffix = truncated ? " (earlier events trimmed)" : ""
+            appendNotice("Synced \(events.count) events from desktop\(suffix).")
+            scheduleTranscriptSave()
+
         case .terminalData, .terminalControl, .fileListResult, .fileReadResult, .fileWriteResult, .portListResult, .tunnelStatus:
             // Handled by the dedicated tools views via their own connection.
             break
         }
+    }
+
+    /// Rebuild the items array from a server-issued transcript replay. Mirrors
+    /// the live `handle()` logic: assistant deltas coalesce, tool results
+    /// update the matching call, diffs append. SessionDone is intentionally
+    /// ignored here — `isLive` from the replay drives the running state.
+    private func rebuildItems(fromReplay events: [ServerMessage.TranscriptEvent]) -> [Item] {
+        var out: [Item] = []
+        for event in events {
+            switch event {
+            case let .user(_, text):
+                out.append(.user(id: UUID(), text: text))
+            case let .assistantDelta(_, text):
+                if case let .assistant(id, existing) = out.last {
+                    out[out.count - 1] = .assistant(id: id, text: existing + text)
+                } else {
+                    out.append(.assistant(id: UUID(), text: text))
+                }
+            case let .toolCall(_, callId, tool, summary):
+                out.append(.tool(id: callId, tool: tool, summary: summary, ok: nil, output: nil))
+            case let .toolResult(_, callId, ok, output):
+                if let idx = out.firstIndex(where: {
+                    if case let .tool(id, _, _, _, _) = $0 { return id == callId }
+                    return false
+                }), case let .tool(id, tool, summary, _, _) = out[idx] {
+                    out[idx] = .tool(id: id, tool: tool, summary: summary, ok: ok, output: output)
+                }
+            case let .diff(_, path, patch, added, removed):
+                out.append(.diff(id: UUID(), path: path, patch: patch, added: added, removed: removed))
+            }
+        }
+        return out
     }
 
     var taskProgress: (done: Int, total: Int) {

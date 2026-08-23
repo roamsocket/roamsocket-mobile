@@ -13,6 +13,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { WebSocket } from 'ws';
 
 const PORT = Number(process.env.PORT) || 4571;
@@ -67,11 +68,19 @@ function assert(cond: unknown, msg: string): void {
 
 async function main(): Promise<void> {
   const origin = await makeOriginRepo();
+  // Convert the local path to a file:// URL so the server's clone helper
+  // recognizes it on every platform (Windows absolute paths don't match the
+  // "starts with /" or "://" check in remoteUrl()).
+  const originURL = pathToFileURL(origin).toString();
   // Isolate the server from the developer's real ~/.claude so global settings
   // env vars / skills don't leak into the throwaway smoke repo.
   const smokeHome = await mkdtemp(path.join(tmpdir(), 'apc-smoke-home-'));
 
-  const server = spawn('npx', ['tsx', 'src/index.ts'], {
+  // Cross-platform: Node's spawn() on Windows requires `shell: true` to
+  // resolve `.cmd` shims like npx.cmd that ship in the npm bin dir.
+  const npxBin = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+  const server = spawn(npxBin, ['tsx', 'src/index.ts'], {
+    shell: process.platform === 'win32',
     cwd: process.cwd(),
     env: {
       ...process.env,
@@ -107,7 +116,7 @@ async function main(): Promise<void> {
           JSON.stringify({
             type: 'create_session',
             sessionId: 'smoke',
-            repo: { fullName: origin, workBranch: 'apc/smoke-test' },
+            repo: { fullName: originURL, workBranch: 'apc/smoke-test' },
             model: { provider: 'anthropic', model: 'mock', apiKey: 'none', effort: 'high' },
             permissionMode: 'acceptEdits',
           })
@@ -167,6 +176,88 @@ async function main(): Promise<void> {
     assert(diffForNotes, 'diff for NOTES.md received');
     assert(seen.includes('session_done'), 'session_done received');
     assert(prUrl.length > 0, 'pr_created url received');
+
+    // Reattach: open a second WebSocket with the same session id and verify
+    // the server replays the full transcript + checklist + goal so a phone
+    // returning to a live session can pick up where it left off.
+    {
+      const ws2 = new WebSocket(`ws://localhost:${PORT}/session?token=${token}`);
+      const replayEvents: string[] = [];
+      let transcriptReplay: {
+        events: { type: string }[];
+        truncated: boolean;
+        isLive: boolean;
+      } | null = null;
+      let replayedUser = false;
+      let replayedAssistant = false;
+      let replayedToolCall = false;
+      let replayedToolResult = false;
+      let replayedDiff = false;
+
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(
+          () => reject(new Error(`reattach timeout; saw: ${replayEvents.join(', ')}`)),
+          15000
+        );
+        ws2.on('open', () => {
+          // Re-open with the same session id and an empty firstMessage so the
+          // server takes the reattach path instead of starting a new turn.
+          ws2.send(
+            JSON.stringify({
+              type: 'create_session',
+              sessionId: 'smoke',
+              repo: { fullName: originURL, workBranch: 'apc/smoke-test' },
+              model: { provider: 'anthropic', model: 'mock', apiKey: 'none', effort: 'high' },
+              permissionMode: 'acceptEdits',
+            })
+          );
+        });
+        ws2.on('message', (data) => {
+          const msg = JSON.parse(data.toString());
+          replayEvents.push(msg.type);
+          if (msg.type === 'transcript_replay') {
+            transcriptReplay = {
+              events: msg.events,
+              truncated: msg.truncated,
+              isLive: msg.isLive,
+            };
+            for (const ev of msg.events) {
+              if (ev.type === 'user') replayedUser = true;
+              else if (ev.type === 'assistant_delta') replayedAssistant = true;
+              else if (ev.type === 'tool_call') replayedToolCall = true;
+              else if (ev.type === 'tool_result') replayedToolResult = true;
+              else if (ev.type === 'diff') replayedDiff = true;
+            }
+            // The agent is idle after the first session — `transcript_replay`
+            // is the last event we expect until the phone sends a new turn.
+            // Close the test once we've verified the replay arrived.
+            clearTimeout(timeout);
+            resolve();
+          } else if (msg.type === 'error') {
+            clearTimeout(timeout);
+            reject(new Error(`reattach error: ${msg.message}`));
+          }
+        });
+        ws2.on('error', reject);
+      });
+      ws2.close();
+
+      assert(replayEvents.includes('session_created'), 'reattach: session_created re-emitted');
+      assert(replayEvents.includes('task_list'), 'reattach: task_list replayed');
+      assert(replayEvents.includes('goal_status'), 'reattach: goal_status replayed');
+      assert(transcriptReplay !== null, 'reattach: transcript_replay received');
+      assert(!transcriptReplay!.truncated, 'reattach: transcript not truncated for short sessions');
+      assert(!transcriptReplay!.isLive, 'reattach: isLive false after session_done');
+      assert(transcriptReplay!.events.length > 0, 'reattach: transcript has events');
+      assert(replayedUser, 'reattach: user message replayed');
+      assert(replayedAssistant, 'reattach: assistant_delta replayed');
+      assert(replayedToolCall, 'reattach: tool_call replayed');
+      assert(replayedToolResult, 'reattach: tool_result replayed');
+      assert(replayedDiff, 'reattach: diff replayed');
+      console.log(
+        `  reattach: replayed ${transcriptReplay!.events.length} events (truncated=${transcriptReplay!.truncated}, isLive=${transcriptReplay!.isLive})`
+      );
+    }
 
     console.log('\nSMOKE TEST PASSED');
     console.log('events:', seen.join(' -> '));
