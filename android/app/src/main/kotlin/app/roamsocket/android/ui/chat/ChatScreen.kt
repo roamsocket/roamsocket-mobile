@@ -34,7 +34,8 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Key
-import androidx.compose.material.icons.outlined.Lightbulb
+import androidx.compose.material.icons.filled.Lightbulb
+import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -341,6 +342,7 @@ fun ChatScreen(
             onAttachCamera = { onLaunchCamera() },
             onAttachGallery = { onLaunchGallery() },
             onOpenAddToChat = { showAddToChat = true },
+            onMic = { /* TODO: voice chat */ },
             onRemoveAttachment = { index -> viewModel.removeAttachedImage(index) },
             onRemoveFile = { index -> viewModel.removeAttachedFile(index) },
         )
@@ -463,6 +465,7 @@ private fun ChatInputBar(
     onAttachCamera: () -> Unit,
     onAttachGallery: () -> Unit,
     onOpenAddToChat: () -> Unit,
+    onMic: () -> Unit,
     onRemoveAttachment: (Int) -> Unit,
     onRemoveFile: (Int) -> Unit,
     attachedImages: List<ProviderChatMessage.ImageAttachment>,
@@ -504,7 +507,7 @@ private fun ChatInputBar(
                     value = draft,
                     onValueChange = onDraftChange,
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text("Send a message…") },
+                    placeholder = { Text("Message RoamSocket") },
                     enabled = !isStreaming,
                     singleLine = false,
                     maxLines = 4,
@@ -513,58 +516,84 @@ private fun ChatInputBar(
                         imeAction = ImeAction.Send,
                     ),
                 )
-                IconButton(
-                    onClick = onSend,
-                    enabled = !isStreaming && (draft.isNotBlank() || attachedImages.isNotEmpty() || attachedFiles.isNotEmpty()),
-                ) {
-                    Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = "Send")
-                }
             }
-            // Port #12: + button (Add to Chat sheet).
-            // Port #9 (model pill) + Port #7 (camera + gallery).
+            // Bottom row: left = "+" + model pill, right = camera + gallery + mic/send
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                IconButton(
-                    onClick = onOpenAddToChat,
-                    enabled = !isStreaming,
+                // Left side: + button + model picker pill
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Add,
-                        contentDescription = "Add to Chat",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    IconButton(
+                        onClick = onOpenAddToChat,
+                        enabled = !isStreaming,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Add,
+                            contentDescription = "Add to Chat",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                    ModelPickerPill(
+                        modelDisplayName = modelDisplayName,
+                        hasUsableModel = hasUsableModel,
+                        onPick = onPickModel,
+                        onAddModel = LocalNavigateToSettings.current,
                     )
                 }
-                IconButton(
-                    onClick = onAttachCamera,
-                    enabled = !isStreaming,
+
+                Spacer(modifier = Modifier.weight(1f))
+
+                // Right side: camera + gallery + mic/send
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
-                    Icon(
-                        imageVector = Icons.Outlined.PhotoCamera,
-                        contentDescription = "Attach from camera",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    IconButton(
+                        onClick = onAttachCamera,
+                        enabled = !isStreaming,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.PhotoCamera,
+                            contentDescription = "Attach from camera",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                    IconButton(
+                        onClick = onAttachGallery,
+                        enabled = !isStreaming,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Image,
+                            contentDescription = "Attach from gallery",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                    if (draft.isNotBlank() || attachedImages.isNotEmpty() || attachedFiles.isNotEmpty()) {
+                        IconButton(
+                            onClick = onSend,
+                            enabled = !isStreaming,
+                        ) {
+                            Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = "Send")
+                        }
+                    } else {
+                        IconButton(
+                            onClick = onMic,
+                            enabled = !isStreaming,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Mic,
+                                contentDescription = "Voice chat",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
+                    }
                 }
-                IconButton(
-                    onClick = onAttachGallery,
-                    enabled = !isStreaming,
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Image,
-                        contentDescription = "Attach from gallery",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                ModelPickerPill(
-                    modelDisplayName = modelDisplayName,
-                    hasUsableModel = hasUsableModel,
-                    onPick = onPickModel,
-                    onAddModel = LocalNavigateToSettings.current,
-                )
             }
         }
     }
@@ -838,19 +867,19 @@ private fun EmptyState(
             else -> {
                 Box(
                     modifier = Modifier
-                        .size(64.dp)
+                        .size(56.dp)
                         .clip(CircleShape)
                         .background(MaterialTheme.colorScheme.surfaceContainerHigh),
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        imageVector = Icons.Outlined.Lightbulb,
+                        imageVector = Icons.Filled.Lightbulb,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(32.dp),
+                        modifier = Modifier.size(36.dp),
                     )
                 }
-                Spacer(Modifier.size(16.dp))
+                Spacer(Modifier.size(18.dp))
                 Text(
                     text = ChatGreeting.phrase(),
                     style = MaterialTheme.typography.headlineSmall.copy(
@@ -859,12 +888,6 @@ private fun EmptyState(
                     ),
                     color = MaterialTheme.colorScheme.onSurface,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                )
-                Spacer(Modifier.size(6.dp))
-                Text(
-                    text = "Ask anything. Add a photo, file, or tool via the + button.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
