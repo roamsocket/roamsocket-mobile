@@ -11,9 +11,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -58,11 +60,13 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -72,6 +76,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.roamsocket.android.data.PairedServer
+import app.roamsocket.android.data.PairedServerStore
+import app.roamsocket.android.ui.LocalAppContainer
 import app.roamsocket.android.ui.chat.AssistantTypingIndicator
 import app.roamsocket.android.ui.chat.ThinkingBlock
 import app.roamsocket.android.ui.chat.ThinkingExtractor
@@ -79,6 +85,7 @@ import app.roamsocket.android.ui.markdown.MarkdownText
 import app.roamsocket.android.ui.settings.ServerPairingSheet
 import app.roamsocket.android.ui.theme.Palette
 import app.roamsocket.core.server.Endpoint
+import kotlinx.coroutines.launch
 
 /**
  * Live session transcript + composer. Mirrors `ios/.../SessionView.swift`
@@ -104,6 +111,9 @@ fun SessionScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
+    val appContainer = LocalAppContainer.current
+    val pairedServerStore: PairedServerStore = remember(appContainer) { appContainer.pairedServerStore }
+    val scope = rememberCoroutineScope()
 
     // Workspace sheets — pick exactly one at a time so they don't stack.
     // Mirrors the iOS `showTerminal` / `showFiles` / `showPorts` / `showGitSheet`
@@ -218,23 +228,45 @@ fun SessionScreen(
                         Icon(Icons.Outlined.Stop, contentDescription = "Interrupt")
                     }
                 } else {
-                    AssistChip(
-                        onClick = {
-                            if (state.prUrl != null) {
-                                // iOS opens the PR URL directly when a PR is
-                                // already published.
-                                // (best-effort) the URL is shown in the
-                                // PR banner; tapping it opens in browser.
-                            } else {
+                    // `Finish · PR` chip: tap to open the git sheet for
+                    // review, long-press to instantly commit + push +
+                    // open PR with an auto-generated subject. Mirrors
+                    // iOS `SessionView.finishWithPR` invoked from the
+                    // long-press on "Done".
+                    Box {
+                        var chipPressed by remember { mutableStateOf(false) }
+                        AssistChip(
+                            onClick = {
                                 pendingGitAction = GitAction.All
                                 showGitSheet = true
-                            }
-                        },
-                        label = { Text(if (state.prUrl != null) "View PR" else "Finish · PR") },
-                        enabled = state.isSessionReady,
-                    )
+                            },
+                            label = {
+                                Text(if (state.prUrl != null) "View PR" else "Finish · PR")
+                            },
+                            enabled = state.isSessionReady,
+                        )
+                        // Overlay an invisible long-press target on
+                        // the chip so a long-press anywhere on it
+                        // calls `finishWithPR` without opening the
+                        // git sheet.
+                        Box(
+                            modifier = Modifier
+                                .matchParentSize()
+                                .pointerInput(Unit) {
+                                    detectTapGestures(
+                                        onLongPress = {
+                                            if (state.isSessionReady) {
+                                                viewModel.finishWithPR()
+                                                chipPressed = true
+                                            }
+                                        },
+                                    )
+                                },
+                        )
+                    }
                 }
                 // Workspace menu (mirrors iOS `Menu` in the top bar).
+                val context = LocalContext.current
                 Box {
                     IconButton(onClick = { workspaceMenuExpanded = true }) {
                         Icon(Icons.Outlined.Menu, contentDescription = "Workspace menu")
@@ -268,6 +300,27 @@ fun SessionScreen(
                             onClick = {
                                 workspaceMenuExpanded = false
                                 showPortsSheet = true
+                            },
+                        )
+                        // Auto-preview: refresh ports, pick the first
+                        // web-shaped port, tunnel it, open the public
+                        // URL in the system browser. Mirrors iOS
+                        // `openBrowserPreview` in the workspace menu.
+                        androidx.compose.material3.DropdownMenuItem(
+                            text = {
+                                Text(
+                                    if (state.isBrowserBusy) "Opening preview…" else "Browser",
+                                )
+                            },
+                            leadingIcon = { Icon(Icons.Outlined.Link, contentDescription = null) },
+                            enabled = endpoint != null && state.isSessionReady && !state.isBrowserBusy,
+                            onClick = {
+                                workspaceMenuExpanded = false
+                                viewModel.openBrowserPreview(
+                                    onUrl = { url ->
+                                        if (url != null) openSystemBrowser(context, url)
+                                    },
+                                )
                             },
                         )
                         androidx.compose.material3.DropdownMenuItem(
@@ -436,7 +489,10 @@ fun SessionScreen(
         PermissionDialog(permission = perm, onDecision = viewModel::respondPermission)
     }
 
-    // Workspace sheets (iOS parity).
+    // Workspace sheets (iOS parity). Terminal / Files / Open ports
+    // use the partial-expand detent so the user can drag them down
+    // to peek at the transcript. FileViewer + GitSheet open fully
+    // expanded — the editor and form need the full height.
     if (showTerminalSheet && endpoint != null) {
         SheetContainer(onDismiss = { showTerminalSheet = false }, title = "Shell") {
             TerminalPane(
@@ -460,7 +516,11 @@ fun SessionScreen(
     }
     openFile?.let { (path, preferDiff) ->
         if (endpoint != null) {
-            SheetContainer(onDismiss = { openFile = null }, title = path.substringAfterLast('/')) {
+            SheetContainer(
+                onDismiss = { openFile = null },
+                title = path.substringAfterLast('/'),
+                startExpanded = true,
+            ) {
                 FileViewerPane(
                     sessionId = state.sessionId ?: "",
                     path = path,
@@ -487,6 +547,7 @@ fun SessionScreen(
         SheetContainer(
             onDismiss = { showGitSheet = false; pendingGitAction = null },
             title = pendingGitAction!!.title,
+            startExpanded = true,
         ) {
             GitSheet(
                 action = pendingGitAction!!,
@@ -515,7 +576,12 @@ fun SessionScreen(
             onDismiss = { showRePairSheet = false },
             onPaired = { server ->
                 showRePairSheet = false
-                // Only re-connect if the token actually changed.
+                // Persist the re-paired server so Settings + the
+                // sidebar continue to point at the new token /
+                // server name after this session ends. The
+                // SessionViewModel then swaps its snapshot and
+                // reconnects.
+                scope.launch { pairedServerStore.save(server) }
                 if (server.token != pairTokenAtOpen.value) {
                     viewModel.applyRePair(
                         endpoint = server.endpoint,
@@ -528,43 +594,51 @@ fun SessionScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SheetContainer(
     onDismiss: () -> Unit,
     title: String,
+    startExpanded: Boolean = false,
     content: @Composable () -> Unit,
 ) {
-    androidx.compose.ui.window.Dialog(
+    // Mirrors the iOS `.sheet` + `.presentationDetents([.medium, .large])`
+    // UX. Android's `ModalBottomSheet` doesn't have a "medium" detent
+    // exactly, so we ship two values: partial (≈ 50% of the screen) for
+    // sheets the user might want to glance at while reading, and
+    // expanded (full) for file editors and the terminal.
+    val sheetState = androidx.compose.material3.rememberModalBottomSheetState(
+        skipPartiallyExpanded = startExpanded,
+    )
+    LaunchedEffect(Unit) {
+        if (startExpanded) sheetState.expand() else sheetState.partialExpand()
+    }
+    androidx.compose.material3.ModalBottomSheet(
         onDismissRequest = onDismiss,
-        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.background,
     ) {
-        Surface(
-            color = MaterialTheme.colorScheme.background,
-            modifier = Modifier
-                .fillMaxSize(),
-        ) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Palette.Surface)
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                ) {
-                    TextButton(onClick = onDismiss) { Text("Done") }
-                    Spacer(Modifier.weight(1f))
-                    Text(
-                        text = title,
-                        color = Palette.TextPrimary,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Spacer(Modifier.weight(1f))
-                    // Spacer to keep the title centred (matches Done width).
-                    TextButton(onClick = {}, enabled = false) { Text("Done") }
-                }
-                content()
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Palette.Surface)
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+            ) {
+                TextButton(onClick = onDismiss) { Text("Done") }
+                Spacer(Modifier.weight(1f))
+                Text(
+                    text = title,
+                    color = Palette.TextPrimary,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.weight(1f))
+                // Spacer to keep the title centred (matches Done width).
+                TextButton(onClick = {}, enabled = false) { Text("Done") }
             }
+            content()
         }
     }
 }
@@ -1127,5 +1201,18 @@ private fun SlashCommandMenu(
                 }
             }
         }
+    }
+}
+
+/**
+ * Open [url] in the system browser. Best-effort — if no Activity
+ * can handle the intent (e.g. the desktop returned a non-http URL)
+ * the exception is swallowed.
+ */
+private fun openSystemBrowser(context: android.content.Context, url: String) {
+    runCatching {
+        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(intent)
     }
 }
