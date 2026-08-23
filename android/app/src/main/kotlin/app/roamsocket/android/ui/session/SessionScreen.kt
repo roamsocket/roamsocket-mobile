@@ -127,6 +127,13 @@ fun SessionScreen(
     var showRePairSheet by remember { mutableStateOf(false) }
     var workspaceMenuExpanded by remember { mutableStateOf(false) }
 
+    // Action history (PR #67 parity) — a snapshot of the tool group the
+    // user tapped on, so the sheet stays stable as new tool calls stream
+    // in. Mirrors iOS `actionHistoryTools` / `showActionHistory` in
+    // `SessionView`.
+    var actionHistoryTools by remember { mutableStateOf<List<TranscriptItem.Tool>>(emptyList()) }
+    var showActionHistory by remember { mutableStateOf(false) }
+
     // Track the token snapshot the pairing sheet was opened with so we
     // only re-connect when pairing actually produced a new token.
     val pairTokenAtOpen = remember { mutableStateOf(paired.token) }
@@ -160,8 +167,24 @@ fun SessionScreen(
 
     LaunchedEffect(state.transcript.size, state.isRunning) {
         if (state.transcript.isNotEmpty()) {
-            listState.animateScrollToItem(state.transcript.size - 1)
+            // Anchor on the last segment's id so the scroll lands on the
+            // trailing group even after the action-group collapse (PR #67
+            // parity). The `key = { it.segmentId }` in the LazyColumn
+            // matches these ids.
+            val segments = sessionTranscriptSegments(state.transcript)
+            val lastId = segments.lastOrNull()?.segmentId ?: return@LaunchedEffect
+            listState.animateScrollToItem(
+                index = segments.indexOfLast { it.segmentId == lastId },
+            )
         }
+    }
+
+    // Compute the collapsed segments once per render. Consecutive tool
+    // items are bucketed into a single `ActionGroupCard` so the inline
+    // transcript stays compact (PR #67 parity). Held outside the
+    // LazyColumn so `remember` runs in the @Composable scope.
+    val segments: List<SessionTranscriptSegment> = remember(state.transcript) {
+        sessionTranscriptSegments(state.transcript)
     }
 
     Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
@@ -443,14 +466,24 @@ fun SessionScreen(
                     )
                 }
             }
-            items(state.transcript, key = { it.key() }) { item ->
-                TranscriptRow(item = item, isRunning = state.isRunning)
+            // Walk segments, not raw items: consecutive tools are
+            // collapsed into a single `ActionGroupCard` (PR #67 parity).
+            // The action group card opens the full history in a sheet.
+            items(segments, key = { it.segmentId }) { segment ->
+                SegmentRow(
+                    segment = segment,
+                    isRunning = state.isRunning,
+                    onOpenActionHistory = { tools ->
+                        actionHistoryTools = tools
+                        showActionHistory = true
+                    },
+                )
             }
             // Live typing indicator while the agent is mid-turn and
             // nothing else at the tail of the transcript already
             // signals progress (matches iOS
             // `shouldShowTypingIndicator`).
-            if (shouldShowTypingIndicator(state)) {
+            if (shouldShowTypingIndicator(state, segments)) {
                 item("running") {
                     AssistantTypingIndicator(
                         modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
@@ -592,6 +625,17 @@ fun SessionScreen(
             },
         )
     }
+
+    // Action history (PR #67 parity) — shown when the user taps a
+    // collapsed action group card. The sheet receives a defensive
+    // snapshot of the group at tap time so it stays stable as new
+    // tool calls stream in.
+    if (showActionHistory) {
+        ActionHistorySheet(
+            tools = actionHistoryTools,
+            onDismiss = { showActionHistory = false },
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -648,27 +692,54 @@ private fun SheetContainer(
  * transcript already signals progress (live assistant text, thinking
  * row, or an in-flight tool card). Mirrors the iOS
  * `shouldShowTypingIndicator` computed property.
+ *
+ * Updated for PR #67 to operate on the collapsed segments: a trailing
+ * action group counts as "in progress" if any of its tools are still
+ * running, so the typing indicator doesn't pop on/off as a tool
+ * finishes mid-group.
  */
-private fun shouldShowTypingIndicator(state: SessionUiState): Boolean {
+private fun shouldShowTypingIndicator(
+    state: SessionUiState,
+    segments: List<SessionTranscriptSegment>,
+): Boolean {
     if (!state.isRunning) return false
     // A live model_status banner is already a progress signal.
     if (state.modelStatus != null) return false
-    val last = state.transcript.lastOrNull() ?: return true
+    val last = segments.lastOrNull() ?: return true
     return when (last) {
-        is TranscriptItem.User, is TranscriptItem.Diff -> true
-        is TranscriptItem.Assistant -> {
-            val parsed = ThinkingExtractor.extract(last.text)
-            val cleaned = ThinkingExtractor.stripControlTokens(parsed.content)
-                .let { ThinkingExtractor.stripToolCallXml(it) }
-            // Visible body or any thinking already shows progress.
-            if (cleaned.isNotBlank()) return false
-            if (parsed.thinking != null) return false
-            true
+        is SessionTranscriptSegment.Item -> when (val item = last.item) {
+            is TranscriptItem.User, is TranscriptItem.Diff -> true
+            is TranscriptItem.Assistant -> {
+                val parsed = ThinkingExtractor.extract(item.text)
+                val cleaned = ThinkingExtractor.stripControlTokens(parsed.content)
+                    .let { ThinkingExtractor.stripToolCallXml(it) }
+                if (cleaned.isNotBlank()) return false
+                if (parsed.thinking != null) return false
+                true
+            }
+            is TranscriptItem.Tool -> item.ok != null
+            // A trailing notice is informational only; the agent is
+            // still working (otherwise the indicator would be off
+            // entirely).
+            is TranscriptItem.Notice -> true
         }
-        is TranscriptItem.Tool -> last.ok != null
-        // A trailing notice is informational only; the agent is still
-        // working (otherwise the indicator would be off entirely).
-        is TranscriptItem.Notice -> true
+        // Action group: any in-flight tool means progress is visible.
+        is SessionTranscriptSegment.Actions -> last.tools.all { it.ok != null }
+    }
+}
+
+@Composable
+private fun SegmentRow(
+    segment: SessionTranscriptSegment,
+    isRunning: Boolean,
+    onOpenActionHistory: (List<TranscriptItem.Tool>) -> Unit,
+) {
+    when (segment) {
+        is SessionTranscriptSegment.Item -> TranscriptRow(item = segment.item, isRunning = isRunning)
+        is SessionTranscriptSegment.Actions -> ActionGroupCard(
+            tools = segment.tools,
+            onOpenHistory = { onOpenActionHistory(segment.tools) },
+        )
     }
 }
 
@@ -677,6 +748,9 @@ private fun TranscriptRow(item: TranscriptItem, isRunning: Boolean) {
     when (item) {
         is TranscriptItem.User -> UserBubble(item.text)
         is TranscriptItem.Assistant -> AssistantBubble(item.text, isRunning = isRunning)
+        // Tool rows are routed through the segment-based renderer
+        // (see [SegmentRow] / [ActionGroupCard]). Direct tool rendering
+        // is no longer used in the live transcript.
         is TranscriptItem.Tool -> ToolCard(item)
         is TranscriptItem.Diff -> DiffRow(item)
         is TranscriptItem.Notice -> NoticeRow(item)
@@ -958,14 +1032,6 @@ private fun ErrorRow(message: String, onDismiss: () -> Unit) {
             }
         }
     }
-}
-
-private fun TranscriptItem.key(): String = when (this) {
-    is TranscriptItem.User -> "u:" + text.hashCode()
-    is TranscriptItem.Assistant -> "a:" + text.hashCode()
-    is TranscriptItem.Tool -> "t:" + id
-    is TranscriptItem.Diff -> "d:" + id
-    is TranscriptItem.Notice -> "n:" + text.hashCode()
 }
 
 // MARK: - Banners (parity with iOS `goalBanner` / `modelLoadingBanner`
