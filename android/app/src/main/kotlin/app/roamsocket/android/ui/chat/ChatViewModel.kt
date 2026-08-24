@@ -457,6 +457,13 @@ class ChatViewModel(
                 }
                 tags.forEach { tag -> memoryStore.apply(tag) }
                 val finalMessages = withReply.dropLast(1) + finalAssistantMsg
+                // PR #92 (artifacts): auto-save long assistant outputs
+                // and code blocks to the local artifact store. Mirrors
+                // iOS `ChatViewModel.handleAssistantDelta` →
+                // `state.artifactStore.maybeSave(...)`. The messageId
+                // matches the persisted id so opening the artifact
+                // later can scroll back to the source message.
+                captureArtifact(visibleReply, finalAssistantMsg.timestampMillis)
                 _state.value = _state.value.copy(
                     messages = finalMessages,
                     isStreaming = false,
@@ -748,6 +755,30 @@ class ChatViewModel(
             failureReason = reason,
         )
         return messages.toMutableList().apply { this[last] = updated }
+    }
+
+    /**
+     * PR #92 (artifacts): forward a freshly-arrived assistant message
+     * to the local [app.roamsocket.android.ui.artifacts.ArtifactStore].
+     * The store applies its own threshold (≥ 10 lines OR contains a
+     * code block) and skips the write if the reply is too short. The
+     * `messageId` matches the persisted id used by
+     * `ChatMessage.toPersisted` so the artifact can later scroll back
+     * to the source message in the chat.
+     *
+     * Mirrors the iOS `state.artifactStore.maybeSave(...)` call inside
+     * `ChatViewModel.handleAssistantDelta`.
+     */
+    private fun captureArtifact(content: String, timestampMillis: Long) {
+        if (isIncognitoActive) return
+        if (content.isBlank()) return
+        val chatId = effectiveChatId ?: return
+        val messageId = "a:$timestampMillis:${content.hashCode()}"
+        container.artifactStore.maybeSave(
+            chatId = chatId,
+            messageId = messageId,
+            content = content,
+        )
     }
 
     companion object {
