@@ -232,9 +232,7 @@ fun ChatScreen(
                         },
                     )
                 }
-                IconButton(onClick = { showKeyDialog = true }) {
-                    Icon(Icons.Outlined.Key, contentDescription = "API key")
-                }
+
             },
             colors = TopAppBarDefaults.topAppBarColors(
                 containerColor = MaterialTheme.colorScheme.surface,
@@ -518,6 +516,14 @@ private fun MessageBubble(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
     ) {
+        // Timestamp above the message bubble, matching iOS style
+        val timeFormat = remember { SimpleDateFormat("h:mm a", Locale.getDefault()) }
+        Text(
+            text = timeFormat.format(Date(message.timestampMillis)),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = 4.dp, start = 4.dp, end = 4.dp),
+        )
         Row(
             modifier = Modifier
                 .fillMaxWidth()

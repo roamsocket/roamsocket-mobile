@@ -201,17 +201,6 @@ private fun NavList(
             title = "Browser",
             onClick = { onSelect(SidebarDestination.Browser) },
         )
-        // Skills + Connectors, matching the iOS sidebar.
-        SidebarRow(
-            icon = SidebarDestination.Skills.icon(),
-            title = "Skills",
-            onClick = { onSelect(SidebarDestination.Skills) },
-        )
-        SidebarRow(
-            icon = SidebarDestination.Connectors.icon(),
-            title = "Connectors",
-            onClick = { onSelect(SidebarDestination.Connectors) },
-        )
     }
 }
 
