@@ -18,6 +18,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import app.roamsocket.android.ui.browser.BrowserHomeView
 import app.roamsocket.android.ui.chat.ChatScreen
 import app.roamsocket.android.ui.code.CodeScreen
 import app.roamsocket.android.ui.placeholder.PlaceholderScreen
@@ -156,6 +157,12 @@ fun RootView() {
                     SidebarDestination.Vision -> VisionScreen(
                         onClose = { current = SidebarDestination.Chats },
                     )
+                    SidebarDestination.Browser -> {
+                        // Browser holds its own store on the AppContainer so
+                        // tabs/history/chat survive sidebar navigation, mirroring
+                        // the iOS `AppState.browserStore` pattern.
+                        BrowserHomeView(store = LocalAppContainer.current.browserStore)
+                    }
                     SidebarDestination.Settings -> SettingsScreen(
                         onDismiss = { current = SidebarDestination.Chats },
                         initialFocus = LocalSettingsFocus.current,
