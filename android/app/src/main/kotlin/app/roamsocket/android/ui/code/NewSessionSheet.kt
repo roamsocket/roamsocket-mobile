@@ -55,11 +55,14 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.roamsocket.android.ui.environments.EnvironmentPickerSheet
+import app.roamsocket.android.ui.environments.EnvironmentStore
 import app.roamsocket.android.ui.repositories.RepositoryPickerSheet
 import app.roamsocket.android.ui.session.SessionConfig
 import app.roamsocket.android.ui.theme.Palette
 import app.roamsocket.core.code.CodeSession
 import app.roamsocket.core.github.GitHubRepo
+import app.roamsocket.core.protocol.EnvironmentConfig
 import app.roamsocket.core.protocol.PermissionMode
 import app.roamsocket.core.protocol.RepoRef
 import kotlinx.coroutines.launch
@@ -89,9 +92,20 @@ fun NewSessionSheet(
     var permissionMode by remember { mutableStateOf(PermissionMode.ACCEPT_EDITS) }
     var showRepoPicker by remember { mutableStateOf(false) }
     var showPermissionSheet by remember { mutableStateOf(false) }
+    var showEnvironmentPicker by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     var starting by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+
+    // PR #94 (environments): read the selected env from the
+    // AppContainer store so the picker, the form, and the Start
+    // handler all see the same value. `LocalAppContainer.current` is
+    // provided by `MainActivity` so this is a safe lookup at compose
+    // time.
+    val environmentStore: EnvironmentStore =
+        app.roamsocket.android.ui.LocalAppContainer.current.environmentStore
+    val selectedEnv: EnvironmentConfig? = environmentStore.selected
+    val selectedEnvName = selectedEnv?.name ?: EnvironmentStore.DEFAULT_NAME
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -153,6 +167,11 @@ fun NewSessionSheet(
                                     workBranch = branch,
                                 ),
                                 permissionMode = permissionMode,
+                                // PR #94 (environments): forward the
+                                // currently selected env to the desktop
+                                // with `create_session`. Mirrors iOS
+                                // `NewSessionView` line ~155.
+                                environment = environmentStore.selected,
                             )
                             val now = System.currentTimeMillis()
                             val sessionTitle = task.take(48)
@@ -208,6 +227,16 @@ fun NewSessionSheet(
                         onPickPermission = { showPermissionSheet = true },
                     )
                 }
+                // PR #94 (environments): environment pill, mirrors the
+                // iOS NewSessionView header. Tapping opens the
+                // EnvironmentPickerSheet so the user can switch (or
+                // create) a cloud environment.
+                item {
+                    EnvironmentRow(
+                        name = selectedEnvName,
+                        onClick = { showEnvironmentPicker = true },
+                    )
+                }
                 item {
                     TaskComposer(
                         task = task,
@@ -252,6 +281,52 @@ fun NewSessionSheet(
             },
             onDismiss = { showPermissionSheet = false },
         )
+    }
+
+    if (showEnvironmentPicker) {
+        EnvironmentPickerSheet(
+            store = environmentStore,
+            onDismiss = { showEnvironmentPicker = false },
+        )
+    }
+}
+
+@Composable
+private fun EnvironmentRow(name: String, onClick: () -> Unit) {
+    Surface(
+        color = Palette.Surface,
+        shape = RoundedCornerShape(50),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(50))
+            .clickable(onClick = onClick),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Hub,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(14.dp),
+            )
+            Text(
+                text = name,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                color = Palette.TextPrimary,
+                maxLines = 1,
+                modifier = Modifier.weight(1f),
+            )
+            Icon(
+                imageVector = Icons.Outlined.KeyboardArrowDown,
+                contentDescription = "Change environment",
+                tint = Palette.TextSecondary,
+                modifier = Modifier.size(16.dp),
+            )
+        }
     }
 }
 

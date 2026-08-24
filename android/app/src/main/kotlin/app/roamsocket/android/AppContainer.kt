@@ -97,6 +97,17 @@ class AppContainer(application: Application) {
     }
 
     /**
+     * Saved cloud-environment configurations. Held on the container so
+     * the picker (Code / New session) reads the same data the store
+     * writes, mirroring iOS `AppState.environments` +
+     * `AppState.selectedEnvironment` in
+     * `ios/App/Sources/App/AppState.swift`.
+     */
+    val environmentStore: app.roamsocket.android.ui.environments.EnvironmentStore by lazy {
+        app.roamsocket.android.ui.environments.EnvironmentStore(application)
+    }
+
+    /**
      * Skills + MCP managers. Local cache for the skills / connectors
      * the desktop last pushed; flips to the desktop via
      * [skillsMCPClient] when the user is paired.
