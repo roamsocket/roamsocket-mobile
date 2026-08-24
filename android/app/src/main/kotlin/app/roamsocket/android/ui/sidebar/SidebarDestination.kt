@@ -2,10 +2,12 @@ package app.roamsocket.android.ui.sidebar
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.MenuBook
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Brush
 import androidx.compose.material.icons.outlined.CameraAlt
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Code
+import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Layers
@@ -32,6 +34,9 @@ sealed class SidebarDestination {
     data object Browser : SidebarDestination()
     data object Settings : SidebarDestination()
     data object Models : SidebarDestination()
+    // Skills + MCP, matching the iOS Skills / Connectors tabs.
+    data object Skills : SidebarDestination()
+    data object Connectors : SidebarDestination()
 
     // Study mode only
     data object Classes : SidebarDestination()
@@ -53,6 +58,8 @@ fun SidebarDestination.icon(): ImageVector = when (this) {
     SidebarDestination.Browser -> Icons.Outlined.Public
     SidebarDestination.Settings -> Icons.Outlined.Settings
     SidebarDestination.Models -> Icons.Outlined.Memory
+    SidebarDestination.Skills -> Icons.Outlined.AutoAwesome
+    SidebarDestination.Connectors -> Icons.Outlined.Dns
     SidebarDestination.Classes -> Icons.AutoMirrored.Outlined.MenuBook
     SidebarDestination.ScanQuestions -> Icons.Outlined.CameraAlt
     SidebarDestination.Study -> Icons.Outlined.Brush
