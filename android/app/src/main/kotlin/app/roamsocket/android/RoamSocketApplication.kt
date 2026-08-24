@@ -13,7 +13,13 @@ class RoamSocketApplication : Application() {
     /** DI graph. Lazy so the keystore / DataStore are only touched on first use. */
     val container: AppContainer by lazy { AppContainer(this) }
 
+    companion object {
+        lateinit var instance: RoamSocketApplication
+            private set
+    }
+
     override fun onCreate() {
+        instance = this
         super.onCreate()
         // PR #76: prune any incognito chats whose countdown elapsed while
         // the app was killed. Runs on the process-scoped appScope so the

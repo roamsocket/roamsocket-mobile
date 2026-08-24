@@ -31,8 +31,19 @@ import app.roamsocket.android.ui.sidebar.SidebarView
 import app.roamsocket.android.ui.sidebar.icon
 import app.roamsocket.android.ui.sidebar.rememberChatHistoryStore
 import app.roamsocket.android.ui.skills.SkillsScreen
+import app.roamsocket.android.ui.study.StudyScanScreen
+import app.roamsocket.android.ui.study.StudyScreen
+import app.roamsocket.android.ui.study.DeckDetailScreen
+import app.roamsocket.android.ui.study.FlashcardDeckStore
+import app.roamsocket.android.RoamSocketApplication
 import app.roamsocket.android.ui.vision.VisionScreen
 import kotlinx.coroutines.launch
+
+/** Sub-destinations within the Study section. */
+private sealed class StudySubDest {
+    data object Scan : StudySubDest()
+    data class Deck(val id: String) : StudySubDest()
+}
 
 /**
  * `CompositionLocal` carrying a lambda that opens the left-edge sidebar
@@ -103,8 +114,13 @@ fun RootView() {
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
 
+    // Study sub-navigation: Scan flow or deck detail.
+    var studySubDest by remember { mutableStateOf<StudySubDest?>(null) }
+    val studyDeckStore by remember { mutableStateOf(FlashcardDeckStore(RoamSocketApplication.instance)) }
+
     fun navigate(to: SidebarDestination) {
         current = to
+        studySubDest = null
         scope.launch { drawerState.close() }
     }
 
@@ -175,6 +191,24 @@ fun RootView() {
                     SidebarDestination.Connectors -> MCPScreen(
                         onBack = { current = SidebarDestination.Chats },
                     )
+                    SidebarDestination.Study -> {
+                        when (studySubDest) {
+                            StudySubDest.Scan -> StudyScanScreen(
+                                onClose = { studySubDest = null },
+                            )
+                            is StudySubDest.Deck -> DeckDetailScreen(
+                                deckId = (studySubDest as StudySubDest.Deck).id,
+                                onBack = { studySubDest = null },
+                                deckStore = studyDeckStore,
+                            )
+                            null -> StudyScreen(
+                                onBack = { current = SidebarDestination.Chats },
+                                onOpenDeck = { deckId -> studySubDest = StudySubDest.Deck(deckId) },
+                                onScan = { studySubDest = StudySubDest.Scan },
+                                deckStore = studyDeckStore,
+                            )
+                        }
+                    }
                     else -> PlaceholderScreen(
                         title = labelFor(current),
                         icon = current.icon(),
