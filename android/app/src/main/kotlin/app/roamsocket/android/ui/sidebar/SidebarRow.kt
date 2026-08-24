@@ -23,6 +23,10 @@ import androidx.compose.ui.unit.dp
  * Compact icon + label row used inside the sidebar. Mirrors the iOS
  * `SidebarRow` private struct (`SidebarView.swift:399`): 18pt regular
  * text, 18pt system icon, 10pt vertical padding, full-width click target.
+ *
+ * The 40dp row height (down from 44dp) matches iOS's 38pt + button
+ * chrome at typical 3x density and removes the dead band that was
+ * visible between nav items on small phones.
  */
 @Composable
 fun SidebarRow(
@@ -35,7 +39,7 @@ fun SidebarRow(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
             .fillMaxWidth()
-            .height(44.dp)
+            .height(40.dp)
             .clickable(role = Role.Button, onClick = onClick)
             .padding(horizontal = 4.dp),
     ) {

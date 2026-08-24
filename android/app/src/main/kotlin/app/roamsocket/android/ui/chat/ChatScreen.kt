@@ -346,7 +346,16 @@ fun ChatScreen(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth(),
-            contentPadding = PaddingValues(vertical = 12.dp, horizontal = 16.dp),
+            // Top padding bumped from 12dp to 20dp so the first message
+            // (or the centered empty state) has a visible breath under
+            // the TopAppBar instead of hugging the navigation row.
+            // Bottom stays at 12dp — the input bar has its own padding.
+            contentPadding = PaddingValues(
+                top = 20.dp,
+                bottom = 12.dp,
+                start = 16.dp,
+                end = 16.dp,
+            ),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             if (state.messages.isEmpty()) {
@@ -1071,9 +1080,16 @@ private fun EmptyState(
                 Spacer(Modifier.size(18.dp))
                 Text(
                     text = ChatGreeting.phrase(),
+                    // 26sp regular serif to match iOS `ChatGreeting`
+                    // (`.font(.system(size: 26, weight: .regular, design: .serif))`).
+                    // headlineSmall defaults to 24sp which felt a hair
+                    // small next to the lightbulb at the iOS reference
+                    // size; 26sp keeps the two apps in lockstep.
                     style = MaterialTheme.typography.headlineSmall.copy(
                         fontFamily = FontFamily.Serif,
                         fontWeight = FontWeight.Normal,
+                        fontSize = 26.sp,
+                        lineHeight = 34.sp,
                     ),
                     color = MaterialTheme.colorScheme.onSurface,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,
