@@ -43,9 +43,6 @@ class AppContainer(application: Application) {
     val defaultAppearance: AppAppearance = AppAppearance.System
 
     /**
-     * Process-wide scope for long-lived collectors (chat history
-     * mirror, NSD discovery, code session persistence, …). Use
-     * [viewModelScope][androidx.lifecycle.viewModelScope] from
      * Process-wide scope for long-lived collectors (e.g. the chat
      * history mirror, NSD discovery, …). Use [viewModelScope] from
      * `androidx.lifecycle` for per-screen work.
@@ -67,6 +64,26 @@ class AppContainer(application: Application) {
      */
     val codeSessionRepository: app.roamsocket.core.code.CodeSessionRepository =
         app.roamsocket.android.data.DataStoreCodeSessionRepository(application, flowScope = appScope)
+
+    /**
+     * Persisted bookmarks/history/approval-granularity for the in-app
+     * browser. Mirrors the iOS `BrowserStore`'s UserDefaults-backed
+     * state so the Android app retains the same per-tab + per-page
+     * memory across launches.
+     */
+    val browserPreferences: app.roamsocket.android.ui.browser.BrowserPreferences =
+        app.roamsocket.android.ui.browser.BrowserPreferences(application, appScope = appScope)
+
+    /**
+     * The browser's main store. Held on the container so it survives
+     * sidebar navigation (tabs, history, and the Ask-mode chat all
+     * persist when the user leaves the Browser destination and
+     * returns), matching the iOS pattern where `AppState` owns
+     * `browserStore`.
+     */
+    val browserStore: app.roamsocket.android.ui.browser.BrowserStore by lazy {
+        app.roamsocket.android.ui.browser.BrowserStore(this, browserPreferences, appScope)
+    }
 
     /**
      * Skills + MCP managers. Local cache for the skills / connectors
