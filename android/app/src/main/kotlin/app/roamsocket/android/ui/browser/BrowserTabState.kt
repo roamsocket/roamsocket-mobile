@@ -54,8 +54,30 @@ class BrowserTabState(
      */
     private var webView: WebView? = null
 
+    /**
+     * URL captured by [loadUrl] before the WebView was bound. The first
+     * call to [bindTo] (or the next [consumePendingUrl]) flushes it so
+     * the address bar can drive navigation in the same frame the
+     * `AndroidView` factory finishes creating the WebView.
+     *
+     * PR #96: without this, `goToAddress` on a brand-new tab (created
+     * by `BrowserStore.goToAddress` when `activeTab == null`) was a
+     * silent no-op because `webView?.loadUrl(...)` had nothing to call
+     * yet — the user typed a URL, pressed Go, and saw the empty state.
+     */
+    private var pendingUrl: String? = null
+
     fun bindTo(view: WebView) {
         webView = view
+        // Flush any URL captured before the WebView existed. Bound
+        // callback observers (history, address bar) re-read the URL
+        // from the WebViewClient's `onPageStarted`, so we don't need
+        // to also push the value into `_urlString` here.
+        val pending = pendingUrl
+        if (pending != null) {
+            pendingUrl = null
+            view.loadUrl(pending)
+        }
     }
 
     fun unbind(view: WebView) {
@@ -104,7 +126,16 @@ class BrowserTabState(
 
     fun loadUrl(url: String) {
         _loadError.value = null
-        webView?.loadUrl(url)
+        val view = webView
+        if (view != null) {
+            view.loadUrl(url)
+        } else {
+            // PR #96: the WebView hasn't been bound yet (e.g. the user
+            // hit Go on the very first address-bar submission, before
+            // AndroidView's factory has run). Stash the URL so the
+            // first `bindTo` call can flush it.
+            pendingUrl = url
+        }
     }
 
     fun goBack() {
