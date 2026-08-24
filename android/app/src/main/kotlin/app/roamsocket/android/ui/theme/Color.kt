@@ -10,20 +10,20 @@ import androidx.compose.ui.graphics.Color
  */
 internal object Palette {
     // Base
-    val Background = Color(0xFF0B0D10)
+    val Background = Color(0xFF000000)
     val Surface = Color(0xFF14181D)
     val SurfaceElevated = Color(0xFF1B2026)
     val Divider = Color(0xFF2A3038)
 
     // Text
-    val TextPrimary = Color(0xFFE6EAF0)
-    val TextSecondary = Color(0xFFA4ADBA)
-    val TextTertiary = Color(0xFF6C7682)
+    val TextPrimary = Color(0xFFFFFFFF)
+    val TextSecondary = Color(0xFF9BA3AF)
+    val TextTertiary = Color(0xFF5C6370)
 
-    // Accent
-    val Accent = Color(0xFF6AA9FF)
-    val AccentPressed = Color(0xFF4F8DEB)
-    val OnAccent = Color(0xFF0B0D10)
+    // Accent — pastel blue, matches iOS browser design reference
+    val Accent = Color(0xFF8AB4F8)
+    val AccentPressed = Color(0xFF6B9AF0)
+    val OnAccent = Color(0xFF000000)
 
     // Semantic
     val Success = Color(0xFF7AC8A3)

@@ -2,7 +2,6 @@ package app.roamsocket.android.ui.study
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,28 +10,24 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
-import androidx.compose.material.icons.outlined.CameraAlt
-import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Layers
-import androidx.compose.material.icons.outlined.School
+import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -41,22 +36,25 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import app.roamsocket.android.ui.theme.Palette
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 /**
- * Study mode home: a big "Scan questions" entry plus the saved flashcard decks.
+ * Study mode home — redesigned to match the iOS browser aesthetic:
+ * pure black background, pastel blue accent (#8AB4F8), centered layout,
+ * clean header with model picker pill.
  *
  * Ports [FlashcardDecksListView] from iOS `FlashcardDecksListView.swift`.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StudyScreen(
     onBack: () -> Unit,
@@ -70,46 +68,32 @@ fun StudyScreen(
         deckStore.decks.collect { decks = it.sortedByDescending { d -> d.updatedAt } }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = "Study",
-                        color = Palette.TextPrimary,
-                    )
-                },
-                navigationIcon = {
-                    androidx.compose.material3.IconButton(onClick = onBack) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
-                            contentDescription = "Back",
-                            tint = Palette.TextPrimary,
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Palette.Background,
-                ),
-            )
-        },
-        containerColor = Palette.Background,
-    ) { padding ->
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Palette.Background)
+            .statusBarsPadding()
+            .navigationBarsPadding(),
+    ) {
         LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            // Scan questions CTA
+            // Header: "Study" + model pill
+            item {
+                HeaderBar(onBack = onBack)
+            }
+
+            // Main CTA: sparkle icon + title + subtitle
             item {
                 ScanQuestionsCTA(
                     onClick = onScan,
+                    modifier = Modifier.padding(top = 24.dp),
                 )
             }
 
-            // Guided learning CTA (placeholder for now)
+            // Guided learning CTA
             item {
                 GuidedLearningCTA(
                     onClick = { /* TODO: guided learning */ },
@@ -118,13 +102,27 @@ fun StudyScreen(
 
             // Decks section
             item {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Decks",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Palette.TextSecondary,
-                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Decks",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Palette.TextSecondary,
+                    )
+                    if (decks.isNotEmpty()) {
+                        Text(
+                            text = "${decks.size}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Palette.TextTertiary,
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
             }
 
             if (decks.isEmpty()) {
@@ -148,53 +146,81 @@ fun StudyScreen(
 }
 
 @Composable
-private fun ScanQuestionsCTA(onClick: () -> Unit) {
+private fun HeaderBar(onBack: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TextButton(
+            onClick = onBack,
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
+        ) {
+            Text(
+                text = "Chats",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Palette.TextSecondary,
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+                text = "/",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Palette.TextTertiary,
+            )
+        }
+        Spacer(modifier = Modifier.weight(1f))
+        Text(
+            text = "Study",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = Palette.TextPrimary,
+        )
+        Spacer(modifier = Modifier.weight(1f))
+        // Right side spacer balances the left label
+        Spacer(modifier = Modifier.width(52.dp))
+    }
+}
+
+@Composable
+private fun ScanQuestionsCTA(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(18.dp),
-        color = Palette.Accent,
-        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = Color.Transparent,
+        modifier = modifier.fillMaxWidth(),
     ) {
-        Row(
-            modifier = Modifier.padding(18.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        Column(
+            modifier = Modifier.padding(vertical = 32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Box(
-                modifier = Modifier
-                    .size(52.dp)
-                    .background(Palette.OnAccent.copy(alpha = 0.14f), RoundedCornerShape(26.dp)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.CameraAlt,
-                    contentDescription = null,
-                    tint = Palette.OnAccent,
-                    modifier = Modifier.size(26.dp),
-                )
-            }
-
-            Spacer(modifier = Modifier.width(14.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Scan questions",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Palette.OnAccent,
-                )
-                Spacer(modifier = Modifier.height(3.dp))
-                Text(
-                    text = "Snap a page of questions to extract Q&A cards",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Palette.OnAccent.copy(alpha = 0.75f),
-                )
-            }
-
+            // Sparkle icon in accent color
             Icon(
-                imageVector = Icons.Outlined.ChevronRight,
+                imageVector = Icons.Outlined.Star,
                 contentDescription = null,
-                tint = Palette.OnAccent,
-                modifier = Modifier.size(20.dp),
+                tint = Palette.Accent,
+                modifier = Modifier.size(52.dp),
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "Scan questions",
+                style = MaterialTheme.typography.titleLarge.copy(
+                    fontSize = 26.sp,
+                    fontWeight = FontWeight.Bold,
+                ),
+                color = Palette.TextPrimary,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Snap a page of questions to extract Q&A cards",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Palette.TextSecondary,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 16.dp),
             )
         }
     }
@@ -204,51 +230,27 @@ private fun ScanQuestionsCTA(onClick: () -> Unit) {
 private fun GuidedLearningCTA(onClick: () -> Unit) {
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(18.dp),
-        color = Palette.Surface,
-        border = BorderStroke(1.dp, Palette.Divider.copy(alpha = 0.8f)),
+        shape = RoundedCornerShape(16.dp),
+        color = Color.Transparent,
+        border = BorderStroke(1.dp, Palette.Divider),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Row(
-            modifier = Modifier.padding(18.dp),
+            modifier = Modifier.padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
-                modifier = Modifier
-                    .size(52.dp)
-                    .background(Palette.Accent.copy(alpha = 0.14f), RoundedCornerShape(26.dp)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.School,
-                    contentDescription = null,
-                    tint = Palette.Accent,
-                    modifier = Modifier.size(24.dp),
-                )
-            }
-
-            Spacer(modifier = Modifier.width(14.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "Guided learning",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Palette.TextPrimary,
-                )
-                Spacer(modifier = Modifier.height(3.dp))
-                Text(
-                    text = "A tutor teaches step by step, with check-ins and hints",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Palette.TextSecondary,
-                )
-            }
-
+            Text(
+                text = "Guided learning",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                color = Palette.TextSecondary,
+                modifier = Modifier.weight(1f),
+            )
             Icon(
                 imageVector = Icons.Outlined.ChevronRight,
                 contentDescription = null,
                 tint = Palette.TextTertiary,
-                modifier = Modifier.size(20.dp),
+                modifier = Modifier.size(18.dp),
             )
         }
     }
@@ -259,26 +261,20 @@ private fun EmptyDecksView() {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 28.dp),
+            .padding(top = 24.dp, bottom = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Icon(
-            imageVector = Icons.Outlined.Layers,
-            contentDescription = null,
-            tint = Palette.TextTertiary,
-            modifier = Modifier.size(34.dp),
-        )
         Text(
             text = "No decks yet",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = Palette.TextPrimary,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            color = Palette.TextSecondary,
         )
         Text(
             text = "Scan a page of questions and save the cards — they'll appear here.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = Palette.TextSecondary,
+            style = MaterialTheme.typography.bodySmall,
+            color = Palette.TextTertiary,
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(horizontal = 24.dp),
         )
@@ -292,9 +288,9 @@ private fun DeckRow(
 ) {
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(14.dp),
-        color = Palette.Surface,
-        border = BorderStroke(1.dp, Palette.Divider.copy(alpha = 0.7f)),
+        shape = RoundedCornerShape(12.dp),
+        color = Color.Transparent,
+        border = BorderStroke(1.dp, Palette.Divider.copy(alpha = 0.6f)),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Row(
@@ -303,15 +299,16 @@ private fun DeckRow(
         ) {
             Box(
                 modifier = Modifier
-                    .size(36.dp)
-                    .background(Palette.Accent.copy(alpha = 0.14f), RoundedCornerShape(10.dp)),
+                    .size(32.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Palette.Accent.copy(alpha = 0.12f)),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     imageVector = Icons.Outlined.Layers,
                     contentDescription = null,
                     tint = Palette.Accent,
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(16.dp),
                 )
             }
 
@@ -321,31 +318,17 @@ private fun DeckRow(
                 Text(
                     text = deck.title.ifEmpty { "Untitled deck" },
                     style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
+                    fontWeight = FontWeight.Medium,
                     color = Palette.TextPrimary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Text(
-                        text = "${deck.cards.size} card${if (deck.cards.size == 1) "" else "s"}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Palette.TextSecondary,
-                    )
-                    Text(
-                        text = "\u00b7",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Palette.TextTertiary,
-                    )
-                    Text(
-                        text = relativeTime(deck.updatedAt),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Palette.TextTertiary,
-                    )
-                }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "${deck.cards.size} card${if (deck.cards.size == 1) "" else "s"} \u00b7 ${relativeTime(deck.updatedAt)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Palette.TextTertiary,
+                )
             }
 
             Icon(
