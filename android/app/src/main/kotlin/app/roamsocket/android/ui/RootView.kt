@@ -21,6 +21,7 @@ import androidx.compose.ui.Modifier
 import app.roamsocket.android.ui.browser.BrowserHomeView
 import app.roamsocket.android.ui.chat.ChatScreen
 import app.roamsocket.android.ui.code.CodeScreen
+import app.roamsocket.android.ui.mcp.MCPScreen
 import app.roamsocket.android.ui.placeholder.PlaceholderScreen
 import app.roamsocket.android.ui.settings.SettingsFocus
 import app.roamsocket.android.ui.settings.SettingsScreen
@@ -29,6 +30,7 @@ import app.roamsocket.android.ui.sidebar.SidebarDestinationSaver
 import app.roamsocket.android.ui.sidebar.SidebarView
 import app.roamsocket.android.ui.sidebar.icon
 import app.roamsocket.android.ui.sidebar.rememberChatHistoryStore
+import app.roamsocket.android.ui.skills.SkillsScreen
 import app.roamsocket.android.ui.vision.VisionScreen
 import kotlinx.coroutines.launch
 
@@ -167,6 +169,12 @@ fun RootView() {
                         onDismiss = { current = SidebarDestination.Chats },
                         initialFocus = LocalSettingsFocus.current,
                     )
+                    SidebarDestination.Skills -> SkillsScreen(
+                        onBack = { current = SidebarDestination.Chats },
+                    )
+                    SidebarDestination.Connectors -> MCPScreen(
+                        onBack = { current = SidebarDestination.Chats },
+                    )
                     else -> PlaceholderScreen(
                         title = labelFor(current),
                         icon = current.icon(),
@@ -187,6 +195,8 @@ private fun labelFor(dest: SidebarDestination): String = when (dest) {
     SidebarDestination.Browser -> "Browser"
     SidebarDestination.Settings -> "Settings"
     SidebarDestination.Models -> "Models"
+    SidebarDestination.Skills -> "Skills"
+    SidebarDestination.Connectors -> "Connectors"
     SidebarDestination.Classes -> "Classes"
     SidebarDestination.ScanQuestions -> "Scan questions"
     SidebarDestination.Study -> "Decks"

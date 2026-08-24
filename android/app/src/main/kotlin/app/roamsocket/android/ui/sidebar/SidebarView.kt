@@ -84,7 +84,10 @@ fun SidebarView(
                 },
             )
 
-            Spacer(modifier = Modifier.height(16.dp))
+            // Tighter gap to the nav list — the 16dp spacer left a dead
+            // band under the title on phones; 8dp keeps the rhythm from
+            // iOS without crowding the first row.
+            Spacer(modifier = Modifier.height(8.dp))
 
             NavList(
                 studyMode = studyMode,
@@ -198,6 +201,17 @@ private fun NavList(
             title = "Browser",
             onClick = { onSelect(SidebarDestination.Browser) },
         )
+        // Skills + Connectors, matching the iOS sidebar.
+        SidebarRow(
+            icon = SidebarDestination.Skills.icon(),
+            title = "Skills",
+            onClick = { onSelect(SidebarDestination.Skills) },
+        )
+        SidebarRow(
+            icon = SidebarDestination.Connectors.icon(),
+            title = "Connectors",
+            onClick = { onSelect(SidebarDestination.Connectors) },
+        )
     }
 }
 
@@ -212,7 +226,11 @@ private fun Recents(
             text = stringResource(R.string.sidebar_recents),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelLarge,
-            modifier = Modifier.padding(top = 20.dp, bottom = 8.dp),
+            // Tightened from (20, 8) — the 20dp top padding left a
+            // visible gap between the last nav row and "Recents" that
+            // made the section feel like a separate screen. 12dp top
+            // keeps the same hierarchy without the dead band.
+            modifier = Modifier.padding(top = 12.dp, bottom = 6.dp),
         )
         if (items.isEmpty()) {
             Text(
@@ -247,7 +265,10 @@ private fun BottomBar(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 12.dp, bottom = 4.dp),
+            // Slightly tightened from (12, 4) — when the Recents list
+            // grows the bottom bar should still feel anchored, but the
+            // 12dp top was duplicating the gap below the last recent.
+            .padding(top = 8.dp, bottom = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         // Avatar / settings entry — initials on the iOS equivalent.

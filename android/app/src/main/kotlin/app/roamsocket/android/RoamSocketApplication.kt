@@ -21,6 +21,12 @@ class RoamSocketApplication : Application() {
         container.appScope.launch {
             container.chatHistoryRepository.pruneExpiredIncognito()
         }
+        // Skills + MCP local caches: warm the StateFlows so the
+        // sidebar / Settings panels render instantly on first frame
+        // (the manager is otherwise cold until a screen reads it).
+        container.appScope.launch {
+            container.preloadSkillsAndMCP()
+        }
         // Reserved for future setup (DI graph, crash reporter, telemetry opt-in,
         // push registration, etc). See AGENTS.md for the iOS equivalent.
     }
