@@ -19,6 +19,8 @@ val SidebarDestinationSaver: Saver<SidebarDestination, String> = Saver(
             SidebarDestination.Browser -> "browser:"
             SidebarDestination.Settings -> "settings:"
             SidebarDestination.Models -> "models:"
+            SidebarDestination.Skills -> "skills:"
+            SidebarDestination.Connectors -> "connectors:"
             SidebarDestination.Classes -> "classes:"
             SidebarDestination.ScanQuestions -> "scanQuestions:"
             SidebarDestination.Study -> "study:"
@@ -39,6 +41,8 @@ val SidebarDestinationSaver: Saver<SidebarDestination, String> = Saver(
             "browser" -> SidebarDestination.Browser
             "settings" -> SidebarDestination.Settings
             "models" -> SidebarDestination.Models
+            "skills" -> SidebarDestination.Skills
+            "connectors" -> SidebarDestination.Connectors
             "classes" -> SidebarDestination.Classes
             "scanQuestions" -> SidebarDestination.ScanQuestions
             "study" -> SidebarDestination.Study

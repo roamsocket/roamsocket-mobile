@@ -1,0 +1,35 @@
+Android: add Skills and MCP screens (iOS parity port)
+
+Brings the Skills (marketplace + installed + custom) and Connectors
+(MCP server manager + add sheet) surfaces over from iOS so the
+sidebar can list the same destinations.
+
+RoamSocketCore:
+  * SkillManager / MCPManager: in-memory cache with a thin
+    Store interface (load / save) so the JVM module stays free of
+    AndroidX. The app module plugs in a DataStore-backed impl.
+  * SkillsMCPClient: short-lived WebSocket per op, waits for the
+    desktop's acknowledging skills_sync / mcp_sync, surfaces server
+    errors as SkillsMCPError. Mirrors ios/AnyProvCore.
+  * MarketplaceStore: HTTPS catalog fetch with per-source
+    lastFetchedAt / lastError state, source list (default + user-
+    added) with URL normalisation (owner/repo, github blob/tree,
+    raw URLs).
+
+App:
+  * DataStoreSkillStore / DataStoreMCPStore: preferences-DataStore
+    persistence for the cache.
+  * SkillsScreen + SkillsViewModel: tabbed Installed / Marketplace
+    surface with a topbar + menu for "New text skill" and refresh.
+  * CustomTextSkillEditor: bottom sheet for new text skills.
+  * MCPScreen + MCPViewModel + AddMCPServerSheet: connector list
+    with toggles and an Add sheet.
+  * SidebarDestination: two new entries (Skills, Connectors) with
+    matching icons, labels, and Saver branches. Skills and
+    Connectors sit in the nav list after Browser, matching iOS.
+
+Verification:
+  * :app:assembleDebug -> BUILD SUCCESSFUL (only pre-existing
+    deprecation warnings).
+  * :RoamSocketCore:test -> BUILD SUCCESSFUL.
+  * :RoamSocketCore:compileKotlin -> BUILD SUCCESSFUL.
