@@ -16,6 +16,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import app.roamsocket.android.ui.browser.BrowserHomeView
@@ -23,6 +24,8 @@ import app.roamsocket.android.ui.chat.ChatScreen
 import app.roamsocket.android.ui.code.CodeScreen
 import app.roamsocket.android.ui.artifacts.ArtifactDetailScreen
 import app.roamsocket.android.ui.artifacts.ArtifactsListScreen
+import app.roamsocket.android.ui.lightweight.LightweightTasksStore
+import app.roamsocket.android.ui.lightweight.OnboardingWalkthroughScreen
 import app.roamsocket.android.ui.mcp.MCPScreen
 import app.roamsocket.android.ui.placeholder.PlaceholderScreen
 import app.roamsocket.android.ui.settings.SettingsFocus
@@ -39,6 +42,7 @@ import app.roamsocket.android.ui.study.DeckDetailScreen
 import app.roamsocket.android.ui.study.FlashcardDeckStore
 import app.roamsocket.android.RoamSocketApplication
 import app.roamsocket.android.ui.vision.VisionScreen
+import app.roamsocket.core.providers.ProviderId
 import kotlinx.coroutines.launch
 
 /** Sub-destinations within the Study section. */
@@ -131,6 +135,16 @@ fun RootView() {
     // destination stack.
     var artifactsSubDest by remember { mutableStateOf<ArtifactsSubDest?>(null) }
 
+    // Lightweight-tasks walkthrough. Shown as a full-screen cover on
+    // first launch (and any time the user wipes storage). Mirrors the
+    // iOS `RootView.showWalkthrough` + `.fullScreenCover` flow.
+    val lightweightStore: LightweightTasksStore =
+        LocalAppContainer.current.lightweightTasksStore
+    val lightweightSettings by lightweightStore.settings.collectAsState()
+    var showWalkthrough by remember(lightweightSettings.walkthroughCompleted) {
+        mutableStateOf(!lightweightSettings.walkthroughCompleted)
+    }
+
     fun navigate(to: SidebarDestination) {
         current = to
         studySubDest = null
@@ -138,7 +152,12 @@ fun RootView() {
         scope.launch { drawerState.close() }
     }
 
-    ModalNavigationDrawer(
+    // PR #95 (lightweight tasks): wrap the existing UI in a Box so we
+    // can overlay the onboarding walkthrough on first launch. The
+    // walkthrough sets `walkthroughCompleted = true` on Get started
+    // and `showWalkthrough` falls off naturally.
+    Box(modifier = Modifier.fillMaxSize()) {
+        ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
             ModalDrawerSheet(
@@ -257,6 +276,19 @@ fun RootView() {
             }
         }
     }
+
+    // PR #95: first-launch walkthrough overlay. Disappears as soon
+    // as the user taps Get started (which sets
+    // `walkthroughCompleted = true` on the store).
+    if (showWalkthrough) {
+        OnboardingWalkthroughScreen(
+            store = lightweightStore,
+            availableProviders = ProviderId.BUILT_IN
+                .filter { it !is ProviderId.LocalMetal },
+            onFinished = { showWalkthrough = false },
+        )
+    }
+}
 }
 
 private fun labelFor(dest: SidebarDestination): String = when (dest) {

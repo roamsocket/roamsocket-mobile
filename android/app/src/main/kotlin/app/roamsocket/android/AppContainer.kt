@@ -108,6 +108,16 @@ class AppContainer(application: Application) {
     }
 
     /**
+     * Lightweight-tasks preferences (linked model, walkthrough state).
+     * Mirrors iOS `LightweightTasksSettings.load()` +
+     * `AppState.migrateLegacyLightweightSettings`. The runner and the
+     * walkthrough both read from this single source.
+     */
+    val lightweightTasksStore: app.roamsocket.android.ui.lightweight.LightweightTasksStore by lazy {
+        app.roamsocket.android.ui.lightweight.LightweightTasksStore(application)
+    }
+
+    /**
      * Skills + MCP managers. Local cache for the skills / connectors
      * the desktop last pushed; flips to the desktop via
      * [skillsMCPClient] when the user is paired.
