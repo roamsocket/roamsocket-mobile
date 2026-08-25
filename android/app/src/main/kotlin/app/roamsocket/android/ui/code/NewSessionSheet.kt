@@ -165,6 +165,7 @@ fun NewSessionSheet(
                                     fullName = repo.fullName,
                                     baseBranch = repo.defaultBranch,
                                     workBranch = branch,
+                                    githubToken = base.repo.githubToken,
                                 ),
                                 permissionMode = permissionMode,
                                 // PR #94 (environments): forward the

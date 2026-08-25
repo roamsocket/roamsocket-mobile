@@ -16,6 +16,7 @@ import app.roamsocket.core.code.CodeSessionRepository
 import app.roamsocket.core.server.Endpoint
 import app.roamsocket.core.server.ServerClient
 import app.roamsocket.core.server.ServerClientException
+import app.roamsocket.android.ui.settings.SettingsViewModel.Companion.KEY_GITHUB_PAT
 import app.roamsocket.android.ui.session.SessionConfig
 import app.roamsocket.android.ui.session.SessionModelSelection
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -162,10 +163,13 @@ class PairingViewModel(
         val modelId = container.userSettings.currentModel.first()
         val apiKey = container.secretStore.readApiKey(provider).orEmpty()
         if (apiKey.isEmpty()) return null
+        // Pull the GitHub PAT so the desktop server can clone private repos.
+        val githubToken = container.secretStore.readSecret(KEY_GITHUB_PAT)
         return SessionConfig(
             repo = app.roamsocket.core.protocol.RepoRef(
                 fullName = "owner/repo",
                 workBranch = "feat/new",
+                githubToken = githubToken,
             ),
             model = SessionModelSelection(
                 provider = provider,
