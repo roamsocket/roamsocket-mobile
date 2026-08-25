@@ -1,10 +1,17 @@
 package app.roamsocket.core.providers
 
 import app.roamsocket.core.protocol.Effort
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.Headers
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -48,6 +55,13 @@ public sealed class ProviderError(message: String) : RuntimeException(message) {
 /** HTTP client surface a provider needs. Injected for testing. */
 public interface HTTPClient {
     public suspend fun data(request: Request): HTTPResponse
+
+    /**
+     * Stream the response body as a [Flow] of raw SSE lines (`data: …`).
+     * The caller is responsible for parsing the SSE format.
+     * Throws [ProviderError] on non-2xx or transport errors.
+     */
+    public fun streamEvents(request: Request): Flow<String>
 }
 
 public data class HTTPResponse(
@@ -80,6 +94,49 @@ public class OkHttpHTTPClient(
         return HTTPResponse(response.code, body, response.headers)
     }
 
+    /**
+     * Stream SSE lines from the response body as a [Flow].
+     * Parses `data: …` lines from the SSE stream, ignoring blank lines
+     * and `event:` lines. Throws on non-2xx or transport error.
+     */
+    override fun streamEvents(request: Request): Flow<String> = callbackFlow {
+        val call = client.newCall(request)
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                close(e)
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                try {
+                    if (!response.isSuccessful) {
+                        val body = response.body?.string().orEmpty()
+                        close(ProviderError.Http(response.code, body))
+                        return
+                    }
+                    response.body?.source()?.let { source ->
+                        val buffer = okio.Buffer()
+                        while (source.read(buffer, 8192) != -1L) {
+                            val chunk = buffer.readUtf8()
+                            // Parse SSE lines: "data: <text>" or "data:<text>"
+                            for (line in chunk.split("\n")) {
+                                val trimmed = line.trim()
+                                if (trimmed.startsWith("data:")) {
+                                    val data = trimmed.removePrefix("data:").trim()
+                                    if (data.isNotEmpty()) {
+                                        trySend(data)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } finally {
+                    close()
+                }
+            }
+        })
+        awaitClose { call.cancel() }
+    }
+
     public companion object {
         public fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
@@ -91,7 +148,7 @@ public class OkHttpHTTPClient(
 
 /**
  * A provider client that can list models and run chat completions. Mirrors
- * the iOS `ModelProvider` protocol. Streaming is added in a later PR.
+ * the iOS `ModelProvider` protocol.
  */
 public interface ModelProvider {
     public val id: ProviderId
@@ -115,6 +172,23 @@ public interface ModelProvider {
         effort: Effort?,
         webSearchQuery: String?,
     ): String = chat(model, apiKey, messages, effort)
+
+    /**
+     * Stream a chat completion as a [Flow] of text deltas.
+     * Each emitted string is a partial assistant reply that should be
+     * accumulated. Throws [ProviderError] on key/auth/transport errors.
+     * Providers that don't support streaming should override and fall back
+     * to [chat].
+     */
+    public suspend fun chatStream(
+        model: String,
+        apiKey: String,
+        messages: List<ProviderChatMessage>,
+        effort: Effort?,
+        webSearchQuery: String? = null,
+    ): Flow<String> = flow {
+        emit(chat(model, apiKey, messages, effort, webSearchQuery))
+    }
 }
 
 /** A single message in a chat turn, scoped to provider APIs. */

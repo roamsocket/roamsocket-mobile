@@ -1,6 +1,8 @@
 package app.roamsocket.core.providers
 
 import app.roamsocket.core.protocol.Effort
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -133,5 +135,64 @@ public class AnthropicProvider(
                 .decodeFromString(MessagesResponse.serializer(), response.body)
             parsed.content.mapNotNull { it.text }.joinToString("\n")
         }.getOrElse { throw ProviderError.Decoding(it.message ?: it.javaClass.simpleName) }
+    }
+
+    /**
+     * Stream the Anthropic `/messages` SSE stream, emitting text deltas.
+     * Each emitted string is an incremental piece of the assistant reply.
+     */
+    override suspend fun chatStream(
+        model: String,
+        apiKey: String,
+        messages: List<ProviderChatMessage>,
+        effort: Effort?,
+        webSearchQuery: String?,
+    ): Flow<String> {
+        if (apiKey.isEmpty()) throw ProviderError.MissingKey
+        val system = messages.filter { it.role == ProviderChatMessage.Role.SYSTEM }
+            .joinToString("\n\n") { it.content }
+            .takeIf { it.isNotEmpty() }
+        val turns = messages.filter { it.role != ProviderChatMessage.Role.SYSTEM }
+            .map(Message::from)
+        val hasImages = messages.any { it.hasImages }
+        val body = buildJsonObject {
+            put("model", model)
+            put("max_tokens", if (hasImages) 2048 else 1024)
+            put("messages", buildJsonArray {
+                for (t in turns) { add(Json.encodeToJsonElement(Message.serializer(), t)) }
+            })
+            system?.let { put("system", it) }
+            put("stream", true)
+        }
+        return flow {
+            http.streamEvents(
+                ProviderHTTP.post(
+                    url = "$baseURL/messages",
+                    headers = mapOf(
+                        "x-api-key" to apiKey,
+                        "anthropic-version" to "2023-06-01",
+                        "content-type" to "application/json",
+                        "accept" to "text/event-stream",
+                    ),
+                    body = body.toString(),
+                ),
+            ).collect { line ->
+                // Parse Anthropic SSE: data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}
+                runCatching {
+                    val json = Json.parseToJsonElement(line)
+                    if (json is JsonObject) {
+                        val type = json["type"]?.toString()?.trim('"')
+                        if (type == "content_block_delta") {
+                            val delta = json["delta"] as? JsonObject
+                            val deltaType = delta?.get("type")?.toString()?.trim('"')
+                            if (deltaType == "text_delta") {
+                                val text = delta?.get("text")?.toString()?.trim('"')
+                                if (!text.isNullOrEmpty()) emit(text)
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

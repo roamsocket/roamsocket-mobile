@@ -1,6 +1,8 @@
 package app.roamsocket.core.providers
 
 import app.roamsocket.core.protocol.Effort
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -8,6 +10,8 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 /**
@@ -83,6 +87,14 @@ public class OpenAICompatibleProvider(
         val messages: List<JsonObject>,
         val stream: Boolean = false,
         val temperature: Double? = null,
+        val plugins: List<Plugin>? = null,
+    )
+
+    @Serializable
+    private data class Plugin(
+        val id: String,
+        val max_results: Int? = null,
+        val search_prompt: String? = null,
     )
 
     @Serializable
@@ -131,6 +143,81 @@ public class OpenAICompatibleProvider(
             throw e
         } catch (e: Throwable) {
             throw ProviderError.Decoding(e.message ?: e.javaClass.simpleName)
+        }
+    }
+
+    /**
+     * Stream the OpenAI-compatible SSE stream, emitting text deltas.
+     * Mirrors the non-streaming `chat()` path with the same request shape,
+     * plus `stream: true` and SSE `data:` line parsing.
+     */
+    override suspend fun chatStream(
+        model: String,
+        apiKey: String,
+        messages: List<ProviderChatMessage>,
+        effort: Effort?,
+        webSearchQuery: String?,
+    ): Flow<String> {
+        if (apiKey.isEmpty()) throw ProviderError.MissingKey
+
+        // OpenRouter: native web search plugin.
+        // Mirrors iOS `OpenAICompatibleProvider.chat` which passes the `web`
+        // plugin for OpenRouter when web search is active.
+        val plugins: List<Plugin>? = if (id == ProviderId.OpenRouter && !webSearchQuery.isNullOrEmpty()) {
+            listOf(
+                Plugin(
+                    id = "web",
+                    max_results = 5,
+                    search_prompt = webSearchQuery,
+                ),
+            )
+        } else null
+
+        val body = buildJsonObject {
+            put("model", model)
+            put("messages", buildJsonArray {
+                for (msg in messages.map(::toOpenAIMessage)) { add(msg) }
+            })
+            put("stream", true)
+            plugins?.let { ps ->
+                put("plugins", buildJsonArray {
+                    for (p in ps) {
+                        add(buildJsonObject {
+                            put("id", p.id)
+                            p.max_results?.let { put("max_results", it) }
+                            p.search_prompt?.let { put("search_prompt", it) }
+                        })
+                    }
+                })
+            }
+        }
+
+        return flow {
+            http.streamEvents(
+                ProviderHTTP.post(
+                    url = "$baseURL/chat/completions",
+                    headers = mapOf(
+                        "Authorization" to "Bearer $apiKey",
+                        "content-type" to "application/json",
+                    ),
+                    body = body.toString(),
+                ),
+            ).collect { line ->
+                // SSE line: "data: {...}" or "data: [DONE]"
+                if (line == "[DONE]") return@collect
+                runCatching {
+                    val json = Json.parseToJsonElement(line).jsonObject
+                    val choices = json["choices"]
+                    if (choices is JsonArray && choices.isNotEmpty()) {
+                        val delta = choices[0].jsonObject
+                            .get("delta")?.jsonObject
+                        val content = delta?.get("content")?.jsonPrimitive?.content
+                        if (!content.isNullOrEmpty()) {
+                            emit(content)
+                        }
+                    }
+                }
+            }
         }
     }
 

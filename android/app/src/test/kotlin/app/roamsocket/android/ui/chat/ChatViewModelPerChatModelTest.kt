@@ -107,9 +107,11 @@ class ChatViewModelPerChatModelTest {
         coEvery { container.userSettings.setCurrent(any(), any()) } returns Unit
         // Stub the chat client so `send` can complete. A relaxed mock
         // returns "" for the suspend `chat(...)` which is enough for
-        // the persistence path to land.
+        // the persistence path to land. The streaming path uses `chatStream`
+        // which must also return a valid Flow.
         val fakeProvider = mockk<ModelProvider>(relaxed = true)
         coEvery { fakeProvider.chat(any(), any(), any(), any(), any()) } returns "OK"
+        coEvery { fakeProvider.chatStream(any(), any(), any(), any(), any()) } returns kotlinx.coroutines.flow.flowOf("OK")
         every { fakeProvider.id } returns ProviderId.Anthropic
         every { container.chatClientFor(any()) } returns fakeProvider
         return ChatViewModel(container, chatId)
@@ -311,10 +313,13 @@ class ChatViewModelPerChatModelTest {
         assertTrue(newItem.hasModelOverride)
         assertEquals(ProviderId.Anthropic, newItem.resolvedProvider)
         assertEquals("claude-3-5-sonnet-latest", newItem.selectedModel)
-        // The user message is in the transcript too — proves the send
+        // The user message and assistant placeholder are both persisted
+        // (streaming mode persists the assistant immediately so the UI
+        // can update incrementally as chunks arrive). This proves the send
         // path ran through `persistCurrent`.
-        assertEquals(1, newItem.messages.size)
+        assertEquals(2, newItem.messages.size)
         assertEquals(PersistedChatMessage.Role.USER, newItem.messages.first().role)
+        assertEquals(PersistedChatMessage.Role.ASSISTANT, newItem.messages.last().role)
     }
 
     @Test
