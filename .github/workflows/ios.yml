@@ -1,0 +1,104 @@
+name: iOS CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel in-flight runs for the same branch / PR when a new commit lands.
+concurrency:
+  group: ios-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build & Package IPA
+    runs-on: macos-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: ios
+        run: xcodegen generate
+
+      - name: Download Metal toolchain
+        # Xcode 16+ ships Metal separately; mlx-swift Cmlx needs it for
+        # device builds. No-op if already present on the runner.
+        run: xcodebuild -downloadComponent MetalToolchain
+
+      - name: Cache Swift Package Manager
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            ~/Library/org.swift.swiftpm
+            ios/.build
+            ios/AnyProvCore/.build
+            ios/AnyProvCore/.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('ios/project.yml', 'ios/AnyProvCore/Package.swift') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Run AnyProvCore unit tests
+        # Foundation-only, no Xcode scheme needed. Fast regression net for
+        # protocol Codable + provider parsing shared with the iOS app.
+        working-directory: ios/AnyProvCore
+        run: swift test
+
+      - name: Build RoamSocket (Release, generic iOS, unsigned)
+        working-directory: ios
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project RoamSocket.xcodeproj \
+            -scheme RoamSocket \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="" \
+            build
+
+      - name: Package unsigned IPA
+        working-directory: ios
+        run: |
+          set -o pipefail
+          APP_PATH="build/Build/Products/Release-iphoneos/RoamSocket.app"
+          if [ ! -d "$APP_PATH" ]; then
+            echo "App bundle not found at $APP_PATH" >&2
+            xcodebuild -list -project RoamSocket.xcodeproj >&2 || true
+            ls -la build/Build/Products 2>/dev/null || true
+            exit 1
+          fi
+          mkdir -p dist/Payload
+          cp -R "$APP_PATH" dist/Payload/
+          (cd dist && zip -r -q RoamSocket.ipa Payload)
+          ls -la dist/RoamSocket.ipa
+          shasum -a 256 dist/RoamSocket.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: RoamSocket-IPA
+          path: ios/dist/RoamSocket.ipa
+          if-no-files-found: error
+          retention-days: 14
