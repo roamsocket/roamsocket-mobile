@@ -86,6 +86,17 @@ class AppContainer(application: Application) {
     }
 
     /**
+     * Saved chat artifacts — long assistant replies and code blocks
+     * captured automatically during chat. Held on the container so the
+     * `ChatViewModel` can write to it without owning the lifecycle,
+     * mirroring iOS `AppState.artifactStore` in
+     * `ios/App/Sources/App/AppState.swift`.
+     */
+    val artifactStore: app.roamsocket.android.ui.artifacts.ArtifactStore by lazy {
+        app.roamsocket.android.ui.artifacts.ArtifactStore(application)
+    }
+
+    /**
      * Skills + MCP managers. Local cache for the skills / connectors
      * the desktop last pushed; flips to the desktop via
      * [skillsMCPClient] when the user is paired.

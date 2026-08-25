@@ -21,6 +21,8 @@ import androidx.compose.ui.Modifier
 import app.roamsocket.android.ui.browser.BrowserHomeView
 import app.roamsocket.android.ui.chat.ChatScreen
 import app.roamsocket.android.ui.code.CodeScreen
+import app.roamsocket.android.ui.artifacts.ArtifactDetailScreen
+import app.roamsocket.android.ui.artifacts.ArtifactsListScreen
 import app.roamsocket.android.ui.mcp.MCPScreen
 import app.roamsocket.android.ui.placeholder.PlaceholderScreen
 import app.roamsocket.android.ui.settings.SettingsFocus
@@ -43,6 +45,11 @@ import kotlinx.coroutines.launch
 private sealed class StudySubDest {
     data object Scan : StudySubDest()
     data class Deck(val id: String) : StudySubDest()
+}
+
+/** Sub-destinations within the Artifacts section. */
+private sealed class ArtifactsSubDest {
+    data class Detail(val id: String) : ArtifactsSubDest()
 }
 
 /**
@@ -118,9 +125,16 @@ fun RootView() {
     var studySubDest by remember { mutableStateOf<StudySubDest?>(null) }
     val studyDeckStore by remember { mutableStateOf(FlashcardDeckStore(RoamSocketApplication.instance)) }
 
+    // Artifacts sub-navigation: list (default) or a single artifact detail view.
+    // PR #92 — owned here so the artifact list survives sidebar navigation,
+    // matching the iOS pattern where `AppState.artifactStore` outlives the
+    // destination stack.
+    var artifactsSubDest by remember { mutableStateOf<ArtifactsSubDest?>(null) }
+
     fun navigate(to: SidebarDestination) {
         current = to
         studySubDest = null
+        artifactsSubDest = null
         scope.launch { drawerState.close() }
     }
 
@@ -206,6 +220,31 @@ fun RootView() {
                                 onOpenDeck = { deckId -> studySubDest = StudySubDest.Deck(deckId) },
                                 onScan = { studySubDest = StudySubDest.Scan },
                                 deckStore = studyDeckStore,
+                            )
+                        }
+                    }
+                    // PR #92: artifacts list / detail. The store lives on
+                    // `AppContainer` so its `StateFlow` keeps the list in sync
+                    // even if the user navigates away and back.
+                    SidebarDestination.Artifacts -> {
+                        val artifactStore = LocalAppContainer.current.artifactStore
+                        when (val sub = artifactsSubDest) {
+                            is ArtifactsSubDest.Detail -> {
+                                val artifact = artifactStore.artifactById(sub.id)
+                                if (artifact == null) {
+                                    // Source was deleted while open — fall back to the list.
+                                    artifactsSubDest = null
+                                } else {
+                                    ArtifactDetailScreen(
+                                        artifact = artifact,
+                                        onBack = { artifactsSubDest = null },
+                                    )
+                                }
+                            }
+                            null -> ArtifactsListScreen(
+                                store = artifactStore,
+                                onBack = { current = SidebarDestination.Chats },
+                                onOpenArtifact = { id -> artifactsSubDest = ArtifactsSubDest.Detail(id) },
                             )
                         }
                     }
