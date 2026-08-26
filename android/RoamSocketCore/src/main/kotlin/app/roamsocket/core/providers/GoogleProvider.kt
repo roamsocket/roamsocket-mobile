@@ -1,11 +1,16 @@
 package app.roamsocket.core.providers
 
 import app.roamsocket.core.protocol.Effort
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 /**
@@ -134,5 +139,77 @@ public class GoogleProvider(
                 .decodeFromString(GenerateResponse.serializer(), response.body)
             parsed.candidates.firstOrNull()?.content?.parts?.mapNotNull { it.text }?.joinToString("\n").orEmpty()
         }.getOrElse { throw ProviderError.Decoding(it.message ?: it.javaClass.simpleName) }
+    }
+
+    /**
+     * Stream the Google Gemini SSE stream, emitting text deltas.
+     * Uses `generateContentStream` which returns SSE `data:` lines
+     * each containing a partial `GenerateResponse`-shaped chunk.
+     */
+    override suspend fun chatStream(
+        model: String,
+        apiKey: String,
+        messages: List<ProviderChatMessage>,
+        effort: Effort?,
+        webSearchQuery: String?,
+    ): Flow<String> {
+        if (apiKey.isEmpty()) throw ProviderError.MissingKey
+        val contents = messages
+            .filter { it.role != ProviderChatMessage.Role.SYSTEM }
+            .map { m ->
+                GenerateRequest.Content(
+                    role = if (m.role == ProviderChatMessage.Role.USER) "user" else "model",
+                    parts = buildList {
+                        for (image in m.images) {
+                            add(
+                                GenerateRequest.Content.Part(
+                                    inlineData = GenerateRequest.Content.Part.InlineData(
+                                        mimeType = image.mimeType,
+                                        data = image.base64Data,
+                                    ),
+                                ),
+                            )
+                        }
+                        val text = m.content.trim()
+                        if (text.isNotEmpty()) add(GenerateRequest.Content.Part(text = text))
+                    },
+                )
+            }
+        val system = messages.filter { it.role == ProviderChatMessage.Role.SYSTEM }
+            .joinToString("\n\n") { it.content }
+            .takeIf { it.isNotEmpty() }
+        val body = buildJsonObject {
+            put("contents", Json.encodeToJsonElement(GenerateRequest.serializer(), GenerateRequest(contents)))
+            if (system != null) {
+                put("systemInstruction", buildJsonObject {
+                    put("parts", buildJsonArray { add(buildJsonObject { put("text", system) }) })
+                })
+            }
+        }
+        return flow {
+            http.streamEvents(
+                ProviderHTTP.post(
+                    url = "$baseURL/models/$model:generateContentStream?key=$apiKey",
+                    headers = mapOf("content-type" to "application/json"),
+                    body = body.toString(),
+                ),
+            ).collect { line ->
+                runCatching {
+                    val json = Json.parseToJsonElement(line).jsonObject
+                    val candidates = json["candidates"]?.jsonArray
+                    if (candidates != null && candidates.isNotEmpty()) {
+                        val parts = candidates[0].jsonObject
+                            .get("content")?.jsonObject
+                            ?.get("parts")?.jsonArray
+                        if (parts != null) {
+                            for (part in parts) {
+                                val text = part.jsonObject["text"]?.jsonPrimitive?.content
+                                if (!text.isNullOrEmpty()) emit(text)
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

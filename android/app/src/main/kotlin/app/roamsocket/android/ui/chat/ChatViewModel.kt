@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -369,7 +370,16 @@ class ChatViewModel(
             images = attachedImages,
             files = attachedFiles,
         )
-        val nextMessages = _state.value.messages + userMsg
+
+        // Placeholder assistant message: created immediately so the streaming
+        // reply appears as the user watches. Mirrors the iOS `messages.append(
+        // ChatMessage(role: .assistant, isStreaming: true))` pattern in
+        // `sendMessage()` — the bubble is visible from the first byte.
+        val assistantMsg = ChatMessage.Assistant(
+            text = "",
+            timestampMillis = System.currentTimeMillis(),
+        )
+        val nextMessages = _state.value.messages + userMsg + assistantMsg
         _state.value = _state.value.copy(
             messages = nextMessages,
             draft = "",
@@ -379,11 +389,13 @@ class ChatViewModel(
             attachedFiles = emptyList(),
         )
 
-        // Persist the user message immediately (bug fix: previously the
-        // chat only saved on success, so a failed send dropped the user's
-        // text out of the sidebar entirely). The user message is marked
-        // PENDING; the success / failure paths below update it.
-        persistCurrent(nextMessages, lastUserPending = true)
+        // Persist only the user message now (marked PENDING). The assistant
+        // placeholder is NOT persisted yet — `persistCurrent` is called
+        // again on stream completion with the full transcript. This matches
+        // the original non-streaming behaviour (user persisted, assistant
+        // persisted separately after the API call returns).
+        val userAndPrior = nextMessages.dropLast(1) // exclude assistant placeholder
+        persistCurrent(userAndPrior, lastUserPending = true)
 
         // Build the prompt augmentation based on the Add-to-Chat toggles.
         val prompt = buildAddToChatPrompt(
@@ -394,75 +406,78 @@ class ChatViewModel(
         viewModelScope.launch {
             val apiKey = container.secretStore.readApiKey(provider)
             if (apiKey.isNullOrEmpty()) {
+                // No API key: replace the assistant placeholder with an error.
                 val failureMessages = markLastUserFailed(
                     nextMessages,
                     "No API key for $provider. Add one in Settings, or use the key icon in the toolbar.",
                 )
-                // The user may have attached new images / files while the key
-                // lookup was happening; preserve those AND the ones the failed
-                // send used so the next attempt doesn't drop user work.
+                val errorMsg = ChatMessage.Assistant(
+                    text = "No API key for $provider. Add one in Settings.",
+                    timestampMillis = assistantMsg.timestampMillis,
+                )
+                val withError = failureMessages.dropLast(1) + errorMsg
                 val liveState = _state.value
                 _state.value = liveState.copy(
-                    messages = failureMessages,
+                    messages = withError,
                     isStreaming = false,
                     error = "No API key for $provider.",
                     attachedImages = liveState.attachedImages + attachedImages,
                     attachedFiles = liveState.attachedFiles + attachedFiles,
                 )
-                persistCurrent(failureMessages, lastUserPending = false)
+                persistCurrent(withError, lastUserPending = false)
                 return@launch
             }
+
+            // Effort: from the global Settings slider. Providers that don't
+            // honour it simply ignore the argument.
+            val effort = _state.value.effort.toCore()
+            val webSearchQuery = if (_state.value.webSearchEnabled || _state.value.studyModeEnabled) trimmed else null
+            val providerMessages = nextMessages.toProviderMessages(prompt = prompt)
+            val assistantIdx = nextMessages.size - 1
+
+            // Accumulator for the full reply text as chunks arrive.
+            val fullReply = StringBuilder()
+
             try {
-                // Effort comes from the global Settings slider (port from
-                // iOS `AppState.effort`). Providers that don't honour the
-                // field simply ignore it.
-                val effort = _state.value.effort.toCore()
-                val reply = client.chat(
+                // Use the streaming API so the user sees text arrive in real time.
+                client.chatStream(
                     model = model,
                     apiKey = apiKey,
-                    messages = nextMessages.toProviderMessages(prompt = prompt),
+                    messages = providerMessages,
                     effort = effort,
-                    // PR #78: study mode forces web search on every text
-                    // send so the reply always carries citations. Mirrors
-                    // iOS `let sourcesForced = studyModeEnabled && !text.isEmpty`.
-                    webSearchQuery = if (_state.value.webSearchEnabled || _state.value.studyModeEnabled) {
-                        trimmed
-                    } else {
-                        null
-                    },
-                )
-                val assistantMsg = ChatMessage.Assistant(
-                    text = reply,
-                    timestampMillis = System.currentTimeMillis(),
-                )
-                val withReply = markLastUserSent(nextMessages) + assistantMsg
-                // PR #79: parse <memory ... /> tags out of the reply,
-                // apply them to the local store, and strip them from
-                // the visible text. Mirrors the iOS
-                // `memoryAutoSavePrompt` + `MemoryTagParser.stripTags`
-                // flow in `ChatViewModel.handleAssistantDelta`.
+                    webSearchQuery = webSearchQuery,
+                ).collect { chunk ->
+                    fullReply.append(chunk)
+                    // Update the assistant message in-place so the UI re-renders
+                    // the bubble as each chunk arrives. `copy()` creates a new
+                    // list reference so StateFlow emits the new value.
+                    val current = _state.value.messages.toMutableList()
+                    if (assistantIdx in current.indices) {
+                        val streamingMsg = ChatMessage.Assistant(
+                            text = fullReply.toString(),
+                            timestampMillis = assistantMsg.timestampMillis,
+                        )
+                        current[assistantIdx] = streamingMsg
+                        _state.value = _state.value.copy(messages = current)
+                    }
+                }
+
+                // Stream complete: finalize. Mark user SENT, parse memory tags,
+                // strip tags from visible reply, save artifact.
+                val reply = fullReply.toString()
+                val withSent = markLastUserSent(nextMessages)
                 val tags = MemoryTagParser.parse(reply)
                 val visibleReply = if (tags.isNotEmpty()) {
                     MemoryTagParser.stripTags(reply)
                 } else {
                     reply
                 }
-                val finalAssistantMsg = if (visibleReply != reply) {
-                    ChatMessage.Assistant(
-                        text = visibleReply,
-                        timestampMillis = assistantMsg.timestampMillis,
-                    )
-                } else {
-                    assistantMsg
-                }
+                val finalAssistantMsg = ChatMessage.Assistant(
+                    text = visibleReply,
+                    timestampMillis = assistantMsg.timestampMillis,
+                )
+                val finalMessages = withSent.dropLast(1) + finalAssistantMsg
                 tags.forEach { tag -> memoryStore.apply(tag) }
-                val finalMessages = withReply.dropLast(1) + finalAssistantMsg
-                // PR #92 (artifacts): auto-save long assistant outputs
-                // and code blocks to the local artifact store. Mirrors
-                // iOS `ChatViewModel.handleAssistantDelta` →
-                // `state.artifactStore.maybeSave(...)`. The messageId
-                // matches the persisted id so opening the artifact
-                // later can scroll back to the source message.
                 captureArtifact(visibleReply, finalAssistantMsg.timestampMillis)
                 _state.value = _state.value.copy(
                     messages = finalMessages,
@@ -470,20 +485,23 @@ class ChatViewModel(
                 )
                 persistCurrent(finalMessages, lastUserPending = false)
             } catch (t: Throwable) {
+                // Stream error: replace the placeholder with a failure message.
                 val reason = t.message ?: t.javaClass.simpleName
                 val failureMessages = markLastUserFailed(nextMessages, reason)
-                // Restore the captured attachments AND keep any new ones the
-                // user added during the in-flight request, so Retry (or a
-                // manual resend) can include everything they prepared.
+                val errorMsg = ChatMessage.Assistant(
+                    text = "I couldn't reach ${_state.value.provider}: $reason",
+                    timestampMillis = assistantMsg.timestampMillis,
+                )
+                val withError = failureMessages.dropLast(1) + errorMsg
                 val liveState = _state.value
                 _state.value = liveState.copy(
-                    messages = failureMessages,
+                    messages = withError,
                     isStreaming = false,
                     error = reason,
                     attachedImages = liveState.attachedImages + attachedImages,
                     attachedFiles = liveState.attachedFiles + attachedFiles,
                 )
-                persistCurrent(failureMessages, lastUserPending = false)
+                persistCurrent(withError, lastUserPending = false)
             }
         }
     }

@@ -2,6 +2,7 @@ package app.roamsocket.core.github
 
 import app.roamsocket.core.providers.HTTPClient
 import app.roamsocket.core.providers.HTTPResponse
+import kotlinx.coroutines.flow.Flow
 import okhttp3.Headers
 import okhttp3.Request
 import org.junit.Assert.assertEquals
@@ -15,6 +16,11 @@ class GitHubClientTest {
         override suspend fun data(request: Request): HTTPResponse {
             lastRequest = request
             return response
+        }
+
+        override fun streamEvents(request: Request): Flow<String> {
+            lastRequest = request
+            return kotlinx.coroutines.flow.flowOf()
         }
     }
 
