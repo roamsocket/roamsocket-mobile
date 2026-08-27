@@ -1,7 +1,7 @@
 # Phase 1 — Android Projects Port (iOS parity)
 
 **Date:** 2026-08-27
-**Status:** Awaiting user review (implementation begins after approval)
+**Status:** Updated per user feedback (lightweight-model-driven chat titles). Awaiting user re-review.
 **Parent spec:** `2026-08-27-android-parity-sweep-design.md`
 **Branch:** `feat/android-projects` (off `main`)
 
@@ -32,7 +32,7 @@ Explicitly out of scope (iOS behaviors not ported, called out in iOS comments):
 
 - **`deleteProject`** — iOS has no project deletion; the Android port matches. Projects are created; their content can be edited (instructions, memory, chats). To "remove" a project, the user can clear its instructions and memory to empty and let the project sit. (If we discover a real need we can add it later; matching iOS first.)
 - **Project chat `moveToRecents`** — iOS has it; not ported in Phase 1. Phase 1 keeps project chats inside the project only.
-- **On-device LLM title generation for project chats** — iOS has it but the on-device model is iOS-specific (`MLXLocalEngine` / `LocalMetal`); Android will use the existing heuristic title generator for Phase 1. A separate phase can revisit.
+- **On-device LLM title generation for project chats** — covered in Phase 1 via the new `ChatTitleGenerator` that uses `LightweightTaskRunner` (user's linked model). iOS also has an on-device Foundation Model path; Android does not (no Foundation Model equivalent). The user explicitly approved using the linked lightweight model in place of the local model for chat naming.
 
 ## Architecture
 
@@ -307,6 +307,55 @@ New methods (1:1 with iOS `ChatHistoryStore`):
   AddToChatSheet so the "Add to project" row can show the current
   project's name (matches iOS `viewModel.currentProject ?? "None"`)
 
+## ChatTitleGenerator (lightweight-model-driven, shared by global + project chats)
+
+Today the Android app derives chat titles heuristically
+(`InMemoryChatHistoryRepository.derivedTitle`). For Phase 1 we add a
+proper `ChatTitleGenerator` that mirrors the iOS
+`Chats/ChatTitleGenerator.swift` and uses the user's linked lightweight
+model when one is configured.
+
+**File:** `app/ui/chats/ChatTitleGenerator.kt` (new; co-located with
+the other generators).
+
+**Behavior:**
+
+1. If the user has a linked lightweight model in
+   `LightweightTasksStore.settings`, call
+   `LightweightTaskRunner.complete(container, system, user, maxTokens = 16)`
+   with a short system prompt and the chat's first user message.
+2. Run the LLM reply through `sanitize(...)` (strip quotes, "Title:"
+   prefix, trailing punctuation; cap to 48 chars on a word boundary).
+3. If the lightweight model isn't linked, returns null, or the call
+   fails, fall back to the existing `derivedTitle(...)` heuristic.
+4. Never overwrite a user-edited title.
+
+**Where it's called:**
+
+- `InMemoryChatHistoryRepository.saveMessages(...)` (existing) — keep
+  the heuristic as the synchronous interim title; the LLM call is
+  fire-and-forget in a `viewModelScope` once we plumb a `container`
+  reference.
+- `InMemoryProjectRepository.saveProjectChatMessages(...)` (new) —
+  same pattern.
+- A new `ChatHistoryStore.suggestTitle(chatID)` /
+  `suggestProjectTitle(projectID, chatID)` (matches iOS
+  `history.suggestTitle(...)` / `suggestTitle(projectID:chatID:)`),
+  used by the rename sheet's "Generate" button.
+
+**iOS parity note:** iOS has two title sources — heuristic + on-device
+Foundation Model + linked lightweight model. Android has only the
+heuristic + linked lightweight model. The LLM path uses the same
+`LightweightTaskRunner` that the rest of the app uses for
+artifact/commit/thinking-summary generation, so it's already plumbed
+through `AppContainer`.
+
+This is the change the user asked for ("if the user has a lightweight
+model set in settings it can be tasked to do everything the local model
+would do like naming the chats"). It also matches the iOS surface
+because both apps route through `LightweightTaskRunner`; only the
+default backends differ.
+
 ## AddToChatSheet updates
 
 The existing `onAddToProject: () -> Unit` callback gets replaced with
@@ -363,7 +412,7 @@ is reused for project chat rename; if Phase 2 hasn't ported it yet,
 the project detail screen will inline a minimal rename modal for
 project chats specifically.
 
-## Tests (JVM unit tests in `RoamSocketCore`)
+## Tests (JVM unit tests in `RoamSocketCore` and `app/`)
 
 `src/test/.../core/projects/`:
 
@@ -405,6 +454,18 @@ project chats specifically.
 
 Test placement matches the existing `core/protocol/`, `core/chats/`,
 etc. structure under `RoamSocketCore/src/test/kotlin/app/roamsocket/core/`.
+
+5. **`ChatTitleGeneratorTest.kt`** (Android-side JVM test in `app/src/test/`)
+   - sanitize: strips quotes, "Title:" / "Name:" prefix, trailing period
+   - sanitize: caps at 48 chars on word boundary, appends "…"
+   - sanitize: empty input returns "New chat"
+   - suggestTitle: when `LightweightTasksStore.hasLinkedModel == false`,
+     returns the heuristic (the "first 6 words" case)
+   - suggestTitle: when the LLM call returns a non-blank trimmed string,
+     it's used (mock the runner)
+   - suggestTitle: when the LLM returns null/blank, falls back to
+     heuristic
+   - suggestTitle: never overwrites a user-edited title
 
 ## Acceptance criteria
 
@@ -459,5 +520,7 @@ to keep the PR focused. They become separate phases or follow-ups:
 - Project chat `on-device` heuristic auto-refresh (iOS runs every 3
   user messages)
 - Project chat swipe actions in a future sidebar refresh
+- Foundation Model on-device title generation (iOS-only; Android uses
+  the linked lightweight model instead, which Phase 1 wires up)
 
 These get filed as Phase 2+ candidates when Phase 1 merges.
