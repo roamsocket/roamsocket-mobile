@@ -12,8 +12,6 @@ struct ChatMessageView: View {
     /// Highlight when this message is the source of the open artifact panel.
     var isArtifactSource: Bool = false
 
-    @State private var showCopiedToast = false
-
     var body: some View {
         VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 8) {
             if message.role == .user {
@@ -67,48 +65,34 @@ struct ChatMessageView: View {
                     .padding(.vertical, 12)
                     .background(Theme.surfaceElevated, in: RoundedRectangle(cornerRadius: 20))
                     .contentShape(RoundedRectangle(cornerRadius: 20))
+                    // Enable system text selection so the user can long-press
+                    // and drag to copy a portion of the message. The system
+                    // edit menu also exposes a "Copy" action that copies the
+                    // current selection (or the whole message after Select All).
+                    .textSelection(.enabled)
             }
         }
         // Stretch to the right edge with a tiny margin so it doesn't float.
         // Cap width to keep longer messages readable.
         .frame(maxWidth: 320, alignment: .trailing)
         .frame(maxWidth: .infinity, alignment: .trailing)
-        .overlay(alignment: .top) {
-            if showCopiedToast {
-                Text("Copied")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Theme.accent)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(Theme.surface, in: Capsule())
-                    .offset(y: -28)
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
-            }
-        }
         .contentShape(RoundedRectangle(cornerRadius: 20))
-        .onLongPressGesture(minimumDuration: 0.4, perform: copyOutgoingMessage)
         .contextMenu {
+            // Context menu still offers a one-tap "Copy whole" for users who
+            // don't need partial selection. Long-pressing in place shows this
+            // menu; long-pressing and dragging starts a text selection.
             Button {
-                copyOutgoingMessage()
+                let trimmed = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { return }
+                onCopy()
             } label: {
                 Label("Copy", systemImage: "doc.on.doc")
             }
         }
-        .accessibilityAction(named: "Copy") { copyOutgoingMessage() }
-    }
-
-    private func copyOutgoingMessage() {
-        let trimmed = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        onCopy()
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        withAnimation(.easeOut(duration: 0.15)) {
-            showCopiedToast = true
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
-            withAnimation(.easeOut(duration: 0.2)) {
-                showCopiedToast = false
-            }
+        .accessibilityAction(named: "Copy") {
+            let trimmed = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            onCopy()
         }
     }
 
