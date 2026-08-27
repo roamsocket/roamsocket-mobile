@@ -12,6 +12,7 @@ import app.roamsocket.core.marketplace.MarketplaceStore
 import app.roamsocket.core.providers.HTTPClient
 import app.roamsocket.core.providers.OkHttpHTTPClient
 import app.roamsocket.core.providers.ProviderRegistry
+import app.roamsocket.core.projects.ProjectRepository
 import app.roamsocket.core.server.ServerClient
 import app.roamsocket.core.skills.MCPManager
 import app.roamsocket.core.skills.SkillManager
@@ -56,6 +57,14 @@ class AppContainer(application: Application) {
      */
     val chatHistoryRepository: ChatHistoryRepository =
         app.roamsocket.android.data.DataStoreChatHistoryRepository(application, flowScope = appScope)
+
+    /**
+     * Project state — DataStore-backed; see [DataStoreProjectRepository].
+     * Reached by [ChatHistoryStore] (the app-level coordinator) and by
+     * Compose screens that need direct project flows.
+     */
+    val projectRepository: ProjectRepository =
+        app.roamsocket.android.data.DataStoreProjectRepository(application, appScope)
 
     /**
      * Persisted coding sessions (Code home list). Same DataStore
