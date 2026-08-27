@@ -4,6 +4,7 @@ import app.roamsocket.core.chats.ChatHistoryItem
 import app.roamsocket.core.chats.PersistedChatMessage
 import app.roamsocket.core.providers.AIModel
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.serialization.Serializable
 
 /**
  * Storage and mutation surface for projects + project-scoped chats.
@@ -81,6 +82,7 @@ interface ProjectRepository {
 }
 
 /** Persisted shape; mirrors the iOS `ChatHistoryStore.Snapshot` projects subkey. */
+@Serializable
 data class ProjectsStateSnapshot(
     val projects: List<ProjectItem>,
     val projectChats: Map<String, List<ProjectChatItem>>,
