@@ -57,6 +57,12 @@ fun MarkdownText(
         factory = { ctx ->
             TextView(ctx).apply {
                 setText(styled, TextView.BufferType.SPANNABLE)
+                // Allow the user to long-press and drag to select any
+                // portion of the assistant reply — same as the user-message
+                // bubble. LinkMovementMethod still handles clicks on URL
+                // spans; text selection runs on the same TextView
+                // independently of the movement method on modern Android.
+                setTextIsSelectable(true)
                 movementMethod = LinkMovementMethod.getInstance()
                 if (onLinkClick != null) {
                     // Strip the default URL span and re-attach a custom click
@@ -89,6 +95,7 @@ fun MarkdownText(
         },
         update = { textView ->
             textView.setText(styled, TextView.BufferType.SPANNABLE)
+            textView.setTextIsSelectable(true)
         },
     )
 }

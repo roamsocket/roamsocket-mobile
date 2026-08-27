@@ -27,6 +27,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Send
@@ -539,12 +540,19 @@ private fun MessageBubble(
                     shape = shape,
                     modifier = Modifier.padding(horizontal = 4.dp),
                 ) {
-                    Text(
-                        text = message.text,
-                        color = textColor,
-                        style = MaterialTheme.typography.bodyLarge,
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                    )
+                    // SelectionContainer lets the user long-press to start
+                    // a text selection and copy a portion of their own
+                    // message. The parent Row's long-click still fires on
+                    // the empty space around the bubble to open the
+                    // Message Actions sheet (Copy whole / Share / Delete).
+                    SelectionContainer {
+                        Text(
+                            text = message.text,
+                            color = textColor,
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        )
+                    }
                 }
                 is ChatMessage.Assistant -> {
                     // Parity with iOS `ChatMessageView.assistantMessageContent`:
