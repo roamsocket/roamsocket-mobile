@@ -54,6 +54,8 @@ struct AppSettingsView: View {
                 ScrollView {
                     VStack(spacing: 16) {
                         accountSection
+                        desktopServerSection
+                        sandboxesSection
                         defaultModelSection
                         appearanceSection
                         chatSection
@@ -65,7 +67,6 @@ struct AppSettingsView: View {
                         skillsSection
                         mcpSection
                         memorySection
-                        sandboxesSection
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
@@ -244,25 +245,86 @@ struct AppSettingsView: View {
         return count == 1 ? "1 provider" : "\(count) providers"
     }
 
-    // MARK: - Coding
+    // MARK: - Desktop server
 
-    /// Desktop server pairing. Replaces the old fake "Capabilities /
-    /// Connectors / Permissions / Voice" block — those were dead-ended.
-    private var codingSection: some View {
-        settingsCard(header: "Coding") {
+    /// Standalone "Desktop server" section. Shows a colored status dot
+    /// + the simplified `Paired` / `Not paired` label. Pulled out of
+    /// the old `Coding` block so it can sit directly above the
+    /// Sandboxes (E2B) section — they're related (sandbox runs can be
+    /// desktop-mediated or phone-originated).
+    private var desktopServerSection: some View {
+        settingsCard(header: "Desktop server") {
             Button {
                 showServerPair = true
             } label: {
-                row(
-                    systemImage: "desktopcomputer",
-                    title: "Desktop server",
-                    trailing: serverStatus
-                )
+                HStack(spacing: 14) {
+                    DesktopStatusDot(color: desktopStatusColor)
+                        .frame(width: 12, height: 12)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(state.serverToken == nil ? "Not paired" : "Paired")
+                            .font(.system(size: 17, weight: .regular))
+                            .foregroundStyle(Theme.textPrimary)
+                        Text(serverStatusSubtitle)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.textSecondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundStyle(Theme.textSecondary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
-            Divider().background(Theme.separator)
+            if let msg = state.reconnectMessage, !msg.isEmpty {
+                Text(msg)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.textSecondary)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
+            }
+        }
+    }
 
+    /// Resolves the current pairing + reachability to a dot colour.
+    ///   - grey   = no token
+    ///   - yellow = actively reconnecting / connecting
+    ///   - green  = last known reachable
+    ///   - red    = last attempt said unreachable
+    private var desktopStatusColor: Color {
+        if state.serverToken == nil { return Color(white: 0.55) }
+        if state.isReconnecting { return .yellow }
+        switch state.desktopReachability {
+        case .unpaired: return Color(white: 0.55)
+        case .connecting: return .yellow
+        case .connected: return .green
+        case .unreachable: return .red
+        }
+    }
+
+    /// One-line subtitle under the Paired / Not paired label. The
+    /// server name still shows up here (just not next to the chevron)
+    /// plus a connecting / unreachable hint.
+    private var serverStatusSubtitle: String {
+        if state.isReconnecting { return "Reconnecting…" }
+        if state.desktopReachability == .unreachable {
+            return "Last seen: unreachable"
+        }
+        if let name = state.serverName, !name.isEmpty { return name }
+        if state.serverToken != nil { return "Tap to manage" }
+        return "Tap to pair a desktop for coding sessions."
+    }
+
+    // MARK: - Coding
+
+    /// Coding-session settings that aren't about pairing: branch
+    /// prefix, etc. Desktop-server pairing lives in its own section
+    /// directly above Sandboxes now.
+    private var codingSection: some View {
+        settingsCard(header: "Coding") {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Branch prefix")
                     .font(.system(size: 15, weight: .medium))
@@ -281,14 +343,6 @@ struct AppSettingsView: View {
             .padding(.horizontal, 16)
             .padding(.top, 12)
             .padding(.bottom, 14)
-
-            if let msg = state.reconnectMessage, !msg.isEmpty {
-                Text(msg)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.textSecondary)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 12)
-            }
         }
     }
 
@@ -296,13 +350,6 @@ struct AppSettingsView: View {
         let p = state.codeBranchPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
         let prefix = p.isEmpty ? "roamsocket" : p
         return "\(prefix)/your-task-a1b2c3d4"
-    }
-
-    private var serverStatus: String {
-        if state.isReconnecting { return "Reconnecting…" }
-        if let name = state.serverName, !name.isEmpty { return "Paired · \(name)" }
-        if state.serverToken != nil { return "Paired" }
-        return "Not paired"
     }
 
     // MARK: - Shortcuts & system controls
@@ -577,11 +624,10 @@ struct AppSettingsView: View {
     // MARK: - Sandboxes (E2B)
 
     /// E2B sandbox runs. The desktop server kicks off a sandbox after every
-    /// successful git push and streams the output back over the same WS.
-    /// Admin key lives in the desktop's `E2B_API_KEY` env var; users can
-    /// override per-connection from inside the sheet, or — for the "no
-    /// PC" flow — set their own personal e2b.dev key directly on the
-    /// phone (see the E2B API key row below).
+    /// successful git push (the auto-trigger) and streams the output back
+    /// over the same WS. The user can also start runs directly from the
+    /// phone using their own e2b.dev API key (entered via the E2B API
+    /// key row below) — that's the "no PC" path.
     private var sandboxesSection: some View {
         settingsCard(header: "Sandboxes (E2B)") {
             VStack(spacing: 0) {
@@ -649,6 +695,12 @@ struct AppSettingsView: View {
             }
         }
     }
+
+    /// Whether the user has entered their personal e2b.dev key on
+    /// this device. Used by the Sandboxes card to label the E2B API
+    /// key row and by the Sandboxes view to gate the "Start a run"
+    /// flow when no desktop is paired.
+    private var e2bKeyHasValue: Bool { state.e2bKeyStore.hasKey }
 
     // MARK: - Settings backup
 
@@ -1646,11 +1698,31 @@ private struct AboutSheet: View {
         .environmentObject(AppState(secrets: KeychainSecretStore()))
 }
 
+// MARK: - Desktop status dot
+
+/// Coloured dot for the Desktop server row. Callers resolve the
+/// colour from the current reachability + reconnecting state so the
+/// view doesn't have to read from `AppState` (this file doesn't own
+/// the AppState instance).
+private struct DesktopStatusDot: View {
+    let color: Color
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .overlay(
+                Circle()
+                    .stroke(color.opacity(0.25), lineWidth: 3)
+            )
+    }
+}
+
 // MARK: - E2B key sheet (Settings-level entry point)
 
 /// E2B API key entry sheet shown from the Settings card. The key is
 /// stored locally on the device and used by [DirectE2BClient] to spin
 /// up sandboxes from the phone without a paired desktop.
+
 private struct SettingsE2BKeySheet: View {
     let hasKey: Bool
     @Binding var draft: String
