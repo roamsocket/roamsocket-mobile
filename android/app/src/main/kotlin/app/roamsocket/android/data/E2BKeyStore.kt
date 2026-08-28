@@ -5,7 +5,6 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
@@ -20,32 +19,18 @@ private val Context.e2bKeyDataStore by preferencesDataStore(name = "roamsocket_e
 class E2BKeyStore(context: Context) {
     private val store = context.applicationContext.e2bKeyDataStore
 
-    /** Synchronous snapshot at construction time. The Compose UI
-     *  reads [hasKeyFlow] to react to changes. */
-    val initialHasKey = MutableStateFlow(readSync())
-
     val hasKeyFlow: Flow<Boolean> = store.data.map { prefs ->
         !prefs[KEY].isNullOrEmpty()
     }
 
-    suspend fun get(): String? {
-        return store.data.first()[KEY]?.takeIf { it.isNotBlank() }
-    }
+    suspend fun get(): String? =
+        store.data.first()[KEY]?.takeIf { it.isNotBlank() }
 
     suspend fun set(value: String?) {
         val trimmed = value?.trim().orEmpty()
         store.edit { prefs ->
             if (trimmed.isEmpty()) prefs.remove(KEY) else prefs[KEY] = trimmed
         }
-        initialHasKey.value = trimmed.isNotEmpty()
-    }
-
-    private fun readSync(): Boolean {
-        // Best-effort synchronous read; the value comes from DataStore
-        // so this is only used as a seed for the initial state. The
-        // Compose UI should always read the latest value from
-        // [hasKeyFlow] before deciding to gate anything.
-        return false
     }
 
     private companion object {

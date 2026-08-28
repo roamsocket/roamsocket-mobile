@@ -214,6 +214,24 @@ class UserSettings(context: Context) {
         store.edit { prefs -> prefs[KEY_STUDY_MODE] = enabled }
     }
 
+    // ----- E2B sandbox key override (iOS PR #103 parity) -----
+
+    /**
+     * Locally-cached "did the user set a per-connection E2B key on this
+     * device?". The server keeps the override in memory against the
+     * bearer token; this flag is just so the Settings card can show
+     * "Set" / "Not set" without opening a fresh WebSocket every time.
+     * Key matches the iOS @AppStorage("e2b.key.overrideSet.v1") so the
+     * two apps stay in lockstep on this flag.
+     */
+    val e2bKeyOverrideSet: Flow<Boolean> = store.data.map { prefs ->
+        prefs[KEY_E2B_KEY_OVERRIDE_SET] ?: false
+    }
+
+    suspend fun setE2BKeyOverrideSet(set: Boolean) {
+        store.edit { prefs -> prefs[KEY_E2B_KEY_OVERRIDE_SET] = set }
+    }
+
     private companion object {
         val KEY_PROVIDER: Preferences.Key<String> = stringPreferencesKey("current_provider")
         val KEY_MODEL: Preferences.Key<String> = stringPreferencesKey("current_model")
@@ -234,6 +252,11 @@ class UserSettings(context: Context) {
         // the two apps stay in lockstep on this flag.
         val KEY_STUDY_MODE: Preferences.Key<Boolean> =
             booleanPreferencesKey("studyMode.v1")
+        // Mirrors the iOS @AppStorage("e2b.key.overrideSet.v1") key for
+        // the cached "is the user using their own E2B key?" label that
+        // the Settings card surfaces.
+        val KEY_E2B_KEY_OVERRIDE_SET: Preferences.Key<Boolean> =
+            booleanPreferencesKey("e2b.key.overrideSet.v1")
 
         const val DEFAULT_MODEL = "claude-3-5-sonnet-20241022"
         const val DEFAULT_BRANCH_PREFIX = "roamsocket"
