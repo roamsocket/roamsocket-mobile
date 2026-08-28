@@ -2,11 +2,16 @@ package app.roamsocket.android.ui.chat
 
 import app.roamsocket.android.data.EffortLevel
 import app.roamsocket.android.data.ToolAccessLevel
+import app.roamsocket.android.ui.sidebar.ChatHistoryStore
 import app.roamsocket.core.chats.ChatHistoryItem
 import app.roamsocket.core.chats.InMemoryChatHistoryRepository
 import app.roamsocket.core.chats.PersistedChatMessage
+import app.roamsocket.core.projects.InMemoryProjectRepository
 import app.roamsocket.core.providers.ModelProvider
 import app.roamsocket.core.providers.ProviderId
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Dispatchers as KDispatchers
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
@@ -114,6 +119,18 @@ class ChatViewModelPerChatModelTest {
         coEvery { fakeProvider.chatStream(any(), any(), any(), any(), any()) } returns kotlinx.coroutines.flow.flowOf("OK")
         every { fakeProvider.id } returns ProviderId.Anthropic
         every { container.chatClientFor(any()) } returns fakeProvider
+        // Phase 1 (Android Projects): provide a real ChatHistoryStore
+        // backed by the same in-memory chat repo and a fresh
+        // InMemoryProjectRepository so the relaxed mock doesn't
+        // accidentally satisfy the project-match path with mock
+        // projects. Phase 1 doesn't touch the tests' chat rows
+        // (they're all in the global repo, not any project), so an
+        // empty project repo is the correct setup.
+        every { container.chatHistoryStore } returns ChatHistoryStore(
+            repository = repo,
+            projectRepository = InMemoryProjectRepository(),
+            flowScope = CoroutineScope(SupervisorJob() + KDispatchers.Unconfined),
+        )
         return ChatViewModel(container, chatId)
     }
 

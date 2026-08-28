@@ -13,9 +13,12 @@ import app.roamsocket.android.AppContainer
 import app.roamsocket.android.RoamSocketApplication
 import app.roamsocket.android.data.EffortLevel
 import app.roamsocket.android.data.ToolAccessLevel
+import app.roamsocket.android.ui.sidebar.ChatHistoryStore
 import app.roamsocket.core.chats.ChatHistoryRepository
 import app.roamsocket.core.chats.IncognitoLifetime
 import app.roamsocket.core.chats.PersistedChatMessage
+import app.roamsocket.core.projects.ProjectChatItem
+import app.roamsocket.core.projects.ProjectItem
 import app.roamsocket.core.providers.AIModel
 import app.roamsocket.core.providers.ModelCatalog
 import app.roamsocket.core.providers.ProviderChatMessage
@@ -23,10 +26,13 @@ import app.roamsocket.core.protocol.Effort
 import app.roamsocket.core.providers.ProviderId
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -47,6 +53,36 @@ class ChatViewModel(
 
     private val _state = MutableStateFlow(ChatUiState())
     val state: StateFlow<ChatUiState> = _state.asStateFlow()
+
+    /**
+     * App-level chat coordinator. Exposes the project flows the rest
+     * of the screen needs (active project, etc.) and routes save /
+     * delete / rename calls to the project-scoped store when an
+     * active project is set. Held as a field so [persistCurrent],
+     * [loadProjectChat], and the rename/delete helpers can share the
+     * same instance the sidebar observes.
+     */
+    private val historyStore: ChatHistoryStore = container.chatHistoryStore
+
+    /**
+     * Currently-active project (resolved from
+     * [ChatHistoryStore.activeProject]). Null when the user is on a
+     * global (non-project) chat. Drives [persistCurrent] routing and
+     * surfaces in the chat header so the user knows which project the
+     * current chat belongs to.
+     */
+    val activeProject: StateFlow<ProjectItem?> = historyStore.activeProject
+
+    /**
+     * Display name of the active project, or null for the global
+     * Recents list. Derived from [activeProject] so it stays in
+     * lock-step with the coordinator's combined flow. Used by the
+     * AddToChatSheet "Add to project" row trailing position (matches
+     * iOS `viewModel.currentProject ?? "None"`).
+     */
+    val currentProjectName: StateFlow<String?> = activeProject
+        .map { it?.name }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     /**
      * PR #79: shared in-memory store for user-memory auto-save.
@@ -104,46 +140,61 @@ class ChatViewModel(
             // existing chat id.
             val id = effectiveChatId
             if (id != null) {
-                val repoItem = container.chatHistoryRepository.snapshot()
-                    .firstOrNull { it.id == id }
-                if (repoItem != null) {
-                    val resumed = repoItem.messages.map { it.toUi() }
-                    _state.value = _state.value.copy(
-                        messages = resumed,
-                        // PR #76: surface the persisted incognito flag so
-                        // the chat header pill lights up and the viewmodel
-                        // can keep skipping saveMessages.
-                        isIncognito = repoItem.isIncognito,
-                        incognitoLifetime = repoItem.incognitoLifetime,
-                    )
-                    // Port #9: restore this chat's per-chat model selection.
-                    // When the row carries a `(provider, model)` override we
-                    // override the global default — the same iOS
-                    // `ChatViewModel.restoreSelectedModel(_:)` flow at
-                    // `ios/App/Sources/Features/Chat/ChatViewModel.swift`
-                    // lines 1084-1103. We resolve synchronously here because
-                    // the live model list is fetched asynchronously above
-                    // and may not have landed yet; the model id is what
-                    // matters for the pill + next send, and any fresher
-                    // display name arrives with the live list.
-                    if (repoItem.hasModelOverride) {
-                        val restoredProvider = repoItem.resolvedProvider
-                            ?: container.userSettings.currentProvider.first()
-                        val restoredModel = repoItem.selectedModel ?: ""
-                        // Re-key hasApiKey on the new provider so the empty
-                        // state, the picker CTA, and the "No API key" error
-                        // path all stay accurate.
-                        val restoredKey = container.secretStore.readApiKey(restoredProvider)
-                        applySelection(restoredProvider, restoredModel)
+                // Phase 1 (Android Projects): if any project has a chat
+                // with this id, hydrate from the project store. We scan
+                // all projects because there's no "lookup by chat id
+                // across projects" index yet — projects lists are small.
+                val projectChats = historyStore.projectChats.value
+                val projectMatch: Pair<ProjectItem, ProjectChatItem>? =
+                    historyStore.projects.value.firstNotNullOfOrNull { project ->
+                        projectChats[project.id]
+                            ?.firstOrNull { it.id == id }
+                            ?.let { project to it }
+                    }
+                if (projectMatch != null) {
+                    val (project, projectChat) = projectMatch
+                    loadProjectChat(project, projectChat)
+                } else {
+                    val repoItem = container.chatHistoryRepository.snapshot()
+                        .firstOrNull { it.id == id }
+                    if (repoItem != null) {
+                        val resumed = repoItem.messages.map { it.toUi() }
                         _state.value = _state.value.copy(
-                            hasApiKey = !restoredKey.isNullOrEmpty(),
+                            messages = resumed,
+                            // PR #76: surface the persisted incognito flag
+                            // so the chat header pill lights up and the
+                            // viewmodel can keep skipping saveMessages.
+                            isIncognito = repoItem.isIncognito,
+                            incognitoLifetime = repoItem.incognitoLifetime,
                         )
-                        // Keep the global default in lock-step so a fresh
-                        // blank chat opened after this one inherits the
-                        // same provider/model (matches iOS where
-                        // `state.selectedProvider/selectedModel` drives
-                        // the next new chat as well).
-                        container.userSettings.setCurrent(restoredProvider, restoredModel)
+                        // Port #9: restore this chat's per-chat model
+                        // selection. When the row carries a `(provider,
+                        // model)` override we override the global default
+                        // — the same iOS `ChatViewModel.restoreSelectedModel`
+                        // flow. We resolve synchronously here because the
+                        // live model list is fetched asynchronously above
+                        // and may not have landed yet; the model id is
+                        // what matters for the pill + next send, and any
+                        // fresher display name arrives with the live list.
+                        if (repoItem.hasModelOverride) {
+                            val restoredProvider = repoItem.resolvedProvider
+                                ?: container.userSettings.currentProvider.first()
+                            val restoredModel = repoItem.selectedModel ?: ""
+                            // Re-key hasApiKey on the new provider so the
+                            // empty state, the picker CTA, and the "No
+                            // API key" error path all stay accurate.
+                            val restoredKey = container.secretStore.readApiKey(restoredProvider)
+                            applySelection(restoredProvider, restoredModel)
+                            _state.value = _state.value.copy(
+                                hasApiKey = !restoredKey.isNullOrEmpty(),
+                            )
+                            // Keep the global default in lock-step so a
+                            // fresh blank chat opened after this one
+                            // inherits the same provider/model (matches
+                            // iOS where `state.selectedProvider/selectedModel`
+                            // drives the next new chat as well).
+                            container.userSettings.setCurrent(restoredProvider, restoredModel)
+                        }
                     }
                 }
             }
@@ -664,6 +715,88 @@ class ChatViewModel(
         _state.value = _state.value.copy(error = null)
     }
 
+    // -- Project actions (Phase 1) ----------------------------------------
+
+    /**
+     * Phase 1 (Android Projects): hydrate the chat view with a
+     * project-scoped chat. Called by the chat screen when the user
+     * opens a project chat from ProjectDetailScreen.
+     *
+     * - Pins the project as active and the chat as the active chat on
+     *   the [ChatHistoryStore] coordinator so the rest of the
+     *   view-model (and the sidebar) see the same context.
+     * - Loads the persisted messages through the same [toUi] helper
+     *   the global init() uses.
+     * - Restores the per-chat `(provider, model)` if the project
+     *   stored one; otherwise the existing global selection sticks.
+     *
+     * The chat screen calls this from a `LaunchedEffect` keyed on
+     * the project + chat ids; the view-model launches its own
+     * coroutine so the suspend calls (secretStore, applySelection)
+     * are well-defined.
+     */
+    fun loadProjectChat(project: ProjectItem, chat: ProjectChatItem) {
+        viewModelScope.launch {
+            historyStore.openProjectChatAsActive(project.id, chat.id)
+            effectiveChatId = chat.id
+            val persisted = historyStore.projectChatMessages(project.id, chat.id)
+            _state.value = _state.value.copy(
+                messages = persisted.map { it.toUi() },
+                isIncognito = false,
+                incognitoLifetime = null,
+            )
+            val savedModel = historyStore.projectChatSelectedModel(project.id, chat.id)
+            if (savedModel != null) {
+                // Project chats store an `AIModel?` rather than the
+                // `(provider, model)` string pair the global chat row uses,
+                // so we set the picker state directly from the AIModel.
+                applySelection(savedModel.provider, savedModel.modelID)
+                val savedKey = container.secretStore.readApiKey(savedModel.provider)
+                _state.value = _state.value.copy(
+                    hasApiKey = !savedKey.isNullOrEmpty(),
+                )
+            }
+            refreshInlineError()
+        }
+    }
+
+    /**
+     * Copy the active global chat into a project. Wired to the
+     * AddToChatSheet "Add to project" picker (and the "New project…"
+     * inline create flow). No-op for incognito chats or for the
+     * active project chat (already in the project).
+     */
+    fun attachCurrentChatToProject(project: ProjectItem) {
+        if (isIncognitoActive) return
+        if (historyStore.activeProject.value?.id == project.id) return
+        val id = effectiveChatId ?: return
+        historyStore.addChatToProject(chatID = id, projectID = project.id)
+    }
+
+    /**
+     * Rename the active project chat. No-op when there is no active
+     * project or the active chat id doesn't resolve to a chat in the
+     * active project. Called by the inline rename dialog in
+     * ProjectDetailScreen.
+     */
+    fun renameActiveProjectChat(newTitle: String) {
+        val project = historyStore.activeProject.value ?: return
+        val chatId = effectiveChatId ?: return
+        historyStore.renameProjectChat(project.id, chatId, newTitle)
+    }
+
+    /**
+     * Delete the active project chat. The host (ProjectDetailScreen)
+     * is responsible for showing the confirmation dialog and popping
+     * the user back to the project list afterwards. No-op when there
+     * is no active project.
+     */
+    fun deleteActiveProjectChat() {
+        val project = historyStore.activeProject.value ?: return
+        val chatId = effectiveChatId ?: return
+        historyStore.deleteProjectChat(project.id, chatId)
+    }
+
     /**
      * Set the contextual inline error shown above the input field. This
      * is a separate channel from [dismissError] (which clears the top
@@ -720,26 +853,61 @@ class ChatViewModel(
      * final delivery state.
      */
     private fun persistCurrent(messages: List<ChatMessage>, lastUserPending: Boolean = false) {
-        val repo: ChatHistoryRepository = container.chatHistoryRepository
         // PR #76: never persist an incognito chat's transcript — the whole
         // point is that the on-disk shape disappears. The repo still gets a
         // `startIncognitoChat` call so the row exists for the duration of
         // the session, but `saveMessages` is skipped entirely.
+        // (Project chats are never incognito so this branch is only for
+        // global Recents.)
         if (isIncognitoActive) {
             if (effectiveChatId == null) {
-                // `isIncognitoActive` already proves the lifetime is non-null.
                 val lifetime = activeIncognitoLifetime!!
-                effectiveChatId = repo.startIncognitoChat(lifetime)
+                effectiveChatId = container.chatHistoryRepository.startIncognitoChat(lifetime)
             }
             return
         }
-        val id = effectiveChatId ?: repo.startNewChat().also { effectiveChatId = it }
         val persisted = messages.mapIndexed { index, msg ->
             val isLastUser = lastUserPending &&
                 index == messages.lastIndex &&
                 msg is ChatMessage.User
             msg.toPersisted(markPending = isLastUser)
         }
+        val s = _state.value
+        // Phase 1 (Android Projects): if a project is active, write to
+        // the project-scoped store instead of the global Recents. The
+        // chat id is the project chat id (set by [openProjectChatAsActive]
+        // when the user opened the project chat); there's no lazy mint
+        // because the user always navigates from a project chat row,
+        // never from a blank draft.
+        val activeProject = historyStore.activeProject.value
+        if (activeProject != null) {
+            val projectChatId = effectiveChatId
+                ?: effectiveChatIdFromActiveProject()
+            if (projectChatId != null) {
+                effectiveChatId = projectChatId
+                historyStore.saveProjectChatMessages(
+                    projectID = activeProject.id,
+                    chatID = projectChatId,
+                    messages = persisted,
+                )
+                // Stamp the per-chat model on the project chat so reopen
+                // restores the same combination. Mirrors the global path
+                // below.
+                historyStore.saveProjectChatSelectedModel(
+                    projectID = activeProject.id,
+                    chatID = projectChatId,
+                    model = AIModel(
+                        provider = s.provider,
+                        modelID = s.model,
+                        displayName = s.model,
+                    ),
+                )
+            }
+            return
+        }
+        // Global Recents path (unchanged from the pre-Phase-1 code).
+        val repo: ChatHistoryRepository = container.chatHistoryRepository
+        val id = effectiveChatId ?: repo.startNewChat().also { effectiveChatId = it }
         repo.saveMessages(id, persisted)
         // Port #9: stamp the current (provider, model) onto the chat row
         // so a relaunch resumes with the right combination. `setModel`
@@ -750,9 +918,21 @@ class ChatViewModel(
         // Mirrors the implicit "stamp on first send" behaviour in iOS
         // where `persistSelectedModel(model)` runs unconditionally inside
         // `send()`.
-        val s = _state.value
         repo.setModel(id, s.provider, s.model)
     }
+
+    /**
+     * Resolve the effective chat id when an active project is in
+     * scope. We rely on the `chatHistoryRepository.activeChatId` that
+     * [ChatHistoryStore.openProjectChatAsActive] pins — the sidebar
+     * call set it just before navigating the user into this chat.
+     * Returns null only if the active chat id hasn't been pinned yet
+     * (e.g. the user typed into a freshly-minted project chat before
+     * the navigation completed); the caller treats that as a
+     * no-op rather than minting a new id.
+     */
+    private fun effectiveChatIdFromActiveProject(): String? =
+        container.chatHistoryRepository.activeChatId
 
     private fun markLastUserSent(messages: List<ChatMessage>): List<ChatMessage> {
         if (messages.isEmpty()) return messages

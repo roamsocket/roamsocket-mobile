@@ -11,10 +11,17 @@ import app.roamsocket.core.chats.ChatHistoryItem as CoreChatHistoryItem
 import app.roamsocket.core.chats.ChatHistoryRepository
 import app.roamsocket.core.chats.IncognitoLifetime
 import app.roamsocket.core.chats.PersistedChatMessage
+import app.roamsocket.core.projects.ProjectChatItem
+import app.roamsocket.core.projects.ProjectItem
+import app.roamsocket.core.projects.ProjectRepository
+import app.roamsocket.core.providers.AIModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /**
@@ -46,8 +53,9 @@ data class ChatHistoryItem(
  */
 class ChatHistoryStore internal constructor(
     private val repository: ChatHistoryRepository,
+    private val projectRepository: ProjectRepository,
     /** Long-lived scope for the recents mirror collector. */
-    flowScope: CoroutineScope,
+    private val flowScope: CoroutineScope,
 ) {
     private val _recents = MutableStateFlow<List<ChatHistoryItem>>(emptyList())
     val recents: StateFlow<List<ChatHistoryItem>> = _recents.asStateFlow()
@@ -107,10 +115,77 @@ class ChatHistoryStore internal constructor(
 
     fun forgetChatNow(id: String) = delete(id)
 
-    fun addChatToProject(@Suppress("UNUSED_PARAMETER") chatID: String, @Suppress("UNUSED_PARAMETER") projectID: String) {
-        // Projects feature is iOS-only for now; this is a no-op on Android
-        // so the sidebar's "Add to project" action still compiles.
+    // -- Project coordinator -------------------------------------------------
+
+    val projects: StateFlow<List<ProjectItem>> = projectRepository.projects
+    val projectChats: StateFlow<Map<String, List<ProjectChatItem>>> = projectRepository.projectChats
+    val activeProjectId: StateFlow<String?> = projectRepository.activeProjectId
+
+    /** The currently-active project (resolved from [activeProjectId]). */
+    val activeProject: StateFlow<ProjectItem?> = combine(
+        projectRepository.projects,
+        projectRepository.activeProjectId,
+    ) { list, id -> list.firstOrNull { it.id == id } }
+        .stateIn(flowScope, SharingStarted.Eagerly, null)
+
+    fun chatsFor(project: ProjectItem): List<ProjectChatItem> =
+        projectRepository.projectChats.value[project.id].orEmpty()
+            .filter { !it.isArchived && it.messages.isNotEmpty() }
+
+    fun createProject(name: String): ProjectItem = projectRepository.createProject(name)
+
+    fun updateProjectInstructions(projectID: String, instructions: String) =
+        projectRepository.updateProjectInstructions(projectID, instructions)
+
+    fun updateProjectMemory(projectID: String, memory: String) =
+        projectRepository.updateProjectMemory(projectID, memory)
+
+    fun applyProjectMemoryCommand(projectID: String, command: String): String =
+        projectRepository.applyProjectMemoryCommand(projectID, command)
+
+    fun setActiveProject(projectID: String?) = projectRepository.setActiveProject(projectID)
+
+    /**
+     * Mark a project chat as the user's current focus. Sets the
+     * project as active and pins the chat id on the chat-history
+     * repository so the ChatViewModel can resolve the active chat.
+     * Does NOT add a stub to the global recents list.
+     */
+    fun openProjectChatAsActive(projectID: String, chatID: String) {
+        if (projectRepository.projects.value.none { it.id == projectID }) return
+        projectRepository.setActiveProject(projectID)
+        repository.activeChatId = chatID
     }
+
+    fun addChatToProject(chatID: String, projectID: String): ProjectChatItem? {
+        val source = repository.snapshot().firstOrNull { it.id == chatID } ?: return null
+        if (source.isIncognito) return null
+        return projectRepository.addChatToProject(source, projectID)
+    }
+
+    fun renameProjectChat(projectID: String, chatID: String, title: String) =
+        projectRepository.renameProjectChat(projectID, chatID, title)
+
+    fun deleteProjectChat(projectID: String, chatID: String) =
+        projectRepository.deleteProjectChat(projectID, chatID)
+
+    fun archiveProjectChat(projectID: String, chatID: String) =
+        projectRepository.archiveProjectChat(projectID, chatID)
+
+    fun startNewChatInProject(project: ProjectItem, selectedModel: AIModel? = null): ProjectChatItem =
+        projectRepository.startNewChatInProject(project.id, selectedModel)
+
+    fun saveProjectChatMessages(projectID: String, chatID: String, messages: List<PersistedChatMessage>) =
+        projectRepository.saveProjectChatMessages(projectID, chatID, messages)
+
+    fun projectChatMessages(projectID: String, chatID: String): List<PersistedChatMessage> =
+        projectRepository.projectChatMessages(projectID, chatID)
+
+    fun projectChatSelectedModel(projectID: String, chatID: String): AIModel? =
+        projectRepository.projectChatSelectedModel(projectID, chatID)
+
+    fun saveProjectChatSelectedModel(projectID: String, chatID: String, model: AIModel) =
+        projectRepository.saveProjectChatSelectedModel(projectID, chatID, model)
 
     /**
      * Persist the current message list for a chat. Used by the chat
@@ -185,5 +260,10 @@ private fun toDisplayItem(p: CoreChatHistoryItem): ChatHistoryItem = ChatHistory
 @Composable
 fun rememberChatHistoryStore(): ChatHistoryStore {
     val container: AppContainer = LocalAppContainer.current
-    return remember(container) { ChatHistoryStore(container.chatHistoryRepository, container.appScope) }
+    // Use the shared coordinator from the container so the sidebar and
+    // the ChatViewModel observe the exact same instance — and so any
+    // project mutations the chat view-model performs are immediately
+    // visible in the sidebar's Recents + Projects panes without
+    // depending on DataStore round-trips.
+    return remember(container) { container.chatHistoryStore }
 }

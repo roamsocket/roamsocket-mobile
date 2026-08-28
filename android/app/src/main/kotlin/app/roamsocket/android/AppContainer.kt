@@ -12,6 +12,7 @@ import app.roamsocket.core.marketplace.MarketplaceStore
 import app.roamsocket.core.providers.HTTPClient
 import app.roamsocket.core.providers.OkHttpHTTPClient
 import app.roamsocket.core.providers.ProviderRegistry
+import app.roamsocket.core.projects.ProjectRepository
 import app.roamsocket.core.server.ServerClient
 import app.roamsocket.core.skills.MCPManager
 import app.roamsocket.core.skills.SkillManager
@@ -56,6 +57,33 @@ class AppContainer(application: Application) {
      */
     val chatHistoryRepository: ChatHistoryRepository =
         app.roamsocket.android.data.DataStoreChatHistoryRepository(application, flowScope = appScope)
+
+    /**
+     * Project state — DataStore-backed; see [DataStoreProjectRepository].
+     * Reached by [ChatHistoryStore] (the app-level coordinator) and by
+     * Compose screens that need direct project flows.
+     */
+    val projectRepository: ProjectRepository =
+        app.roamsocket.android.data.DataStoreProjectRepository(application, appScope)
+
+    /**
+     * App-level coordinator that bridges [chatHistoryRepository] +
+     * [projectRepository] and re-publishes the sidebar's Recents list
+     * as a `StateFlow`. Held on the container so the [ChatViewModel],
+     * the sidebar, and any future screen share the same instance —
+     * `addChatToProject`, `openProjectChatAsActive`, etc. all hit the
+     * same coordinator the Compose UI observes. Lazy because
+     * [chatHistoryStore]'s init block launches a collector on
+     * [appScope]; deferring construction until first access avoids
+     * spinning that up before the Application is fully built.
+     */
+    val chatHistoryStore: app.roamsocket.android.ui.sidebar.ChatHistoryStore by lazy {
+        app.roamsocket.android.ui.sidebar.ChatHistoryStore(
+            repository = chatHistoryRepository,
+            projectRepository = projectRepository,
+            flowScope = appScope,
+        )
+    }
 
     /**
      * Persisted coding sessions (Code home list). Same DataStore
