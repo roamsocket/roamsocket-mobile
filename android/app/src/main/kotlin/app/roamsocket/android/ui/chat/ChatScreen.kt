@@ -78,6 +78,8 @@ import app.roamsocket.android.ui.LocalNavigateToSettings
 import app.roamsocket.android.ui.LocalNavigateToSidebar
 import app.roamsocket.android.ui.LocalOpenSidebar
 import app.roamsocket.android.ui.markdown.MarkdownContentView
+import app.roamsocket.android.ui.projects.rememberProjectsViewModel
+import app.roamsocket.android.ui.sidebar.ChatHistoryStore
 import app.roamsocket.core.providers.AIModel
 import app.roamsocket.core.providers.ProviderChatMessage
 import app.roamsocket.core.providers.ProviderId
@@ -101,6 +103,12 @@ fun ChatScreen(
         factory = ChatViewModel.factoryFor(LocalAppContainer.current, chatId),
     ),
 ) {
+    // Phase 1 (Android Projects): the app-level coordinator lives on
+    // the AppContainer and is shared with the sidebar. The chat screen
+    // only needs it for the AddToChat "Add to project" picker (create
+    // a new project + attach) — the existing per-chat work goes
+    // through `viewModel` above.
+    val historyStore: ChatHistoryStore = LocalAppContainer.current.chatHistoryStore
     val state by viewModel.state.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
     val context = LocalContext.current
@@ -270,11 +278,15 @@ fun ChatScreen(
         val navigateToSidebar = LocalNavigateToSidebar.current
 
         if (showAddToChat) {
+            val projects by rememberProjectsViewModel().projects.collectAsState()
+            val activeProject by viewModel.activeProject.collectAsState()
             AddToChatSheet(
                 researchEnabled = state.researchEnabled,
                 webSearchEnabled = state.webSearchEnabled,
                 locationEnabled = state.locationEnabled,
                 toolAccess = state.toolAccess,
+                projects = projects,
+                currentProject = activeProject,
                 onDismiss = { showAddToChat = false },
                 onStartCodingSession = navigateToCode,
                 onAddFiles = {
@@ -285,12 +297,14 @@ fun ChatScreen(
                     // type at read time.
                     filePickerLauncher.launch(arrayOf("*/*"))
                 },
-                onAddToProject = {
-                    // "Projects" is a placeholder destination on the
-                    // sidebar in this port; jumping to it is the
-                    // cheapest thing that "works" without inventing a
-                    // full project picker sheet.
-                    navigateToSidebar(app.roamsocket.android.ui.sidebar.SidebarDestination.Projects)
+                onPickProject = { project ->
+                    viewModel.attachCurrentChatToProject(project)
+                    showAddToChat = false
+                },
+                onCreateProjectAndAttach = { name ->
+                    val newProject = historyStore.createProject(name)
+                    viewModel.attachCurrentChatToProject(newProject)
+                    showAddToChat = false
                 },
                 onShowConnectors = {
                     // Connectors is also a sidebar placeholder for now.

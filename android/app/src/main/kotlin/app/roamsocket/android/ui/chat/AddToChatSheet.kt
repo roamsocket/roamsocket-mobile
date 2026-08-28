@@ -30,6 +30,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -49,6 +50,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import app.roamsocket.android.data.ToolAccessLevel
+import app.roamsocket.core.projects.ProjectItem
 import kotlinx.coroutines.launch
 
 /**
@@ -69,10 +71,15 @@ fun AddToChatSheet(
     webSearchEnabled: Boolean,
     locationEnabled: Boolean,
     toolAccess: ToolAccessLevel,
+    /** The user's projects (already collected by the host). */
+    projects: List<ProjectItem>,
+    /** The currently-active project, or null. */
+    currentProject: ProjectItem?,
     onDismiss: () -> Unit,
     onStartCodingSession: () -> Unit,
     onAddFiles: () -> Unit,
-    onAddToProject: () -> Unit,
+    onPickProject: (ProjectItem) -> Unit,
+    onCreateProjectAndAttach: (name: String) -> Unit,
     onShowConnectors: () -> Unit,
     onSetResearchEnabled: (Boolean) -> Unit,
     onSetWebSearchEnabled: (Boolean) -> Unit,
@@ -82,6 +89,8 @@ fun AddToChatSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
     var showToolAccessPicker by remember { mutableStateOf(false) }
+    var showProjectPicker by remember { mutableStateOf(false) }
+    var newProjectName by remember { mutableStateOf("") }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -138,14 +147,29 @@ fun AddToChatSheet(
             SheetRow(
                 icon = Icons.Outlined.Folder,
                 title = "Add to project",
-                trailing = "None",
+                trailing = currentProject?.name ?: "None",
                 showChevron = true,
                 onClick = {
-                    scope.launch { sheetState.hide() }
-                    onAddToProject()
-                    onDismiss()
+                    // Toggle the inline picker in place (no sheet hide) so
+                    // the user can pick from the same sheet and stay in flow.
+                    showProjectPicker = !showProjectPicker
                 },
             )
+            if (showProjectPicker) {
+                ProjectPickerInline(
+                    projects = projects,
+                    onPick = { project ->
+                        scope.launch { sheetState.hide() }
+                        onPickProject(project)
+                        onDismiss()
+                    },
+                    onCreate = { name ->
+                        scope.launch { sheetState.hide() }
+                        onCreateProjectAndAttach(name)
+                        onDismiss()
+                    },
+                )
+            }
             SheetRow(
                 icon = Icons.Outlined.Work,
                 title = "Tool access",
@@ -385,6 +409,119 @@ private fun ToolAccessPickerSheet(
                     .align(Alignment.End)
                     .padding(end = 8.dp, top = 4.dp, bottom = 12.dp),
             ) { Text("Cancel") }
+        }
+    }
+}
+
+/**
+ * Inline picker that expands under the "Add to project" row. Mirrors
+ * the iOS AddToChatSheet's project picker behavior: list of existing
+ * projects (tap to attach) + a "New project…" inline create field
+ * (Create / Cancel). Hides in place rather than nesting a new sheet
+ * so the user can pick without losing composer state.
+ */
+@Composable
+private fun ProjectPickerInline(
+    projects: List<ProjectItem>,
+    onPick: (ProjectItem) -> Unit,
+    onCreate: (name: String) -> Unit,
+) {
+    var showCreate by remember { mutableStateOf(false) }
+    var newName by remember { mutableStateOf("") }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+    ) {
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            tonalElevation = 0.dp,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                if (projects.isEmpty()) {
+                    Text(
+                        "No projects yet — create one below.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                } else {
+                    projects.forEach { project ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onPick(project) }
+                                .padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Folder,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(Modifier.size(10.dp))
+                            Text(
+                                project.name,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                }
+                // Inline "New project…" entry
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            showCreate = !showCreate
+                            if (showCreate) newName = ""
+                        }
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Add,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.size(10.dp))
+                    Text(
+                        "New project…",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                if (showCreate) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        OutlinedTextField(
+                            value = newName,
+                            onValueChange = { newName = it.take(80) },
+                            placeholder = { Text("Project name") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Spacer(Modifier.size(8.dp))
+                        TextButton(
+                            onClick = {
+                                val trimmed = newName.trim()
+                                if (trimmed.isNotEmpty()) onCreate(trimmed)
+                            },
+                            enabled = newName.isNotBlank(),
+                        ) { Text("Create") }
+                        TextButton(onClick = { showCreate = false }) { Text("Cancel") }
+                    }
+                }
+            }
         }
     }
 }
