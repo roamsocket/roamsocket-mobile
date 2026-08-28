@@ -18,6 +18,8 @@ struct AppSettingsView: View {
     @State private var showProviderKeys = false
     @State private var showLocalMetal = false
     @State private var showVoiceSettings = false
+    @State private var showE2BKeySheet = false
+    @State private var e2bKeyDraft: String = ""
     @State private var defaultModelKind: AppState.DefaultModelKind?
     @State private var syncInFlight = false
     @State private var syncMessage: String?
@@ -111,6 +113,23 @@ struct AppSettingsView: View {
         .sheet(isPresented: $showSandboxes) {
             SandboxesView()
                 .environmentObject(state)
+        }
+        .sheet(isPresented: $showE2BKeySheet) {
+            SettingsE2BKeySheet(
+                hasKey: state.e2bKeyStore.hasKey,
+                draft: $e2bKeyDraft,
+                onSave: { newKey in
+                    state.e2bKeyStore.set(newKey)
+                    e2bKeyDraft = ""
+                    showE2BKeySheet = false
+                },
+                onClear: {
+                    state.e2bKeyStore.set(nil)
+                    e2bKeyDraft = ""
+                    showE2BKeySheet = false
+                },
+            )
+            .presentationDetents([.medium])
         }
         .sheet(isPresented: $showAbout) {
             AboutSheet()
@@ -560,35 +579,74 @@ struct AppSettingsView: View {
     /// E2B sandbox runs. The desktop server kicks off a sandbox after every
     /// successful git push and streams the output back over the same WS.
     /// Admin key lives in the desktop's `E2B_API_KEY` env var; users can
-    /// override per-connection from inside the sheet.
+    /// override per-connection from inside the sheet, or — for the "no
+    /// PC" flow — set their own personal e2b.dev key directly on the
+    /// phone (see the E2B API key row below).
     private var sandboxesSection: some View {
         settingsCard(header: "Sandboxes (E2B)") {
-            Button {
-                showSandboxes = true
-            } label: {
-                HStack(spacing: 14) {
-                    Image(systemName: "shippingbox")
-                        .font(.system(size: 20))
-                        .foregroundStyle(Theme.textPrimary)
-                        .frame(width: 28)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("E2B runs")
-                            .font(.system(size: 17, weight: .regular))
+            VStack(spacing: 0) {
+                Button {
+                    showSandboxes = true
+                } label: {
+                    HStack(spacing: 14) {
+                        Image(systemName: "shippingbox")
+                            .font(.system(size: 20))
                             .foregroundStyle(Theme.textPrimary)
-                        Text("Run pushed branches in a clean E2B sandbox.")
-                            .font(.system(size: 12))
+                            .frame(width: 28)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("E2B runs")
+                                .font(.system(size: 17, weight: .regular))
+                                .foregroundStyle(Theme.textPrimary)
+                            Text("Run pushed branches in a clean E2B sandbox.")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Theme.textSecondary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 14, weight: .regular))
                             .foregroundStyle(Theme.textSecondary)
                     }
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 14, weight: .regular))
-                        .foregroundStyle(Theme.textSecondary)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 14)
+                    .contentShape(Rectangle())
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 14)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+
+                Divider().background(Theme.separator)
+
+                Button {
+                    e2bKeyDraft = ""
+                    showE2BKeySheet = true
+                } label: {
+                    HStack(spacing: 14) {
+                        Image(systemName: state.e2bKeyStore.hasKey ? "key.fill" : "key")
+                            .font(.system(size: 20))
+                            .foregroundStyle(state.e2bKeyStore.hasKey ? Theme.accent : Theme.textPrimary)
+                            .frame(width: 28)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("E2B API key")
+                                .font(.system(size: 17, weight: .regular))
+                                .foregroundStyle(Theme.textPrimary)
+                            Text(state.e2bKeyStore.hasKey
+                                 ? "Your key is set — sandboxes can run from this device."
+                                 : "Add your e2b.dev key to run sandboxes from your phone.")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Theme.textSecondary)
+                        }
+                        Spacer()
+                        Text(state.e2bKeyStore.hasKey ? "Set" : "Not set")
+                            .font(.system(size: 15))
+                            .foregroundStyle(Theme.textSecondary)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 14, weight: .regular))
+                            .foregroundStyle(Theme.textSecondary)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 14)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
     }
 
@@ -1586,4 +1644,58 @@ private struct AboutSheet: View {
 #Preview {
     AppSettingsView()
         .environmentObject(AppState(secrets: KeychainSecretStore()))
+}
+
+// MARK: - E2B key sheet (Settings-level entry point)
+
+/// E2B API key entry sheet shown from the Settings card. The key is
+/// stored locally on the device and used by [DirectE2BClient] to spin
+/// up sandboxes from the phone without a paired desktop.
+private struct SettingsE2BKeySheet: View {
+    let hasKey: Bool
+    @Binding var draft: String
+    var onSave: (String) -> Void
+    var onClear: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Theme.background.ignoresSafeArea()
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Your e2b.dev key")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                    Text("Paste an e2b.dev API key so the phone can spin up sandboxes on its own. The key is held on this device only and is used to call e2b.dev directly — nothing is sent to the desktop server.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.textSecondary)
+                    SecureField("e2b_…", text: $draft)
+                        .textContentType(.password)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .padding(12)
+                        .background(Theme.surfaceElevated, in: RoundedRectangle(cornerRadius: 10))
+                    HStack {
+                        if hasKey {
+                            Button(role: .destructive) {
+                                onClear()
+                            } label: {
+                                Text("Clear")
+                            }
+                        }
+                        Spacer()
+                        Button("Cancel") { dismiss() }
+                            .foregroundStyle(Theme.textSecondary)
+                        Button("Save") { onSave(draft) }
+                            .foregroundStyle(Theme.accent)
+                            .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                    Spacer()
+                }
+                .padding(20)
+            }
+            .navigationTitle("E2B API key")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
 }

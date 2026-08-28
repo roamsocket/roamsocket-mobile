@@ -19,6 +19,9 @@ final class AppState: ObservableObject {
     let codeSessionStore = CodeSessionStore()
     let settingsSync = SettingsSync()
     let browserStore = BrowserStore()
+    /// Local-only store for the user's e2b.dev API key. The phone uses
+    /// it to spin up sandboxes directly (without a paired desktop).
+    let e2bKeyStore = E2BKeyStore()
 
     /// Single source of truth for chat history + projects. `RootView` creates
     /// the store via `@StateObject` and calls `setChatHistory(...)` on first
