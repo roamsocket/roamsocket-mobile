@@ -106,6 +106,15 @@ dependencies {
     implementation(libs.markwon.ext.tasklist)
     implementation(libs.markwon.linkify)
     implementation(libs.markwon.html)
+    // Code block syntax highlighting (PrismJS-backed). We use Markwon's
+    // built-in syntax-highlight plugin with a small inline `GrammarLocator`
+    // (see `app.roamsocket.android.ui.markdown.SimpleGrammarLocator`) so
+    // we don't need the ksp-driven `prism4j-bundler` processor for the
+    // common languages — the highlighter falls through to plain text
+    // for anything not in the inline grammar set, which still looks
+    // clean on the chat surface.
+    implementation(libs.markwon.syntax.highlight)
+    implementation(libs.prism4j)
 
     // CameraX + ML Kit barcode scanning — used by the pairing QR scanner
     // (parity with iOS `PairQRScannerView`). The barcode model is

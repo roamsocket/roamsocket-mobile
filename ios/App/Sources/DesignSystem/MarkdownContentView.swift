@@ -1,10 +1,18 @@
 import SwiftUI
+import UIKit
 import MarkdownUI
+import Highlightr
 
 /// Renders assistant message bodies as Markdown (GFM).
 ///
 /// Fenced blocks tagged as `markdown` / `md` / `mdx` stay as raw source with a
 /// Preview button. Fenced `html` / `htm` blocks stay raw with a browser Preview.
+/// Any other fenced code block (e.g. ```` ```python ````) is lifted out of
+/// the markdown and rendered as its own code card with a header (language
+/// label + Copy button) and a Highlightr-highlighted body. Auto-detects the
+/// language from the fence info string (`ts` → `typescript`, `py` → `python`,
+/// etc.) and falls back to plain monospaced text when Highlightr does not
+/// know the language.
 struct MarkdownContentView: View {
     let text: String
     var fontSize: CGFloat = 17
@@ -25,7 +33,17 @@ struct MarkdownContentView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 case let .snippet(kind, language, code):
-                    SnippetBlock(kind: kind, language: language, code: code)
+                    CodeBlockView(
+                        language: language,
+                        code: code,
+                        kind: .snippet(kind)
+                    )
+                case let .codeBlock(language, code):
+                    CodeBlockView(
+                        language: language,
+                        code: code,
+                        kind: .code
+                    )
                 }
             }
         }
@@ -132,12 +150,18 @@ extension MarkdownUI.Theme {
 
 enum MessageSegment: Identifiable, Equatable {
     case markdown(String)
+    /// Fenced `markdown` / `html` block: keep raw, show Preview.
     case snippet(kind: SnippetKind, language: String, code: String)
+    /// Any other fenced code block: header + Copy + Highlightr body.
+    case codeBlock(language: String, code: String)
 
+    /// Stable, position-derived id. `String.hashValue` collides on long
+    /// messages and breaks `ForEach` diffing when the same code appears twice.
     var id: String {
         switch self {
-        case let .markdown(s): return "m-\(s.hashValue)"
-        case let .snippet(kind, language, code): return "s-\(kind.rawValue)-\(language)-\(code.hashValue)"
+        case .markdown: return "markdown"
+        case let .snippet(_, language, code): return "snippet-\(language)-\(code.count)-\(code.hashValue)"
+        case let .codeBlock(language, code): return "code-\(language)-\(code.count)-\(code.hashValue)"
         }
     }
 }
@@ -187,9 +211,13 @@ enum MessageSegmentParser {
             if let kind = snippetKind(for: lang) {
                 segments.append(.snippet(kind: kind, language: lang.isEmpty ? kind.rawValue : lang, code: trimmedCode))
             } else {
-                // Keep ordinary fences in Markdown so MarkdownUI styles them.
-                let fence = ns.substring(with: whole)
-                segments.append(.markdown(fence))
+                // Lift all other fenced blocks into a code block with header +
+                // Copy + Highlightr highlighting. Use the info string verbatim
+                // when present, otherwise let the language detector sniff.
+                let label = lang.isEmpty
+                    ? CodeLanguage.detect(from: trimmedCode) ?? "text"
+                    : CodeLanguage.normalize(lang) ?? lang
+                segments.append(.codeBlock(language: label, code: trimmedCode))
             }
 
             cursor = whole.location + whole.length
@@ -220,30 +248,57 @@ enum MessageSegmentParser {
     }
 }
 
-// MARK: - Snippet block (raw + preview)
+// MARK: - Code block view (snippet / generic)
 
-private struct SnippetBlock: View {
-    let kind: SnippetKind
+private struct CodeBlockView: View {
     let language: String
     let code: String
+    /// `.snippet` shows the Preview capsule (markdown → `MarkdownPreviewSheet`,
+    /// html → `HTMLPreviewSheet`); `.code` shows a Copy-only header.
+    let kind: Kind
+
+    enum Kind {
+        case snippet(SnippetKind)
+        case code
+    }
 
     @State private var showPreview = false
+    @State private var didCopy = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                Text(languageLabel)
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(Theme.textTertiary)
-                    .textCase(.uppercase)
-                Spacer(minLength: 0)
+            header
+            codeBody
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Theme.separator.opacity(0.6), lineWidth: 1)
+        )
+        .sheet(isPresented: $showPreview) {
+            previewSheet
+        }
+    }
+
+    // MARK: Header
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Text(displayLanguage)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(Theme.textTertiary)
+                .textCase(.uppercase)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            CopyButton(text: code, didCopy: $didCopy)
+            if case let .snippet(snippetKind) = kind {
                 Button {
                     showPreview = true
                 } label: {
                     HStack(spacing: 4) {
-                        Image(systemName: kind == .html ? "safari" : "eye")
+                        Image(systemName: snippetKind == .html ? "safari" : "eye")
                             .font(.system(size: 12, weight: .semibold))
-                        Text(kind == .html ? "Preview in browser" : "Preview")
+                        Text(snippetKind == .html ? "Preview in browser" : "Preview")
                             .font(.system(size: 12, weight: .semibold))
                     }
                     .foregroundStyle(Theme.accent)
@@ -253,10 +308,27 @@ private struct SnippetBlock: View {
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Theme.surfaceElevated)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Theme.surfaceElevated)
+    }
 
+    private var displayLanguage: String {
+        if language.isEmpty {
+            if case let .snippet(kind) = self.kind { return kind.rawValue }
+            return "text"
+        }
+        return language
+    }
+
+    // MARK: Body
+
+    @ViewBuilder
+    private var codeBody: some View {
+        if kind == .code {
+            HighlightedCodeView(text: code, language: language)
+        } else {
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(code.isEmpty ? " " : code)
                     .font(.system(size: 12.5, design: .monospaced))
@@ -265,26 +337,235 @@ private struct SnippetBlock: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(12)
             }
-            .background(Theme.surface)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Theme.separator.opacity(0.6), lineWidth: 1)
-        )
-        .sheet(isPresented: $showPreview) {
-            Group {
-                switch kind {
-                case .markdown:
-                    MarkdownPreviewSheet(markdown: code)
-                case .html:
-                    HTMLPreviewSheet(html: code, title: "HTML preview")
-                }
-            }
         }
     }
 
-    private var languageLabel: String {
-        language.isEmpty ? kind.rawValue : language
+    // MARK: Preview sheet (snippet only)
+
+    @ViewBuilder
+    private var previewSheet: some View {
+        if case let .snippet(snippetKind) = kind {
+            switch snippetKind {
+            case .markdown: MarkdownPreviewSheet(markdown: code)
+            case .html: HTMLPreviewSheet(html: code, title: "HTML preview")
+            }
+        }
     }
+}
+
+// MARK: - Copy button
+
+private struct CopyButton: View {
+    let text: String
+    @Binding var didCopy: Bool
+
+    var body: some View {
+        Button {
+            copy()
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 12, weight: .semibold))
+                Text(didCopy ? "Copied" : "Copy")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .foregroundStyle(didCopy ? Theme.selection : Theme.accent)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(
+                (didCopy ? Theme.selection : Theme.accent).opacity(0.14),
+                in: Capsule()
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(didCopy ? "Copied" : "Copy code")
+    }
+
+    private func copy() {
+        let trimmed = text.isEmpty ? " " : text
+        UIPasteboard.general.string = trimmed
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        withAnimation(.easeOut(duration: 0.15)) { didCopy = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
+            withAnimation(.easeOut(duration: 0.2)) { didCopy = false }
+        }
+    }
+}
+
+// MARK: - Highlightr-backed code body
+
+/// Read-only, Highlightr-highlighted `UITextView` bridge. Uses highlight.js
+/// (bundled inside Highlightr) and the active `Theme` for color tokens.
+struct HighlightedCodeView: UIViewRepresentable {
+    let text: String
+    let language: String
+
+    func makeUIView(context: Context) -> UITextView {
+        let tv = UITextView()
+        tv.isEditable = false
+        tv.isSelectable = true
+        tv.alwaysBounceVertical = false
+        tv.alwaysBounceHorizontal = true
+        tv.showsHorizontalScrollIndicator = true
+        tv.showsVerticalScrollIndicator = false
+        tv.textContainerInset = UIEdgeInsets(top: 12, left: 10, bottom: 12, right: 10)
+        tv.textContainer.lineFragmentPadding = 0
+        tv.backgroundColor = UIColor(Theme.surface)
+        tv.tintColor = UIColor(Theme.accent)
+        tv.font = .monospacedSystemFont(ofSize: 12.5, weight: .regular)
+        context.coordinator.apply(to: tv, text: text, language: language)
+        return tv
+    }
+
+    func updateUIView(_ uiView: UITextView, context: Context) {
+        context.coordinator.apply(to: uiView, text: text, language: language)
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator {
+        // Single shared Highlightr instance is safe — it's stateless per call
+        // aside from the active theme, which we set on every apply().
+        private static let sharedHighlightr: Highlightr? = Highlightr()
+
+        private var lastText: String = ""
+        private var lastLanguage: String = ""
+        private var lastLightTheme: Bool = Theme.isLight
+
+        func apply(to tv: UITextView, text: String, language: String) {
+            let display = text.isEmpty ? " " : text
+            let light = Theme.isLight
+            // Re-highlight when content, language, or theme changes.
+            if display == lastText,
+               language == lastLanguage,
+               light == lastLightTheme,
+               tv.attributedText.length > 0 {
+                return
+            }
+            lastText = display
+            lastLanguage = language
+            lastLightTheme = light
+
+            guard let highlightr = Self.sharedHighlightr else {
+                tv.text = display
+                tv.textColor = UIColor(Theme.textPrimary)
+                return
+            }
+            highlightr.setTheme(to: light ? "atom-one-light" : "atom-one-dark")
+            let themeBackground = (highlightr.theme?.themeBackgroundColor)
+                .map { UIColor($0) }
+                ?? UIColor(Theme.surface)
+            tv.backgroundColor = themeBackground
+
+            // Try requested language first, then a few common aliases, then
+            // fall back to auto-detection, then to plain monospaced text.
+            let candidates = CodeLanguage.highlightCandidates(for: language)
+            var attributed: NSAttributedString?
+            for candidate in candidates {
+                if let attr = highlightr.highlight(display, as: candidate, fastRender: true) {
+                    attributed = attr
+                    break
+                }
+            }
+            if attributed == nil {
+                attributed = highlightr.highlight(display, fastRender: true)
+            }
+            guard let attributed else {
+                tv.text = display
+                tv.textColor = UIColor(Theme.textPrimary)
+                return
+            }
+            // The highlight.js theme supplies its own colors; force the base
+            // font so it stays consistent with our snippet monospace size.
+            let mutable = NSMutableAttributedString(attributedString: attributed)
+            let fullRange = NSRange(location: 0, length: mutable.length)
+            mutable.addAttribute(.font,
+                                 value: UIFont.monospacedSystemFont(ofSize: 12.5, weight: .regular),
+                                 range: fullRange)
+            tv.attributedText = mutable
+        }
+    }
+}
+
+// MARK: - Language helpers
+
+extension CodeLanguage {
+    /// Normalize a fence info string to a highlight.js language id. Returns
+    /// nil if the string is not a known alias and Highlightr should try
+    /// auto-detection.
+    static func normalize(_ raw: String) -> String? {
+        let key = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if key.isEmpty { return nil }
+        return aliases[key]
+    }
+
+    /// Ordered list of highlight.js language ids to try when highlighting
+    /// `text`. Always includes the raw label first, then any aliases, then
+    /// `nil` (Highlightr auto-detect) as a last resort.
+    static func highlightCandidates(for label: String) -> [String] {
+        var candidates: [String] = []
+        let key = label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if !key.isEmpty { candidates.append(key) }
+        if let resolved = aliases[key], !candidates.contains(resolved) {
+            candidates.append(resolved)
+        }
+        return candidates
+    }
+
+    /// Heuristic auto-detect: scan the first non-empty lines for a known
+    /// shebang / comment style and return a highlight.js id, otherwise nil.
+    static func detect(from code: String) -> String? {
+        let head = code.split(separator: "\n", maxSplits: 4, omittingEmptySubsequences: true)
+        for line in head {
+            let lower = line.lowercased()
+            if lower.hasPrefix("#!") {
+                if lower.contains("python") { return "python" }
+                if lower.contains("ruby") { return "ruby" }
+                if lower.contains("bash") || lower.contains("/sh") { return "bash" }
+                if lower.contains("node") { return "javascript" }
+                if lower.contains("deno") { return "typescript" }
+            }
+            if lower.hasPrefix("<?php") { return "php" }
+            if lower.hasPrefix("package ") && lower.contains(";") { return "go" }
+            if lower.hasPrefix("import ") && lower.contains("\"") && !lower.contains("from ") {
+                return "go"
+            }
+        }
+        return nil
+    }
+
+    private static let aliases: [String: String] = [
+        // Common file-extension aliases mapped to highlight.js ids.
+        "ts": "typescript", "tsx": "typescript", "mts": "typescript", "cts": "typescript",
+        "js": "javascript", "jsx": "javascript", "mjs": "javascript", "cjs": "javascript",
+        "py": "python", "python": "python",
+        "rb": "ruby", "ruby": "ruby",
+        "kt": "kotlin", "kts": "kotlin", "kotlin": "kotlin",
+        "sh": "bash", "bash": "bash", "zsh": "bash", "shell": "bash", "console": "bash",
+        "yml": "yaml", "yaml": "yaml",
+        "cs": "csharp", "csharp": "csharp",
+        "objc": "objectivec", "objectivec": "objectivec",
+        "cpp": "cpp", "c++": "cpp", "cxx": "cpp", "hpp": "cpp", "hxx": "cpp",
+        "c": "c", "h": "c",
+        "md": "markdown", "mdx": "markdown", "gfm": "markdown", "markdown": "markdown",
+        "json": "json", "json5": "json",
+        "vue": "xml", "svelte": "xml",
+        "dockerfile": "dockerfile", "docker": "dockerfile",
+        "r": "r", "rs": "rust", "rust": "rust",
+        "pl": "perl", "perl": "perl",
+        "ex": "elixir", "exs": "elixir", "elixir": "elixir",
+        "lua": "lua",
+        "dart": "dart",
+        "scala": "scala", "sc": "scala",
+        "hs": "haskell", "haskell": "haskell",
+        "makefile": "makefile", "mk": "makefile", "make": "makefile",
+        "diff": "diff", "patch": "diff",
+        "sql": "sql",
+        "graphql": "graphql", "gql": "graphql",
+        "proto": "protobuf", "protobuf": "protobuf",
+        "php": "php",
+        "ini": "ini", "toml": "ini", "cfg": "ini",
+        "log": "plaintext", "txt": "plaintext", "text": "plaintext", "plain": "plaintext",
+        "xml": "xml", "plist": "xml", "html": "xml", "htm": "xml", "xhtml": "xml",
+    ]
 }

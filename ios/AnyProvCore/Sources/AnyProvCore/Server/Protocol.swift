@@ -237,6 +237,19 @@ public enum ClientMessage: Encodable, Sendable {
     /// `force: true` tears down the existing access tunnel and starts a new one.
     case remoteEndpointRequest(force: Bool = false)
 
+    // MARK: - E2B sandbox runs
+
+    /// Start an E2B sandbox run for the session. The desktop server picks a
+    /// language-aware default command (`npm test`, `pytest`, …) when none is
+    /// supplied. Auto-triggered after a successful `gitPublish`; this case
+    /// is the manual re-run path from the Sandboxes panel.
+    case e2bStart(sessionId: String, command: String? = nil, apiKey: String? = nil)
+    case e2bAbort(runId: String)
+    case e2bList(sessionId: String? = nil, limit: Int = 50)
+    /// Per-connection user override for the admin-managed E2B key. Empty
+    /// string clears the override and falls back to the admin env key.
+    case e2bSetKey(apiKey: String)
+
     public enum PermissionDecision: String, Codable, Sendable { case allow, deny }
 
     public func encode(to encoder: Encoder) throws {
@@ -349,6 +362,21 @@ public enum ClientMessage: Encodable, Sendable {
         case let .remoteEndpointRequest(force):
             try c.encode("remote_endpoint_request", forKey: .init("type"))
             if force { try c.encode(true, forKey: .init("force")) }
+        case let .e2bStart(sessionId, command, apiKey):
+            try c.encode("e2b_start", forKey: .init("type"))
+            try c.encode(sessionId, forKey: .init("sessionId"))
+            if let command { try c.encode(command, forKey: .init("command")) }
+            if let apiKey { try c.encode(apiKey, forKey: .init("apiKey")) }
+        case let .e2bAbort(runId):
+            try c.encode("e2b_abort", forKey: .init("type"))
+            try c.encode(runId, forKey: .init("runId"))
+        case let .e2bList(sessionId, limit):
+            try c.encode("e2b_list", forKey: .init("type"))
+            if let sessionId { try c.encode(sessionId, forKey: .init("sessionId")) }
+            try c.encode(limit, forKey: .init("limit"))
+        case let .e2bSetKey(apiKey):
+            try c.encode("e2b_set_key", forKey: .init("type"))
+            try c.encode(apiKey, forKey: .init("apiKey"))
         }
     }
 }
