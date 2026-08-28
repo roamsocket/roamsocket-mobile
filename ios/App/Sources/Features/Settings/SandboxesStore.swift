@@ -11,6 +11,10 @@ final class SandboxesStore: ObservableObject {
     @Published private(set) var hasUserKey: Bool = false
     @Published private(set) var isReady: Bool = false
     @Published private(set) var lastStatusLabel: String?
+    /// Phone-originated runs (no paired desktop required). Merged into
+    /// the unified list shown in [SandboxesView] alongside the desktop
+    /// runs, with a "phone" badge to distinguish them.
+    @Published private(set) var phoneRuns: [E2bPhoneRun] = []
 
     /// Errors surfaced from the connection itself (handshake failure,
     /// send failure). One-shot — the view shows them in an alert.
@@ -69,6 +73,99 @@ final class SandboxesStore: ObservableObject {
             errors.send((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
         }
     }
+
+    // MARK: - Phone-originated runs (no PC)
+
+    /// Start a run that the phone drives directly against the user's
+    /// E2B account. The store keeps the desktop- and phone-originated
+    /// runs in separate lists so the view can badge them differently.
+    /// The returned `E2bPhoneRun` is also upserted into `phoneRuns`
+    /// and updated as events stream in.
+    @MainActor
+    func startPhoneRun(
+        apiKey: String,
+        githubToken: String?,
+        request: E2bPhoneRunRequest,
+    ) {
+        // Reject if a previous run with the same id is still going.
+        let sameKey = phoneRuns.first(where: { run in
+            run.command == request.command
+            && run.repoFullName == request.repo.displayName()
+            && (run.status == "running" || run.status == "queued")
+        })
+        if let existing = sameKey {
+            errors.send("A run for \(existing.repoFullName) is already in progress.")
+            return
+        }
+        let client = DirectE2BClient(apiKey: apiKey)
+        // Seed a queued run so the UI shows it before the network
+        // round-trip completes.
+        let seed = E2bPhoneRun(
+            id: "r_phone_" + UUID().uuidString.prefix(8).lowercased(),
+            repoFullName: request.repo.displayName(),
+            branch: request.branch,
+            command: request.command,
+            status: "queued",
+            startedAt: Date().timeIntervalSince1970 * 1000,
+        )
+        phoneRuns.insert(seed, at: 0)
+
+        // The DirectE2BClient.run callback must touch @Published state
+        // on the main actor. We hop to the main actor inside the closure.
+        let runId = seed.id
+        Task { [weak self] in
+            let final = await client.run(request: request) { event in
+                Task { @MainActor [weak self] in
+                    self?.applyPhoneEvent(runId: runId, event: event)
+                }
+            }
+            await MainActor.run { [weak self] in
+                self?.replacePhoneRun(final)
+            }
+        }
+    }
+
+    @MainActor
+    private func applyPhoneEvent(runId: String, event: E2bPhoneRunEvent) {
+        guard let idx = phoneRuns.firstIndex(where: { $0.id == runId }) else { return }
+        switch event {
+        case let .log(stream, line):
+            var updated = phoneRuns[idx]
+            // Promote queued → running as soon as we see the first line.
+            if updated.status == "queued" { updated.status = "running" }
+            // Tag the line with the stream so the view can colour it
+            // (mirrors the desktop's `stream: out|err` field).
+            let prefixed = stream == "stderr" ? "[stderr] \(line)" : line
+            var tail = updated.outputTail
+            tail.append(prefixed)
+            if tail.count > 5_000 { tail = tail.suffix(5_000) }
+            updated.outputTail = tail
+            phoneRuns[idx] = updated
+        case let .finished(exitCode):
+            var updated = phoneRuns[idx]
+            updated.status = exitCode == 0 ? "completed" : "failed"
+            updated.exitCode = exitCode
+            updated.finishedAt = Date().timeIntervalSince1970 * 1000
+            phoneRuns[idx] = updated
+        case let .failed(message):
+            var updated = phoneRuns[idx]
+            updated.status = "failed"
+            updated.error = message
+            updated.finishedAt = Date().timeIntervalSince1970 * 1000
+            phoneRuns[idx] = updated
+        }
+    }
+
+    @MainActor
+    private func replacePhoneRun(_ run: E2bPhoneRun) {
+        if let idx = phoneRuns.firstIndex(where: { $0.id == run.id }) {
+            phoneRuns[idx] = run
+        } else {
+            phoneRuns.insert(run, at: 0)
+        }
+    }
+
+    private func existingRunStatus(_ run: E2bPhoneRun) -> String { run.status }
 
     private func handle(_ msg: ServerMessage) {
         switch msg {
