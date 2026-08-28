@@ -112,6 +112,18 @@ fun SettingsScreen(
     val context = LocalContext.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
+    val container = LocalAppContainer.current
+    val paired by container.pairedServerStore.paired.collectAsStateWithLifecycle(initialValue = null)
+    val e2bKeyHasValue by container.e2bKeyStore.hasKeyFlow.collectAsStateWithLifecycle(initialValue = false)
+
+    // Surfaces the "AI management" hub card. Mirrors the count
+    // summary the AccountCard already shows next to "Provider API
+    // keys" so the hub pill stays in sync.
+    val providerKeysStatus: String = when (val count = state.providers.count { it.hasApiKey }) {
+        0 -> "Add +"
+        1 -> "1 provider"
+        else -> "$count providers"
+    }
     var showProviderApiKeys by remember { mutableStateOf(false) }
     var showAbout by remember { mutableStateOf(false) }
     var showGitHubDialog by remember { mutableStateOf(false) }
@@ -157,6 +169,23 @@ fun SettingsScreen(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 item { AccountCard(state, showGitHubDialog = { showGitHubDialog = true }, showProviderApiKeys = { showProviderApiKeys = true }) }
+                item {
+                    QuickAccessHub(
+                        e2bKeyHasValue = state.e2bKeyOverrideSet,
+                        githubLinked = state.hasGitHubPat,
+                        isPaired = paired != null,
+                        providerKeysStatus = providerKeysStatus,
+                        onGitHub = { showGitHubDialog = true },
+                        onE2B = {
+                            if (paired != null) {
+                                showSandboxesSheet = true
+                            } else {
+                                showE2BKeyDialog = true
+                            }
+                        },
+                        onAiManagement = { showProviderApiKeys = true },
+                    )
+                }
                 item { DesktopServerCard { showDesktopServerSheet = true } }
                 item {
                     SandboxesCard(
@@ -1701,4 +1730,154 @@ private fun E2BKeyDialog(
             }
         },
     )
+}
+
+// MARK: - Quick access hub (Git / E2B / AI management)
+
+/**
+ * Three large tappable cards at the top of Settings that surface
+ * the most important entry points: Git, Sandboxes (E2B), and AI
+ * management. Each card summarises the area's current state via
+ * a status pill and opens the relevant sub-screen on tap.
+ *
+ * Scoping:
+ *   - Git + AI management cards are always shown.
+ *   - The E2B card's tap target is gated on whether the user
+ *     actually has an E2B setup: a paired desktop takes them to
+ *     the Sandboxes sheet; their own e2b.dev key takes them
+ *     there too; otherwise the tap drops them into the E2B key
+ *     entry dialog so they can finish setup.
+ */
+@Composable
+private fun QuickAccessHub(
+    e2bKeyHasValue: Boolean,
+    githubLinked: Boolean,
+    isPaired: Boolean,
+    providerKeysStatus: String,
+    onGitHub: () -> Unit,
+    onE2B: () -> Unit,
+    onAiManagement: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(
+            text = "Quick access",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 4.dp),
+        )
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(22.dp),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column {
+                QuickAccessRow(
+                    icon = Icons.Outlined.Link,
+                    title = "Git",
+                    subtitle = "Repos, commits, branches",
+                    statusLabel = if (githubLinked) "Linked" else "Setup",
+                    isReady = githubLinked,
+                    onClick = onGitHub,
+                )
+                Divider12()
+                QuickAccessRow(
+                    icon = Icons.Outlined.SmartToy,
+                    title = "E2B",
+                    subtitle = e2bQuickAccessSubtitle(isPaired, e2bKeyHasValue),
+                    statusLabel = e2bQuickAccessStatus(isPaired, e2bKeyHasValue),
+                    isReady = isPaired || e2bKeyHasValue,
+                    onClick = onE2B,
+                )
+                Divider12()
+                QuickAccessRow(
+                    icon = Icons.Outlined.Psychology,
+                    title = "AI management",
+                    subtitle = "Default model · providers · effort",
+                    statusLabel = providerKeysStatus,
+                    isReady = true,
+                    onClick = onAiManagement,
+                )
+            }
+        }
+    }
+}
+
+private fun e2bQuickAccessSubtitle(isPaired: Boolean, e2bKeyHasValue: Boolean): String = when {
+    isPaired -> "Desktop-mediated runs are active."
+    e2bKeyHasValue -> "Phone-originated runs are active."
+    else -> "Add your e2b.dev key to run from this device."
+}
+
+private fun e2bQuickAccessStatus(isPaired: Boolean, e2bKeyHasValue: Boolean): String = when {
+    isPaired -> "Desktop"
+    e2bKeyHasValue -> "Phone"
+    else -> "Setup"
+}
+
+@Composable
+private fun QuickAccessRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    statusLabel: String,
+    isReady: Boolean,
+    onClick: () -> Unit,
+) {
+    val accent = MaterialTheme.colorScheme.primary
+    val readyTint = if (isReady) accent else MaterialTheme.colorScheme.onSurface
+    val statusTint = if (isReady) accent else MaterialTheme.colorScheme.onSurfaceVariant
+    val statusBg = if (isReady) accent.copy(alpha = 0.12f)
+        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .background(readyTint.copy(alpha = 0.12f), RoundedCornerShape(10.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = readyTint,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+        Spacer(Modifier.size(14.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+        }
+        Spacer(Modifier.size(8.dp))
+        Text(
+            text = statusLabel,
+            style = MaterialTheme.typography.labelSmall,
+            color = statusTint,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier
+                .background(statusBg, RoundedCornerShape(50))
+                .padding(horizontal = 8.dp, vertical = 3.dp),
+        )
+        Spacer(Modifier.size(4.dp))
+        Icon(
+            imageVector = Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+        )
+    }
 }
