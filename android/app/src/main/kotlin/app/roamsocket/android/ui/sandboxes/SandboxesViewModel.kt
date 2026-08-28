@@ -12,6 +12,10 @@ import app.roamsocket.core.protocol.E2bRun
 import app.roamsocket.core.protocol.E2bRunState
 import app.roamsocket.core.protocol.ServerMessage
 import app.roamsocket.core.protocol.TerminalStream
+import app.roamsocket.core.sandboxes.DirectE2BClient
+import app.roamsocket.core.sandboxes.E2bPhoneRun
+import app.roamsocket.core.sandboxes.E2bPhoneRunEvent
+import app.roamsocket.core.sandboxes.E2bPhoneRunRequest
 import app.roamsocket.core.server.Endpoint
 import app.roamsocket.core.server.ServerClient
 import app.roamsocket.core.server.Session
@@ -26,7 +30,8 @@ import kotlinx.coroutines.launch
 /**
  * View-model for the Sandboxes screen. Owns a dedicated [Session] so the
  * user can keep streaming logs after the chat or code session has been
- * dismissed.
+ * dismissed. Also tracks phone-originated runs (no desktop required)
+ * in [State.phoneRuns].
  */
 class SandboxesViewModel(
     private val container: AppContainer,
@@ -35,6 +40,8 @@ class SandboxesViewModel(
     data class State(
         val isReady: Boolean = false,
         val runs: List<E2bRun> = emptyList(),
+        /** Phone-originated runs (no PC) — mixed into the unified list. */
+        val phoneRuns: List<E2bPhoneRun> = emptyList(),
         val hasUserKey: Boolean = false,
         val lastError: String? = null,
     )
@@ -51,7 +58,9 @@ class SandboxesViewModel(
         viewModelScope.launch {
             val pair = resolvePaired()
             if (pair == null) {
-                _state.update { it.copy(lastError = "Not paired with a desktop server.") }
+                // Not paired — we still allow phone-originated runs.
+                // The SandboxesScreen gates the "Start a run" sheet on
+                // either a paired desktop or a local E2B key.
                 return@launch
             }
             val (endpoint, token) = pair
@@ -59,7 +68,6 @@ class SandboxesViewModel(
                 val s = client.connect(endpoint = endpoint, token = token)
                 session = s
                 _state.update { it.copy(isReady = true) }
-                // Request the run history on connect.
                 s.send(ClientMessage.E2bList(sessionId = null, limit = 50))
                 collectJob = viewModelScope.launch {
                     s.incoming.collect { msg -> handle(msg) }
@@ -95,6 +103,81 @@ class SandboxesViewModel(
             } catch (t: Throwable) {
                 _state.update { it.copy(lastError = t.message ?: t.javaClass.simpleName) }
             }
+        }
+    }
+
+    fun refresh() {
+        viewModelScope.launch {
+            try {
+                session?.send(ClientMessage.E2bList(sessionId = null, limit = 50))
+            } catch (t: Throwable) {
+                _state.update { it.copy(lastError = t.message ?: t.javaClass.simpleName) }
+            }
+        }
+    }
+
+    // MARK: - Phone-originated runs (no PC)
+
+    /**
+     * Start a run that the phone drives directly against the user's
+     * e2b.dev account. Returns immediately; the run streams in via
+     * [State.phoneRuns] updates.
+     */
+    fun startPhoneRun(request: E2bPhoneRunRequest) {
+        viewModelScope.launch {
+            val apiKey = container.e2bKeyStore.get()
+            if (apiKey.isNullOrEmpty()) {
+                _state.update {
+                    it.copy(lastError = "Add your e2b.dev API key in Settings first.")
+                }
+                return@launch
+            }
+            val client = DirectE2BClient(apiKey = apiKey)
+            val seed = E2bPhoneRun(
+                id = "r_phone_" + java.util.UUID.randomUUID().toString().take(8),
+                repoFullName = request.repo.displayName(),
+                branch = request.branch,
+                command = request.command,
+                status = "queued",
+                startedAt = System.currentTimeMillis(),
+            )
+            _state.update { it.copy(phoneRuns = listOf(seed) + it.phoneRuns) }
+            val final = client.run(request) { event ->
+                applyPhoneEvent(seed.id, event)
+            }
+            _state.update { s ->
+                s.copy(phoneRuns = s.phoneRuns.map { if (it.id == final.id) final else it })
+            }
+        }
+    }
+
+    private fun applyPhoneEvent(runId: String, event: E2bPhoneRunEvent) {
+        _state.update { s ->
+            s.copy(phoneRuns = s.phoneRuns.map { run ->
+                if (run.id != runId) return@map run
+                when (event) {
+                    is E2bPhoneRunEvent.Log -> {
+                        val tagged = if (event.stream == "stderr") "[stderr] ${event.line}" else event.line
+                        val newTail = (run.outputTail + tagged).let {
+                            if (it.size > 5_000) it.takeLast(5_000) else it
+                        }
+                        run.copy(
+                            status = if (run.status == "queued") "running" else run.status,
+                            outputTail = newTail,
+                        )
+                    }
+                    is E2bPhoneRunEvent.Finished -> run.copy(
+                        status = if (event.exitCode == 0) "completed" else "failed",
+                        exitCode = event.exitCode,
+                        finishedAt = System.currentTimeMillis(),
+                    )
+                    is E2bPhoneRunEvent.Failed -> run.copy(
+                        status = "failed",
+                        error = event.message,
+                        finishedAt = System.currentTimeMillis(),
+                    )
+                }
+            })
         }
     }
 

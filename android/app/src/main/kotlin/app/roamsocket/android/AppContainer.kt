@@ -125,6 +125,15 @@ class AppContainer(application: Application) {
     }
 
     /**
+     * Local-only e2b.dev API key store. The phone uses it to spin up
+     * sandboxes without a paired desktop. Mirrors the iOS
+     * `E2BKeyStore` + `AppState.e2bKeyStore`.
+     */
+    val e2bKeyStore: app.roamsocket.android.data.E2BKeyStore by lazy {
+        app.roamsocket.android.data.E2BKeyStore(application)
+    }
+
+    /**
      * Saved cloud-environment configurations. Held on the container so
      * the picker (Code / New session) reads the same data the store
      * writes, mirroring iOS `AppState.environments` +
