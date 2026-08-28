@@ -72,6 +72,14 @@ class PairingViewModel(
             initialValue = emptyList(),
         )
 
+    /** Archived sessions for the dedicated sheet (iOS parity). */
+    val archivedSessions: StateFlow<List<CodeSession>> = codeSessions.archived
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = emptyList(),
+        )
+
     /** Add a freshly-started session to the persisted list. */
     fun registerSession(session: CodeSession) {
         codeSessions.add(session)
@@ -80,6 +88,21 @@ class PairingViewModel(
     /** Move a session into the archived bucket. */
     fun archiveSession(id: String) {
         codeSessions.archive(id)
+    }
+
+    /** Restore an archived session to the active list. */
+    fun unarchiveSession(id: String) {
+        codeSessions.unarchive(id)
+    }
+
+    /** Rename a session (no-op for blank titles). */
+    fun renameSession(id: String, title: String) {
+        codeSessions.rename(id, title)
+    }
+
+    /** Permanently delete a session from the store. */
+    fun removeSession(id: String) {
+        codeSessions.delete(id)
     }
 
     /** Look up a session by id. */
