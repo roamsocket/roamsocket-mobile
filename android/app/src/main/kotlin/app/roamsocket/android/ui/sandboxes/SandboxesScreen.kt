@@ -104,6 +104,7 @@ fun SandboxesScreen(
     var showKeySheet by remember { mutableStateOf(false) }
     var showStartSheet by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    val hasPhoneKey by container.e2bKeyStore.hasKeyFlow.collectAsState(initial = false)
 
     LaunchedEffect(Unit) { viewModel.start() }
     androidx.compose.runtime.DisposableEffect(Unit) {
@@ -140,11 +141,11 @@ fun SandboxesScreen(
                 !state.isReady && state.runs.isEmpty() && state.phoneRuns.isEmpty() ->
                     ConnectingOrNoDesktopState(
                         errorMessage = errorMessage,
-                        hasPhoneKey = container.e2bKeyStore.initialHasKey.value,
+                        hasPhoneKey = hasPhoneKey,
                         onStart = { showStartSheet = true },
                     )
                 unifiedRuns.isEmpty() -> EmptyState(
-                    hasPhoneKey = container.e2bKeyStore.initialHasKey.value,
+                    hasPhoneKey = hasPhoneKey,
                     onStart = { showStartSheet = true },
                 )
                 else -> RunsList(

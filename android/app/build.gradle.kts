@@ -70,6 +70,12 @@ android {
 dependencies {
     implementation(project(":RoamSocketCore"))
 
+    // Exclude the annotations-java5 module entirely — it duplicates
+    // classes from annotations and is not needed.
+    configurations.all {
+        exclude(group = "org.jetbrains", module = "annotations-java5")
+    }
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.activity.compose)
