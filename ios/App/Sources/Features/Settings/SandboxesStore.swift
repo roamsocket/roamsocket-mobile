@@ -47,7 +47,10 @@ final class SandboxesStore: ObservableObject {
     func stop() {
         task?.cancel()
         task = nil
-        client.disconnect()
+        // `ServerClient` is an `actor`; tear it down off the MainActor.
+        // Capturing `client` keeps the reference alive across the hop.
+        let client = self.client
+        Task.detached { await client.disconnect() }
         isReady = false
     }
 

@@ -689,26 +689,6 @@ public enum ServerMessage: Decodable, Sendable {
         public let error: String?
     }
 
-    /// One persisted E2B sandbox run, returned in `e2b_list` and the body
-    /// of `e2b_status`. Mirrors the canonical Zod `E2bRun` in
-    /// `desktop-server/src/protocol.ts`.
-    public struct E2bRunPayload: Codable, Hashable, Sendable, Identifiable {
-        public let id: String
-        public let sessionId: String
-        public let repoFullName: String
-        public let branch: String
-        public let command: String
-        /// queued | running | completed | failed | killed
-        public let status: String
-        public let exitCode: Int?
-        public let sandboxId: String?
-        public let sandboxUrl: String?
-        public let startedAt: Double?
-        public let finishedAt: Double?
-        public let outputTail: [String]
-        public let error: String?
-    }
-
     private enum K: String, CodingKey {
         case type, sessionId, workdir, baseBranch, workBranch, text, callId, tool
         case summary, ok, output, path, patch, added, removed, requestId, stopReason, url, message
@@ -890,6 +870,59 @@ public enum ServerMessage: Decodable, Sendable {
             throw DecodingError.dataCorruptedError(
                 forKey: .type, in: c, debugDescription: "Unknown server message type: \(type)")
         }
+    }
+}
+
+/// One persisted E2B sandbox run, returned in `e2b_list` and the body
+/// of `e2b_status`. Mirrors the canonical Zod `E2bRun` in
+/// `desktop-server/src/protocol.ts`. Top-level (not nested under
+/// `ServerMessage`) so the app target can use it as
+/// `AnyProvCore.E2bRunPayload` in the same way it uses `Skill` /
+/// `MCPServer` / `RepoRef`.
+public struct E2bRunPayload: Codable, Hashable, Sendable, Identifiable {
+    public let id: String
+    public let sessionId: String
+    public let repoFullName: String
+    public let branch: String
+    public let command: String
+    /// queued | running | completed | failed | killed
+    public let status: String
+    public let exitCode: Int?
+    public let sandboxId: String?
+    public let sandboxUrl: String?
+    public let startedAt: Double?
+    public let finishedAt: Double?
+    public let outputTail: [String]
+    public let error: String?
+
+    public init(
+        id: String,
+        sessionId: String,
+        repoFullName: String,
+        branch: String,
+        command: String,
+        status: String,
+        exitCode: Int? = nil,
+        sandboxId: String? = nil,
+        sandboxUrl: String? = nil,
+        startedAt: Double? = nil,
+        finishedAt: Double? = nil,
+        outputTail: [String] = [],
+        error: String? = nil,
+    ) {
+        self.id = id
+        self.sessionId = sessionId
+        self.repoFullName = repoFullName
+        self.branch = branch
+        self.command = command
+        self.status = status
+        self.exitCode = exitCode
+        self.sandboxId = sandboxId
+        self.sandboxUrl = sandboxUrl
+        self.startedAt = startedAt
+        self.finishedAt = finishedAt
+        self.outputTail = outputTail
+        self.error = error
     }
 }
 
