@@ -1,5 +1,6 @@
 import SwiftUI
 import AnyProvCore
+import UIKit
 
 /// Sandboxes (E2B) — see the runs the desktop server kicked off after each
 /// `git_publish`, set a per-connection user-override API key, and (when the
@@ -15,6 +16,25 @@ struct SandboxesView: View {
     @State private var showKeySheet = false
     @State private var keyDraft = ""
     @State private var showError: String?
+    @State private var filter: SandboxesView.RunFilter = .all
+
+    enum RunFilter: String, CaseIterable, Hashable {
+        case all = "All"
+        case running = "Running"
+        case completed = "Completed"
+        case failed = "Failed"
+
+        /// Match helper. `failed` covers both `failed` and `killed` so
+        /// users can quickly triage runs that didn't finish cleanly.
+        func matches(_ run: E2bRunPayload) -> Bool {
+            switch self {
+            case .all: return true
+            case .running: return run.status == "running" || run.status == "queued"
+            case .completed: return run.status == "completed"
+            case .failed: return run.status == "failed" || run.status == "killed"
+            }
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -74,6 +94,10 @@ struct SandboxesView: View {
         }
     }
 
+    private var filteredRuns: [E2bRunPayload] {
+        store.runs.filter(filter.matches)
+    }
+
     @ViewBuilder
     private var content: some View {
         if !store.isReady {
@@ -94,21 +118,38 @@ struct SandboxesView: View {
                         lastStatus: store.lastStatusLabel,
                         onTapKey: { showKeySheet = true },
                     )
-                    ForEach(store.runs) { run in
-                        RunCard(
-                            run: run,
-                            onAbort: { Task { await store.abort(runId: run.id) } },
-                        )
+                    filterBar
+                    if filteredRuns.isEmpty {
+                        EmptyFilter(filter: filter) { self.filter = .all }
+                    } else {
+                        ForEach(filteredRuns) { run in
+                            RunCard(
+                                run: run,
+                                onAbort: { Task { await store.abort(runId: run.id) } },
+                            )
+                        }
                     }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
             }
+            .refreshable {
+                await store.refresh()
+            }
         }
+    }
+
+    /// Segmented filter. Only renders once we have runs (the empty state
+    /// doesn't need it) so it doesn't waste vertical space on first launch.
+    private var filterBar: some View {
+        Picker("Filter", selection: $filter) {
+            ForEach(RunFilter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+        }
+        .pickerStyle(.segmented)
     }
 }
 
-// MARK: - Empty state
+// MARK: - Empty states
 
 private struct EmptyState: View {
     var body: some View {
@@ -126,6 +167,23 @@ private struct EmptyState: View {
                 .padding(.horizontal, 32)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct EmptyFilter: View {
+    let filter: SandboxesView.RunFilter
+    var onShowAll: () -> Void
+    var body: some View {
+        VStack(spacing: 6) {
+            Text("No \(filter.rawValue.lowercased()) runs")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Theme.textSecondary)
+            Button("Show all runs", action: onShowAll)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 28)
     }
 }
 
@@ -172,6 +230,8 @@ private struct RunCard: View {
     let onAbort: () -> Void
 
     @State private var expanded = false
+    @State private var showCopied = false
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -221,14 +281,19 @@ private struct RunCard: View {
                         .foregroundStyle(statusTint)
                 }
                 if let sandboxUrl = run.sandboxUrl, !sandboxUrl.isEmpty {
-                    HStack(spacing: 4) {
-                        Image(systemName: "link")
-                            .font(.system(size: 10, weight: .semibold))
-                        Text(sandboxUrl)
-                            .font(.system(size: 11, design: .monospaced))
-                            .lineLimit(1)
+                    Button {
+                        if let url = URL(string: sandboxUrl) { openURL(url) }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "link")
+                                .font(.system(size: 10, weight: .semibold))
+                            Text(sandboxUrl)
+                                .font(.system(size: 11, design: .monospaced))
+                                .lineLimit(1)
+                        }
+                        .foregroundStyle(Theme.accent)
                     }
-                    .foregroundStyle(Theme.accent)
+                    .buttonStyle(.plain)
                 }
             }
             .padding(12)
@@ -247,12 +312,7 @@ private struct RunCard: View {
                     .padding(12)
             } else {
                 if !run.command.isEmpty {
-                    Text("$ \(run.command)")
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(Theme.textTertiary)
-                        .padding(.horizontal, 12)
-                        .padding(.top, 10)
-                        .padding(.bottom, 4)
+                    commandRow
                 }
                 ScrollView(.horizontal, showsIndicators: false) {
                     Text(run.outputTail.joined(separator: "\n").isEmpty
@@ -277,6 +337,73 @@ private struct RunCard: View {
                     .padding(.horizontal, 12)
                     .padding(.bottom, 10)
                 }
+                copyBar
+            }
+        }
+    }
+
+    /// `$ <command>` line + a per-line copy button. The button only copies
+    /// the command itself, not the full output.
+    private var commandRow: some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text("$ \(run.command)")
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(Theme.textTertiary)
+                .textSelection(.enabled)
+            Spacer(minLength: 0)
+            Button {
+                UIPasteboard.general.string = run.command
+                flashCopied()
+            } label: {
+                Image(systemName: "doc.on.doc")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.textSecondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Copy command")
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 10)
+        .padding(.bottom, 4)
+    }
+
+    /// Bottom row with a "Copy all output" button + a transient confirmation
+    /// label. The label auto-clears after a beat so it doesn't linger.
+    private var copyBar: some View {
+        HStack {
+            if showCopied {
+                Text("Copied")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.selection)
+                    .transition(.opacity)
+            }
+            Spacer()
+            Button {
+                UIPasteboard.general.string = run.outputTail.joined(separator: "\n")
+                flashCopied()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("Copy output")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundStyle(Theme.accent)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Copy run output")
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 6)
+        .padding(.bottom, 10)
+    }
+
+    private func flashCopied() {
+        withAnimation(.easeOut(duration: 0.15)) { showCopied = true }
+        Task {
+            try? await Task.sleep(nanoseconds: 1_400_000_000)
+            await MainActor.run {
+                withAnimation(.easeIn(duration: 0.2)) { showCopied = false }
             }
         }
     }

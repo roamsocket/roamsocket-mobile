@@ -18,6 +18,15 @@ struct AppSettingsView: View {
     @State private var showProviderKeys = false
     @State private var showLocalMetal = false
     @State private var showVoiceSettings = false
+    @State private var showE2BKeySheet = false
+    @State private var e2bKeyInFlight = false
+    @State private var e2bKeyError: String?
+    @State private var e2bKeyDraft: String = ""
+    /// Locally-cached "did the user set a key on this device?". The server
+    /// keeps the override in memory against the bearer token; this flag is
+    /// just so the Settings card can show "Set" / "Not set" without opening
+    /// a fresh WebSocket every time.
+    @AppStorage("e2b.key.overrideSet.v1") private var e2bKeyOverrideSet: Bool = false
     @State private var defaultModelKind: AppState.DefaultModelKind?
     @State private var syncInFlight = false
     @State private var syncMessage: String?
@@ -111,6 +120,21 @@ struct AppSettingsView: View {
         .sheet(isPresented: $showSandboxes) {
             SandboxesView()
                 .environmentObject(state)
+        }
+        .sheet(isPresented: $showE2BKeySheet) {
+            SettingsE2BKeySheet(
+                draft: $e2bKeyDraft,
+                isSubmitting: e2bKeyInFlight,
+                errorMessage: e2bKeyError,
+                hasOverride: e2bKeyOverrideSet,
+                onSave: { newKey in
+                    submitE2BKey(newKey)
+                },
+                onClear: {
+                    submitE2BKey("")
+                },
+            )
+            .presentationDetents([.medium])
         }
         .sheet(isPresented: $showAbout) {
             AboutSheet()
@@ -560,35 +584,104 @@ struct AppSettingsView: View {
     /// E2B sandbox runs. The desktop server kicks off a sandbox after every
     /// successful git push and streams the output back over the same WS.
     /// Admin key lives in the desktop's `E2B_API_KEY` env var; users can
-    /// override per-connection from inside the sheet.
+    /// override per-connection from inside the sheet or directly from this
+    /// settings card (the E2B key row below).
     private var sandboxesSection: some View {
         settingsCard(header: "Sandboxes (E2B)") {
-            Button {
-                showSandboxes = true
-            } label: {
-                HStack(spacing: 14) {
-                    Image(systemName: "shippingbox")
-                        .font(.system(size: 20))
-                        .foregroundStyle(Theme.textPrimary)
-                        .frame(width: 28)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("E2B runs")
-                            .font(.system(size: 17, weight: .regular))
+            VStack(spacing: 0) {
+                Button {
+                    showSandboxes = true
+                } label: {
+                    HStack(spacing: 14) {
+                        Image(systemName: "shippingbox")
+                            .font(.system(size: 20))
                             .foregroundStyle(Theme.textPrimary)
-                        Text("Run pushed branches in a clean E2B sandbox.")
-                            .font(.system(size: 12))
+                            .frame(width: 28)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("E2B runs")
+                                .font(.system(size: 17, weight: .regular))
+                                .foregroundStyle(Theme.textPrimary)
+                            Text("Run pushed branches in a clean E2B sandbox.")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Theme.textSecondary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 14, weight: .regular))
                             .foregroundStyle(Theme.textSecondary)
                     }
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 14, weight: .regular))
-                        .foregroundStyle(Theme.textSecondary)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 14)
+                    .contentShape(Rectangle())
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 14)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+
+                Divider().background(Theme.separator)
+
+                Button {
+                    e2bKeyDraft = ""
+                    e2bKeyError = nil
+                    showE2BKeySheet = true
+                } label: {
+                    HStack(spacing: 14) {
+                        Image(systemName: e2bKeyOverrideSet ? "key.fill" : "key")
+                            .font(.system(size: 20))
+                            .foregroundStyle(e2bKeyOverrideSet ? Theme.accent : Theme.textPrimary)
+                            .frame(width: 28)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("E2B API key")
+                                .font(.system(size: 17, weight: .regular))
+                                .foregroundStyle(Theme.textPrimary)
+                            Text(e2bKeyOverrideSet
+                                 ? "Override active on this device."
+                                 : "Using the admin-managed key on the desktop.")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Theme.textSecondary)
+                        }
+                        Spacer()
+                        Text(e2bKeyOverrideSet ? "Set" : "Not set")
+                            .font(.system(size: 15))
+                            .foregroundStyle(Theme.textSecondary)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 14, weight: .regular))
+                            .foregroundStyle(Theme.textSecondary)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 14)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(state.serverEndpoint == nil || state.serverToken == nil)
             }
-            .buttonStyle(.plain)
+        }
+    }
+
+    /// Submit a new E2B key (or clear it with an empty string). Opens a
+    /// short-lived WebSocket via `E2BKeyClient` so the Sandboxes view
+    /// doesn't have to be open. The server keeps the override in memory
+    /// against the bearer token; we mirror "set vs not set" to
+    /// `UserDefaults` so the card label can show the right thing on the
+    /// next launch.
+    private func submitE2BKey(_ key: String) {
+        guard let endpoint = state.serverEndpoint, let token = state.serverToken else {
+            e2bKeyError = "Pair a desktop server first."
+            return
+        }
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        e2bKeyInFlight = true
+        e2bKeyError = nil
+        let client = E2BKeyClient()
+        Task { @MainActor in
+            do {
+                let result = try await client.setKey(trimmed, endpoint: endpoint, token: token)
+                e2bKeyOverrideSet = result.overrideActive
+                e2bKeyInFlight = false
+                showE2BKeySheet = false
+            } catch {
+                e2bKeyInFlight = false
+                e2bKeyError = (error as? LocalizedError)?.errorDescription
+                    ?? error.localizedDescription
+            }
         }
     }
 
@@ -1580,6 +1673,85 @@ private struct AboutSheet: View {
             }
         }
         .presentationDetents([.medium])
+    }
+}
+
+// MARK: - E2B key sheet (Settings-level entry point)
+
+/// E2B API key entry sheet shown from the Settings card. Mirrors the
+/// in-sheet `E2bKeySheet` from `SandboxesView` but uses the
+/// `E2BKeyClient` (short-lived WebSocket) instead of the Sandboxes
+/// store, so the user can change the override without opening the
+/// full Sandboxes panel.
+private struct SettingsE2BKeySheet: View {
+    @Binding var draft: String
+    let isSubmitting: Bool
+    let errorMessage: String?
+    let hasOverride: Bool
+    var onSave: (String) -> Void
+    var onClear: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Theme.background.ignoresSafeArea()
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Your E2B key")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                    Text("Paste an e2b.dev API key to override the admin-managed key on the desktop. The override is held in memory only and is cleared when you disconnect.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.textSecondary)
+                    SecureField("e2b_…", text: $draft)
+                        .textContentType(.password)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .disabled(isSubmitting)
+                        .padding(12)
+                        .background(Theme.surfaceElevated, in: RoundedRectangle(cornerRadius: 10))
+                    if let errorMessage, !errorMessage.isEmpty {
+                        Text(errorMessage)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.red)
+                    }
+                    HStack {
+                        if hasOverride {
+                            Button(role: .destructive) {
+                                onClear()
+                            } label: {
+                                Text("Clear override")
+                            }
+                            .disabled(isSubmitting)
+                        }
+                        Spacer()
+                        Button("Cancel") { dismiss() }
+                            .foregroundStyle(Theme.textSecondary)
+                            .disabled(isSubmitting)
+                        Button {
+                            onSave(draft)
+                        } label: {
+                            if isSubmitting {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .tint(Theme.accent)
+                            } else {
+                                Text("Save")
+                                    .foregroundStyle(Theme.accent)
+                            }
+                        }
+                        .disabled(
+                            isSubmitting
+                            || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        )
+                    }
+                    Spacer()
+                }
+                .padding(20)
+            }
+            .navigationTitle("E2B key")
+            .navigationBarTitleDisplayMode(.inline)
+        }
     }
 }
 

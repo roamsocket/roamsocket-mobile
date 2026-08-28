@@ -44,6 +44,18 @@ final class SandboxesStore: ObservableObject {
         }
     }
 
+    /// Re-fetch the run history without tearing the connection down. Bound
+    /// to pull-to-refresh so a user who closes the sheet loses the spinner
+    /// quickly if the desktop is unresponsive.
+    func refresh() async {
+        guard isReady else { return }
+        do {
+            try await client.send(.e2bList(sessionId: nil, limit: 50))
+        } catch {
+            errors.send((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+        }
+    }
+
     func stop() {
         task?.cancel()
         task = nil
