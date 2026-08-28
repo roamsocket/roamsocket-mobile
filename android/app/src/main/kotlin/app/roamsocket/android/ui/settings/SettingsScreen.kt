@@ -3,6 +3,7 @@ package app.roamsocket.android.ui.settings
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,6 +23,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
@@ -83,6 +85,7 @@ import app.roamsocket.android.BuildConfig
 import app.roamsocket.android.data.AppAppearance
 import app.roamsocket.android.data.EffortLevel
 import app.roamsocket.android.data.VoiceProvider
+import app.roamsocket.android.ui.LocalAppContainer
 import app.roamsocket.android.ui.LocalNavigateToCode
 import app.roamsocket.android.ui.LocalNavigateToSidebar
 import app.roamsocket.core.providers.ProviderId
@@ -116,6 +119,8 @@ fun SettingsScreen(
     var showVoiceSettings by remember { mutableStateOf(false) }
     var showMemorySheet by remember { mutableStateOf(false) }
     var showSandboxesSheet by remember { mutableStateOf(false) }
+    var showDesktopServerSheet by remember { mutableStateOf(false) }
+    var showE2BKeyDialog by remember { mutableStateOf(false) }
     var showMarketplaceSheet by remember { mutableStateOf(false) }
     var showSkillsSheet by remember { mutableStateOf(false) }
     var showConnectorsSheet by remember { mutableStateOf(false) }
@@ -152,6 +157,14 @@ fun SettingsScreen(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 item { AccountCard(state, showGitHubDialog = { showGitHubDialog = true }, showProviderApiKeys = { showProviderApiKeys = true }) }
+                item { DesktopServerCard { showDesktopServerSheet = true } }
+                item {
+                    SandboxesCard(
+                        e2bKeyOverrideSet = state.e2bKeyOverrideSet,
+                        onOpen = { showSandboxesSheet = true },
+                        onEditKey = { showE2BKeyDialog = true },
+                    )
+                }
                 item { AppearanceCard(state, onSetAppearance = viewModel::setAppearance) }
                 item { ChatCard(state, onToggle = viewModel::setAlwaysExpandThinking, onOpenVoice = { showVoiceSettings = true }) }
                 item { EffortCard(state, onSetEffort = viewModel::setEffort) }
@@ -161,13 +174,26 @@ fun SettingsScreen(
                 item { SkillsCard { showSkillsSheet = true } }
                 item { ConnectorsCard { showConnectorsSheet = true } }
                 item { MemoryCard { showMemorySheet = true } }
-                item { SandboxesCard { showSandboxesSheet = true } }
             }
         }
     }
 
     if (showSandboxesSheet) {
         SandboxesSheet(onDismiss = { showSandboxesSheet = false })
+    }
+
+    if (showE2BKeyDialog) {
+        E2BKeyDialog(
+            hasOverride = state.e2bKeyOverrideSet,
+            isSubmitting = state.e2bKeyInFlight,
+            errorMessage = state.e2bKeyError,
+            onSave = { key -> viewModel.submitE2BKey(key) },
+            onClear = { viewModel.submitE2BKey("") },
+            onDismiss = {
+                viewModel.dismissE2BKeyError()
+                showE2BKeyDialog = false
+            },
+        )
     }
 
     if (showProviderApiKeys) {
@@ -643,17 +669,7 @@ private fun CodingCard(
     state: SettingsUiState,
     onSetBranchPrefix: (String) -> Unit,
 ) {
-    val navigateToCode = LocalNavigateToCode.current
     SettingsCard(title = "Coding") {
-        PlaceholderRow(
-            icon = Icons.Outlined.Terminal,
-            title = "Desktop server",
-            subtitle = "Manage in the Code tab.",
-            trailing = "Manage in Code",
-            showChevron = true,
-            onClick = navigateToCode,
-        )
-        Divider12()
         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
@@ -844,7 +860,11 @@ private fun MemoryCard(onOpen: () -> Unit) {
 }
 
 @Composable
-private fun SandboxesCard(onOpen: () -> Unit) {
+private fun SandboxesCard(
+    e2bKeyOverrideSet: Boolean,
+    onOpen: () -> Unit,
+    onEditKey: () -> Unit,
+) {
     SettingsCard(title = "Sandboxes (E2B)") {
         PlaceholderRow(
             icon = Icons.Outlined.SmartToy,
@@ -852,6 +872,19 @@ private fun SandboxesCard(onOpen: () -> Unit) {
             subtitle = "Run pushed branches in a clean E2B sandbox.",
             showChevron = true,
             onClick = onOpen,
+        )
+        Divider12()
+        PlaceholderRow(
+            icon = Icons.Outlined.Key,
+            title = "E2B API key",
+            subtitle = if (e2bKeyOverrideSet) {
+                "Override active on this device."
+            } else {
+                "Using the admin-managed key on the desktop."
+            },
+            trailing = if (e2bKeyOverrideSet) "Set" else "Not set",
+            showChevron = true,
+            onClick = onEditKey,
         )
     }
 }
@@ -1501,4 +1534,171 @@ fun SandboxesSheet(onDismiss: () -> Unit) {
     ) {
         app.roamsocket.android.ui.sandboxes.SandboxesScreen(onBack = onDismiss)
     }
+}
+
+// MARK: - Desktop server card
+
+/**
+ * Standalone "Desktop server" card. Shows a coloured status dot +
+ * the simplified "Paired" / "Not paired" label. Pulled out of the
+ * old `Coding` block so it can sit directly above the Sandboxes
+ * (E2B) section — they're related (sandbox runs can be
+ * desktop-mediated or phone-originated).
+ */
+@Composable
+private fun DesktopServerCard(onClick: () -> Unit) {
+    val container = LocalAppContainer.current
+    val paired by container.pairedServerStore.paired.collectAsStateWithLifecycle(initialValue = null)
+    val isPaired = paired != null
+    SettingsCard(title = "Desktop server") {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onClick)
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            DesktopStatusDot(isPaired = isPaired)
+            Spacer(Modifier.size(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = if (isPaired) "Paired" else "Not paired",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = paired?.serverName?.takeIf { it.isNotEmpty() }
+                        ?: if (isPaired) "Tap to manage" else "Tap to pair a desktop for coding sessions.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Icon(
+                imageVector = Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * Coloured dot for the Desktop server row.
+ *   - grey   = unpaired
+ *   - yellow = paired but reconnecting (best-effort; falls back to
+ *              green when we have no reconnecting state on Android
+ *              yet)
+ *   - green  = paired and last seen reachable
+ *   - red    = paired but last error was a connection failure
+ */
+@Composable
+private fun DesktopStatusDot(isPaired: Boolean) {
+    Box(
+        modifier = Modifier
+            .size(12.dp)
+            .background(
+                color = if (isPaired) statusGreen else statusGrey,
+                shape = CircleShape,
+            )
+            .border(
+                width = 3.dp,
+                color = (if (isPaired) statusGreen else statusGrey).copy(alpha = 0.25f),
+                shape = CircleShape,
+            ),
+    )
+}
+
+private val statusGrey = Color(0xFF8C8C8C)
+private val statusGreen = Color(0xFF22C55E)
+
+// MARK: - E2B key dialog (Settings-level entry point)
+
+/**
+ * E2B API key entry dialog shown from the Settings Sandboxes card.
+ * The in-sheet `E2bKeySheet` inside [SandboxesSheet] mirrors this
+ * layout but routes through the live `SandboxesViewModel`; this one
+ * uses `SettingsViewModel.submitE2BKey` so the override is editable
+ * without opening the Sandboxes panel first.
+ */
+@Composable
+private fun E2BKeyDialog(
+    hasOverride: Boolean,
+    isSubmitting: Boolean,
+    errorMessage: String?,
+    onSave: (String) -> Unit,
+    onClear: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var draft by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = { if (!isSubmitting) onDismiss() },
+        title = { Text("Your E2B key") },
+        text = {
+            Column {
+                Text(
+                    text = "Paste an e2b.dev API key to override the admin-managed key on the desktop. The override is held in memory only and is cleared when you disconnect.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    singleLine = true,
+                    enabled = !isSubmitting,
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.None,
+                        autoCorrectEnabled = false,
+                    ),
+                    placeholder = { Text("e2b_…") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (errorMessage != null) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = errorMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onSave(draft) },
+                enabled = !isSubmitting && draft.isNotBlank(),
+            ) {
+                if (isSubmitting) {
+                    CircularProgressIndicator(
+                        color = MaterialTheme.colorScheme.primary,
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.size(16.dp),
+                    )
+                } else {
+                    Text("Save")
+                }
+            }
+        },
+        dismissButton = {
+            Row {
+                if (hasOverride) {
+                    TextButton(
+                        onClick = onClear,
+                        enabled = !isSubmitting,
+                    ) {
+                        Text(
+                            text = "Clear",
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+                TextButton(
+                    onClick = onDismiss,
+                    enabled = !isSubmitting,
+                ) {
+                    Text("Cancel")
+                }
+            }
+        },
+    )
 }

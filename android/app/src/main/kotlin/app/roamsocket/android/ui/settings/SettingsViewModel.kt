@@ -10,7 +10,9 @@ import app.roamsocket.android.RoamSocketApplication
 import app.roamsocket.android.data.AppAppearance
 import app.roamsocket.android.data.EffortLevel
 import app.roamsocket.android.data.VoiceProvider
+import app.roamsocket.android.data.toEndpoint
 import app.roamsocket.core.providers.ProviderId
+import app.roamsocket.core.sandboxes.E2BKeyClient
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -59,6 +61,7 @@ class SettingsViewModel(
             appearance = userSettings.appearance.first(),
             voiceProvider = userSettings.voiceProvider.first(),
             voiceOpenAIModel = userSettings.voiceOpenAIModel.first(),
+            e2bKeyOverrideSet = userSettings.e2bKeyOverrideSet.first(),
         )
     }
 
@@ -85,6 +88,50 @@ class SettingsViewModel(
 
     fun forgetServer() {
         viewModelScope.launch { container.pairedServerStore.clear() }
+    }
+
+    // ----- E2B sandbox key (iOS PR #103 parity) -----
+
+    /** Submit a new E2B key (or clear it with an empty string). Opens a
+     *  short-lived WebSocket via [E2BKeyClient] so the Sandboxes view
+     *  doesn't have to be open. The server keeps the override in memory
+     *  against the bearer token; we mirror "set vs not set" to
+     *  [container.userSettings] so the Settings card can show the right
+     *  label on next launch. */
+    fun submitE2BKey(key: String) {
+        if (_state.value.e2bKeyInFlight) return
+        val trimmed = key.trim()
+        viewModelScope.launch {
+            val pair = container.pairedServerStore.paired.first()
+            val endpoint = pair?.toEndpoint()
+            if (pair == null || endpoint == null) {
+                _state.value = _state.value.copy(
+                    e2bKeyError = "Pair a desktop server first.",
+                )
+                return@launch
+            }
+            _state.value = _state.value.copy(e2bKeyInFlight = true, e2bKeyError = null)
+            runCatching {
+                val client = E2BKeyClient()
+                client.setKey(trimmed, endpoint = endpoint, token = pair.token)
+            }.onSuccess { result ->
+                container.userSettings.setE2BKeyOverrideSet(result.overrideActive)
+                _state.value = _state.value.copy(
+                    e2bKeyInFlight = false,
+                    e2bKeyOverrideSet = result.overrideActive,
+                    e2bKeyError = null,
+                )
+            }.onFailure { err ->
+                _state.value = _state.value.copy(
+                    e2bKeyInFlight = false,
+                    e2bKeyError = err.message ?: err.javaClass.simpleName,
+                )
+            }
+        }
+    }
+
+    fun dismissE2BKeyError() {
+        _state.value = _state.value.copy(e2bKeyError = null)
     }
 
     fun setAlwaysExpandThinking(enabled: Boolean) {
@@ -276,6 +323,10 @@ data class SettingsUiState(
     val syncMessage: String? = null,
     val syncError: String? = null,
     val syncStatuses: Map<String, String> = emptyMap(),
+    // E2B sandbox key entry state — surfaced in the Sandboxes card.
+    val e2bKeyOverrideSet: Boolean = false,
+    val e2bKeyInFlight: Boolean = false,
+    val e2bKeyError: String? = null,
 )
 
 data class ProviderEntry(
