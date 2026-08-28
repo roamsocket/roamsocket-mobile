@@ -63,6 +63,7 @@ import { loadDesktopPrefs, resolveAdvertise, resolveAutoTunnel } from './desktop
 import { printPairingBanner, printTunnelReadyBanner, resolvePairHost } from './cli/banner.js';
 import { runSettingsMenu } from './cli/settings-menu.js';
 import { getMetalStore, getMetalRuntimeStatus, METAL_PROVIDER_ID } from './metal/index.js';
+import { E2bRunner } from './e2b/runner.js';
 
 export interface StartServerOptions {
   port?: number;
@@ -207,6 +208,15 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
 
   const pairing = new PairingManager();
   const syncConfig = await loadSyncConfig();
+
+  // E2B sandbox runner. Admin key comes from the environment; the
+  // desktop settings menu can also surface it. Per-connection user
+  // overrides are kept in `e2bStateOverrides` below.
+  const adminE2bKey = (process.env.E2B_API_KEY ?? '').trim();
+  const e2bRunner = new E2bRunner({
+    runsDir: path.join(productDataDir(), 'e2b-runs'),
+    adminApiKey: adminE2bKey,
+  });
   const app = express();
   // Only parse JSON bodies for the small handful of non-proxy routes — the
   // proxy in `mountProxy` reads bodies as raw streams itself (so it can
@@ -346,6 +356,10 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
     };
     const manager = new SessionManager(emit, useMock ? mockAdapter : undefined);
 
+    // Per-connection state: the user can override the admin E2B key for
+    // this socket only. Empty string = fall back to the admin env key.
+    let e2bUserKey = '';
+
     // Auto-push the current skills/MCP state to the app on connect.
     void pushInitialSync(emit, syncConfig);
 
@@ -386,9 +400,67 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Runnin
           case 'create_pr':
             await manager.createPr(msg);
             break;
-          case 'git_publish':
-            await manager.gitPublish(msg);
+          case 'git_publish': {
+            // Auto-trigger an E2B sandbox run when the push succeeds.
+            // We only kick the run when the user actually pushed
+            // (commit-only or no-op publishes are left alone). The
+            // runner streams output to this connection; the user can
+            // also start additional runs from the Sandboxes panel.
+            const result = await manager.gitPublish(msg);
+            if (result && result.pushed) {
+              const run = e2bRunner.start({
+                sessionId: msg.sessionId,
+                repoFullName: result.repoFullName,
+                branch: result.branch,
+                workdir: result.workdir,
+                apiKey: e2bUserKey || undefined,
+                emit,
+              });
+              emit({ type: 'e2b_started', sessionId: msg.sessionId, run });
+            }
             break;
+          }
+          case 'e2b_start': {
+            const info = manager.sessionInfo(msg.sessionId);
+            if (!info) {
+              emit({ type: 'error', sessionId: msg.sessionId, message: 'Unknown session.' });
+              break;
+            }
+            const run = e2bRunner.start({
+              sessionId: msg.sessionId,
+              repoFullName: info.repo.fullName,
+              branch: info.repo.workBranch,
+              workdir: info.workdir,
+              command: msg.command,
+              apiKey: msg.apiKey ?? (e2bUserKey || undefined),
+              emit,
+            });
+            emit({ type: 'e2b_started', sessionId: msg.sessionId, run });
+            break;
+          }
+          case 'e2b_abort': {
+            const stopped = e2bRunner.abort(msg.runId);
+            if (!stopped) {
+              emit({
+                type: 'error',
+                message: `No live E2B run with id ${msg.runId}.`,
+              });
+            }
+            break;
+          }
+          case 'e2b_list': {
+            const runs = await e2bRunner.list(msg.sessionId, msg.limit);
+            emit({ type: 'e2b_list', sessionId: msg.sessionId, runs });
+            break;
+          }
+          case 'e2b_set_key': {
+            e2bUserKey = msg.apiKey.trim();
+            emit({
+              type: 'e2b_key_ack',
+              overrideActive: e2bUserKey.length > 0,
+            });
+            break;
+          }
           case 'skills_sync_request':
             if (!syncConfig.skillsRepo.url) {
               emit({ type: 'error', message: 'No skills repo configured on the desktop.' });

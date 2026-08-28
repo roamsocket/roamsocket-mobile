@@ -218,6 +218,13 @@ export class SessionManager {
     return globalSessions.get(sessionId)?.workdir ?? null;
   }
 
+  /** Lightweight view of a session for downstream services (E2B, etc.). */
+  sessionInfo(sessionId: string): { workdir: string; repo: RepoSpec } | null {
+    const s = globalSessions.get(sessionId);
+    if (!s) return null;
+    return { workdir: s.workdir, repo: s.repo };
+  }
+
   interrupt(sessionId: string): void {
     globalSessions.get(sessionId)?.abort.abort();
   }
@@ -237,12 +244,24 @@ export class SessionManager {
   /**
    * Instant commit / push / open-PR from the session UI.
    * Steps run in order when their flags are set.
+   *
+   * Returns a small result object so the connection can decide whether
+   * to auto-trigger downstream services (E2B sandbox, etc.) without
+   * having to re-derive session / repo state from the wire frames.
+   * Returns `null` when the session is unknown or the publish aborted
+   * before any push (caller should look at the emitted `git_result` /
+   * `error` frame for the user-facing detail).
    */
-  async gitPublish(msg: GitPublishMsg): Promise<void> {
+  async gitPublish(msg: GitPublishMsg): Promise<{
+    pushed: boolean;
+    branch: string;
+    workdir: string;
+    repoFullName: string;
+  } | null> {
     const session = globalSessions.get(msg.sessionId);
     if (!session) {
       this.emit({ type: 'error', sessionId: msg.sessionId, message: 'Unknown session.' });
-      return;
+      return null;
     }
     if (!msg.commit && !msg.push && !msg.openPr) {
       this.emit({
@@ -250,12 +269,13 @@ export class SessionManager {
         sessionId: msg.sessionId,
         message: 'Nothing to do — pick commit, push, and/or open PR.',
       });
-      return;
+      return null;
     }
 
     const steps: string[] = [];
     const details: string[] = [];
     let url: string | undefined;
+    let pushed = false;
 
     try {
       if (msg.commit) {
@@ -266,7 +286,7 @@ export class SessionManager {
             sessionId: msg.sessionId,
             message: 'Commit message is required.',
           });
-          return;
+          return null;
         }
         const committed = await commitAll(session.workdir, message);
         steps.push('commit');
@@ -279,7 +299,7 @@ export class SessionManager {
             ok: false,
             detail: 'No changes to commit.',
           });
-          return;
+          return null;
         }
       }
 
@@ -288,6 +308,7 @@ export class SessionManager {
         url = await pushBranch(session.repo, session.workdir);
         steps.push('push');
         details.push(`Pushed ${session.repo.workBranch}.`);
+        pushed = true;
       }
 
       if (msg.openPr) {
@@ -305,12 +326,19 @@ export class SessionManager {
         detail: details.join(' '),
         url,
       });
+      return {
+        pushed,
+        branch: session.repo.workBranch,
+        workdir: session.workdir,
+        repoFullName: session.repo.fullName,
+      };
     } catch (err) {
       this.emit({
         type: 'error',
         sessionId: msg.sessionId,
         message: (err as Error).message,
       });
+      return null;
     }
   }
 }

@@ -19,6 +19,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.DesktopWindows
+import androidx.compose.material.icons.outlined.FilterList
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.PlayArrow
@@ -62,7 +63,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.roamsocket.android.data.PairedServer
 import app.roamsocket.android.ui.LocalOpenSidebar
+import app.roamsocket.android.ui.codesessions.ArchivedSessionsSheet
 import app.roamsocket.android.ui.codesessions.CodeSessionList
+import app.roamsocket.android.ui.codesessions.SessionFilterSheet
 import app.roamsocket.android.ui.repositories.RepositoryPickerSheet
 import app.roamsocket.android.ui.session.SessionConfig
 import app.roamsocket.android.ui.session.SessionModelSelection
@@ -89,10 +92,15 @@ fun CodeScreen(
     val paired by viewModel.paired.collectAsStateWithLifecycle()
     val nearby by viewModel.nearbyEndpoints.collectAsStateWithLifecycle()
     val sessions by viewModel.activeSessions.collectAsStateWithLifecycle()
+    val archived by viewModel.archivedSessions.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
 
     var showNewSessionDialog by remember { mutableStateOf(false) }
     var activeConfig by remember { mutableStateOf<Pair<SessionConfig, PairedServer>?>(null) }
+    // iOS parity: status filter chip + archived sheet on the Sessions list.
+    var statusFilter by remember { mutableStateOf<CodeSession.Status?>(null) }
+    var showFilterSheet by remember { mutableStateOf(false) }
+    var showArchivedSheet by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         TopAppBar(
@@ -167,6 +175,20 @@ fun CodeScreen(
                         }
                     },
                     onArchive = { viewModel.archiveSession(it.id) },
+                    statusFilter = statusFilter,
+                )
+            }
+            item {
+                // Status filter + "View archived" affordance (iOS parity).
+                // Mirrors the chip + sheet on the iOS Code home — tapping
+                // the chip opens the filter sheet, tapping the chip's
+                // trailing "View archived" line opens the archive sheet.
+                SessionsToolbar(
+                    activeCount = sessions.size,
+                    archivedCount = archived.size,
+                    statusFilter = statusFilter,
+                    onOpenFilter = { showFilterSheet = true },
+                    onOpenArchived = { showArchivedSheet = true },
                 )
             }
             if (paired == null && nearby.isNotEmpty()) {
@@ -206,6 +228,107 @@ fun CodeScreen(
             paired = server,
             onBack = { activeConfig = null },
         )
+    }
+
+    if (showFilterSheet) {
+        SessionFilterSheet(
+            current = statusFilter,
+            onSelect = { statusFilter = it },
+            onOpenArchived = { showArchivedSheet = true },
+            onDismiss = { showFilterSheet = false },
+        )
+    }
+
+    if (showArchivedSheet) {
+        ArchivedSessionsSheet(
+            sessions = archived,
+            onOpen = { session ->
+                // Same reattach path as the active list.
+                val p = paired
+                showArchivedSheet = false
+                if (p != null) {
+                    scope.launch {
+                        val base = viewModel.defaultSessionConfig()
+                        if (base != null) {
+                            val config = base.copy(
+                                repo = RepoRef(
+                                    fullName = session.repoFullName,
+                                    baseBranch = session.baseBranch,
+                                    workBranch = session.workBranch,
+                                ),
+                            )
+                            activeConfig = config to p
+                        }
+                    }
+                }
+            },
+            onUnarchive = { viewModel.unarchiveSession(it.id) },
+            onDelete = { viewModel.removeSession(it.id) },
+            onRename = { session, title -> viewModel.renameSession(session.id, title) },
+            onDismiss = { showArchivedSheet = false },
+        )
+    }
+}
+
+/**
+ * Pill row under the Sessions list. Shows the current filter (or "All")
+ * and a "View archived" link when the archive has entries. Matches the
+ * iOS `statusFilter` button + archived link in the Code home header.
+ */
+@Composable
+private fun SessionsToolbar(
+    activeCount: Int,
+    archivedCount: Int,
+    statusFilter: CodeSession.Status?,
+    onOpenFilter: () -> Unit,
+    onOpenArchived: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Surface(
+            onClick = onOpenFilter,
+            color = MaterialTheme.colorScheme.surface,
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(50),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.FilterList,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(14.dp),
+                )
+                Spacer(Modifier.size(6.dp))
+                Text(
+                    text = statusFilter?.displayName ?: "All",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.size(6.dp))
+                Text(
+                    text = "($activeCount)",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Spacer(modifier = Modifier.weight(1f))
+        if (archivedCount > 0) {
+            TextButton(onClick = onOpenArchived) {
+                Text(
+                    text = "Archived ($archivedCount)",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
     }
 }
 

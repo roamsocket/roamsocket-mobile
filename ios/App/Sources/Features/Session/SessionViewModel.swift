@@ -900,8 +900,12 @@ final class SessionViewModel: ObservableObject {
             appendNotice("Synced \(events.count) events from desktop\(suffix).")
             scheduleTranscriptSave()
 
-        case .terminalData, .terminalControl, .fileListResult, .fileReadResult, .fileWriteResult, .portListResult, .tunnelStatus:
-            // Handled by the dedicated tools views via their own connection.
+        case .terminalData, .terminalControl, .fileListResult, .fileReadResult, .fileWriteResult, .portListResult, .tunnelStatus, .remoteEndpoint, .skillsSync, .mcpSync, .memorySync, .e2bStarted, .e2bLog, .e2bStatus, .e2bList, .e2bKeyAck:
+            // Terminal / files / ports / tunnels are handled by the
+            // dedicated tools views over their own connection. Remote
+            // endpoint + connector / skills / MCP sync are surfaced in
+            // the global AppState. E2B runs have their own Sandboxes
+            // settings sheet; nothing to do here.
             break
         }
     }

@@ -75,6 +75,12 @@ markwon-ext-strikethrough = { group = "io.noties.markwon", name = "ext-strikethr
 markwon-ext-tasklist = { group = "io.noties.markwon", name = "ext-tasklist", version.ref = "markwon" }
 markwon-linkify = { group = "io.noties.markwon", name = "linkify", version.ref = "markwon" }
 markwon-html = { group = "io.noties.markwon", name = "html", version.ref = "markwon" }
+# Syntax highlighting for fenced code blocks (PrismJS-backed). The
+# bundler would add the annotation processor for every bundled Prism
+# language; we use a small inline grammar set instead (see
+# `SimpleGrammarLocator`) and drop the bundler.
+markwon-syntax-highlight = { group = "io.noties.markwon", name = "syntax-highlight", version.ref = "markwon" }
+prism4j = { group = "io.noties", name = "prism4j", version = "2.0.0" }
 
 # Test
 junit = { group = "junit", name = "junit", version.ref = "junit" }

@@ -490,10 +490,17 @@ struct ChatView: View {
                         )
                         .id(message.id)
                     }
+                    // Sentinel anchor at the very bottom. `defaultScrollAnchor`
+                    // keeps this on-screen as the trailing message grows, so
+                    // streaming text never falls off the bottom.
+                    Color.clear
+                        .frame(height: 1)
+                        .id(Self.streamTailAnchorID)
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
             }
+            .defaultScrollAnchor(.bottom)
             .onChange(of: viewModel.messages.count) {
                 // Prefer explicit artifact scroll target over following the stream tail.
                 if let target = state.scrollToMessageId {
@@ -509,6 +516,32 @@ struct ChatView: View {
                     withAnimation(.easeOut(duration: 0.3)) {
                         proxy.scrollTo(lastMessage.id, anchor: .bottom)
                     }
+                }
+                // Final nudge to the sentinel tail once the message lands —
+                // .defaultScrollAnchor only re-engages on size changes.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    withAnimation(.easeOut(duration: 0.25)) {
+                        proxy.scrollTo(Self.streamTailAnchorID, anchor: .bottom)
+                    }
+                }
+            }
+            // `lastContentChangeToken` is bumped whenever the trailing message
+            // grows (i.e. while the assistant is streaming). We use it as
+            // an `onChange` trigger so the scroll view follows the stream
+            // tail even though the message *count* never changes mid-response.
+            // Without this, sending a message leaves the user looking at
+            // the bottom of their own bubble while the assistant content
+            // grows below the visible area — i.e. the "blank screen after
+            // send" bug.
+            .onChange(of: lastContentChangeToken) { _, _ in
+                // Only follow the stream if the user is already at (or very
+                // near) the bottom. Otherwise leave them where they are so
+                // they can keep reading older messages while the response
+                // streams in.
+                guard state.scrollToMessageId == nil else { return }
+                guard shouldFollowStreamTail else { return }
+                withAnimation(.easeOut(duration: 0.25)) {
+                    proxy.scrollTo(Self.streamTailAnchorID, anchor: .bottom)
                 }
             }
             .onChange(of: state.scrollToMessageId) { _, target in
@@ -533,6 +566,35 @@ struct ChatView: View {
                 }
             }
         }
+    }
+
+    /// Anchor id used by `messageList` to keep the bottom of the transcript
+    /// pinned to the viewport as the trailing message grows.
+    private static let streamTailAnchorID = "rs.stream.tail.anchor"
+
+    /// Bumped whenever the trailing message grows (i.e. while the
+    /// assistant is streaming). We use it as an `onChange` trigger so the
+    /// scroll view follows the stream tail even though the message *count*
+    /// never changes mid-response. Without this, sending a message leaves
+    /// the user looking at the bottom of their own bubble while the
+    /// assistant content grows below the visible area — i.e. the "blank
+    /// screen after send" bug.
+    private var lastContentChangeToken: String {
+        viewModel.messages.last.map { msg in
+            "\(msg.id)-\(msg.content.count)-\(msg.isStreaming)-\(msg.toolCalls?.count ?? 0)"
+        } ?? ""
+    }
+
+    /// True when the scroll position is at (or within ~80pt of) the bottom
+    /// of the content. Used to gate auto-follow during streaming so a user
+    /// who has scrolled up to read older messages doesn't get yanked back
+    /// to the tail every time a token lands.
+    private var shouldFollowStreamTail: Bool {
+        // The view-model exposes whether we're currently streaming. While
+        // we are, the user almost always wants to follow. After streaming
+        // ends, stop following so subsequent small layout shifts (image
+        // attachment sizing, tool-card reveal) don't disturb the user.
+        viewModel.messages.last?.isStreaming == true
     }
 
     private func isArtifactSource(_ message: ChatMessage) -> Bool {

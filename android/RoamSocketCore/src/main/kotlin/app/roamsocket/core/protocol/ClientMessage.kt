@@ -189,6 +189,32 @@ public sealed class ClientMessage {
     @Serializable
     @SerialName("remote_endpoint_request")
     public data class RemoteEndpointRequest(val force: Boolean = false) : ClientMessage()
+
+    // MARK: - E2B sandbox runs (E2B.dev)
+
+    @Serializable
+    @SerialName("e2b_start")
+    public data class E2bStart(
+        val sessionId: String,
+        val command: String? = null,
+        /** Per-connection user override. Server still uses the admin env key when null. */
+        val apiKey: String? = null,
+    ) : ClientMessage()
+
+    @Serializable
+    @SerialName("e2b_abort")
+    public data class E2bAbort(val runId: String) : ClientMessage()
+
+    @Serializable
+    @SerialName("e2b_list")
+    public data class E2bList(
+        val sessionId: String? = null,
+        val limit: Int = 50,
+    ) : ClientMessage()
+
+    @Serializable
+    @SerialName("e2b_set_key")
+    public data class E2bSetKey(val apiKey: String) : ClientMessage()
 }
 
 @Serializable

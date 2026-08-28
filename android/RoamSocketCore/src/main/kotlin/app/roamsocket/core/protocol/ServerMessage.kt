@@ -212,6 +212,43 @@ public sealed class ServerMessage {
         val truncated: Boolean = false,
         val isLive: Boolean = false,
     ) : ServerMessage()
+
+    // MARK: - E2B sandbox runs (E2B.dev)
+
+    @Serializable
+    @SerialName("e2b_started")
+    public data class E2bStarted(
+        val sessionId: String,
+        val run: E2bRun,
+    ) : ServerMessage()
+
+    @Serializable
+    @SerialName("e2b_log")
+    public data class E2bLog(
+        val runId: String,
+        val sessionId: String,
+        val stream: TerminalStream,
+        val line: String,
+        val ts: Long,
+    ) : ServerMessage()
+
+    @Serializable
+    @SerialName("e2b_status")
+    public data class E2bStatus(
+        val sessionId: String,
+        val run: E2bRun,
+    ) : ServerMessage()
+
+    @Serializable
+    @SerialName("e2b_list")
+    public data class E2bList(
+        val sessionId: String? = null,
+        val runs: List<E2bRun> = emptyList(),
+    ) : ServerMessage()
+
+    @Serializable
+    @SerialName("e2b_key_ack")
+    public data class E2bKeyAck(val overrideActive: Boolean) : ServerMessage()
 }
 
 /**
@@ -360,3 +397,29 @@ public enum class ModelState {
     @SerialName("generating") GENERATING,
     @SerialName("done") DONE,
 }
+
+@Serializable
+public enum class E2bRunState {
+    @SerialName("queued") QUEUED,
+    @SerialName("running") RUNNING,
+    @SerialName("completed") COMPLETED,
+    @SerialName("failed") FAILED,
+    @SerialName("killed") KILLED,
+}
+
+@Serializable
+public data class E2bRun(
+    val id: String,
+    val sessionId: String,
+    val repoFullName: String,
+    val branch: String,
+    val command: String = "",
+    val status: E2bRunState,
+    val exitCode: Int? = null,
+    val sandboxId: String? = null,
+    val sandboxUrl: String? = null,
+    val startedAt: Long? = null,
+    val finishedAt: Long? = null,
+    val outputTail: List<String> = emptyList(),
+    val error: String? = null,
+)

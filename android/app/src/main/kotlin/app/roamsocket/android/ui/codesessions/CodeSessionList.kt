@@ -31,6 +31,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -60,7 +61,11 @@ fun CodeSessionList(
     onOpen: (CodeSession) -> Unit,
     onArchive: (CodeSession) -> Unit,
     modifier: Modifier = Modifier,
+    statusFilter: CodeSession.Status? = null,
 ) {
+    val filtered = remember(sessions, statusFilter) {
+        if (statusFilter == null) sessions else sessions.filter { it.status == statusFilter }
+    }
     Column(modifier = modifier.fillMaxWidth()) {
         Text(
             text = "Sessions",
@@ -68,15 +73,15 @@ fun CodeSessionList(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 8.dp),
         )
-        if (sessions.isEmpty()) {
-            EmptyState()
+        if (filtered.isEmpty()) {
+            EmptyState(filterActive = statusFilter != null)
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxWidth(),
                 contentPadding = PaddingValues(vertical = 0.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(sessions, key = { it.id }) { session ->
+                items(filtered, key = { it.id }) { session ->
                     SessionRow(
                         session = session,
                         onClick = { onOpen(session) },
@@ -89,7 +94,7 @@ fun CodeSessionList(
 }
 
 @Composable
-private fun EmptyState() {
+private fun EmptyState(filterActive: Boolean) {
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         modifier = Modifier.fillMaxWidth(),
@@ -106,12 +111,16 @@ private fun EmptyState() {
                 modifier = Modifier.size(28.dp),
             )
             Text(
-                text = "No sessions yet",
+                text = if (filterActive) "No sessions match the filter" else "No sessions yet",
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                text = "Start a session once your desktop is paired — it shows up here and resumes next launch.",
+                text = if (filterActive) {
+                    "Clear the filter to see all of your active sessions."
+                } else {
+                    "Start a session once your desktop is paired — it shows up here and resumes next launch."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
