@@ -13,6 +13,7 @@ struct AppSettingsView: View {
     @State private var showMCP = false
     @State private var showMarketplace = false
     @State private var showMemory = false
+    @State private var showSandboxes = false
     @State private var showAbout = false
     @State private var showProviderKeys = false
     @State private var showLocalMetal = false
@@ -62,6 +63,7 @@ struct AppSettingsView: View {
                         skillsSection
                         mcpSection
                         memorySection
+                        sandboxesSection
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
@@ -104,6 +106,10 @@ struct AppSettingsView: View {
         }
         .sheet(isPresented: $showMemory) {
             ManageMemoryView()
+                .environmentObject(state)
+        }
+        .sheet(isPresented: $showSandboxes) {
+            SandboxesView()
                 .environmentObject(state)
         }
         .sheet(isPresented: $showAbout) {
@@ -537,6 +543,43 @@ struct AppSettingsView: View {
                             .font(.system(size: 15))
                             .foregroundStyle(Theme.textSecondary)
                     }
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundStyle(Theme.textSecondary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    // MARK: - Sandboxes (E2B)
+
+    /// E2B sandbox runs. The desktop server kicks off a sandbox after every
+    /// successful git push and streams the output back over the same WS.
+    /// Admin key lives in the desktop's `E2B_API_KEY` env var; users can
+    /// override per-connection from inside the sheet.
+    private var sandboxesSection: some View {
+        settingsCard(header: "Sandboxes (E2B)") {
+            Button {
+                showSandboxes = true
+            } label: {
+                HStack(spacing: 14) {
+                    Image(systemName: "shippingbox")
+                        .font(.system(size: 20))
+                        .foregroundStyle(Theme.textPrimary)
+                        .frame(width: 28)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("E2B runs")
+                            .font(.system(size: 17, weight: .regular))
+                            .foregroundStyle(Theme.textPrimary)
+                        Text("Run pushed branches in a clean E2B sandbox.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.textSecondary)
+                    }
+                    Spacer()
                     Image(systemName: "chevron.right")
                         .font(.system(size: 14, weight: .regular))
                         .foregroundStyle(Theme.textSecondary)

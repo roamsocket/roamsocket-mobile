@@ -475,6 +475,14 @@ public enum ServerMessage: Decodable, Sendable {
     case remoteEndpoint(status: String, url: String?, provider: String?, error: String?)
     /// Agent working checklist snapshot (`update_tasks` tool).
     case taskList(sessionId: String, tasks: [AgentTaskPayload])
+
+    // MARK: - E2B sandbox runs (E2B.dev)
+
+    case e2bStarted(sessionId: String, run: E2bRunPayload)
+    case e2bLog(runId: String, sessionId: String, stream: String, line: String, ts: Double)
+    case e2bStatus(sessionId: String, run: E2bRunPayload)
+    case e2bList(sessionId: String?, runs: [E2bRunPayload])
+    case e2bKeyAck(overrideActive: Bool)
     /// `/goal` completion-condition status for the coding session.
     case goalStatus(
         sessionId: String,
@@ -681,6 +689,26 @@ public enum ServerMessage: Decodable, Sendable {
         public let error: String?
     }
 
+    /// One persisted E2B sandbox run, returned in `e2b_list` and the body
+    /// of `e2b_status`. Mirrors the canonical Zod `E2bRun` in
+    /// `desktop-server/src/protocol.ts`.
+    public struct E2bRunPayload: Codable, Hashable, Sendable, Identifiable {
+        public let id: String
+        public let sessionId: String
+        public let repoFullName: String
+        public let branch: String
+        public let command: String
+        /// queued | running | completed | failed | killed
+        public let status: String
+        public let exitCode: Int?
+        public let sandboxId: String?
+        public let sandboxUrl: String?
+        public let startedAt: Double?
+        public let finishedAt: Double?
+        public let outputTail: [String]
+        public let error: String?
+    }
+
     private enum K: String, CodingKey {
         case type, sessionId, workdir, baseBranch, workBranch, text, callId, tool
         case summary, ok, output, path, patch, added, removed, requestId, stopReason, url, message
@@ -694,6 +722,9 @@ public enum ServerMessage: Decodable, Sendable {
         case condition, reason, turnsEvaluated, startedAt, elapsedMs
         case hubID
         case events, isLive
+        // E2B fields
+        case run, runId, line, ts, runs, repoFullName, branch, exitCode
+        case sandboxId, sandboxUrl, finishedAt, outputTail, overrideActive
     }
 
     // CodingKeys already cover remote_endpoint fields: status, url, provider, error
@@ -833,6 +864,28 @@ public enum ServerMessage: Decodable, Sendable {
                 events: try c.decode([TranscriptEvent].self, forKey: .events),
                 truncated: try c.decodeIfPresent(Bool.self, forKey: .truncated) ?? false,
                 isLive: try c.decodeIfPresent(Bool.self, forKey: .isLive) ?? false)
+        case "e2b_started":
+            self = .e2bStarted(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                run: try c.decode(E2bRunPayload.self, forKey: .run))
+        case "e2b_log":
+            self = .e2bLog(
+                runId: try c.decode(String.self, forKey: .runId),
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                stream: try c.decode(String.self, forKey: .stream),
+                line: try c.decode(String.self, forKey: .line),
+                ts: try c.decode(Double.self, forKey: .ts))
+        case "e2b_status":
+            self = .e2bStatus(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                run: try c.decode(E2bRunPayload.self, forKey: .run))
+        case "e2b_list":
+            self = .e2bList(
+                sessionId: try c.decodeIfPresent(String.self, forKey: .sessionId),
+                runs: try c.decode([E2bRunPayload].self, forKey: .runs))
+        case "e2b_key_ack":
+            self = .e2bKeyAck(
+                overrideActive: try c.decode(Bool.self, forKey: .overrideActive))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .type, in: c, debugDescription: "Unknown server message type: \(type)")

@@ -38,6 +38,7 @@ import androidx.compose.material.icons.outlined.PhoneIphone
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material.icons.outlined.RecordVoiceOver
+import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material.icons.outlined.SettingsBrightness
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.Terminal
@@ -114,6 +115,7 @@ fun SettingsScreen(
     var showApiKeyDialogFor by remember { mutableStateOf<ProviderId?>(null) }
     var showVoiceSettings by remember { mutableStateOf(false) }
     var showMemorySheet by remember { mutableStateOf(false) }
+    var showSandboxesSheet by remember { mutableStateOf(false) }
     var showMarketplaceSheet by remember { mutableStateOf(false) }
     var showSkillsSheet by remember { mutableStateOf(false) }
     var showConnectorsSheet by remember { mutableStateOf(false) }
@@ -159,8 +161,13 @@ fun SettingsScreen(
                 item { SkillsCard { showSkillsSheet = true } }
                 item { ConnectorsCard { showConnectorsSheet = true } }
                 item { MemoryCard { showMemorySheet = true } }
+                item { SandboxesCard { showSandboxesSheet = true } }
             }
         }
+    }
+
+    if (showSandboxesSheet) {
+        SandboxesSheet(onDismiss = { showSandboxesSheet = false })
     }
 
     if (showProviderApiKeys) {
@@ -836,6 +843,19 @@ private fun MemoryCard(onOpen: () -> Unit) {
     }
 }
 
+@Composable
+private fun SandboxesCard(onOpen: () -> Unit) {
+    SettingsCard(title = "Sandboxes (E2B)") {
+        PlaceholderRow(
+            icon = Icons.Outlined.SmartToy,
+            title = "E2B runs",
+            subtitle = "Run pushed branches in a clean E2B sandbox.",
+            showChevron = true,
+            onClick = onOpen,
+        )
+    }
+}
+
 // MARK: - Sub-screens
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1465,3 +1485,20 @@ private fun AboutDialog(
 
 @Composable
 fun providerKeysSubtitleForTest(state: SettingsUiState): String = providerKeysSubtitle(state)
+
+/**
+ * Sandboxes (E2B) full-screen sheet. Hosts the [SandboxesScreen] under
+ * a navigation stack so the user can pop back to Settings without
+ * rebuilding the WebSocket.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SandboxesSheet(onDismiss: () -> Unit) {
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = MaterialTheme.colorScheme.background,
+    ) {
+        app.roamsocket.android.ui.sandboxes.SandboxesScreen(onBack = onDismiss)
+    }
+}

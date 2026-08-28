@@ -321,8 +321,15 @@ class SessionViewModel(
             is ServerMessage.FileWriteResult,
             is ServerMessage.PortListResult,
             is ServerMessage.TunnelStatus,
-            is ServerMessage.RemoteEndpoint -> {
-                // Surfaced in later PRs; ignore for now.
+            is ServerMessage.RemoteEndpoint,
+            is ServerMessage.E2bStarted,
+            is ServerMessage.E2bLog,
+            is ServerMessage.E2bStatus,
+            is ServerMessage.E2bList,
+            is ServerMessage.E2bKeyAck -> {
+                // Surfaced in later PRs (or handled at the app-level Sandboxes
+                // coordinator). Keep the SessionViewModel's `when` exhaustive
+                // without doing duplicate work here.
             }
         }
     }
