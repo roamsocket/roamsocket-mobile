@@ -476,17 +476,6 @@ struct ChatView: View {
     }
 
     private var messageList: some View {
-        // `lastContentChangeToken` is bumped whenever the trailing message
-        // grows (i.e. while the assistant is streaming). We use it as an
-        // `onChange` trigger so the scroll view follows the stream tail
-        // even though the message *count* never changes mid-response.
-        // Without this, sending a message leaves the user looking at the
-        // bottom of their own bubble while the assistant content grows
-        // below the visible area — i.e. the "blank screen after send" bug.
-        let lastContentChangeToken = viewModel.messages.last.map { msg in
-            "\(msg.id)-\(msg.content.count)-\(msg.isStreaming)-\(msg.toolCalls?.count ?? 0)"
-        } ?? ""
-
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 16) {
@@ -536,6 +525,14 @@ struct ChatView: View {
                     }
                 }
             }
+            // `lastContentChangeToken` is bumped whenever the trailing message
+            // grows (i.e. while the assistant is streaming). We use it as
+            // an `onChange` trigger so the scroll view follows the stream
+            // tail even though the message *count* never changes mid-response.
+            // Without this, sending a message leaves the user looking at
+            // the bottom of their own bubble while the assistant content
+            // grows below the visible area — i.e. the "blank screen after
+            // send" bug.
             .onChange(of: lastContentChangeToken) { _, _ in
                 // Only follow the stream if the user is already at (or very
                 // near) the bottom. Otherwise leave them where they are so
@@ -574,6 +571,19 @@ struct ChatView: View {
     /// Anchor id used by `messageList` to keep the bottom of the transcript
     /// pinned to the viewport as the trailing message grows.
     private static let streamTailAnchorID = "rs.stream.tail.anchor"
+
+    /// Bumped whenever the trailing message grows (i.e. while the
+    /// assistant is streaming). We use it as an `onChange` trigger so the
+    /// scroll view follows the stream tail even though the message *count*
+    /// never changes mid-response. Without this, sending a message leaves
+    /// the user looking at the bottom of their own bubble while the
+    /// assistant content grows below the visible area — i.e. the "blank
+    /// screen after send" bug.
+    private var lastContentChangeToken: String {
+        viewModel.messages.last.map { msg in
+            "\(msg.id)-\(msg.content.count)-\(msg.isStreaming)-\(msg.toolCalls?.count ?? 0)"
+        } ?? ""
+    }
 
     /// True when the scroll position is at (or within ~80pt of) the bottom
     /// of the content. Used to gate auto-follow during streaming so a user

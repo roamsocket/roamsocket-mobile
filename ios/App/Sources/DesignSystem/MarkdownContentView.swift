@@ -257,7 +257,7 @@ private struct CodeBlockView: View {
     /// html → `HTMLPreviewSheet`); `.code` shows a Copy-only header.
     let kind: Kind
 
-    enum Kind {
+    enum Kind: Equatable {
         case snippet(SnippetKind)
         case code
     }
@@ -453,7 +453,7 @@ struct HighlightedCodeView: UIViewRepresentable {
             }
             highlightr.setTheme(to: light ? "atom-one-light" : "atom-one-dark")
             let themeBackground = (highlightr.theme?.themeBackgroundColor)
-                .map { UIColor($0) }
+                .map { UIColor(cgColor: $0.cgColor) }
                 ?? UIColor(Theme.surface)
             tv.backgroundColor = themeBackground
 
