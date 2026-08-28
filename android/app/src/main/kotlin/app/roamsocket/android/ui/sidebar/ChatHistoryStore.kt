@@ -260,11 +260,10 @@ private fun toDisplayItem(p: CoreChatHistoryItem): ChatHistoryItem = ChatHistory
 @Composable
 fun rememberChatHistoryStore(): ChatHistoryStore {
     val container: AppContainer = LocalAppContainer.current
-    return remember(container) {
-        ChatHistoryStore(
-            repository = container.chatHistoryRepository,
-            projectRepository = container.projectRepository,
-            flowScope = container.appScope,
-        )
-    }
+    // Use the shared coordinator from the container so the sidebar and
+    // the ChatViewModel observe the exact same instance — and so any
+    // project mutations the chat view-model performs are immediately
+    // visible in the sidebar's Recents + Projects panes without
+    // depending on DataStore round-trips.
+    return remember(container) { container.chatHistoryStore }
 }

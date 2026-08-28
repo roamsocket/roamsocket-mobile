@@ -67,6 +67,25 @@ class AppContainer(application: Application) {
         app.roamsocket.android.data.DataStoreProjectRepository(application, appScope)
 
     /**
+     * App-level coordinator that bridges [chatHistoryRepository] +
+     * [projectRepository] and re-publishes the sidebar's Recents list
+     * as a `StateFlow`. Held on the container so the [ChatViewModel],
+     * the sidebar, and any future screen share the same instance —
+     * `addChatToProject`, `openProjectChatAsActive`, etc. all hit the
+     * same coordinator the Compose UI observes. Lazy because
+     * [chatHistoryStore]'s init block launches a collector on
+     * [appScope]; deferring construction until first access avoids
+     * spinning that up before the Application is fully built.
+     */
+    val chatHistoryStore: app.roamsocket.android.ui.sidebar.ChatHistoryStore by lazy {
+        app.roamsocket.android.ui.sidebar.ChatHistoryStore(
+            repository = chatHistoryRepository,
+            projectRepository = projectRepository,
+            flowScope = appScope,
+        )
+    }
+
+    /**
      * Persisted coding sessions (Code home list). Same DataStore
      * single-blob strategy as the chat history wrapper. Populated by
      * the Session screen when a session starts / updates.
