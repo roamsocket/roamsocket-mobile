@@ -215,7 +215,7 @@ enum MessageSegmentParser {
                 // Copy + Highlightr highlighting. Use the info string verbatim
                 // when present, otherwise let the language detector sniff.
                 let label = lang.isEmpty
-                    ? CodeLanguage.detect(from: trimmedCode) ?? "text"
+                    ? CodeLanguage.detectLanguage(in: trimmedCode) ?? "text"
                     : CodeLanguage.normalize(lang) ?? lang
                 segments.append(.codeBlock(language: label, code: trimmedCode))
             }
@@ -514,7 +514,9 @@ extension CodeLanguage {
 
     /// Heuristic auto-detect: scan the first non-empty lines for a known
     /// shebang / comment style and return a highlight.js id, otherwise nil.
-    static func detect(from code: String) -> String? {
+    /// Renamed from `detect(from:)` to avoid colliding with the path-based
+    /// `CodeLanguage.detect(from path: String)` in `CodeEditorView.swift`.
+    static func detectLanguage(in code: String) -> String? {
         let head = code.split(separator: "\n", maxSplits: 4, omittingEmptySubsequences: true)
         for line in head {
             let lower = line.lowercased()
