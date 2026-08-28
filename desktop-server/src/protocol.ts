@@ -394,6 +394,56 @@ export const RemoteEndpointRequestMsg = z.object({
 });
 export type RemoteEndpointRequestMsg = z.infer<typeof RemoteEndpointRequestMsg>;
 
+// ---------------------------------------------------------------------------
+// E2B sandbox runs (E2B.dev)
+//
+// After a successful git push the desktop server can spin up an E2B
+// sandbox (https://e2b.dev) that clones the pushed branch, installs the
+// project's deps, and runs a language-aware smoke command (e.g. `npm
+// test`, `pytest`, `cargo test`). Output is streamed to the phone as
+// `e2b_log` events with a terminal `e2b_status` once the run finishes.
+//
+// The API key is admin-managed: the desktop server reads
+// `E2B_API_KEY` (or the Firebase RTDB override) at startup. The user
+// can override per-device via `e2b_set_key`, which the server stores
+// alongside the bearer token for the active connection only.
+// ---------------------------------------------------------------------------
+
+export const E2bStartMsg = z.object({
+  type: z.literal('e2b_start'),
+  sessionId: z.string(),
+  /** Override the auto-detected run command. Server may reject (admin). */
+  command: z.string().optional(),
+  /** Optional user-override E2B API key. Use with care — admins can disable. */
+  apiKey: z.string().optional(),
+});
+export type E2bStartMsg = z.infer<typeof E2bStartMsg>;
+
+export const E2bAbortMsg = z.object({
+  type: z.literal('e2b_abort'),
+  /** Run id returned by the most recent `e2b_started` for this connection. */
+  runId: z.string(),
+});
+export type E2bAbortMsg = z.infer<typeof E2bAbortMsg>;
+
+export const E2bListRequestMsg = z.object({
+  type: z.literal('e2b_list'),
+  sessionId: z.string().optional(),
+  /** Max runs to return (newest first). Defaults to 50. */
+  limit: z.number().int().positive().optional().default(50),
+});
+export type E2bListRequestMsg = z.infer<typeof E2bListRequestMsg>;
+
+export const E2bSetKeyMsg = z.object({
+  type: z.literal('e2b_set_key'),
+  /**
+   * Empty string clears the per-connection override. Server still uses the
+   * admin-managed env key when the override is unset.
+   */
+  apiKey: z.string(),
+});
+export type E2bSetKeyMsg = z.infer<typeof E2bSetKeyMsg>;
+
 export const ClientMessage = z.discriminatedUnion('type', [
   CreateSessionMsg,
   UserMessageMsg,
@@ -427,6 +477,10 @@ export const ClientMessage = z.discriminatedUnion('type', [
   TunnelStopMsg,
   TunnelListMsg,
   RemoteEndpointRequestMsg,
+  E2bStartMsg,
+  E2bAbortMsg,
+  E2bListRequestMsg,
+  E2bSetKeyMsg,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
@@ -783,6 +837,94 @@ export const TranscriptReplayMsg = z.object({
 });
 export type TranscriptReplayMsg = z.infer<typeof TranscriptReplayMsg>;
 
+/**
+ * One persisted E2B run, returned in `e2b_list` and used as the body of
+ * `e2b_status` once the run reaches a terminal state.
+ */
+export const E2bRun = z.object({
+  id: z.string(),
+  sessionId: z.string(),
+  repoFullName: z.string(),
+  branch: z.string(),
+  /** The exact command (or sh script) executed inside the sandbox. */
+  command: z.string(),
+  /** queued | running | completed | failed | killed */
+  status: z.enum(['queued', 'running', 'completed', 'failed', 'killed']),
+  /** Exit code once the run finishes. */
+  exitCode: z.number().optional(),
+  /** E2B sandbox id (assigned by e2b.dev). */
+  sandboxId: z.string().optional(),
+  /** Public URL of the sandbox (when e2b.dev exposes one). */
+  sandboxUrl: z.string().optional(),
+  /** Unix ms. */
+  startedAt: z.number().optional(),
+  finishedAt: z.number().optional(),
+  /** Last N lines captured for the UI. Capped to keep the WS frame small. */
+  outputTail: z.array(z.string()).default([]),
+  /** Human-readable failure reason (network error, missing key, etc.). */
+  error: z.string().optional(),
+});
+export type E2bRun = z.infer<typeof E2bRun>;
+
+/**
+ * Acknowledgement that a sandbox has been provisioned. Sent immediately
+ * after the server kicks off the run; subsequent log lines come as
+ * `e2b_log` and the terminal state as `e2b_status`.
+ */
+export const E2bStartedMsg = z.object({
+  type: z.literal('e2b_started'),
+  sessionId: z.string(),
+  run: E2bRun,
+});
+export type E2bStartedMsg = z.infer<typeof E2bStartedMsg>;
+
+/**
+ * One log line from a running sandbox. `stream` is `out` for stdout and
+ * `err` for stderr so the UI can colour them consistently with the
+ * built-in terminal surface.
+ */
+export const E2bLogMsg = z.object({
+  type: z.literal('e2b_log'),
+  runId: z.string(),
+  sessionId: z.string(),
+  stream: z.enum(['out', 'err']),
+  line: z.string(),
+  /** Unix ms — set by the server when the line was captured. */
+  ts: z.number(),
+});
+export type E2bLogMsg = z.infer<typeof E2bLogMsg>;
+
+/**
+ * Terminal state of a sandbox run. Sent once with the final status;
+ * the client should treat this as the authoritative completion of the
+ * run referenced by `runId`.
+ */
+export const E2bStatusMsg = z.object({
+  type: z.literal('e2b_status'),
+  sessionId: z.string(),
+  run: E2bRun,
+});
+export type E2bStatusMsg = z.infer<typeof E2bStatusMsg>;
+
+/** Response payload for `e2b_list`, newest first. */
+export const E2bListMsg = z.object({
+  type: z.literal('e2b_list'),
+  sessionId: z.string().optional(),
+  runs: z.array(E2bRun),
+});
+export type E2bListMsg = z.infer<typeof E2bListMsg>;
+
+/** Confirms the per-connection user override key was applied (or cleared). */
+export const E2bKeyAckMsg = z.object({
+  type: z.literal('e2b_key_ack'),
+  /**
+   * True if a user-override key is now in effect. False means the server
+   * is using the admin-managed env key. Does NOT echo the key value.
+   */
+  overrideActive: z.boolean(),
+});
+export type E2bKeyAckMsg = z.infer<typeof E2bKeyAckMsg>;
+
 export const ServerMessage = z.discriminatedUnion('type', [
   SessionCreatedMsg,
   AssistantDeltaMsg,
@@ -810,6 +952,11 @@ export const ServerMessage = z.discriminatedUnion('type', [
   GoalStatusMsg,
   ModelStatusMsg,
   TranscriptReplayMsg,
+  E2bStartedMsg,
+  E2bLogMsg,
+  E2bStatusMsg,
+  E2bListMsg,
+  E2bKeyAckMsg,
 ]);
 export type ServerMessage = z.infer<typeof ServerMessage>;
 
