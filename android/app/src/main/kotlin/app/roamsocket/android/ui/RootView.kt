@@ -25,6 +25,8 @@ import app.roamsocket.android.ui.code.CodeScreen
 import app.roamsocket.android.ui.artifacts.ArtifactDetailScreen
 import app.roamsocket.android.ui.artifacts.ArtifactsListScreen
 import app.roamsocket.android.ui.lightweight.LightweightTasksStore
+import app.roamsocket.android.ui.projects.ProjectDetailScreen
+import app.roamsocket.android.ui.projects.ProjectsListScreen
 import app.roamsocket.android.ui.lightweight.OnboardingWalkthroughScreen
 import app.roamsocket.android.ui.mcp.MCPScreen
 import app.roamsocket.android.ui.placeholder.PlaceholderScreen
@@ -54,6 +56,11 @@ private sealed class StudySubDest {
 /** Sub-destinations within the Artifacts section. */
 private sealed class ArtifactsSubDest {
     data class Detail(val id: String) : ArtifactsSubDest()
+}
+
+/** Sub-destinations within the Projects section. */
+private sealed class ProjectsSubDest {
+    data class Detail(val id: String) : ProjectsSubDest()
 }
 
 /**
@@ -135,6 +142,12 @@ fun RootView() {
     // destination stack.
     var artifactsSubDest by remember { mutableStateOf<ArtifactsSubDest?>(null) }
 
+    // Projects sub-navigation: list (default) or a single project detail
+    // view. Phase 1 — owned here so the project list + detail survive
+    // sidebar navigation, matching the iOS pattern where the sidebar
+    // owns the navigation stack.
+    var projectsSubDest by remember { mutableStateOf<ProjectsSubDest?>(null) }
+
     // Lightweight-tasks walkthrough. Shown as a full-screen cover on
     // first launch (and any time the user wipes storage). Mirrors the
     // iOS `RootView.showWalkthrough` + `.fullScreenCover` flow.
@@ -149,6 +162,7 @@ fun RootView() {
         current = to
         studySubDest = null
         artifactsSubDest = null
+        projectsSubDest = null
         scope.launch { drawerState.close() }
     }
 
@@ -264,6 +278,27 @@ fun RootView() {
                                 store = artifactStore,
                                 onBack = { current = SidebarDestination.Chats },
                                 onOpenArtifact = { id -> artifactsSubDest = ArtifactsSubDest.Detail(id) },
+                            )
+                        }
+                    }
+                    // Phase 1 (Android Projects): list / detail. The store
+                    // lives on `AppContainer` so the projects + projectChats
+                    // flows stay in sync across navigation. The list → detail
+                    // transition goes through `projectsSubDest` so the user can
+                    // pop back without losing scroll position.
+                    SidebarDestination.Projects -> {
+                        when (val sub = projectsSubDest) {
+                            is ProjectsSubDest.Detail -> ProjectDetailScreen(
+                                projectId = sub.id,
+                                onBack = { projectsSubDest = null },
+                                onOpenChat = {
+                                    projectsSubDest = null
+                                    current = SidebarDestination.Chats
+                                },
+                            )
+                            null -> ProjectsListScreen(
+                                onBack = { current = SidebarDestination.Chats },
+                                onOpenProject = { id -> projectsSubDest = ProjectsSubDest.Detail(id) },
                             )
                         }
                     }
