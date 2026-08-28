@@ -53,6 +53,7 @@ struct AppSettingsView: View {
                 header
                 ScrollView {
                     VStack(spacing: 16) {
+                        quickAccessSection
                         accountSection
                         desktopServerSection
                         sandboxesSection
@@ -185,6 +186,85 @@ struct AppSettingsView: View {
     }
 
     // MARK: - Account
+
+    // MARK: - Quick access (Git / E2B / AI management)
+
+    /// Three large tappable cards at the top of Settings that
+    /// surface the most important entry points: Git, Sandboxes
+    /// (E2B), and AI management. Each card summarises the area's
+    /// current state and opens the relevant sub-screen on tap.
+    ///
+    /// Scoping:
+    ///   - Git + AI management cards are always shown.
+    ///   - The E2B card is always shown too, but its tap target
+    ///     and "status" subtitle gate the deeper flows — phone-
+    ///     originated runs are exclusive to having an e2b key
+    ///     (or a paired desktop with an admin key). The card text
+    ///     surfaces the current state so the user knows which
+    ///     path is available before they tap.
+    private var quickAccessSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Quick access")
+                .font(.system(size: 14))
+                .foregroundStyle(Theme.textSecondary)
+                .padding(.horizontal, 4)
+            VStack(spacing: 0) {
+                QuickAccessCard(
+                    systemImage: "link",
+                    title: "Git",
+                    subtitle: "Repos, commits, branches",
+                    statusLabel: githubStatus,
+                    isReady: !((state.githubToken ?? "").isEmpty),
+                    action: { showGitHubLink = true },
+                )
+                Divider().background(Theme.separator)
+                QuickAccessCard(
+                    systemImage: "shippingbox",
+                    title: "E2B",
+                    subtitle: e2bQuickAccessSubtitle,
+                    statusLabel: e2bQuickAccessStatus,
+                    isReady: e2bQuickAccessIsReady,
+                    action: {
+                        if state.serverToken != nil || !(state.e2bKeyStore.get() ?? "").isEmpty {
+                            showSandboxes = true
+                        } else {
+                            showE2BKeySheet = true
+                        }
+                    },
+                )
+                Divider().background(Theme.separator)
+                QuickAccessCard(
+                    systemImage: "brain",
+                    title: "AI management",
+                    subtitle: "Default model · providers · effort",
+                    statusLabel: providerKeysStatus,
+                    isReady: true,
+                    action: { showProviderKeys = true },
+                )
+            }
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 22))
+        }
+    }
+
+    private var e2bQuickAccessSubtitle: String {
+        if state.serverToken != nil { return "Desktop-mediated runs are active." }
+        if !(state.e2bKeyStore.get() ?? "").isEmpty { return "Phone-originated runs are active." }
+        return "Add your e2b.dev key to run from this device."
+    }
+
+    private var e2bQuickAccessStatus: String {
+        if state.serverToken != nil { return "Desktop" }
+        if !(state.e2bKeyStore.get() ?? "").isEmpty { return "Phone" }
+        return "Setup"
+    }
+
+    /// True when the user can actually start a run from the E2B
+    /// card (either the desktop is paired or the user has a
+    /// personal e2b key set). Drives the card's `Setup` / `Ready`
+    /// styling.
+    private var e2bQuickAccessIsReady: Bool {
+        state.serverToken != nil || !(state.e2bKeyStore.get() ?? "").isEmpty
+    }
 
     /// GitHub link status + provider API keys. Replaces the old fake
     /// "Profile / Billing / Usage / Notifications / Privacy / Shared links"
@@ -1713,6 +1793,72 @@ private struct DesktopStatusDot: View {
             .overlay(
                 Circle()
                     .stroke(color.opacity(0.25), lineWidth: 3)
+            )
+    }
+}
+
+// MARK: - Quick access card
+
+/// One row of the `Quick access` section. Three things on each card:
+///   - an SF Symbol for the area,
+///   - a status pill (e.g. "Linked", "Setup", "Desktop"),
+///   - a chevron that hints "tap to open".
+private struct QuickAccessCard: View {
+    let systemImage: String
+    let title: String
+    let subtitle: String
+    let statusLabel: String
+    /// When true, the status pill uses the accent colour. When false,
+    /// the pill is neutral and the user knows the area needs setup.
+    let isReady: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 22, weight: .medium))
+                    .foregroundStyle(isReady ? Theme.accent : Theme.textPrimary)
+                    .frame(width: 32, height: 32)
+                    .background(
+                        (isReady ? Theme.accent : Theme.textTertiary).opacity(0.12),
+                        in: RoundedRectangle(cornerRadius: 10),
+                    )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                    Text(subtitle)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textSecondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                StatusPill(label: statusLabel, isReady: isReady)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 14, weight: .regular))
+                    .foregroundStyle(Theme.textTertiary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct StatusPill: View {
+    let label: String
+    let isReady: Bool
+    var body: some View {
+        Text(label)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(isReady ? Theme.accent : Theme.textSecondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(
+                (isReady ? Theme.accent : Theme.textTertiary).opacity(0.12),
+                in: Capsule(),
             )
     }
 }
