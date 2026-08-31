@@ -1,0 +1,198 @@
+{
+  "op": "encode_client_message",
+  "cases": [
+    {
+      "name": "user_message minimal",
+      "input": {
+        "case": "user_message",
+        "sessionId": "s1",
+        "text": "hello"
+      },
+      "expected": {
+        "type": "user_message",
+        "sessionId": "s1",
+        "text": "hello"
+      }
+    },
+    {
+      "name": "user_message with model override",
+      "input": {
+        "case": "user_message",
+        "sessionId": "s1",
+        "text": "switch me",
+        "model": {
+          "provider": "anthropic",
+          "model": "claude-sonnet-4",
+          "effort": "high",
+          "apiKey": "sk-test"
+        }
+      },
+      "expected": {
+        "type": "user_message",
+        "sessionId": "s1",
+        "text": "switch me",
+        "model": {
+          "provider": "anthropic",
+          "model": "claude-sonnet-4",
+          "effort": "high",
+          "apiKey": "sk-test"
+        }
+      }
+    },
+    {
+      "name": "interrupt",
+      "input": {
+        "case": "interrupt",
+        "sessionId": "s1"
+      },
+      "expected": {
+        "type": "interrupt",
+        "sessionId": "s1"
+      }
+    },
+    {
+      "name": "skills_sync_request singleton",
+      "input": {
+        "case": "skills_sync_request"
+      },
+      "expected": {
+        "type": "skills_sync_request"
+      }
+    },
+    {
+      "name": "git_publish all flags",
+      "input": {
+        "case": "git_publish",
+        "sessionId": "s1",
+        "message": "feat: add notes",
+        "commit": true,
+        "push": true,
+        "openPr": false
+      },
+      "expected": {
+        "type": "git_publish",
+        "sessionId": "s1",
+        "message": "feat: add notes",
+        "commit": true,
+        "push": true,
+        "openPr": false
+      }
+    },
+    {
+      "name": "file_write",
+      "input": {
+        "case": "file_write",
+        "sessionId": "s1",
+        "path": "src/App.swift",
+        "content": "print(1)\n"
+      },
+      "expected": {
+        "type": "file_write",
+        "sessionId": "s1",
+        "path": "src/App.swift",
+        "content": "print(1)\n"
+      }
+    },
+    {
+      "name": "tunnel_start",
+      "input": {
+        "case": "tunnel_start",
+        "sessionId": "s1",
+        "port": 3000,
+        "provider": "cloudflare"
+      },
+      "expected": {
+        "type": "tunnel_start",
+        "sessionId": "s1",
+        "port": 3000,
+        "provider": "cloudflare"
+      }
+    },
+    {
+      "name": "remote_endpoint_request soft omits force",
+      "input": {
+        "case": "remote_endpoint_request",
+        "force": false
+      },
+      "expected": {
+        "type": "remote_endpoint_request"
+      }
+    },
+    {
+      "name": "remote_endpoint_request force",
+      "input": {
+        "case": "remote_endpoint_request",
+        "force": true
+      },
+      "expected": {
+        "type": "remote_endpoint_request",
+        "force": true
+      }
+    },
+    {
+      "name": "create_session full",
+      "input": {
+        "case": "create_session",
+        "sessionId": "s1",
+        "repo": {
+          "fullName": "owner/repo",
+          "workBranch": "apc/work"
+        },
+        "environment": {
+          "name": "kind",
+          "variables": { "API_KEY": "hunter2" }
+        },
+        "model": {
+          "provider": "anthropic",
+          "model": "claude-sonnet-4",
+          "apiKey": "k"
+        },
+        "permissionMode": "acceptEdits",
+        "skills": [],
+        "mcpServers": [
+          {
+            "id": "fs",
+            "name": "filesystem",
+            "description": "Local FS",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+            "env": { "HOME": "/tmp" },
+            "isEnabled": true
+          }
+        ]
+      },
+      "expected": {
+        "type": "create_session",
+        "sessionId": "s1",
+        "repo": {
+          "fullName": "owner/repo",
+          "workBranch": "apc/work"
+        },
+        "environment": {
+          "name": "kind",
+          "networkAccess": "trusted",
+          "allowedDomains": [],
+          "variables": { "API_KEY": "hunter2" }
+        },
+        "model": {
+          "provider": "anthropic",
+          "model": "claude-sonnet-4",
+          "effort": "high",
+          "apiKey": "k"
+        },
+        "permissionMode": "acceptEdits",
+        "mcpServers": [
+          {
+            "id": "fs",
+            "name": "filesystem",
+            "description": "Local FS",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+            "env": { "HOME": "/tmp" },
+            "isEnabled": true
+          }
+        ]
+      }
+    }
+  ]
+}

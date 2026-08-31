@@ -1,0 +1,326 @@
+{
+  "op": "decode_server_message",
+  "cases": [
+    {
+      "name": "session_created",
+      "input": "{\"type\":\"session_created\",\"sessionId\":\"s1\",\"workdir\":\"/tmp/x\",\"baseBranch\":\"main\",\"workBranch\":\"apc/work\"}",
+      "expected": {
+        "kind": "session_created",
+        "sessionId": "s1",
+        "workdir": "/tmp/x",
+        "baseBranch": "main",
+        "workBranch": "apc/work"
+      }
+    },
+    {
+      "name": "assistant_delta",
+      "input": "{\"type\":\"assistant_delta\",\"sessionId\":\"s\",\"text\":\"Hello \"}",
+      "expected": {
+        "kind": "assistant_delta",
+        "sessionId": "s",
+        "text": "Hello "
+      }
+    },
+    {
+      "name": "tool_call",
+      "input": "{\"type\":\"tool_call\",\"sessionId\":\"s1\",\"callId\":\"c1\",\"tool\":\"bash\",\"summary\":\"bash: ls\"}",
+      "expected": {
+        "kind": "tool_call",
+        "sessionId": "s1",
+        "callId": "c1",
+        "tool": "bash",
+        "summary": "bash: ls"
+      }
+    },
+    {
+      "name": "tool_result ok",
+      "input": "{\"type\":\"tool_result\",\"sessionId\":\"s\",\"callId\":\"c\",\"ok\":true,\"output\":\"done\"}",
+      "expected": {
+        "kind": "tool_result",
+        "sessionId": "s",
+        "callId": "c",
+        "ok": true,
+        "output": "done"
+      }
+    },
+    {
+      "name": "tool_result failure",
+      "input": "{\"type\":\"tool_result\",\"sessionId\":\"s\",\"callId\":\"c\",\"ok\":false,\"output\":\"boom\"}",
+      "expected": {
+        "kind": "tool_result",
+        "sessionId": "s",
+        "callId": "c",
+        "ok": false,
+        "output": "boom"
+      }
+    },
+    {
+      "name": "diff",
+      "input": "{\"type\":\"diff\",\"sessionId\":\"s1\",\"path\":\"a.txt\",\"patch\":\"@@\",\"added\":3,\"removed\":1}",
+      "expected": {
+        "kind": "diff",
+        "sessionId": "s1",
+        "path": "a.txt",
+        "patch": "@@",
+        "added": 3,
+        "removed": 1
+      }
+    },
+    {
+      "name": "permission_request",
+      "input": "{\"type\":\"permission_request\",\"sessionId\":\"s1\",\"requestId\":\"r1\",\"tool\":\"bash\",\"summary\":\"bash: rm\"}",
+      "expected": {
+        "kind": "permission_request",
+        "sessionId": "s1",
+        "requestId": "r1",
+        "tool": "bash",
+        "summary": "bash: rm"
+      }
+    },
+    {
+      "name": "session_done without stopReason",
+      "input": "{\"type\":\"session_done\",\"sessionId\":\"s1\"}",
+      "expected": {
+        "kind": "session_done",
+        "sessionId": "s1",
+        "stopReason": null
+      }
+    },
+    {
+      "name": "session_done with stopReason",
+      "input": "{\"type\":\"session_done\",\"sessionId\":\"s1\",\"stopReason\":\"interrupted\"}",
+      "expected": {
+        "kind": "session_done",
+        "sessionId": "s1",
+        "stopReason": "interrupted"
+      }
+    },
+    {
+      "name": "pr_created",
+      "input": "{\"type\":\"pr_created\",\"sessionId\":\"s1\",\"url\":\"https://github.com/o/r/pull/9\"}",
+      "expected": {
+        "kind": "pr_created",
+        "sessionId": "s1",
+        "url": "https://github.com/o/r/pull/9"
+      }
+    },
+    {
+      "name": "git_result with url",
+      "input": "{\"type\":\"git_result\",\"sessionId\":\"s1\",\"action\":\"commit+push\",\"ok\":true,\"detail\":\"Pushed.\",\"url\":\"https://github.com/o/r/compare/main...b\"}",
+      "expected": {
+        "kind": "git_result",
+        "sessionId": "s1",
+        "action": "commit+push",
+        "ok": true,
+        "detail": "Pushed.",
+        "url": "https://github.com/o/r/compare/main...b"
+      }
+    },
+    {
+      "name": "git_result without url",
+      "input": "{\"type\":\"git_result\",\"sessionId\":\"s1\",\"action\":\"commit\",\"ok\":true,\"detail\":\"Committed.\"}",
+      "expected": {
+        "kind": "git_result",
+        "sessionId": "s1",
+        "action": "commit",
+        "ok": true,
+        "detail": "Committed.",
+        "url": null
+      }
+    },
+    {
+      "name": "error without sessionId",
+      "input": "{\"type\":\"error\",\"message\":\"boom\"}",
+      "expected": {
+        "kind": "error",
+        "sessionId": null,
+        "message": "boom"
+      }
+    },
+    {
+      "name": "error with sessionId",
+      "input": "{\"type\":\"error\",\"sessionId\":\"s1\",\"message\":\"boom\"}",
+      "expected": {
+        "kind": "error",
+        "sessionId": "s1",
+        "message": "boom"
+      }
+    },
+    {
+      "name": "file_write_result",
+      "input": "{\"type\":\"file_write_result\",\"sessionId\":\"s1\",\"path\":\"a.md\",\"ok\":true,\"message\":\"Saved a.md\"}",
+      "expected": {
+        "kind": "file_write_result",
+        "sessionId": "s1",
+        "path": "a.md",
+        "ok": true,
+        "message": "Saved a.md"
+      }
+    },
+    {
+      "name": "file_list_result with changes",
+      "input": "{\"type\":\"file_list_result\",\"sessionId\":\"s1\",\"path\":\"\",\"entries\":[{\"name\":\"a.ts\",\"path\":\"a.ts\",\"isDirectory\":false,\"size\":12,\"modifiedAt\":\"2020-01-01T00:00:00.000Z\",\"changeStatus\":\"M\"}],\"diff\":\" a.ts | 1 +\\n\",\"changes\":[{\"path\":\"a.ts\",\"status\":\"M\"}]}",
+      "expected": {
+        "kind": "file_list_result",
+        "sessionId": "s1",
+        "path": "",
+        "entries": [
+          {
+            "name": "a.ts",
+            "path": "a.ts",
+            "isDirectory": false,
+            "size": 12,
+            "modifiedAt": "2020-01-01T00:00:00.000Z",
+            "changeStatus": "M"
+          }
+        ],
+        "diff": " a.ts | 1 +\n",
+        "changes": [{ "path": "a.ts", "status": "M" }]
+      }
+    },
+    {
+      "name": "port_list_result",
+      "input": "{\"type\":\"port_list_result\",\"sessionId\":\"s1\",\"ports\":[{\"port\":3000,\"pid\":42,\"command\":\"vite\"}]}",
+      "expected": {
+        "kind": "port_list_result",
+        "sessionId": "s1",
+        "ports": [{ "port": 3000, "pid": 42, "command": "vite" }]
+      }
+    },
+    {
+      "name": "tunnel_status",
+      "input": "{\"type\":\"tunnel_status\",\"sessionId\":\"s1\",\"tunnels\":[{\"id\":\"t1\",\"port\":3000,\"provider\":\"localtunnel\",\"status\":\"up\",\"url\":\"https://x.loca.lt\"}],\"availableProviders\":[\"localtunnel\",\"cloudflare\"]}",
+      "expected": {
+        "kind": "tunnel_status",
+        "sessionId": "s1",
+        "tunnels": [
+          {
+            "id": "t1",
+            "port": 3000,
+            "provider": "localtunnel",
+            "status": "up",
+            "url": "https://x.loca.lt"
+          }
+        ],
+        "availableProviders": ["localtunnel", "cloudflare"]
+      }
+    },
+    {
+      "name": "remote_endpoint up",
+      "input": "{\"type\":\"remote_endpoint\",\"status\":\"up\",\"url\":\"https://abc.trycloudflare.com\",\"provider\":\"cloudflare\"}",
+      "expected": {
+        "kind": "remote_endpoint",
+        "status": "up",
+        "url": "https://abc.trycloudflare.com",
+        "provider": "cloudflare",
+        "error": null
+      }
+    },
+    {
+      "name": "task_list",
+      "input": "{\"type\":\"task_list\",\"sessionId\":\"s1\",\"tasks\":[{\"id\":\"1\",\"content\":\"Plan\",\"status\":\"completed\"},{\"id\":\"2\",\"content\":\"Ship\",\"status\":\"in_progress\"}]}",
+      "expected": {
+        "kind": "task_list",
+        "sessionId": "s1",
+        "tasks": [
+          { "id": "1", "content": "Plan", "status": "completed" },
+          { "id": "2", "content": "Ship", "status": "in_progress" }
+        ]
+      }
+    },
+    {
+      "name": "goal_status active",
+      "input": "{\"type\":\"goal_status\",\"sessionId\":\"s1\",\"status\":\"active\",\"condition\":\"tests pass\",\"reason\":\"not yet\",\"turnsEvaluated\":2,\"startedAt\":1710000000000,\"elapsedMs\":12000,\"message\":\"◎ /goal active\"}",
+      "expected": {
+        "kind": "goal_status",
+        "sessionId": "s1",
+        "status": "active",
+        "condition": "tests pass",
+        "reason": "not yet",
+        "turnsEvaluated": 2,
+        "startedAt": 1710000000000,
+        "elapsedMs": 12000,
+        "message": "◎ /goal active"
+      }
+    },
+    {
+      "name": "model_status loading with hubID",
+      "input": "{\"type\":\"model_status\",\"sessionId\":\"s1\",\"status\":\"loading\",\"hubID\":\"mlx-community/gemma-3-4b\",\"message\":\"Loading model weights into memory…\"}",
+      "expected": {
+        "kind": "model_status",
+        "sessionId": "s1",
+        "status": "loading",
+        "hubID": "mlx-community/gemma-3-4b",
+        "message": "Loading model weights into memory…"
+      }
+    },
+    {
+      "name": "model_status done minimal",
+      "input": "{\"type\":\"model_status\",\"sessionId\":\"s1\",\"status\":\"done\"}",
+      "expected": {
+        "kind": "model_status",
+        "sessionId": "s1",
+        "status": "done",
+        "hubID": null,
+        "message": null
+      }
+    },
+    {
+      "name": "transcript_replay",
+      "input": "{\"type\":\"transcript_replay\",\"sessionId\":\"s1\",\"events\":[{\"type\":\"user\",\"ts\":1710000000000,\"text\":\"hi\"},{\"type\":\"assistant_delta\",\"sessionId\":\"s1\",\"text\":\"he\"},{\"type\":\"tool_call\",\"sessionId\":\"s1\",\"callId\":\"c1\",\"tool\":\"bash\",\"summary\":\"ls\"},{\"type\":\"tool_result\",\"sessionId\":\"s1\",\"callId\":\"c1\",\"ok\":true,\"output\":\"out\"},{\"type\":\"diff\",\"sessionId\":\"s1\",\"path\":\"a\",\"patch\":\"@@\",\"added\":1,\"removed\":0}],\"truncated\":false,\"isLive\":true}",
+      "expected": {
+        "kind": "transcript_replay",
+        "sessionId": "s1",
+        "truncated": false,
+        "isLive": true,
+        "events": [
+          { "kind": "user", "ts": 1710000000000, "text": "hi" },
+          { "kind": "assistant_delta", "sessionId": "s1", "text": "he" },
+          { "kind": "tool_call", "sessionId": "s1", "callId": "c1", "tool": "bash", "summary": "ls" },
+          { "kind": "tool_result", "sessionId": "s1", "callId": "c1", "ok": true, "output": "out" },
+          { "kind": "diff", "sessionId": "s1", "path": "a", "patch": "@@", "added": 1, "removed": 0 }
+        ]
+      }
+    },
+    {
+      "name": "e2b_list",
+      "input": "{\"type\":\"e2b_list\",\"sessionId\":\"s1\",\"runs\":[{\"id\":\"r1\",\"sessionId\":\"s1\",\"repoFullName\":\"o/r\",\"branch\":\"main\",\"command\":\"npm test\",\"status\":\"completed\",\"exitCode\":0,\"sandboxId\":\"sbx1\",\"sandboxUrl\":\"https://sbx1.e2b.dev\",\"startedAt\":1710000000000,\"finishedAt\":1710000001000,\"outputTail\":[\"ok\"],\"error\":null}]}",
+      "expected": {
+        "kind": "e2b_list",
+        "sessionId": "s1",
+        "runs": [
+          {
+            "id": "r1",
+            "sessionId": "s1",
+            "repoFullName": "o/r",
+            "branch": "main",
+            "command": "npm test",
+            "status": "completed",
+            "exitCode": 0,
+            "sandboxId": "sbx1",
+            "sandboxUrl": "https://sbx1.e2b.dev",
+            "startedAt": 1710000000000,
+            "finishedAt": 1710000001000,
+            "outputTail": ["ok"],
+            "error": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "e2b_key_ack",
+      "input": "{\"type\":\"e2b_key_ack\",\"overrideActive\":true}",
+      "expected": {
+        "kind": "e2b_key_ack",
+        "overrideActive": true
+      }
+    },
+    {
+      "name": "unknown type must fail decode",
+      "input": "{\"type\":\"not_a_real_type\"}",
+      "expected": {
+        "kind": "error"
+      }
+    }
+  ]
+}
