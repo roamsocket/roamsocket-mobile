@@ -240,12 +240,21 @@ final class CodeSessionStore: ObservableObject, @unchecked Sendable {
     }
 }
 
-/// The Code home screen on iOS: the entry point for phone-originated
-/// E2B sandboxes. The desktop-mediated Code flow is gone (see the
-/// E2B cleanup commits on this branch), so this view no longer
-/// drives agent sessions, git publishing, or PR creation — it
-/// just lets the user pick a repo, fire off a sandbox command,
-/// and watch the live output.
+/// The Code home screen on iOS. Two paths live here, side by side:
+///   - **Phone sandbox (E2B)**: the default. Pick a repo, run a
+///     command on a fresh e2b.dev sandbox. The sandbox is a
+///     one-shot: clone → install → run. History persists.
+///   - **Desktop session**: the full agent loop. Requires a
+///     paired desktop running the server (the existing path
+///     that drives `SessionView` / `SessionViewModel`). The
+///     phone is a thin client; the desktop does the work.
+///
+/// Both paths land in a chat-style session UI. The phone sandbox
+/// path is currently one-shot (no agent loop on the phone); the
+/// desktop path has the full agent. Bridging the two — running
+/// the agent loop on the phone by orchestrating the E2B sandbox
+/// — is the next phase. Until then, the desktop path is the way
+/// to get AI-driven multi-step code changes.
 struct CodeHomeView: View {
     @EnvironmentObject var state: AppState
     /// Drives the "Start a run" sheet (repo / branch / preset / command).
@@ -253,10 +262,12 @@ struct CodeHomeView: View {
     /// Inline error from the start sheet (missing key, sandbox create
     /// failed, etc.) — surfaces as an alert above the run history.
     @State private var startError: String?
-    /// One-shot trigger for the "Add your e2b.dev key" sheet from the
-    /// empty state. Same UI as the Settings E2B card entry, just
-    /// routed through `state.showE2BKeySheet` for consistency.
-    @State private var showKeySheet = false
+    /// Desktop session launched from this screen, if any. When
+    /// non-nil, `SessionView` is presented as a fullScreenCover.
+    @State private var desktopSession: SessionConfig?
+    /// Sheet for the desktop pairing flow. Independent of the
+    /// Settings card so the user can pair without leaving Code.
+    @State private var showPairing = false
 
     /// Opens the root sidebar drawer. Wired from `RootView` so Code can open
     /// the same destinations as Chat even though this screen hides the
@@ -268,72 +279,32 @@ struct CodeHomeView: View {
     /// persisted history survives via `PhoneRunPersistence`.
     @StateObject private var store = SandboxesStore()
 
+    private var isPaired: Bool {
+        state.serverToken != nil && (state.serverName?.isEmpty == false)
+    }
+
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             Theme.background.ignoresSafeArea()
             VStack(spacing: 0) {
-                if rows.isEmpty {
-                    CodeEmptyState(
-                        hasPhoneKey: state.e2bKeyStore.hasKey,
-                        onStart: { showStartSheet = true },
-                        onAddKey: { state.showE2BKeySheet = true },
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    // Pinned active run (if any) at the top, then
-                    // history below. Mirrors the desktop Code home's
-                    // "current session" / "history" split — the
-                    // active run is the focus, the history is
-                    // reference.
-                    let active = rows.first(where: {
-                        $0.status == "running" || $0.status == "queued"
-                    })
-                    ScrollView {
-                        LazyVStack(spacing: 12) {
-                            if let active {
-                                Section {
-                                    HStack {
-                                        Image(systemName: "bolt.fill")
-                                            .font(.system(size: 11, weight: .bold))
-                                            .foregroundStyle(Theme.accent)
-                                        Text("Active sandbox")
-                                            .font(.system(size: 12, weight: .semibold))
-                                            .foregroundStyle(Theme.textSecondary)
-                                            .textCase(.uppercase)
-                                    }
-                                    .padding(.horizontal, 4)
-                                    RunRowView(row: active, onStop: {
-                                        state.sandboxesStore.cancelPhoneRun(runId: active.id)
-                                    }, onRerun: { rerun(row: active) })
-                                } header: {
-                                    EmptyView()
-                                }
-                            }
-                            let past = rows.filter {
-                                $0.status != "running" && $0.status != "queued"
-                            }
-                            if !past.isEmpty {
-                                Section {
-                                        ForEach(past) { row in
-                                            RunRowView(row: row, onStop: {
-                                                state.sandboxesStore.cancelPhoneRun(runId: row.id)
-                                            }, onRerun: { rerun(row: row) })
-                                        }
-                                } header: {
-                                    HStack {
-                                        Text("History")
-                                            .font(.system(size: 12, weight: .semibold))
-                                            .foregroundStyle(Theme.textSecondary)
-                                            .textCase(.uppercase)
-                                        Spacer()
-                                    }
-                                    .padding(.horizontal, 4)
-                                }
-                            }
+                ScrollView {
+                    LazyVStack(spacing: 12) {
+                        // Path 1: desktop session. The full agent
+                        // loop path — only shown when the user has
+                        // paired a desktop. Tap → open a new
+                        // session (or resume the most recent) →
+                        // SessionView fullScreenCover.
+                        if isPaired {
+                            desktopCard
+                        } else {
+                            pairDesktopCard
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
+                        // Path 2: phone sandbox (E2B). Always
+                        // shown. This is the default path.
+                        e2bSection
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
                 }
             }
             // Floating "Start a run" affordance. Disabled until the
@@ -377,6 +348,14 @@ struct CodeHomeView: View {
         .sheet(isPresented: $showStartSheet) {
             StartRunSheet(onStart: { req in startRun(req) })
                 .presentationDetents([.large])
+        }
+        .sheet(isPresented: $showPairing) {
+            NavigationStack { ServerPairingView() }
+                .environmentObject(state)
+        }
+        .fullScreenCover(item: $desktopSession) { config in
+            NavigationStack { SessionView(config: config) }
+                .environmentObject(state)
         }
         .alert("Run error", isPresented: Binding(
             get: { startError != nil },
@@ -461,6 +440,185 @@ struct CodeHomeView: View {
             return .url(displayName)
         }
         return .github(fullName: displayName)
+    }
+
+    // MARK: - Sections
+
+    /// E2B sandboxes section. Pinned active run + history, or the
+    /// empty state if there are no runs yet.
+    @ViewBuilder
+    private var e2bSection: some View {
+        if rows.isEmpty {
+            CodeEmptyState(
+                hasPhoneKey: state.e2bKeyStore.hasKey,
+                onStart: { showStartSheet = true },
+                onAddKey: { state.showE2BKeySheet = true },
+            )
+            .frame(maxWidth: .infinity)
+            .padding(.top, 24)
+        } else {
+            let active = rows.first(where: { $0.status == "running" || $0.status == "queued" })
+            let past = rows.filter { $0.status != "running" && $0.status != "queued" }
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Image(systemName: "iphone.gen3")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Theme.accent)
+                    Text("Phone sandbox")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.textSecondary)
+                        .textCase(.uppercase)
+                    Spacer()
+                    Button {
+                        showStartSheet = true
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 10, weight: .bold))
+                            Text("Start")
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                        .foregroundStyle(Theme.accent)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 4)
+                if let active {
+                    RunRowView(row: active, onStop: {
+                        state.sandboxesStore.cancelPhoneRun(runId: active.id)
+                    }, onRerun: { rerun(row: active) })
+                }
+                if !past.isEmpty {
+                    Text("History")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.textSecondary)
+                        .textCase(.uppercase)
+                        .padding(.horizontal, 4)
+                        .padding(.top, 4)
+                    ForEach(past) { row in
+                        RunRowView(row: row, onStop: {
+                            state.sandboxesStore.cancelPhoneRun(runId: row.id)
+                        }, onRerun: { rerun(row: row) })
+                    }
+                }
+            }
+        }
+    }
+
+    /// Card shown when a desktop is paired. Offers the full
+    /// agent-loop path: open a new session on the desktop, which
+    /// drives the existing `SessionView` fullScreenCover.
+    private var desktopCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Image(systemName: "desktopcomputer")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                    .frame(width: 28)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(state.serverName ?? "Desktop")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                    Text(desktopSubtitle)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textSecondary)
+                }
+                Spacer()
+            }
+            HStack(spacing: 8) {
+                Button {
+                    launchDesktopSession()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "play.fill")
+                        Text("Start desktop session")
+                    }
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.background)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Theme.accent, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(!canLaunchDesktop)
+                .opacity(canLaunchDesktop ? 1 : 0.5)
+            }
+        }
+        .padding(12)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(Theme.separator.opacity(0.6), lineWidth: 1)
+        )
+    }
+
+    /// Card shown when no desktop is paired. Directs the user to
+    /// the pairing flow (also reachable from Settings).
+    private var pairDesktopCard: some View {
+        Button {
+            showPairing = true
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "desktopcomputer")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Theme.textTertiary)
+                    .frame(width: 28)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Pair a desktop for the full agent loop")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                    Text("Phone sandboxes run one command. A paired desktop adds AI-driven multi-step edits, git, and PRs.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textSecondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.textTertiary)
+            }
+            .padding(12)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(Theme.separator.opacity(0.6), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var desktopSubtitle: String {
+        let status = state.desktopReachability
+        switch status {
+        case .connected: return "Connected · start a session to drive the agent loop."
+        case .connecting: return "Connecting…"
+        case .unreachable: return "Unreachable — try pairing again."
+        case .unpaired: return "Paired · ready."
+        }
+    }
+
+    /// Prerequisite check for launching a desktop session. Mirrors
+    /// the desktop's pre-session checks: repo selected, model with
+    /// API key, and the desktop actually reachable.
+    private var canLaunchDesktop: Bool {
+        guard state.desktopReachability == .connected else { return false }
+        guard state.selectedRepo != nil else { return false }
+        guard let model = state.selectedModel else { return false }
+        return !state.resolvedAPIKey(for: model.provider).isEmpty
+    }
+
+    /// Build a `SessionConfig` and trigger the desktop-session cover.
+    /// Surfaces a friendly error if the prerequisites aren't met.
+    private func launchDesktopSession() {
+        let missing = SessionLauncher.missingRequirements(in: state)
+        if !missing.isEmpty {
+            startError = missing.joined(separator: " ")
+            return
+        }
+        guard let config = SessionLauncher.makeConfig(in: state, task: "Start a new coding session.") else {
+            startError = "Couldn't build a session config. Check pairing + repo + API key."
+            return
+        }
+        desktopSession = config
     }
 }
 
