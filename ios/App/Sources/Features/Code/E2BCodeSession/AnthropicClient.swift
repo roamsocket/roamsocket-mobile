@@ -1,10 +1,11 @@
 import Foundation
 import AnyProvCore
 
-/// Minimal Anthropic Messages API client. We don't use the
-/// streaming SSE variant in v1 — the runner awaits the full
-/// response and then dispatches any tool calls. Streaming
-/// can land later once the basic tool loop is working.
+/// Minimal Anthropic Messages API client. Non-streaming v1 by
+/// default (`send`); streaming via `stream` returns an
+/// `AsyncThrowingStream<StreamEvent>` for callers that want to
+/// show text deltas as they arrive. Pinned to model
+/// `claude-sonnet-4-5` with 4k max_tokens by default.
 ///
 /// Auth: the `x-api-key` header. `anthropic-version` is the
 /// pinned 2023-06-01 (matches the Messages API surface we use).
@@ -34,11 +35,8 @@ public actor AnthropicClient {
                     try c.encode(input, forKey: .input)
                 case let .toolResult(id, content, isError):
                     try c.encode("tool_result", forKey: .type)
-                    try c.encode(id, forKey: .content) // `content` field name
-                    // Re-encode the inner tool_result body so the
-                    // wire shape matches Anthropic's spec: a string
-                    // body plus an `is_error` flag at the top level.
-                    try c.encode(content, forKey: .text) // we use .text as a generic extra key
+                    try c.encode(id, forKey: .content)
+                    try c.encode(content, forKey: .text)
                     try c.encode(isError, forKey: .is_error)
                 }
             }
@@ -56,7 +54,7 @@ public actor AnthropicClient {
                     let input = try c.decode(AnyJSON.self, forKey: .input)
                     self = .toolUse(id: id, name: name, input: input)
                 case .tool_result:
-                    let id = try c.decode(String.self, forKey: .id)
+                    let id = try c.decode(String.self, forKey: .content)
                     let content = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
                     let isError = try c.decodeIfPresent(Bool.self, forKey: .is_error) ?? false
                     self = .toolResult(toolUseId: id, content: content, isError: isError)
@@ -104,6 +102,21 @@ public actor AnthropicClient {
         }
     }
 
+    /// One SSE event. Matches the Anthropic Messages API
+    /// streaming surface. `textDelta` and `inputJsonDelta`
+    /// are the per-event content deltas; `messageDelta`
+    /// carries the per-turn delta for stop_reason + usage.
+    public enum StreamEvent: Sendable {
+        case messageStart
+        case contentBlockStart(index: Int, type: String)
+        case textDelta(index: Int, text: String)
+        case inputJsonDelta(index: Int, partialJson: String)
+        case contentBlockStop(index: Int)
+        case messageDelta(stopReason: String?, usage: Response.Usage?)
+        case messageStop
+        case ping
+    }
+
     let apiKey: String
     let baseURL: URL
     let model: String
@@ -130,19 +143,113 @@ public actor AnthropicClient {
         tools: [Tool],
         maxTokens: Int = 4096,
     ) async throws -> Response {
+        let (data, response) = try await post(
+            system: system,
+            messages: messages,
+            tools: tools,
+            maxTokens: maxTokens,
+            stream: false,
+        )
+        return try Self.decode(data)
+    }
+
+    /// SSE-streaming variant of `send`. The returned `AsyncThrowingStream`
+    /// yields `StreamEvent` values as the server produces them. The
+    /// final event is always `.messageStop` (or an error). Caller
+    /// is responsible for accumulating text deltas into a final
+    /// assistant message and matching tool_use `input_json_delta`
+    /// chunks back into a tool input JSON object.
+    public func stream(
+        system: String,
+        messages: [Message],
+        tools: [Tool],
+        maxTokens: Int = 4096,
+    ) -> AsyncThrowingStream<StreamEvent, Error> {
+        // The `build` closure of `AsyncThrowingStream.init` is
+        // synchronous. The async streaming work runs in a `Task`
+        // that we cancel on termination so the user can abort
+        // mid-stream.
+        AsyncThrowingStream<StreamEvent, Error>(
+            StreamEvent.self,
+            bufferingPolicy: .unbounded
+        ) { continuation in
+            let task = Task {
+                do {
+                    let (bytes, response) = try await self.bytes(
+                        system: system,
+                        messages: messages,
+                        tools: tools,
+                        maxTokens: maxTokens,
+                    )
+                    guard let http = response as? HTTPURLResponse,
+                          (200..<300).contains(http.statusCode) else {
+                        let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+                        throw AnthropicError.stream("Anthropic HTTP \(code)")
+                    }
+                    var eventName = ""
+                    var dataBuffer = ""
+                    for try await line in bytes.lines {
+                        if Task.isCancelled { break }
+                        if line.isEmpty {
+                            if !eventName.isEmpty {
+                                let raw = dataBuffer.trimmingCharacters(in: .whitespaces)
+                                if let data = raw.data(using: .utf8),
+                                   let event = Self.parseSSEEvent(name: eventName, data: data) {
+                                    continuation.yield(event)
+                                }
+                            }
+                            eventName = ""
+                            dataBuffer = ""
+                            continue
+                        }
+                        if let colon = line.firstIndex(of: ":") {
+                            let field = String(line[..<colon])
+                            let value = String(line[line.index(after: colon)...])
+                                .trimmingCharacters(in: .whitespaces)
+                            if field == "event" {
+                                eventName = value
+                            } else if field == "data" {
+                                dataBuffer = value
+                            }
+                        }
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
+        }
+    }
+
+    /// Common wire-format POST. Returns either `(Data, URLResponse)`
+    /// for non-streaming (caller decodes) or
+    /// `(URLSession.AsyncBytes, URLResponse)` for streaming. The
+    /// streaming version uses `URLSession.bytes(for:)` so the
+    /// response body can be consumed incrementally.
+    private func post(
+        system: String,
+        messages: [Message],
+        tools: [Tool],
+        maxTokens: Int,
+        stream: Bool,
+    ) async throws -> (Data, URLResponse) {
         var req = URLRequest(url: baseURL.appendingPathComponent("v1/messages"))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         req.setValue("anyprov-code", forHTTPHeaderField: "User-Agent")
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": model,
             "max_tokens": maxTokens,
             "system": system,
-            "messages": messages.map(messageToWire),
-            "tools": tools.map(toolToWire),
+            "messages": messages.map(Self.messageToWire),
+            "tools": tools.map(Self.toolToWire),
         ]
+        if stream { body["stream"] = true }
         req.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         let (data, response): (Data, URLResponse)
         do {
@@ -157,6 +264,38 @@ public actor AnthropicClient {
             let body = String(data: data, encoding: .utf8) ?? ""
             throw AnthropicError.http(status: http.statusCode, body: body)
         }
+        return (data, response)
+    }
+
+    /// Same as `post` but returns the streaming `AsyncBytes` so
+    /// the caller can iterate SSE events. URLSession.bytes(for:)
+    /// is the documented streaming API and gives us line-by-line
+    /// iteration.
+    private func bytes(
+        system: String,
+        messages: [Message],
+        tools: [Tool],
+        maxTokens: Int,
+    ) async throws -> (URLSession.AsyncBytes, URLResponse) {
+        var req = URLRequest(url: baseURL.appendingPathComponent("v1/messages"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        req.setValue("anyprov-code", forHTTPHeaderField: "User-Agent")
+        let body: [String: Any] = [
+            "model": model,
+            "max_tokens": maxTokens,
+            "system": system,
+            "stream": true,
+            "messages": messages.map(Self.messageToWire),
+            "tools": tools.map(Self.toolToWire),
+        ]
+        req.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+        return try await session.bytes(for: req)
+    }
+
+    private static func decode(_ data: Data) throws -> Response {
         do {
             return try JSONDecoder().decode(Response.self, from: data)
         } catch {
@@ -164,7 +303,7 @@ public actor AnthropicClient {
         }
     }
 
-    private func messageToWire(_ message: Message) -> [String: Any] {
+    private static func messageToWire(_ message: Message) -> [String: Any] {
         let content: [[String: Any]] = message.content.map { c in
             switch c {
             case let .text(s):
@@ -188,12 +327,61 @@ public actor AnthropicClient {
         return ["role": message.role, "content": content]
     }
 
-    private func toolToWire(_ tool: Tool) -> [String: Any] {
+    private static func toolToWire(_ tool: Tool) -> [String: Any] {
         return [
             "name": tool.name,
             "description": tool.description,
             "input_schema": tool.inputSchema.value as Any,
         ]
+    }
+
+    private static func parseSSEEvent(name: String, data: Data) -> StreamEvent? {
+        switch name {
+        case "message_start":
+            return .messageStart
+        case "content_block_start":
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let index = obj["index"] as? Int,
+                  let block = obj["content_block"] as? [String: Any],
+                  let type = block["type"] as? String
+            else { return nil }
+            return .contentBlockStart(index: index, type: type)
+        case "content_block_delta":
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let index = obj["index"] as? Int,
+                  let delta = obj["delta"] as? [String: Any]
+            else { return nil }
+            if let text = delta["text"] as? String {
+                return .textDelta(index: index, text: text)
+            }
+            if let partial = delta["partial_json"] as? String {
+                return .inputJsonDelta(index: index, partialJson: partial)
+            }
+            return nil
+        case "content_block_stop":
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let index = obj["index"] as? Int
+            else { return nil }
+            return .contentBlockStop(index: index)
+        case "message_delta":
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+            let stopReason = (obj["delta"] as? [String: Any])?["stop_reason"] as? String
+            let usage = (obj["usage"] as? [String: Any]).flatMap { usageDict in
+                Response.Usage(
+                    inputTokens: usageDict["input_tokens"] as? Int ?? 0,
+                    outputTokens: usageDict["output_tokens"] as? Int ?? 0,
+                    cacheReadInputTokens: usageDict["cache_read_input_tokens"] as? Int,
+                    cacheCreationInputTokens: usageDict["cache_creation_input_tokens"] as? Int
+                )
+            }
+            return .messageDelta(stopReason: stopReason, usage: usage)
+        case "message_stop":
+            return .messageStop
+        case "ping":
+            return .ping
+        default:
+            return nil
+        }
     }
 }
 
@@ -201,6 +389,7 @@ public enum AnthropicError: Error, LocalizedError {
     case http(status: Int, body: String)
     case transport(String)
     case decoding(String)
+    case stream(String)
 
     public var errorDescription: String? {
         switch self {
@@ -209,6 +398,7 @@ public enum AnthropicError: Error, LocalizedError {
             return "Anthropic HTTP \(status)\(snippet)"
         case let .transport(msg): return "Anthropic transport: \(msg)"
         case let .decoding(msg): return "Anthropic decode: \(msg)"
+        case let .stream(msg): return "Anthropic stream: \(msg)"
         }
     }
 }
