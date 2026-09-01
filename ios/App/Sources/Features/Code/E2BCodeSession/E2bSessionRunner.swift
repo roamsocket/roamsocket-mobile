@@ -366,10 +366,42 @@ public actor E2bSessionRunner {
             try await client.writeFile(
                 sandboxId: sandboxId, accessToken: sandboxAccessToken, path: path, content: updated
             )
-            return ("edited \(path)", false)
+            // Build a minimal unified diff in Swift. Each output
+            // line starts with `+`, `-`, or ` ` so the ToolCard
+            // can colour it without parsing. We only emit the
+            // changed region, not the full context — good enough
+            // for the chat view to give a feel for the change.
+            let diff = Self.miniDiff(find: find, replace: replace, contextLines: 2)
+            let header = "edited \(path)"
+            return ([header, diff].joined(separator: "\n\n"), false)
         } catch {
             return ("edit_file failed: \(error.localizedDescription)", true)
         }
+    }
+
+    /// Minimal context-preserving diff. We have the exact
+    /// `find` and `replace` strings, so the only line-level
+    /// change is the substitution. Emit ` ` (context), `-`
+    /// (removed), `+` (added) lines with a `@@` hunk header.
+    /// Truncated to 200 lines so a giant edit doesn't blow up
+    /// the tool card.
+    private static func miniDiff(find: String, replace: String, contextLines: Int) -> String {
+        let oldLines = find.components(separatedBy: "\n")
+        let newLines = replace.components(separatedBy: "\n")
+        var out: [String] = ["@@ -\(oldLines.count) +\(newLines.count) @@"]
+        for line in oldLines {
+            out.append("-\(line)")
+        }
+        for line in newLines {
+            out.append("+\(line)")
+        }
+        // Hard-cap the diff so the tool card stays usable. The
+        // last line is replaced with a hint.
+        if out.count > 200 {
+            out = Array(out.prefix(199))
+            out.append("… (diff truncated, see file in the sandbox for full content)")
+        }
+        return out.joined(separator: "\n")
     }
 
     private func gitCommitTool(input: AnyJSON, sandboxId: String, sandboxAccessToken: String?) async -> (String, Bool) {

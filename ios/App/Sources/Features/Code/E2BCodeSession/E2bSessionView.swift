@@ -652,18 +652,68 @@ private struct ToolCard: View {
         }
     }
 
+    @ViewBuilder
     private var output: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            Text(message.text)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(Theme.textPrimary)
-                .textSelection(.enabled)
-                .lineLimit(20)
+        // Render the body. If the body looks like our mini-diff
+        // (lines starting with `+` / `-` / ` ` and a `@@` header)
+        // render each line colour-tinted so the user can scan
+        // the change at a glance. Otherwise fall back to a
+        // plain monospaced text view.
+        let body = message.text
+        if isDiffBody(body) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(diffLines(body).enumerated()), id: \.offset) { _, line in
+                        Text(line.text)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(line.color)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
                 .padding(8)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 240)
+            .background(Theme.background, in: RoundedRectangle(cornerRadius: 6))
+        } else {
+            ScrollView(.horizontal, showsIndicators: false) {
+                Text(body)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(Theme.textPrimary)
+                    .textSelection(.enabled)
+                    .lineLimit(20)
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 240)
+            .background(Theme.background, in: RoundedRectangle(cornerRadius: 6))
         }
-        .frame(maxHeight: 240)
-        .background(Theme.background, in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    /// `edit_file` outputs a `@@ -\(m) +\(n) @@` header followed
+    /// by lines starting with `+`, `-`, or ` `. Detect that
+    /// shape so we can render with the right colours.
+    private func isDiffBody(_ body: String) -> Bool {
+        guard let first = body.split(separator: "\n").first,
+              first.hasPrefix("@@") else { return false }
+        return body.contains("\n+") || body.contains("\n-")
+    }
+
+    private struct DiffLine { let text: String; let color: Color }
+
+    private func diffLines(_ body: String) -> [DiffLine] {
+        body.split(separator: "\n", omittingEmptySubsequences: false).map { raw in
+            let s = String(raw)
+            if s.hasPrefix("@@") {
+                return DiffLine(text: s, color: Theme.accent)
+            }
+            if s.hasPrefix("+") {
+                return DiffLine(text: s, color: Theme.selection)
+            }
+            if s.hasPrefix("-") {
+                return DiffLine(text: s, color: .red)
+            }
+            return DiffLine(text: s, color: Theme.textSecondary)
+        }
     }
 
     private var toolName: String {
