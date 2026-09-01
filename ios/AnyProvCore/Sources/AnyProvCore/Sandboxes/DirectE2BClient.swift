@@ -558,6 +558,10 @@ public final class DirectE2BClient: @unchecked Sendable {
         request: E2bPhoneRunRequest,
         onEvent: @escaping @Sendable (E2bPhoneRunEvent) -> Void,
     ) async -> E2bPhoneRun {
+        // Track the currently-active pipeline step so `.log` events
+        // can be attributed to the right pill. `nil` before any
+        // step starts.
+        var currentStepId: String? = nil
         var run = E2bPhoneRun(
             id: "r_phone_" + UUID().uuidString.prefix(8).lowercased(),
             repoFullName: request.repo.displayName(),
@@ -566,7 +570,7 @@ public final class DirectE2BClient: @unchecked Sendable {
             status: "queued",
             startedAt: Date().timeIntervalSince1970 * 1000,
         )
-        onEvent(.log(stream: "stdout", line: "Creating sandbox…"))
+        onEvent(.log(stream: "stdout", line: "Creating sandbox…", stepId: nil))
 
         let sandbox: E2bSandboxInfo
         do {
@@ -583,7 +587,7 @@ public final class DirectE2BClient: @unchecked Sendable {
         run.sandboxId = sandbox.sandboxId
         run.sandboxUrl = "https://\(sandbox.sandboxId).\(sandbox.domain)"
         run.status = "running"
-        onEvent(.log(stream: "stdout", line: "Sandbox ready: \(sandbox.sandboxId)"))
+        onEvent(.log(stream: "stdout", line: "Sandbox ready: \(sandbox.sandboxId)", stepId: nil))
 
         // 2. POST the Python shim to the code-interpreter execute endpoint
         //    and stream the NDJSON response.
@@ -592,6 +596,7 @@ public final class DirectE2BClient: @unchecked Sendable {
             branch: request.branch,
             command: request.command,
             githubToken: request.githubToken,
+            installCommand: request.installCommand,
         )
         let executeURL = URL(string: "https://\(DirectE2BClient.codeInterpreterPort)-\(sandbox.sandboxId).\(sandbox.domain)/execute")!
         var req = URLRequest(url: executeURL)
@@ -617,9 +622,21 @@ public final class DirectE2BClient: @unchecked Sendable {
             for try await line in bytes.lines {
                 switch E2bPhoneStreamEvent.parse(line: line) {
                 case let .stdout(value):
-                    onEvent(.log(stream: "stdout", line: value))
+                    onEvent(.log(stream: "stdout", line: value, stepId: currentStepId))
                 case let .stderr(value):
-                    onEvent(.log(stream: "stderr", line: value))
+                    onEvent(.log(stream: "stderr", line: value, stepId: currentStepId))
+                case let .stepStart(id):
+                    currentStepId = id
+                    onEvent(.stepStarted(stepId: id))
+                case let .stepDone(id):
+                    onEvent(.stepDone(stepId: id))
+                    if currentStepId == id { currentStepId = nil }
+                case let .stepFailed(id, code):
+                    onEvent(.stepFailed(stepId: id, exitCode: code))
+                    if currentStepId == id { currentStepId = nil }
+                case let .stepSkipped(id):
+                    onEvent(.stepSkipped(stepId: id))
+                    if currentStepId == id { currentStepId = nil }
                 case let .exit(code):
                     exitCode = code
                 case let .cloneFailed(code):
@@ -629,7 +646,7 @@ public final class DirectE2BClient: @unchecked Sendable {
                 case .launchFailed:
                     streamError = "command launch failed"
                 case let .passthrough(raw):
-                    onEvent(.log(stream: "stdout", line: raw))
+                    onEvent(.log(stream: "stdout", line: raw, stepId: currentStepId))
                 }
             }
         } catch {

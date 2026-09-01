@@ -225,7 +225,11 @@ struct AppSettingsView: View {
                     statusLabel: e2bQuickAccessStatus,
                     isReady: e2bQuickAccessIsReady,
                     action: {
-                        if state.serverToken != nil || !(state.e2bKeyStore.get() ?? "").isEmpty {
+                        // Phone-only: open the Sandboxes sheet when a
+                        // key is set, otherwise prompt the user to
+                        // paste one. The desktop is no longer in
+                        // this flow.
+                        if !(state.e2bKeyStore.get() ?? "").isEmpty {
                             showSandboxes = true
                         } else {
                             showE2BKeySheet = true
@@ -247,23 +251,23 @@ struct AppSettingsView: View {
     }
 
     private var e2bQuickAccessSubtitle: String {
-        if state.serverToken != nil { return "Desktop-mediated runs are active." }
-        if !(state.e2bKeyStore.get() ?? "").isEmpty { return "Phone-originated runs are active." }
+        // Phone-only — desktop-mediated runs are gone. The status
+        // reflects whether the key is set, and (if the user has
+        // verified) whether the key actually works.
+        if !(state.e2bKeyStore.get() ?? "").isEmpty { return "Run code on e2b sandboxes from this device." }
         return "Add your e2b.dev key to run from this device."
     }
 
     private var e2bQuickAccessStatus: String {
-        if state.serverToken != nil { return "Desktop" }
-        if !(state.e2bKeyStore.get() ?? "").isEmpty { return "Phone" }
+        if !(state.e2bKeyStore.get() ?? "").isEmpty { return "Ready" }
         return "Setup"
     }
 
     /// True when the user can actually start a run from the E2B
-    /// card (either the desktop is paired or the user has a
-    /// personal e2b key set). Drives the card's `Setup` / `Ready`
-    /// styling.
+    /// card. Phone-only: just need a key set. Drives the card's
+    /// `Setup` / `Ready` styling.
     private var e2bQuickAccessIsReady: Bool {
-        state.serverToken != nil || !(state.e2bKeyStore.get() ?? "").isEmpty
+        !(state.e2bKeyStore.get() ?? "").isEmpty
     }
 
     /// GitHub link status + provider API keys. Replaces the old fake
@@ -1875,6 +1879,24 @@ private struct SettingsE2BKeySheet: View {
     var onSave: (String) -> Void
     var onClear: () -> Void
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
+
+    /// Inline validation error from `E2BKeyStore.validate`. Shown
+    /// under the secure field and gates the Save button.
+    @State private var validationError: String?
+    /// Result of the post-save `DirectE2BClient.verifyKey` ping.
+    /// Tracks the round-trip so we can show "Verified" / "Failed"
+    /// next to the field.
+    @State private var verification: E2BVerificationStatus = .idle
+
+    private var trimmedDraft: String {
+        draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var isValidFormat: Bool {
+        if case .valid = E2BKeyStore.validate(trimmedDraft) { return true }
+        return false
+    }
 
     var body: some View {
         NavigationStack {
@@ -1884,7 +1906,7 @@ private struct SettingsE2BKeySheet: View {
                     Text("Your e2b.dev key")
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(Theme.textPrimary)
-                    Text("Paste an e2b.dev API key so the phone can spin up sandboxes on its own. The key is held on this device only and is used to call e2b.dev directly — nothing is sent to the desktop server.")
+                    Text("Paste an e2b.dev API key so the phone can spin up sandboxes on its own. The key is held on this device only and is used to call e2b.dev directly — nothing is sent anywhere else.")
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.textSecondary)
                     SecureField("e2b_…", text: $draft)
@@ -1893,10 +1915,38 @@ private struct SettingsE2BKeySheet: View {
                         .textInputAutocapitalization(.never)
                         .padding(12)
                         .background(Theme.surfaceElevated, in: RoundedRectangle(cornerRadius: 10))
+                        .onChange(of: draft) { _, newValue in
+                            // Live format validation. Only show the
+                            // error once the user has typed
+                            // something — the placeholder
+                            // "e2b_…" shouldn't count as an error.
+                            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if trimmed.isEmpty {
+                                validationError = nil
+                            } else if case let .invalid(reason) = E2BKeyStore.validate(trimmed) {
+                                validationError = reason
+                            } else {
+                                validationError = nil
+                            }
+                            // A new draft invalidates any previous
+                            // verification status from a prior save.
+                            if case .verified = verification {} else if case .failed = verification {
+                                verification = .idle
+                            } else {
+                                verification = .idle
+                            }
+                        }
+                    if let validationError {
+                        Label(validationError, systemImage: "exclamationmark.triangle.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.red)
+                    }
+                    verificationBadge
                     HStack {
                         if hasKey {
                             Button(role: .destructive) {
                                 onClear()
+                                verification = .idle
                             } label: {
                                 Text("Clear")
                             }
@@ -1904,10 +1954,26 @@ private struct SettingsE2BKeySheet: View {
                         Spacer()
                         Button("Cancel") { dismiss() }
                             .foregroundStyle(Theme.textSecondary)
-                        Button("Save") { onSave(draft) }
+                        Button("Save") { saveAndVerify() }
                             .foregroundStyle(Theme.accent)
-                            .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            .disabled(!isValidFormat)
                     }
+                    // Help the user who landed here without an
+                    // e2b.dev account. Deep link to the keys page.
+                    Button {
+                        if let url = URL(string: "https://e2b.dev/dashboard?tab=keys") {
+                            openURL(url)
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.up.right.square")
+                                .font(.system(size: 12))
+                            Text("Get an e2b.dev API key")
+                                .font(.system(size: 13, weight: .semibold))
+                        }
+                        .foregroundStyle(Theme.accent)
+                    }
+                    .buttonStyle(.plain)
                     Spacer()
                 }
                 .padding(20)
@@ -1916,4 +1982,82 @@ private struct SettingsE2BKeySheet: View {
             .navigationBarTitleDisplayMode(.inline)
         }
     }
+
+    @ViewBuilder
+    private var verificationBadge: some View {
+        switch verification {
+        case .idle:
+            EmptyView()
+        case .verifying:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.mini)
+                Text("Verifying with e2b.dev…")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.textSecondary)
+            }
+        case .verified:
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.seal.fill")
+                    .foregroundStyle(Theme.selection)
+                Text("Verified — your key works.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.selection)
+            }
+        case let .failed(message):
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: "xmark.seal.fill")
+                    .foregroundStyle(.red)
+                Text(message)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.red)
+            }
+        }
+    }
+
+    /// Save the key, then call `DirectE2BClient.verifyKey()` to
+    /// confirm it actually works. The status badge updates when the
+    /// round-trip completes.
+    private func saveAndVerify() {
+        guard isValidFormat else { return }
+        let key = trimmedDraft
+        onSave(key)
+        verification = .verifying
+        Task { [key] in
+            let result = await Self.verify(key: key)
+            await MainActor.run { verification = result }
+        }
+    }
+
+    /// Stand-alone wrapper that runs the verification on a detached
+    /// task and converts any error into a user-readable status. Kept
+    /// separate from the view so it can be unit-tested if needed.
+    private static func verify(key: String) async -> E2BVerificationStatus {
+        let client = DirectE2BClient(apiKey: key)
+        do {
+            let status = try await client.verifyKey()
+            return (200..<300).contains(status) ? .verified : .failed("e2b.dev returned HTTP \(status).")
+        } catch let error as DirectE2BError {
+            switch error {
+            case .noApiKey: return .failed("Key is empty.")
+            case let .http(status, body):
+                let snippet = body.isEmpty ? "" : " — \(body.prefix(80))"
+                return .failed("e2b.dev rejected the key (HTTP \(status))\(snippet)")
+            case let .transport(msg): return .failed("Network error: \(msg)")
+            case let .decoding(msg): return .failed("Couldn't decode the response: \(msg)")
+            case let .stream(msg): return .failed("Stream error: \(msg)")
+            }
+        } catch {
+            return .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+        }
+    }
+}
+
+/// One-shot verification status for the e2b key. Mirrors the
+/// state machine in `E2BKeyStore.validate` but covers the
+/// network round-trip too.
+private enum E2BVerificationStatus: Equatable {
+    case idle
+    case verifying
+    case verified
+    case failed(String)
 }
