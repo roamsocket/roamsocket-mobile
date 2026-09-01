@@ -112,7 +112,10 @@ struct AppSettingsView: View {
             ManageMemoryView()
                 .environmentObject(state)
         }
-        .sheet(isPresented: $showSandboxes) {
+        .sheet(isPresented: Binding(
+            get: { state.showSandboxes },
+            set: { state.showSandboxes = $0 }
+        )) {
             SandboxesView()
                 .environmentObject(state)
         }

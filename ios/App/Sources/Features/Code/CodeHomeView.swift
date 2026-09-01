@@ -476,6 +476,26 @@ struct CodeHomeView: View {
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
                             .accessibilityHint("Opens pairing to connect a desktop server")
+
+                            // Phone-only E2B banner. The desktop
+                            // pairing card above is the primary
+                            // action; this is the alternate path
+                            // for users who don't have (or don't
+                            // want to spin up) a desktop. Shown
+                            // only when unpaired so paired users
+                            // aren't distracted.
+                            Button {
+                                openPhoneSandboxSheet()
+                            } label: {
+                                phoneE2BBanner
+                            }
+                            .buttonStyle(.plain)
+                            .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 0, trailing: 16))
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .accessibilityHint(state.e2bKeyStore.hasKey
+                                               ? "Opens the Sandboxes sheet to start a phone-only run"
+                                               : "Opens the e2b key entry sheet")
                         } else {
                             Button {
                                 Task { await handleDeviceTap() }
@@ -789,6 +809,39 @@ struct CodeHomeView: View {
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
     }
 
+    /// Phone-only E2B quick action shown under the unpaired
+    /// "Devices" card. Sits in the same section so it doesn't
+    /// compete with the desktop pairing CTA — the pairing card
+    /// is still the first thing the user sees.
+    private var phoneE2BBanner: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "shippingbox")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Run code on a phone sandbox")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                Text(state.e2bKeyStore.hasKey
+                     ? "Open the Sandboxes sheet to start a run."
+                     : "Add your e2b.dev key in Settings to start a run.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.textSecondary)
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.textTertiary)
+        }
+        .padding(12)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(Theme.accent.opacity(0.4), lineWidth: 1)
+        )
+    }
+
     private func deviceRow(name: String, status: AppState.DesktopReachability) -> some View {
         HStack(spacing: 12) {
             ZStack(alignment: .bottomTrailing) {
@@ -880,6 +933,14 @@ struct CodeHomeView: View {
     private func presentPairingSheet() {
         tokenWhenPairingPresented = state.serverToken
         showServerPairing = true
+    }
+
+    /// Open the Sandboxes sheet from the Code-home E2B banner.
+    /// Routed via `state.showSandboxes` so the same sheet the user
+    /// sees from Settings opens here — `AppSettingsView` is the
+    /// single owner of the presentation modifier.
+    private func openPhoneSandboxSheet() {
+        state.showSandboxes = true
     }
 
     /// Ensure the desktop is reachable before opening a coding session.

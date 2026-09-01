@@ -150,6 +150,13 @@ final class AppState: ObservableObject {
     /// repo on every change (and pull on launch when a token is linked).
     @AppStorage("settingsSyncRepoFullName.v1") var settingsSyncRepoFullName: String?
 
+    /// Set to `true` to present the Sandboxes sheet. The view
+    /// layer flips it back to `false` once the sheet dismisses.
+    /// Lifted onto AppState so multiple surfaces (Settings, the
+    /// unpaired Code-home banner, future deep links) can open
+    /// the same sheet without each owning its own `@State`.
+    @Published var showSandboxes: Bool = false
+
     // Catalog state
     @Published var providerResults: [ModelCatalog.ProviderResult] = []
     @Published var isLoadingModels = false
