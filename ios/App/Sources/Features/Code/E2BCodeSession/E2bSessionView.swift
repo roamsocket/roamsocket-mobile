@@ -28,6 +28,7 @@ struct E2bSessionView: View {
     /// a shell is still streaming). `nil` when no turn is active.
     @State private var agentTask: Task<Void, Never>?
     @FocusState private var inputFocused: Bool
+    @Environment(\.openURL) private var openURL
 
     private var session: E2bCodeSession? { store.session(id: sessionId) }
 
@@ -88,6 +89,17 @@ struct E2bSessionView: View {
                             .lineLimit(1)
                     }
                     Spacer()
+                    if let url = s.sandboxUrl, let parsed = URL(string: url) {
+                        Button {
+                            openURL(parsed)
+                        } label: {
+                            Image(systemName: "safari")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(Theme.accent)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Open sandbox in browser")
+                    }
                     Text(statusLabel(for: s))
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(Theme.textTertiary)
