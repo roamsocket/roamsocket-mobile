@@ -13,7 +13,8 @@ final class SandboxesStore: ObservableObject {
     @Published private(set) var lastStatusLabel: String?
     /// Phone-originated runs (no paired desktop required). Merged into
     /// the unified list shown in [SandboxesView] alongside the desktop
-    /// runs, with a "phone" badge to distinguish them.
+    /// runs, with a "phone" badge to distinguish them. Persisted to
+    /// disk via [PhoneRunPersistence] so the history survives launches.
     @Published private(set) var phoneRuns: [E2bPhoneRun] = []
 
     /// Errors surfaced from the connection itself (handshake failure,
@@ -22,6 +23,30 @@ final class SandboxesStore: ObservableObject {
 
     private let client = ServerClient()
     private var task: Task<Void, Never>?
+    /// In-flight phone-originated runs. Used so the view's "Stop"
+    /// button can cancel the orchestrating `Task`. We also reach
+    /// into this on `deinit` to cancel anything still running so
+    /// the run loops don't outlive the store.
+    private var phoneRunTasks: [String: Task<Void, Never>] = [:]
+    private let phonePersistence = PhoneRunPersistence()
+
+    init() {
+        // Hydrate from disk so the history survives launches. Only
+        // pull terminal runs back — anything still "running" or
+        // "queued" when the app died is dead now (the sandbox is
+        // gone) and we mark it so for clarity.
+        let loaded = phonePersistence.load()
+        phoneRuns = loaded.map { run in
+            guard run.status == "running" || run.status == "queued" else { return run }
+            var copy = run
+            copy.status = "killed"
+            copy.error = "App was closed before the run finished."
+            copy.finishedAt = copy.finishedAt ?? Date().timeIntervalSince1970 * 1000
+            return copy
+        }
+        // Re-persist the normalized state so the disk matches.
+        if phoneRuns != loaded { persistPhoneRuns() }
+    }
 
     func start(endpoint: ServerClient.Endpoint?, token: String?) async {
         guard let endpoint, let token else {
@@ -51,6 +76,16 @@ final class SandboxesStore: ObservableObject {
     func stop() {
         task?.cancel()
         task = nil
+        // Cancel any in-flight phone runs so the run loops don't
+        // outlive the view. The cancellation flows through
+        // `DirectE2BClient.run` and lands the row as `killed`.
+        for (_, runTask) in phoneRunTasks {
+            runTask.cancel()
+        }
+        phoneRunTasks.removeAll()
+        // Flush the debounced phone-run write so the very last
+        // mutation isn't lost on background.
+        phonePersistence.flushNow()
         // `ServerClient` is an `actor`; tear it down off the MainActor.
         // Capturing `client` keeps the reference alive across the hop.
         let client = self.client
@@ -67,11 +102,29 @@ final class SandboxesStore: ObservableObject {
     }
 
     func abort(runId: String) async {
+        // Phone-originated runs are cancelled locally — there's no
+        // desktop to ask. The cancel flows through DirectE2BClient
+        // and lands the row as `killed`.
+        if phoneRunTasks[runId] != nil {
+            cancelPhoneRun(runId: runId)
+            return
+        }
         do {
             try await client.send(.e2bAbort(runId: runId))
         } catch {
             errors.send((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
         }
+    }
+
+    /// Cancel an in-flight phone-originated run. Idempotent — calling
+    /// twice on the same id is a no-op. The cancellation surfaces
+    /// through `DirectE2BClient.run` and the run's final status
+    /// becomes `killed`.
+    func cancelPhoneRun(runId: String) {
+        guard let runTask = phoneRunTasks[runId] else { return }
+        runTask.cancel()
+        // We don't remove from the map here — the orchestrating task
+        // will set the final status to `killed` and remove itself.
     }
 
     // MARK: - Phone-originated runs (no PC)
@@ -109,20 +162,22 @@ final class SandboxesStore: ObservableObject {
             startedAt: Date().timeIntervalSince1970 * 1000,
         )
         phoneRuns.insert(seed, at: 0)
+        persistPhoneRuns()
 
         // The DirectE2BClient.run callback must touch @Published state
         // on the main actor. We hop to the main actor inside the closure.
         let runId = seed.id
-        Task { [weak self] in
+        let orchestrator = Task { [weak self] in
             let final = await client.run(request: request) { event in
                 Task { @MainActor [weak self] in
                     self?.applyPhoneEvent(runId: runId, event: event)
                 }
             }
             await MainActor.run { [weak self] in
-                self?.replacePhoneRun(final)
+                self?.finalizePhoneRun(runId: runId, final: final)
             }
         }
+        phoneRunTasks[runId] = orchestrator
     }
 
     @MainActor
@@ -141,28 +196,50 @@ final class SandboxesStore: ObservableObject {
             if tail.count > 5_000 { tail = tail.suffix(5_000) }
             updated.outputTail = tail
             phoneRuns[idx] = updated
+            persistPhoneRuns()
         case let .finished(exitCode):
             var updated = phoneRuns[idx]
             updated.status = exitCode == 0 ? "completed" : "failed"
             updated.exitCode = exitCode
             updated.finishedAt = Date().timeIntervalSince1970 * 1000
             phoneRuns[idx] = updated
+            persistPhoneRuns()
         case let .failed(message):
             var updated = phoneRuns[idx]
             updated.status = "failed"
             updated.error = message
             updated.finishedAt = Date().timeIntervalSince1970 * 1000
             phoneRuns[idx] = updated
+            persistPhoneRuns()
+        case let .cancelled(message):
+            var updated = phoneRuns[idx]
+            updated.status = "killed"
+            updated.error = message
+            updated.finishedAt = Date().timeIntervalSince1970 * 1000
+            phoneRuns[idx] = updated
+            persistPhoneRuns()
         }
     }
 
     @MainActor
-    private func replacePhoneRun(_ run: E2bPhoneRun) {
-        if let idx = phoneRuns.firstIndex(where: { $0.id == run.id }) {
-            phoneRuns[idx] = run
+    private func finalizePhoneRun(runId: String, final: E2bPhoneRun) {
+        // The final run carries the canonical status the client
+        // computed (completed / failed / killed). If the row is
+        // still around, overwrite it; otherwise push it to the top.
+        if let idx = phoneRuns.firstIndex(where: { $0.id == runId }) {
+            phoneRuns[idx] = final
         } else {
-            phoneRuns.insert(run, at: 0)
+            phoneRuns.insert(final, at: 0)
         }
+        phoneRunTasks.removeValue(forKey: runId)
+        persistPhoneRuns()
+    }
+
+    /// Disk-persist the current phone-runs list. Coalesced inside
+    /// `PhoneRunPersistence` so the rapid log-event updates don't
+    /// hammer the filesystem.
+    private func persistPhoneRuns() {
+        phonePersistence.save(phoneRuns)
     }
 
     private func existingRunStatus(_ run: E2bPhoneRun) -> String { run.status }

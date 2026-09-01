@@ -119,6 +119,7 @@
 		C1B329431F390A9F2742F004 /* StudyViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B593DD3D18DD8BE5FE53B910 /* StudyViewModel.swift */; };
 		C2DD54AA29CA0384D7A83304 /* LightweightTaskRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6390D6DD178A7A4FF3154EA6 /* LightweightTaskRunner.swift */; };
 		CA699B226F3FD4B352DC4D12 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = 43E358FAF805F505611BE0C6 /* MLXLMCommon */; };
+		CC5E73918810069FD1A2B3DE /* PhoneRunPersistence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9970CF5F7BD968BD998CDD5E /* PhoneRunPersistence.swift */; };
 		CD8A68F94472005C884A3438 /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25BB8C5338F7DF305283B5CA /* ChatViewModel.swift */; };
 		CE984FB513D3BBDC93DDFBE3 /* RoamSocketApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E4E188C5E1EDA070A2F8B11 /* RoamSocketApp.swift */; };
 		CECF151DD9F2D6A926AABFCD /* BrowserModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 972605C18C1EDD61772BF802 /* BrowserModels.swift */; };
@@ -273,6 +274,7 @@
 		94DAD72AF3A8EDCB01382ED6 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		972605C18C1EDD61772BF802 /* BrowserModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserModels.swift; sourceTree = "<group>"; };
 		97A8944EF43317CCBCDD259F /* BrowserTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserTab.swift; sourceTree = "<group>"; };
+		9970CF5F7BD968BD998CDD5E /* PhoneRunPersistence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneRunPersistence.swift; sourceTree = "<group>"; };
 		9ACE6D7C117681CD3BC86593 /* ProviderAPIKeyLinks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderAPIKeyLinks.swift; sourceTree = "<group>"; };
 		9B25157F72346CB32826FDA4 /* BrowserAgentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserAgentTests.swift; sourceTree = "<group>"; };
 		9B8A4A1FFCD6EDEBFEB99EF1 /* SchoolClasses.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchoolClasses.swift; sourceTree = "<group>"; };
@@ -694,6 +696,7 @@
 				25BE60DC817AD0BC7B4B9B31 /* ManageMemoryView.swift */,
 				2A2E1E4E5900A3B1A176BA38 /* MarketplaceSettingsView.swift */,
 				FCFCDDBCB421E72768436B69 /* PairQRScannerView.swift */,
+				9970CF5F7BD968BD998CDD5E /* PhoneRunPersistence.swift */,
 				AAE89D75194F26FCBD9DFC19 /* SandboxesStore.swift */,
 				2D7CB402AE4F47F7B0276BC2 /* SandboxesView.swift */,
 				2F2D62CFB337D25D6AEEC04E /* ServerPairingView.swift */,
@@ -984,6 +987,7 @@
 				975EBCE0B6BF23BF231C1C8C /* NewSessionView.swift in Sources */,
 				465A1DC2A6A14E2F2982E5FE /* OnboardingWalkthroughView.swift in Sources */,
 				467CE79F9739A0905587D9E4 /* PairQRScannerView.swift in Sources */,
+				CC5E73918810069FD1A2B3DE /* PhoneRunPersistence.swift in Sources */,
 				E76982093466A87FFE305DA8 /* PreviewSheets.swift in Sources */,
 				E33C726AAD13D775CACA70F4 /* ProjectDetailView.swift in Sources */,
 				ABF6B0DA9E2354F21FFBB2E4 /* ProjectsListView.swift in Sources */,
