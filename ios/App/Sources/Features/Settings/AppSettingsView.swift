@@ -112,13 +112,14 @@ struct AppSettingsView: View {
             ManageMemoryView()
                 .environmentObject(state)
         }
-        .sheet(isPresented: Binding(
-            get: { state.showSandboxes },
-            set: { state.showSandboxes = $0 }
-        )) {
-            SandboxesView()
-                .environmentObject(state)
-        }
+        // NOTE: the Sandboxes sheet is no longer attached here.
+        // It used to be — but the .sheet modifier only works when
+        // the parent view is in the hierarchy, so the sheet wouldn't
+        // present from the sidebar Sandboxes row unless Settings
+        // was open first. The single owner is now RootView, which
+        // is always in the hierarchy. We still read the flag here
+        // only as a defensive check — RootView is the one that
+        // actually presents the sheet.
         .sheet(isPresented: $showE2BKeySheet) {
             SettingsE2BKeySheet(
                 hasKey: state.e2bKeyStore.hasKey,

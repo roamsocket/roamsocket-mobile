@@ -137,6 +137,19 @@ struct RootView: View {
         .sheet(isPresented: $showSettings) {
             AppSettingsView()
         }
+        // Sandboxes (E2B) is presented here — not inside
+        // AppSettingsView — so the sidebar's "Sandboxes" row works
+        // even when Settings is closed. The single
+        // `state.showSandboxes` flag is flipped by the sidebar,
+        // the unpaired Code-home banner, the Settings E2B card,
+        // and any future deep links.
+        .sheet(isPresented: Binding(
+            get: { state.showSandboxes },
+            set: { state.showSandboxes = $0 }
+        )) {
+            SandboxesView()
+                .environmentObject(state)
+        }
         .sheet(isPresented: $showIncognitoSheet) {
             IncognitoChatSheet(
                 history: history,
