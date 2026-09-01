@@ -41,6 +41,7 @@ final class E2bSessionStore: ObservableObject {
         title: String,
         repoFullName: String,
         branch: String,
+        modelID: String = "claude-sonnet-4-5",
     ) async throws -> UUID {
         guard let client else {
             throw E2BSessionError.noApiKey
@@ -52,6 +53,7 @@ final class E2bSessionStore: ObservableObject {
             repoFullName: repoFullName,
             branch: branch,
             status: .provisioning,
+            modelID: modelID,
         )
         upsert(session)
 
@@ -141,6 +143,33 @@ final class E2bSessionStore: ObservableObject {
         // this on every step.
         guard sessions[idx].status != status else { return }
         sessions[idx].status = status
+        sessions[idx].updatedAt = Date()
+        persist()
+    }
+
+    /// Stamp the model id onto a session. Captured at first
+    /// turn so subsequent cost estimates don't drift when the
+    /// user changes the selected model elsewhere.
+    func setModelID(_ sessionId: UUID, modelID: String) {
+        guard let idx = sessions.firstIndex(where: { $0.id == sessionId }) else { return }
+        guard sessions[idx].modelID != modelID else { return }
+        sessions[idx].modelID = modelID
+        sessions[idx].updatedAt = Date()
+        persist()
+    }
+
+    /// Accumulate the per-step token usage into the session's
+    /// running total. Called by the runner after each Claude
+    /// response. The session's `updatedAt` is bumped so the
+    /// chat view re-renders the cost footer.
+    func recordUsage(
+        sessionId: UUID,
+        inputTokens: Int,
+        outputTokens: Int,
+    ) {
+        guard let idx = sessions.firstIndex(where: { $0.id == sessionId }) else { return }
+        sessions[idx].totalInputTokens += inputTokens
+        sessions[idx].totalOutputTokens += outputTokens
         sessions[idx].updatedAt = Date()
         persist()
     }

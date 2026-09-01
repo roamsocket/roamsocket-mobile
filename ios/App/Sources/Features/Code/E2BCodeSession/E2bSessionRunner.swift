@@ -75,6 +75,14 @@ public actor E2bSessionRunner {
             messages: history,
             tools: tools,
         )
+        // Surface the per-step token usage to the UI so it can
+        // surface a running total.
+        if let usage = response.usage {
+            onEvent(.usageRecorded(
+                inputTokens: usage.inputTokens,
+                outputTokens: usage.outputTokens
+            ))
+        }
         // Record the assistant's content blocks in the history
         // so the next request includes them.
         history.append(.init(role: "assistant", content: response.content))
@@ -123,6 +131,7 @@ public actor E2bSessionRunner {
     public enum StepEvent: Sendable {
         case toolCallStarted(id: String, name: String, input: AnyJSON)
         case toolCallFinished(id: String, name: String, output: String, isError: Bool)
+        case usageRecorded(inputTokens: Int, outputTokens: Int)
     }
 
     /// The tool definitions Claude sees. Names + descriptions

@@ -39,6 +39,7 @@ struct E2bSessionView: View {
                 VStack(spacing: 0) {
                     statusBar
                     messagesList
+                    costFooter
                     inputBar
                 }
             }
@@ -144,6 +145,42 @@ struct E2bSessionView: View {
                         proxy.scrollTo(last.id, anchor: .bottom)
                     }
                 }
+            }
+        }
+    }
+
+    /// Thin footer showing the running token total + estimated
+    /// USD cost. Pulls the pricing for the session's model id
+    /// and renders the running cost compactly. Hidden when both
+    /// counters are zero (no agent turn has happened yet).
+    private var costFooter: some View {
+        Group {
+            if let s = session, s.totalInputTokens + s.totalOutputTokens > 0 {
+                let rate = TokenCost.pricingFor(modelID: s.modelID)
+                let total = TokenCost.costUSD(
+                    usage: .init(
+                        inputTokens: s.totalInputTokens,
+                        outputTokens: s.totalOutputTokens,
+                        cacheReadInputTokens: nil,
+                        cacheCreationInputTokens: nil
+                    ),
+                    rate: rate
+                )
+                HStack(spacing: 6) {
+                    Image(systemName: "gauge.with.dots.needle.50percent")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Theme.textTertiary)
+                    Text("\(s.totalInputTokens) in · \(s.totalOutputTokens) out")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(Theme.textTertiary)
+                    Spacer()
+                    Text(TokenCost.formatUSD(total))
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.textTertiary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+                .background(Theme.surface)
             }
         }
     }
@@ -269,6 +306,13 @@ struct E2bSessionView: View {
             return
         }
 
+        // Stamp the model id onto the session so the cost
+        // estimate stays consistent even if the user later changes
+        // the selected model in Settings.
+        if let s = store.session(id: sessionId), s.modelID != model.modelID {
+            store.setModelID(sessionId, modelID: model.modelID)
+        }
+
         let system = E2bSessionRunner.systemPrompt(
             repoFullName: s.repoFullName,
             branch: s.branch
@@ -383,7 +427,9 @@ struct E2bSessionView: View {
     }
 
     /// Apply a runner event to the transcript. Tool call starts
-    /// get a placeholder card that's filled in on finish.
+    /// get a placeholder card that's filled in on finish. Usage
+    /// events are routed to the store so the chat footer can
+    /// surface running cost.
     private func apply(event: E2bSessionRunner.StepEvent) {
         switch event {
         case let .toolCallStarted(id, name, input):
@@ -414,6 +460,12 @@ struct E2bSessionView: View {
                     kind: kind,
                     text: output,
                 )
+            )
+        case let .usageRecorded(inputTokens, outputTokens):
+            store.recordUsage(
+                sessionId: sessionId,
+                inputTokens: inputTokens,
+                outputTokens: outputTokens,
             )
         }
     }

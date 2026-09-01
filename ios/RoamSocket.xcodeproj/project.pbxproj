@@ -123,6 +123,7 @@
 		C1461CB8D418F81AB7DC7D48 /* ThinkingExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9328EF63166A416E99004CF3 /* ThinkingExtractor.swift */; };
 		C1B329431F390A9F2742F004 /* StudyViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B593DD3D18DD8BE5FE53B910 /* StudyViewModel.swift */; };
 		C2DD54AA29CA0384D7A83304 /* LightweightTaskRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6390D6DD178A7A4FF3154EA6 /* LightweightTaskRunner.swift */; };
+		C59D537F8F1B5923864AA3D4 /* TokenCost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D090665B52F1132DBA41C6 /* TokenCost.swift */; };
 		CA699B226F3FD4B352DC4D12 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = 43E358FAF805F505611BE0C6 /* MLXLMCommon */; };
 		CC5E73918810069FD1A2B3DE /* PhoneRunPersistence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9970CF5F7BD968BD998CDD5E /* PhoneRunPersistence.swift */; };
 		CD8A68F94472005C884A3438 /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25BB8C5338F7DF305283B5CA /* ChatViewModel.swift */; };
@@ -221,6 +222,7 @@
 		25BE60DC817AD0BC7B4B9B31 /* ManageMemoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManageMemoryView.swift; sourceTree = "<group>"; };
 		25F54051B559DF9922EE72D8 /* GuidedLearningView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuidedLearningView.swift; sourceTree = "<group>"; };
 		26154A8C1130ED5DEBC3EBF6 /* HealthKitService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthKitService.swift; sourceTree = "<group>"; };
+		28D090665B52F1132DBA41C6 /* TokenCost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TokenCost.swift; sourceTree = "<group>"; };
 		2A2E1E4E5900A3B1A176BA38 /* MarketplaceSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketplaceSettingsView.swift; sourceTree = "<group>"; };
 		2BF9870F8E79C86739A22675 /* AnyProvCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = AnyProvCore; path = AnyProvCore; sourceTree = SOURCE_ROOT; };
 		2C1993FB4194123ABB1B4B51 /* StudyScanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudyScanView.swift; sourceTree = "<group>"; };
@@ -770,6 +772,7 @@
 				8BA661F59BB8DEF3D252F103 /* E2bSessionRunner.swift */,
 				52BAF5D4B47A1AFC7B7EB9A8 /* E2bSessionStore.swift */,
 				8EF3701CF1A43740F916B6F2 /* E2bSessionView.swift */,
+				28D090665B52F1132DBA41C6 /* TokenCost.swift */,
 			);
 			path = E2BCodeSession;
 			sourceTree = "<group>";
@@ -1059,6 +1062,7 @@
 				C1461CB8D418F81AB7DC7D48 /* ThinkingExtractor.swift in Sources */,
 				0E452A7671B4961DC4B2713D /* ThinkingSummaryGenerator.swift in Sources */,
 				4ABC786625BBA12076E26C20 /* ThoughtProcessView.swift in Sources */,
+				C59D537F8F1B5923864AA3D4 /* TokenCost.swift in Sources */,
 				24856603C8786315B3E43605 /* UserMemoryStore.swift in Sources */,
 				66D424DE4134504D108F708D /* VisionAnalysisSheet.swift in Sources */,
 				F577080BC15C9E21A75A8764 /* VisionCameraView.swift in Sources */,

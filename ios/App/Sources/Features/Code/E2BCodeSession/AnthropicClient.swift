@@ -81,10 +81,26 @@ public actor AnthropicClient {
         public let id: String
         public let content: [Message.Content]
         public let stopReason: String?
+        public let usage: Usage?
 
         private enum CodingKeys: String, CodingKey {
             case id, content
             case stopReason = "stop_reason"
+            case usage
+        }
+
+        public struct Usage: Codable, Sendable, Hashable {
+            public let inputTokens: Int
+            public let outputTokens: Int
+            public let cacheReadInputTokens: Int?
+            public let cacheCreationInputTokens: Int?
+
+            private enum CodingKeys: String, CodingKey {
+                case inputTokens = "input_tokens"
+                case outputTokens = "output_tokens"
+                case cacheReadInputTokens = "cache_read_input_tokens"
+                case cacheCreationInputTokens = "cache_creation_input_tokens"
+            }
         }
     }
 

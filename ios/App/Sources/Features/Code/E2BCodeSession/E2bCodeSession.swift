@@ -48,6 +48,15 @@ public struct E2bCodeSession: Codable, Identifiable, Hashable, Sendable {
     public var updatedAt: Date
     public var transcript: [E2bCodeMessage]
     public var agentActive: Bool
+    /// Running total of input tokens billed by the agent loop.
+    /// Surfaced in the chat footer so the user sees running cost.
+    public var totalInputTokens: Int
+    /// Running total of output tokens billed by the agent loop.
+    public var totalOutputTokens: Int
+    /// The model id the user is talking to. Captured at session
+    /// open time so the cost estimate stays consistent even if
+    /// the user later changes the selected model.
+    public var modelID: String
 
     public init(
         id: UUID = UUID(),
@@ -63,6 +72,9 @@ public struct E2bCodeSession: Codable, Identifiable, Hashable, Sendable {
         updatedAt: Date = Date(),
         transcript: [E2bCodeMessage] = [],
         agentActive: Bool = false,
+        totalInputTokens: Int = 0,
+        totalOutputTokens: Int = 0,
+        modelID: String = "claude-sonnet-4-5",
     ) {
         self.id = id
         self.title = title
@@ -77,6 +89,9 @@ public struct E2bCodeSession: Codable, Identifiable, Hashable, Sendable {
         self.updatedAt = updatedAt
         self.transcript = transcript
         self.agentActive = agentActive
+        self.totalInputTokens = totalInputTokens
+        self.totalOutputTokens = totalOutputTokens
+        self.modelID = modelID
     }
 
     /// Convenience: returns the e2b sandbox URL for "open in
