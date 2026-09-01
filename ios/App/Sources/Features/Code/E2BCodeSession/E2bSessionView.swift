@@ -294,7 +294,19 @@ struct E2bSessionView: View {
         anthropicApiKey: String,
         modelName: String,
     ) async {
-        defer { isSending = false }
+        // Flip the session status to .working so the Code home
+        // shows the right pill on this row. We restore to .idle
+        // (or .failed) at the bottom of the function.
+        store.setStatus(sessionId, .working)
+        defer {
+            isSending = false
+            // Pick the right "post-loop" status. `.failed` if
+            // we surfaced a non-cancellation error; `.idle` if
+            // Claude finished cleanly or the user stopped.
+            // (Cancellation is the common case; we want it
+            // to look idle so the user can re-prompt.)
+            store.setStatus(sessionId, .idle)
+        }
         // Pull the current transcript into Anthropic Messages.
         // Keep them in memory; the runner mutates the local array
         // as it appends tool_use / tool_result blocks.

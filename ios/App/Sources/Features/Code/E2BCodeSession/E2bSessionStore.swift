@@ -130,6 +130,21 @@ final class E2bSessionStore: ObservableObject {
         persist()
     }
 
+    /// Update the session's lifecycle status. The chat view
+    /// drives this: `.working` when a turn starts, `.idle` when
+    /// it ends (or `.failed` on a hard error). The Code home
+    /// reads `status` to render the right pill on the session
+    /// row.
+    func setStatus(_ sessionId: UUID, _ status: E2bCodeSession.Status) {
+        guard let idx = sessions.firstIndex(where: { $0.id == sessionId }) else { return }
+        // Only persist on a real transition — the runner flips
+        // this on every step.
+        guard sessions[idx].status != status else { return }
+        sessions[idx].status = status
+        sessions[idx].updatedAt = Date()
+        persist()
+    }
+
     // MARK: - Internal
 
     private func upsert(_ session: E2bCodeSession) {
