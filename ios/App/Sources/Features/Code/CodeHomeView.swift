@@ -809,12 +809,14 @@ struct CodeHomeView: View {
             return
         }
         let fullName = repoFullName.isEmpty ? repo.fullName : repoFullName
+        let githubToken = state.githubToken
         Task { @MainActor in
             do {
                 let id = try await state.e2bSessionStore.openSession(
                     title: title.isEmpty ? "\(fullName) · \(branch)" : title,
                     repoFullName: fullName,
                     branch: branch,
+                    githubToken: githubToken
                 )
                 onOpen(id)
             } catch {

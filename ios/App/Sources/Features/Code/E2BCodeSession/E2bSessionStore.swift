@@ -34,14 +34,20 @@ final class E2bSessionStore: ObservableObject {
     // MARK: - Session lifecycle
 
     /// Open a new E2B code session: pick a repo + branch, create
-    /// the sandbox, persist the live state. Returns the session
-    /// id when the sandbox is ready (or in flight).
+    /// the sandbox, clone the repo into /code, persist the live
+    /// state. Returns the session id when the sandbox is ready
+    /// (or in flight).
+    ///
+    /// `githubToken` is optional. When supplied we use it for
+    /// `git clone` so private repos work; for public repos it's
+    /// ignored.
     @discardableResult
     func openSession(
         title: String,
         repoFullName: String,
         branch: String,
         modelID: String = "claude-sonnet-4-5",
+        githubToken: String? = nil,
     ) async throws -> UUID {
         guard let client else {
             throw E2BSessionError.noApiKey
@@ -58,16 +64,9 @@ final class E2bSessionStore: ObservableObject {
         upsert(session)
 
         // 2. Provision the sandbox.
+        let info: E2bSandboxInfo
         do {
-            let info = try await client.createSandbox()
-            var live = session
-            live.sandboxId = info.sandboxId
-            live.sandboxAccessToken = info.accessToken
-            live.sandboxUrl = live.liveSandboxURL
-            live.status = .idle
-            live.updatedAt = Date()
-            upsert(live)
-            return live.id
+            info = try await client.createSandbox()
         } catch {
             var failed = session
             failed.status = .failed
@@ -79,6 +78,133 @@ final class E2bSessionStore: ObservableObject {
             upsert(failed)
             throw error
         }
+        var live = session
+        live.sandboxId = info.sandboxId
+        live.sandboxAccessToken = info.accessToken
+        live.sandboxUrl = live.liveSandboxURL
+        live.status = .idle
+        live.updatedAt = Date()
+        upsert(live)
+
+        // 3. Pre-clone the repo into /code so the agent doesn't
+        //    burn its first turn running git. We do this after
+        //    persisting the live state so the user sees the
+        //    sandbox come online even if the clone fails. A
+        //    failed clone lands as a transcript notice.
+        do {
+            try await preCloneRepo(
+                e2b: client,
+                sessionId: live.id,
+                sandboxId: info.sandboxId,
+                accessToken: info.accessToken,
+                repoFullName: repoFullName,
+                branch: branch,
+                githubToken: githubToken
+            )
+        } catch {
+            appendMessage(
+                sessionId: live.id,
+                .init(
+                    kind: .notice,
+                    text: "Sandbox is up but the repo clone failed: \(error.localizedDescription). The agent can run `git clone` itself."
+                )
+            )
+        }
+        return live.id
+    }
+
+    /// Pre-clone `repoFullName` into /code and check out
+    /// `branch`. Injects the user's GitHub token into the
+    /// clone URL when supplied so private repos work. Designed
+    /// to be best-effort: a failure here is reported as a
+    /// transcript notice, not a session error, because the
+    /// agent can always `git clone` itself.
+    private func preCloneRepo(
+        e2b: DirectE2BClient,
+        sessionId: UUID,
+        sandboxId: String,
+        accessToken: String?,
+        repoFullName: String,
+        branch: String,
+        githubToken: String?,
+    ) async throws {
+        let token = githubToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let cloneURL: String
+        if token.isEmpty {
+            cloneURL = "https://github.com/\(repoFullName).git"
+        } else {
+            cloneURL = "https://oauth2:\(token)@github.com/\(repoFullName).git"
+        }
+        // Build the Python that does the clone + checkout.
+        // Output is JSON so we can detect errors.
+        let script = """
+        import subprocess, json
+        clone_url = \(Self.escapePython(cloneURL))
+        branch = \(Self.escapePython(branch))
+        try:
+            clone = subprocess.run(
+                ["git", "clone", "--depth", "1", clone_url, "/code"],
+                capture_output=True, text=True, timeout=120,
+            )
+            if clone.returncode != 0:
+                print(json.dumps({"ok": False, "step": "clone", "stderr": clone.stderr}))
+                return
+            # Try to switch to the requested branch; depth-1
+            # clone may not have it.
+            subprocess.run(
+                ["git", "fetch", "--depth", "1", "origin", branch],
+                cwd="/code", capture_output=True, text=True, timeout=60,
+            )
+            co = subprocess.run(
+                ["git", "checkout", branch],
+                cwd="/code", capture_output=True, text=True, timeout=60,
+            )
+            if co.returncode != 0:
+                print(json.dumps({"ok": False, "step": "checkout", "stderr": co.stderr}))
+                return
+            sha = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd="/code", capture_output=True, text=True, timeout=10,
+            )
+            print(json.dumps({"ok": True, "sha": sha.stdout.strip()}))
+        except Exception as exc:
+            print(json.dumps({"ok": False, "step": "exception", "stderr": str(exc)}))
+        """
+        let raw = try await e2b.exec(
+            sandboxId: sandboxId,
+            accessToken: accessToken,
+            code: script,
+            timeoutMs: 180_000,
+        )
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = trimmed.data(using: .utf8),
+              let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            throw DirectE2BError.stream("pre-clone: invalid response — \(raw.prefix(200))")
+        }
+        if let ok = parsed["ok"] as? Bool, ok {
+            let sha = parsed["sha"] as? String ?? "?"
+            appendMessage(
+                sessionId: sessionId,
+                .init(
+                    kind: .notice,
+                    text: "Pre-cloned \(repoFullName)@\(branch) → \(sha)"
+                )
+            )
+            return
+        }
+        let step = parsed["step"] as? String ?? "unknown"
+        let stderr = parsed["stderr"] as? String ?? raw
+        throw NSError(
+            domain: "E2BSessionPreClone",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "pre-clone failed at \(step): \(stderr.prefix(400))"]
+        )
+    }
+
+    private static func escapePython(_ s: String) -> String {
+        s.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
     }
 
     /// Append a message to a session's transcript. Cheap —
