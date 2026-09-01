@@ -23,6 +23,7 @@
 		232952957769112968A5A015 /* ModelPickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7C91CD10546F9AFECAEDF55 /* ModelPickerSheet.swift */; };
 		24856603C8786315B3E43605 /* UserMemoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6988A4059DBA7C6CB7C9083 /* UserMemoryStore.swift */; };
 		298A9D9CCA4A0F0AB506A716 /* LocalMetalMLXBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 588702516D0496BBC9A698CB /* LocalMetalMLXBackend.swift */; };
+		2B953B769D76F021E9259AF6 /* CodeSessionExtras.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE0D13F168E0F515ABF0C5FB /* CodeSessionExtras.swift */; };
 		2C3B1915498EF2DE0712660D /* ImageProcessing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1527859F8C93DC72EBCFD9F2 /* ImageProcessing.swift */; };
 		2C667CF02D91B02A5DAC5D81 /* WebSearchService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 471E0875DF99071BF74BD76E /* WebSearchService.swift */; };
 		2CCDE50E6E0936B1AC08C5F9 /* CodeEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCB8BAB31F912B0EA456AFF5 /* CodeEditorView.swift */; };
@@ -309,6 +310,7 @@
 		C6988A4059DBA7C6CB7C9083 /* UserMemoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserMemoryStore.swift; sourceTree = "<group>"; };
 		C8C59CEAC9FC457A1F8982B3 /* LocationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationService.swift; sourceTree = "<group>"; };
 		C9727CF8FE5BD4BAF42842E2 /* ThoughtProcessView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThoughtProcessView.swift; sourceTree = "<group>"; };
+		CE0D13F168E0F515ABF0C5FB /* CodeSessionExtras.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeSessionExtras.swift; sourceTree = "<group>"; };
 		CF913EDB357E1A5F7C15B1D6 /* SessionViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionViewModel.swift; sourceTree = "<group>"; };
 		CF9AD9584C979837931C1242 /* CustomTextSkillEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomTextSkillEditor.swift; sourceTree = "<group>"; };
 		CFD214B4222A5A18831D1D80 /* E2BKeySheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = E2BKeySheet.swift; sourceTree = "<group>"; };
@@ -365,6 +367,7 @@
 		072675FF36112712202EE587 /* Session */ = {
 			isa = PBXGroup;
 			children = (
+				CE0D13F168E0F515ABF0C5FB /* CodeSessionExtras.swift */,
 				13B3870C0EA82767F54B3116 /* CodeSessionLauncher.swift */,
 				7077C723B9F5B3594F7B50AA /* CommitMessageGenerator.swift */,
 				D0CAAA0DEDB91FE373245F30 /* SessionActionHistoryView.swift */,
@@ -942,6 +945,7 @@
 				BC52E3F1D1DAEEA9C008D3FA /* ClassesListView.swift in Sources */,
 				2CCDE50E6E0936B1AC08C5F9 /* CodeEditorView.swift in Sources */,
 				380E6AB4B7DEB3A397F94666 /* CodeHomeView.swift in Sources */,
+				2B953B769D76F021E9259AF6 /* CodeSessionExtras.swift in Sources */,
 				5277A4402CB29FA2F5ED3424 /* CodeSessionLauncher.swift in Sources */,
 				431FCA5B4ED6D3AB67743E98 /* CommitMessageGenerator.swift in Sources */,
 				9E1FE29136A3C6963F8CEDFB /* Components.swift in Sources */,
