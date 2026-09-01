@@ -92,6 +92,7 @@
 		7BE7D87AD5C1038AD21E3274 /* VisionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E78702A24AA6316C6E487682 /* VisionView.swift */; };
 		7D49BB93832074EF12EDE2B9 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 122D73711B783A293FCCA9E5 /* ChatView.swift */; };
 		807015225826A7BCDB9C2ED7 /* ChatDefaultSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DBA8CB6865382F693BD0668 /* ChatDefaultSelectionTests.swift */; };
+		82458C54BDC1CE3721DAA989 /* E2bSessionRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BA661F59BB8DEF3D252F103 /* E2bSessionRunner.swift */; };
 		83AB7FFB53281A38F873F73D /* SkillMarketplaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60589C5D2806263CE8A5DCB1 /* SkillMarketplaceView.swift */; };
 		8442243F818E8E1C64935984 /* DefaultModelSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E6D41ED9D798C92689948CB /* DefaultModelSheet.swift */; };
 		84B590E579C16DA6F2709E25 /* AppDeepLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE9FA560FAB7091DF4FE35F5 /* AppDeepLink.swift */; };
@@ -135,6 +136,7 @@
 		D6D44B4653CBF2FF5D45AB94 /* StudyScanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C1993FB4194123ABB1B4B51 /* StudyScanView.swift */; };
 		D7587A96A2194EE6916276DE /* DeviceConnectionHelpSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2E0977C8D358EDB08F7CB9A /* DeviceConnectionHelpSheet.swift */; };
 		DA63230F4C53B1D84024F868 /* E2bSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52BAF5D4B47A1AFC7B7EB9A8 /* E2bSessionStore.swift */; };
+		DAD72E84685D02B43002E880 /* AnthropicClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D49817FA116240A0E84D4C3 /* AnthropicClient.swift */; };
 		DC6DC687994549C8353E56A5 /* VisionViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5865BD07DDF2FB090FEEB8B8 /* VisionViewModel.swift */; };
 		DD168B7BD1267C1A7A2300E4 /* AIThinkingAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DC4F2A2740B259BDBC20BB8 /* AIThinkingAttributes.swift */; };
 		DE16E6AFD28A3676FEFFCE62 /* TabsSwitcherSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F02DD01EAA4645E102288A04 /* TabsSwitcherSheet.swift */; };
@@ -209,6 +211,7 @@
 		13B3870C0EA82767F54B3116 /* CodeSessionLauncher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeSessionLauncher.swift; sourceTree = "<group>"; };
 		1527859F8C93DC72EBCFD9F2 /* ImageProcessing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageProcessing.swift; sourceTree = "<group>"; };
 		16BE332D27423E93B6592767 /* NeuralTTSService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NeuralTTSService.swift; sourceTree = "<group>"; };
+		1D49817FA116240A0E84D4C3 /* AnthropicClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnthropicClient.swift; sourceTree = "<group>"; };
 		1DBA8CB6865382F693BD0668 /* ChatDefaultSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatDefaultSelectionTests.swift; sourceTree = "<group>"; };
 		1F90DB94C3BF91EA0A18CB26 /* EnvironmentPickerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvironmentPickerSheet.swift; sourceTree = "<group>"; };
 		21838C0F99960BD7131D4621 /* SessionActionHistoryGroupingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionActionHistoryGroupingTests.swift; sourceTree = "<group>"; };
@@ -270,6 +273,7 @@
 		84CE2A5843612EAEEEBD8DEC /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		857FC93A399636F79301B819 /* LightweightTasksSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LightweightTasksSettings.swift; sourceTree = "<group>"; };
 		8B8A4BF42960BD664E65C598 /* SSHAutoSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHAutoSetupView.swift; sourceTree = "<group>"; };
+		8BA661F59BB8DEF3D252F103 /* E2bSessionRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = E2bSessionRunner.swift; sourceTree = "<group>"; };
 		8BAED357FB143CAA4A585022 /* GalleryPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryPicker.swift; sourceTree = "<group>"; };
 		8DDB8096BD8EDC931A40E9D0 /* PreviewSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewSheets.swift; sourceTree = "<group>"; };
 		8E6BDFEC5407686C57AE778B /* MarkdownContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownContentView.swift; sourceTree = "<group>"; };
@@ -761,7 +765,9 @@
 		F00A6BDC9678FFC2152F9F14 /* E2BCodeSession */ = {
 			isa = PBXGroup;
 			children = (
+				1D49817FA116240A0E84D4C3 /* AnthropicClient.swift */,
 				40ED4D827C9D2CC841F105C2 /* E2bCodeSession.swift */,
+				8BA661F59BB8DEF3D252F103 /* E2bSessionRunner.swift */,
 				52BAF5D4B47A1AFC7B7EB9A8 /* E2bSessionStore.swift */,
 				8EF3701CF1A43740F916B6F2 /* E2bSessionView.swift */,
 			);
@@ -940,6 +946,7 @@
 				5F6B842209C4B107EF27FA6E /* AIThinkingAttributes.swift in Sources */,
 				62B191B77C6771A49117EF60 /* AddMCPServerView.swift in Sources */,
 				97D13AEE0AFADB4D4367D733 /* AddToChatSheet.swift in Sources */,
+				DAD72E84685D02B43002E880 /* AnthropicClient.swift in Sources */,
 				84B590E579C16DA6F2709E25 /* AppDeepLink.swift in Sources */,
 				62390C0F85887584C5C76275 /* AppOpenIntents.swift in Sources */,
 				0D9CA03E4A4FB171BF57307A /* AppSettingsView.swift in Sources */,
@@ -974,6 +981,7 @@
 				D7587A96A2194EE6916276DE /* DeviceConnectionHelpSheet.swift in Sources */,
 				74A3B710E669A7B73547B939 /* E2BKeySheet.swift in Sources */,
 				5FA06A8430B95628B7B45D62 /* E2bCodeSession.swift in Sources */,
+				82458C54BDC1CE3721DAA989 /* E2bSessionRunner.swift in Sources */,
 				DA63230F4C53B1D84024F868 /* E2bSessionStore.swift in Sources */,
 				6F6A4D38AD1C8B8C918EFF4E /* E2bSessionView.swift in Sources */,
 				36D95BE4FFAAB05BA1BF5A90 /* EdgeFreeTTSService.swift in Sources */,

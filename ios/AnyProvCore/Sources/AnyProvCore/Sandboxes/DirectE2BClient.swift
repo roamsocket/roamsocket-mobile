@@ -463,12 +463,31 @@ public final class DirectE2BClient: @unchecked Sendable {
 
     // MARK: - Sandbox lifecycle
 
+    /// e2b.dev's `POST /sandboxes` rejects `timeout` values over
+    /// 1 hour (3,600,000 ms). We clamp to that ceiling so callers
+    /// can't trip the API by accident — the request is in ms.
+    public static let maxSandboxTimeoutMs: Int = 3_600_000
+
     /// Create a fresh sandbox. Returns the e2b sandbox id and the
     /// "X-Access-Token" the sandbox returned; the token is needed to
     /// authenticate follow-up calls into the sandbox itself.
-    public func createSandbox(template: String = DirectE2BClient.codeInterpreterTemplate, timeoutMs: Int = 600_000) async throws -> E2bSandboxInfo {
+    ///
+    /// `timeoutMs` is the sandbox lifetime in **milliseconds** and
+    /// is clamped to `maxSandboxTimeoutMs` (1 hour) — e2b.dev's
+    /// own limit. The default of 1 hour is right for long-lived
+    /// code sessions where the user might run an agent loop for
+    /// a while; one-shot runs can pass a smaller value.
+    public func createSandbox(
+        template: String = DirectE2BClient.codeInterpreterTemplate,
+        timeoutMs: Int = 3_600_000,
+    ) async throws -> E2bSandboxInfo {
         let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw DirectE2BError.noApiKey }
+        // e2b.dev's hard cap. If the caller passed a longer value
+        // (e.g. 7_200_000 for "2 hours") we silently cap it
+        // rather than round-tripping a guaranteed 400. New sandboxes
+        // beyond 1 hour require explicit re-provisioning.
+        let safeTimeoutMs = min(max(0, timeoutMs), DirectE2BClient.maxSandboxTimeoutMs)
 
         var req = URLRequest(url: baseURL.appendingPathComponent("sandboxes"))
         req.httpMethod = "POST"
@@ -477,7 +496,7 @@ public final class DirectE2BClient: @unchecked Sendable {
         req.setValue("anyprov-code", forHTTPHeaderField: "User-Agent")
         let body: [String: Any] = [
             "templateID": template,
-            "timeout": timeoutMs,
+            "timeout": safeTimeoutMs,
         ]
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 

@@ -184,30 +184,228 @@ struct E2bSessionView: View {
 
     // MARK: - Actions
 
-    /// Send the current draft as a user message. The runner is
-    /// wired in a follow-up commit; for now this appends a
-    /// placeholder assistant reply so the UI flow is end-to-end
-    /// testable before the LLM integration lands.
+    /// Send the current draft as a user message. Drives the
+    /// Claude agent loop via `E2bSessionRunner` until Claude
+    /// returns `end_turn` or we hit the step limit. Each step
+    /// appends its tool calls + assistant text to the transcript
+    /// as the loop runs.
     private func send() {
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, session?.isLive == true else { return }
-        let userMessage = E2bCodeMessage(kind: .user, text: trimmed)
-        store.appendMessage(sessionId: sessionId, userMessage)
+        guard !trimmed.isEmpty, let s = session, s.isLive else { return }
+        store.appendMessage(
+            sessionId: sessionId,
+            .init(kind: .user, text: trimmed)
+        )
         draft = ""
         isSending = true
-        Task { @MainActor in
-            // Placeholder reply — replaced by the E2bSessionRunner
-            // in the agent-loop commit. Lives long enough to
-            // exercise the send / append / scroll UX.
-            try? await Task.sleep(nanoseconds: 800_000_000)
+        let sandboxId = s.sandboxId ?? ""
+        let sandboxAccessToken = s.sandboxAccessToken
+
+        // Pick the LLM client from the user's selected model. v1
+        // only supports the Anthropic provider — anything else
+        // gets a clear "select Claude" message.
+        guard let model = state.selectedModel else {
+            store.appendMessage(sessionId: sessionId, .init(
+                kind: .notice,
+                text: "Pick a Claude model on the home screen first."
+            ))
+            isSending = false
+            return
+        }
+        guard model.provider == .anthropic else {
+            store.appendMessage(sessionId: sessionId, .init(
+                kind: .notice,
+                text: "The phone E2B agent only supports Anthropic Claude for now — switch the selected model to Claude."
+            ))
+            isSending = false
+            return
+        }
+        let apiKey = state.resolvedAPIKey(for: model.provider)
+        guard !apiKey.isEmpty else {
+            store.appendMessage(sessionId: sessionId, .init(
+                kind: .notice,
+                text: "Add an Anthropic API key in Settings → Providers first."
+            ))
+            isSending = false
+            return
+        }
+        guard let e2bKey = state.e2bKeyStore.get(), !e2bKey.isEmpty else {
+            store.appendMessage(sessionId: sessionId, .init(
+                kind: .notice,
+                text: "Add your e2b.dev API key in Settings first."
+            ))
+            isSending = false
+            return
+        }
+
+        let system = E2bSessionRunner.systemPrompt(
+            repoFullName: s.repoFullName,
+            branch: s.branch
+        )
+        Task {
+            await runAgentLoop(
+                system: system,
+                sandboxId: sandboxId,
+                sandboxAccessToken: sandboxAccessToken,
+                e2bApiKey: e2bKey,
+                anthropicApiKey: apiKey,
+                modelName: model.modelID,
+            )
+        }
+    }
+
+    /// The agent loop. Builds the runner, replays the session
+    /// transcript into a `messages` array, then steps until
+    /// Claude ends the turn or the step limit is hit. Each step
+    /// surfaces its tool calls as transcript cards and the
+    /// assistant's text as a normal message.
+    private func runAgentLoop(
+        system: String,
+        sandboxId: String,
+        sandboxAccessToken: String?,
+        e2bApiKey: String,
+        anthropicApiKey: String,
+        modelName: String,
+    ) async {
+        defer { isSending = false }
+        // Pull the current transcript into Anthropic Messages.
+        // Keep them in memory; the runner mutates the local array
+        // as it appends tool_use / tool_result blocks.
+        var history: [AnthropicClient.Message] = []
+        if let s = store.session(id: sessionId) {
+            history = s.transcript.compactMap(messageToAnthropic)
+        }
+        let e2b = DirectE2BClient(apiKey: e2bApiKey)
+        let anthropic = AnthropicClient(apiKey: anthropicApiKey, model: modelName)
+        let runner = E2bSessionRunner(e2b: e2b, anthropic: anthropic)
+
+        // Drive the loop. We cap at the runner's own maxSteps
+        // (12) so a runaway conversation can't burn the user's
+        // API budget.
+        while true {
+            // Re-read the sandbox state in case it was killed
+            // mid-loop.
+            guard let s = store.session(id: sessionId), s.isLive else { return }
+            do {
+                let result = try await runner.step(
+                    system: system,
+                    history: &history,
+                    sandboxId: s.sandboxId ?? sandboxId,
+                    sandboxAccessToken: s.sandboxAccessToken ?? sandboxAccessToken,
+                ) { @Sendable event in
+                    Task { @MainActor in
+                        self.apply(event: event)
+                    }
+                }
+                switch result {
+                case .continued:
+                    continue
+                case .finished:
+                    return
+                case .hitStepLimit:
+                    store.appendMessage(sessionId: sessionId, .init(
+                        kind: .notice,
+                        text: "Agent reached the step limit. Send another message to continue."
+                    ))
+                    return
+                }
+            } catch {
+                store.appendMessage(sessionId: sessionId, .init(
+                    kind: .notice,
+                    text: "Agent error: \(error.localizedDescription)"
+                ))
+                return
+            }
+        }
+    }
+
+    /// Apply a runner event to the transcript. Tool call starts
+    /// get a placeholder card that's filled in on finish.
+    private func apply(event: E2bSessionRunner.StepEvent) {
+        switch event {
+        case let .toolCallStarted(id, name, input):
+            let summary = summariseInput(name: name, input: input)
+            let msg = E2bCodeMessage(
+                kind: .tool,
+                text: "running…",
+                tool: "\(name) — \(summary)"
+            )
+            // Encode the id so the finished event can find the
+            // matching row. We stash it in the message id, but
+            // that's the wrong field — instead, push a transient
+            // id on the message via the existing field. For v1
+            // we just append a new card and update it on finish.
+            pendingToolIds[id] = msg.id
+            store.appendMessage(sessionId: sessionId, msg)
+        case let .toolCallFinished(id, _, output, isError):
+            // Find the pending card by id; for v1 we just append
+            // a final result card next to the running one. (We
+            // could later collapse the two into one with an
+            // animated transition; for now, separate cards are
+            // clearer in the transcript.)
+            _ = pendingToolIds.removeValue(forKey: id)
+            let kind: E2bCodeMessage.Kind = isError ? .notice : .tool
             store.appendMessage(
                 sessionId: sessionId,
                 .init(
-                    kind: .notice,
-                    text: "Agent loop not wired yet — the LLM runner ships in the next commit."
+                    kind: kind,
+                    text: output,
                 )
             )
-            isSending = false
+        }
+    }
+
+    /// Pending tool card ids, so the start/finish events can
+    /// match up if we later collapse them into a single card.
+    @State private var pendingToolIds: [String: String] = [:]
+
+    /// Convert an `E2bCodeMessage` into an `AnthropicClient.Message`
+    /// suitable for the Messages API. The `user` role passes
+    /// text through; `assistant` passes text; `tool` and `notice`
+    /// get folded into the assistant turn as plain text so the
+    /// model sees what the tools did.
+    private func messageToAnthropic(_ message: E2bCodeMessage) -> AnthropicClient.Message? {
+        switch message.kind {
+        case .user:
+            return .init(role: "user", content: [.text(message.text)])
+        case .assistant:
+            return .init(role: "assistant", content: [.text(message.text)])
+        case .tool:
+            return .init(role: "assistant", content: [.text(
+                "[tool: \(message.tool ?? "?")] \(message.text)"
+            )])
+        case .notice:
+            return .init(role: "user", content: [.text(
+                "[system notice] \(message.text)"
+            )])
+        case .diff:
+            return .init(role: "assistant", content: [.text(
+                "[diff: \(message.path ?? "?")] +\(message.added ?? 0) -\(message.removed ?? 0)"
+            )])
+        }
+    }
+
+    /// Short human-readable summary of a tool call's input.
+    /// Truncated to keep the card header one line.
+    private func summariseInput(name: String, input: AnyJSON) -> String {
+        switch name {
+        case "run_shell":
+            let cmd = input.stringValue(for: "command") ?? ""
+            return cmd.count > 60 ? String(cmd.prefix(60)) + "…" : cmd
+        case "read_file":
+            return input.stringValue(for: "path") ?? ""
+        case "write_file":
+            return input.stringValue(for: "path") ?? ""
+        case "edit_file":
+            return input.stringValue(for: "path") ?? ""
+        case "git_commit":
+            return input.stringValue(for: "message") ?? ""
+        case "git_push":
+            return ""
+        case "create_pr":
+            return input.stringValue(for: "title") ?? ""
+        default:
+            return ""
         }
     }
 

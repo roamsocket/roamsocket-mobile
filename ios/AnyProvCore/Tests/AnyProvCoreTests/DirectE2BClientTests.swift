@@ -305,6 +305,71 @@ final class DirectE2BClientTests: XCTestCase {
         }
     }
 
+    /// e2b.dev rejects `timeout` values over 1 hour with a
+    /// confusing server-side error. The client clamps to the
+    /// ceiling so callers can't trip the API. Verify the clamp
+    /// via the captured request body: a 2-hour timeout must
+    /// arrive at the server as 3,600,000.
+    func testCreateSandboxClampsTimeoutToOneHour() async throws {
+        final class CapturingHTTP: HTTPClient, @unchecked Sendable {
+            var capturedBody: Data?
+            func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+                capturedBody = request.httpBody
+                return (
+                    json(#"{"sandboxID":"sb_abc","clientID":"cli_xyz"}"#),
+                    HTTPURLResponse(
+                        url: request.url!,
+                        statusCode: 200,
+                        httpVersion: nil,
+                        headerFields: nil
+                    )!
+                )
+            }
+        }
+        let cap = CapturingHTTP()
+        let client = DirectE2BClient(
+            apiKey: "e2b_testkey1234567890abcdef",
+            http: cap
+        )
+        // Caller asks for 2 hours (7,200,000 ms).
+        _ = try await client.createSandbox(timeoutMs: 7_200_000)
+        let body = try XCTUnwrap(cap.capturedBody)
+        let obj = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let timeout = try XCTUnwrap(obj["timeout"] as? Int)
+        XCTAssertEqual(timeout, 3_600_000, "timeout must be clamped to 1 hour")
+        XCTAssertEqual(DirectE2BClient.maxSandboxTimeoutMs, 3_600_000)
+    }
+
+    /// Negative or zero timeouts shouldn't blow up — clamp to 0
+    /// (e2b.dev itself enforces the lower bound).
+    func testCreateSandboxClampsNegativeTimeoutToZero() async throws {
+        final class CapturingHTTP: HTTPClient, @unchecked Sendable {
+            var capturedBody: Data?
+            func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+                capturedBody = request.httpBody
+                return (
+                    json(#"{"sandboxID":"sb_abc","clientID":"cli_xyz"}"#),
+                    HTTPURLResponse(
+                        url: request.url!,
+                        statusCode: 200,
+                        httpVersion: nil,
+                        headerFields: nil
+                    )!
+                )
+            }
+        }
+        let cap = CapturingHTTP()
+        let client = DirectE2BClient(
+            apiKey: "e2b_testkey1234567890abcdef",
+            http: cap
+        )
+        _ = try await client.createSandbox(timeoutMs: -1)
+        let body = try XCTUnwrap(cap.capturedBody)
+        let obj = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let timeout = try XCTUnwrap(obj["timeout"] as? Int)
+        XCTAssertEqual(timeout, 0)
+    }
+
     // MARK: - killSandbox
 
     func testKillSandboxSendsDelete() async throws {
