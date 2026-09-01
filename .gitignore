@@ -42,6 +42,8 @@ open_pr.py
 # Per-repo agent rules (use AGENTS.md / CLAUDE.md at root instead)
 AGENTS.local.md
 CLAUDE.local.md
+# Stray local tool caches (e.g. .freebuff/ — project-id scratch dir at repo root)
+.freebuff/
 
 # ---------- Node / npm ----------
 node_modules/

@@ -1,0 +1,60 @@
+{
+  "op": "prettify_display_name",
+  "cases": [
+    {
+      "name": "hyphenated tokens capitalize",
+      "input": "claude-3-5-sonnet",
+      "expected": { "name": "Claude 3 5 Sonnet" }
+    },
+    {
+      "name": "dotted version token stays verbatim",
+      "input": "claude-3.5-sonnet",
+      "expected": { "name": "Claude 3.5 Sonnet" }
+    },
+    {
+      "name": "brand override deepseek",
+      "input": "deepseek-v3",
+      "expected": { "name": "DeepSeek V3" }
+    },
+    {
+      "name": "brand override gpt keeps acronym",
+      "input": "gpt-4o",
+      "expected": { "name": "GPT 4o" }
+    },
+    {
+      "name": "size suffix uppercased",
+      "input": "llama-3.1-70b",
+      "expected": { "name": "Llama 3.1 70B" }
+    },
+    {
+      "name": "short lowercase token uppercased",
+      "input": "o1",
+      "expected": { "name": "O1" }
+    },
+    {
+      "name": "underscore and tilde separators",
+      "input": "Qwen2.5_0.5B~Instruct",
+      "expected": { "name": "Qwen2.5 0.5B Instruct" }
+    },
+    {
+      "name": "slash separated id keeps org token without provider context",
+      "input": "mistralai/mistral-large",
+      "expected": { "name": "Mistral AI Mistral Large" }
+    },
+    {
+      "name": "brand override gemma",
+      "input": "gemma-3-4b",
+      "expected": { "name": "Gemma 3 4B" }
+    },
+    {
+      "name": "vllm special case",
+      "input": "vllm-serve",
+      "expected": { "name": "vLLM Serve" }
+    },
+    {
+      "name": "plain single word",
+      "input": "grok",
+      "expected": { "name": "Grok" }
+    }
+  ]
+}

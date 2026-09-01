@@ -200,7 +200,8 @@ public sealed class ServerMessage {
     public data class ModelStatus(
         val sessionId: String,
         val status: ModelState,
-        val hubId: String? = null,
+        /** Wire key is `hubID` (canonical TS schema); decoded into hubId here. */
+        @SerialName("hubID") val hubId: String? = null,
         val message: String? = null,
     ) : ServerMessage()
 
@@ -319,6 +320,7 @@ public data class TunnelInfo(
     val id: String,
     val port: Int,
     val provider: String,
+    /** Wire value is lowercase (`starting|up|error|stopped`); kept as enum. */
     val status: TunnelStatusState,
     val url: String? = null,
     val error: String? = null,

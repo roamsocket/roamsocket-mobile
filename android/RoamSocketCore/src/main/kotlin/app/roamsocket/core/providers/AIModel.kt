@@ -70,6 +70,7 @@ public data class AIModel(
             "llama" to "Llama",
             "claude" to "Claude",
             "gemini" to "Gemini",
+            "nemo" to "NeMo",
             "olmo" to "OLMo",
             "kimi" to "Kimi",
             "yi" to "Yi",

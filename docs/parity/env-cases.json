@@ -1,0 +1,34 @@
+{
+  "op": "parse_env",
+  "cases": [
+    {
+      "name": "quotes comments blank lines invalid",
+      "input": "# a comment\nAPI_KEY=hunter2\nQUOTED=\"with spaces\"\nSINGLE='single'\nEMPTY=\n\nBAD LINE WITHOUT EQUALS\n",
+      "expected": {
+        "vars": {
+          "API_KEY": "hunter2",
+          "QUOTED": "with spaces",
+          "SINGLE": "single",
+          "EMPTY": ""
+        }
+      }
+    },
+    {
+      "name": "whitespace trimming",
+      "input": "  KEY  =  value  \n#comment\nEMPTY_KEY=\n=NO_KEY\n",
+      "expected": {
+        "vars": {
+          "KEY": "value",
+          "EMPTY_KEY": ""
+        }
+      }
+    },
+    {
+      "name": "empty input",
+      "input": "",
+      "expected": {
+        "vars": {}
+      }
+    }
+  ]
+}

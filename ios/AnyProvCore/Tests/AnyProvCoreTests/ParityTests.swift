@@ -1,4 +1,4 @@
-﻿import XCTest
+import XCTest
 @testable import AnyProvCore
 
 /// Cross-platform parity runner (iOS side).
