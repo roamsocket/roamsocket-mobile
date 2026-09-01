@@ -268,6 +268,10 @@ struct CodeHomeView: View {
     /// Sheet for the desktop pairing flow. Independent of the
     /// Settings card so the user can pair without leaving Code.
     @State private var showPairing = false
+    /// Sheet for opening a new E2B code session (repo + branch picker).
+    @State private var showSessionSheet = false
+    /// Active E2B code session presented as a chat fullScreenCover.
+    @State private var activeE2bSession: UUID?
 
     /// Opens the root sidebar drawer. Wired from `RootView` so Code can open
     /// the same destinations as Chat even though this screen hides the
@@ -382,8 +386,37 @@ struct CodeHomeView: View {
             NavigationStack { ServerPairingView() }
                 .environmentObject(state)
         }
+        .sheet(isPresented: $showSessionSheet) {
+            NewE2BSessionSheet(
+                onStart: { title, branch, _ in
+                    showSessionSheet = false
+                    startE2BSession(
+                        title: title,
+                        repoFullName: "",
+                        branch: branch,
+                        onOpen: { sessionId in
+                            // Wait a beat so the sheet can dismiss
+                            // before we present the chat cover.
+                            Task { @MainActor in
+                                try? await Task.sleep(nanoseconds: 250_000_000)
+                                activeE2bSession = sessionId
+                            }
+                        }
+                    )
+                }
+            )
+            .environmentObject(state)
+            .presentationDetents([.medium])
+        }
         .fullScreenCover(item: $desktopSession) { config in
             NavigationStack { SessionView(config: config) }
+                .environmentObject(state)
+        }
+        .fullScreenCover(item: Binding(
+            get: { activeE2bSession.map { E2BSessionCover(id: $0) } },
+            set: { activeE2bSession = $0?.id }
+        )) { cover in
+            E2bSessionView(sessionId: cover.id, store: state.e2bSessionStore)
                 .environmentObject(state)
         }
         .alert("Run error", isPresented: Binding(
@@ -493,11 +526,15 @@ struct CodeHomeView: View {
         }
     }
 
-    /// E2B sandboxes section. Pinned active run + history, or the
-    /// empty state if there are no runs yet.
+    /// E2B sandboxes section. Shows the user's long-lived code
+    /// sessions at the top (each is a chat-driven agent loop
+    /// against a persistent e2b sandbox) and the one-shot run
+    /// list below. The "Start a session" CTA opens a chat; the
+    /// "Start a run" CTA opens the one-shot runner.
     @ViewBuilder
     private var e2bSection: some View {
-        if rows.isEmpty {
+        let sessions = state.e2bSessionStore.sessions
+        if rows.isEmpty && sessions.isEmpty {
             CodeEmptyState(
                 hasPhoneKey: state.e2bKeyStore.hasKey,
                 onStart: { showStartSheet = true },
@@ -506,51 +543,135 @@ struct CodeHomeView: View {
             .frame(maxWidth: .infinity)
             .padding(.top, 24)
         } else {
-            let active = rows.first(where: { $0.status == "running" || $0.status == "queued" })
-            let past = rows.filter { $0.status != "running" && $0.status != "queued" }
             VStack(alignment: .leading, spacing: 12) {
+                // Code sessions (long-lived, agent-driven).
                 HStack {
-                    Image(systemName: "iphone.gen3")
+                    Image(systemName: "bubble.left.and.bubble.right.fill")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(Theme.accent)
-                    Text("Phone sandbox")
+                    Text("Sessions")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Theme.textSecondary)
                         .textCase(.uppercase)
                     Spacer()
                     Button {
-                        showStartSheet = true
+                        showSessionSheet = true
                     } label: {
                         HStack(spacing: 3) {
-                            Image(systemName: "play.fill")
-                                .font(.system(size: 10, weight: .bold))
-                            Text("Start")
+                            Image(systemName: "plus")
+                                .font(.system(size: 11, weight: .bold))
+                            Text("New")
                                 .font(.system(size: 12, weight: .semibold))
                         }
                         .foregroundStyle(Theme.accent)
                     }
                     .buttonStyle(.plain)
+                    .disabled(!state.e2bKeyStore.hasKey)
                 }
                 .padding(.horizontal, 4)
-                if let active {
-                    RunRowView(row: active, onStop: {
-                        state.sandboxesStore.cancelPhoneRun(runId: active.id)
-                    }, onRerun: { rerun(row: active) })
+                if sessions.isEmpty {
+                    Text("No sessions yet. Start a chat with a repo to write code, run, and commit.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textTertiary)
+                        .padding(.horizontal, 4)
+                } else {
+                    ForEach(sessions) { session in
+                        sessionRow(session)
+                    }
                 }
-                if !past.isEmpty {
-                    Text("History")
+                Divider().overlay(Theme.separator).padding(.vertical, 4)
+                // One-shot run list (existing flow).
+                HStack {
+                    Image(systemName: "play.square")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Theme.accent)
+                    Text("Quick runs")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Theme.textSecondary)
                         .textCase(.uppercase)
+                    Spacer()
+                }
+                .padding(.horizontal, 4)
+                if rows.isEmpty {
+                    Text("No runs yet. Tap play below to start a one-shot sandbox run.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textTertiary)
                         .padding(.horizontal, 4)
-                        .padding(.top, 4)
-                    ForEach(past) { row in
-                        RunRowView(row: row, onStop: {
-                            state.sandboxesStore.cancelPhoneRun(runId: row.id)
-                        }, onRerun: { rerun(row: row) })
+                } else {
+                    let active = rows.first(where: { $0.status == "running" || $0.status == "queued" })
+                    let past = rows.filter { $0.status != "running" && $0.status != "queued" }
+                    if let active {
+                        RunRowView(row: active, onStop: {
+                            state.sandboxesStore.cancelPhoneRun(runId: active.id)
+                        }, onRerun: { rerun(row: active) })
+                    }
+                    if !past.isEmpty {
+                        ForEach(past) { row in
+                            RunRowView(row: row, onStop: {
+                                state.sandboxesStore.cancelPhoneRun(runId: row.id)
+                            }, onRerun: { rerun(row: row) })
+                        }
                     }
                 }
             }
+        }
+    }
+
+    /// Row for one E2B code session. Tap to open the chat.
+    private func sessionRow(_ session: E2bCodeSession) -> some View {
+        Button {
+            activeE2bSession = session.id
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: session.isLive ? "circle.fill" : "circle")
+                    .font(.system(size: 10))
+                    .foregroundStyle(session.isLive ? Theme.selection : Theme.textTertiary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(session.title)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text(session.repoFullName)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(Theme.textSecondary)
+                            .lineLimit(1)
+                        Text("·")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.textTertiary)
+                        Text(session.branch)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(Theme.textSecondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+                Text(sessionStatusLabel(session))
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Theme.textTertiary)
+                    .textCase(.uppercase)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.textTertiary)
+            }
+            .padding(12)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(Theme.separator.opacity(0.6), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func sessionStatusLabel(_ s: E2bCodeSession) -> String {
+        switch s.status {
+        case .provisioning: return "Provisioning"
+        case .idle: return "Idle"
+        case .working: return "Working"
+        case .readyForReview: return "Ready"
+        case .failed: return "Failed"
+        case .killed: return "Closed"
         }
     }
 
@@ -668,6 +789,106 @@ struct CodeHomeView: View {
             return
         }
         desktopSession = config
+    }
+
+    /// Open a new E2B code session. Called from the NewE2BSessionSheet.
+    /// The sandbox is provisioned asynchronously; the caller is
+    /// expected to navigate to the chat cover on `onOpen`.
+    private func startE2BSession(
+        title: String,
+        repoFullName: String,
+        branch: String,
+        onOpen: @escaping (UUID) -> Void,
+    ) {
+        guard state.e2bKeyStore.hasKey else {
+            startError = "Add your e2b.dev API key in Settings first."
+            return
+        }
+        guard let repo = state.selectedRepo else {
+            startError = "Choose a repository on the home screen first."
+            return
+        }
+        let fullName = repoFullName.isEmpty ? repo.fullName : repoFullName
+        Task { @MainActor in
+            do {
+                let id = try await state.e2bSessionStore.openSession(
+                    title: title.isEmpty ? "\(fullName) · \(branch)" : title,
+                    repoFullName: fullName,
+                    branch: branch,
+                )
+                onOpen(id)
+            } catch {
+                startError = "Couldn't open sandbox: \(error.localizedDescription)"
+            }
+        }
+    }
+}
+
+/// Identifiable wrapper for the `fullScreenCover(item:)` so the
+/// active session id is captured in a binding-friendly shape.
+private struct E2BSessionCover: Identifiable, Hashable {
+    let id: UUID
+}
+
+// MARK: - New E2B session sheet
+
+/// Quick picker for a new E2B code session. Uses the user's
+/// currently selected repo + lets them name the session and
+/// override the branch. Hands the values back to the parent
+/// which drives provisioning.
+private struct NewE2BSessionSheet: View {
+    @EnvironmentObject var state: AppState
+    @Environment(\.dismiss) private var dismiss
+    /// Title / branch / repo are the user's choices; the
+    /// parent kicks off the actual sandbox provisioning and
+    /// navigation.
+    let onStart: (String, String, AnyProvCore.GitHubRepo) -> Void
+
+    @State private var title: String = ""
+    @State private var branch: String = "main"
+    @State private var isOpening: Bool = false
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Theme.background.ignoresSafeArea()
+                Form {
+                    Section {
+                        TextField("Session title (optional)", text: $title)
+                        TextField("Branch", text: $branch)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                    } header: {
+                        Text("Repository")
+                    } footer: {
+                        if let repo = state.selectedRepo {
+                            Text("Will open \(repo.fullName) on a fresh e2b sandbox.")
+                        } else {
+                            Text("Choose a repository on the home screen first.")
+                        }
+                    }
+                }
+                .scrollContentBackground(.hidden)
+            }
+            .navigationTitle("New code session")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Open") {
+                        guard let repo = state.selectedRepo else { return }
+                        let titleTrimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let branchTrimmed = branch.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let resolvedBranch = branchTrimmed.isEmpty ? repo.defaultBranch : branchTrimmed
+                        isOpening = true
+                        onStart(titleTrimmed, resolvedBranch, repo)
+                    }
+                    .disabled(state.selectedRepo == nil || isOpening)
+                }
+            }
+        }
     }
 }
 

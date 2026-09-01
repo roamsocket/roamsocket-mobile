@@ -112,6 +112,24 @@ final class E2bSessionStore: ObservableObject {
         sessions.first { $0.id == id }
     }
 
+    /// Update the live-sandbox fields on an existing session. Used
+    /// when reopening a closed session on a fresh sandbox.
+    func attachSandbox(
+        sessionId: UUID,
+        sandboxId: String,
+        accessToken: String?,
+        domain: String,
+    ) {
+        guard let idx = sessions.firstIndex(where: { $0.id == sessionId }) else { return }
+        sessions[idx].sandboxId = sandboxId
+        sessions[idx].sandboxAccessToken = accessToken
+        sessions[idx].sandboxDomain = domain
+        sessions[idx].sandboxUrl = sessions[idx].liveSandboxURL
+        sessions[idx].status = .idle
+        sessions[idx].updatedAt = Date()
+        persist()
+    }
+
     // MARK: - Internal
 
     private func upsert(_ session: E2bCodeSession) {

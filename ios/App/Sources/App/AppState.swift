@@ -29,6 +29,13 @@ final class AppState: ObservableObject {
     /// Hydrates from `Application Support/phoneRuns.v1.json` on init.
     let sandboxesStore = SandboxesStore()
 
+    /// Long-lived E2B code sessions (the phone-driven agent loop).
+    /// One sandbox per session, kept alive across multiple
+    /// operations so the user can have a chat-style "write code
+    /// → run → commit → PR" flow over e2b.dev. Hydrates from
+    /// `Application Support/e2bCodeSessions.v1.json` on init.
+    let e2bSessionStore = E2bSessionStore()
+
     /// Single source of truth for chat history + projects. `RootView` creates
     /// the store via `@StateObject` and calls `setChatHistory(...)` on first
     /// appear so SettingsSync (which lives here) can read/write the same

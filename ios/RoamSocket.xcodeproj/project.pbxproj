@@ -78,6 +78,7 @@
 		69BF058A45E585C9AE0887E1 /* SessionActionHistoryGroupingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21838C0F99960BD7131D4621 /* SessionActionHistoryGroupingTests.swift */; };
 		6E70EBF273945E0228C63049 /* EnvironmentConnectionPill.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A3031F186BD8C45C56036C9 /* EnvironmentConnectionPill.swift */; };
 		6F4AFEDD0A9E789386447FFE /* SandboxesStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAE89D75194F26FCBD9DFC19 /* SandboxesStore.swift */; };
+		6F6A4D38AD1C8B8C918EFF4E /* E2bSessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EF3701CF1A43740F916B6F2 /* E2bSessionView.swift */; };
 		70AD0F163F397BC476626589 /* ChatMessageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5BA5A9E14DE782584ECE46 /* ChatMessageView.swift */; };
 		715E154DF3AF762214EB2490 /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = 6316DB60B03ACE7ED50E0C14 /* MLXVLM */; };
 		71F637BC144C796B450102FA /* RenameChatSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08EF66148B760142391C499D /* RenameChatSheet.swift */; };
@@ -272,6 +273,7 @@
 		8BAED357FB143CAA4A585022 /* GalleryPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryPicker.swift; sourceTree = "<group>"; };
 		8DDB8096BD8EDC931A40E9D0 /* PreviewSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewSheets.swift; sourceTree = "<group>"; };
 		8E6BDFEC5407686C57AE778B /* MarkdownContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownContentView.swift; sourceTree = "<group>"; };
+		8EF3701CF1A43740F916B6F2 /* E2bSessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = E2bSessionView.swift; sourceTree = "<group>"; };
 		92139FD1C2399BF1338D4E31 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		92157B46A462037562EF4756 /* ProjectsListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectsListView.swift; sourceTree = "<group>"; };
 		9328EF63166A416E99004CF3 /* ThinkingExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThinkingExtractor.swift; sourceTree = "<group>"; };
@@ -761,6 +763,7 @@
 			children = (
 				40ED4D827C9D2CC841F105C2 /* E2bCodeSession.swift */,
 				52BAF5D4B47A1AFC7B7EB9A8 /* E2bSessionStore.swift */,
+				8EF3701CF1A43740F916B6F2 /* E2bSessionView.swift */,
 			);
 			path = E2BCodeSession;
 			sourceTree = "<group>";
@@ -972,6 +975,7 @@
 				74A3B710E669A7B73547B939 /* E2BKeySheet.swift in Sources */,
 				5FA06A8430B95628B7B45D62 /* E2bCodeSession.swift in Sources */,
 				DA63230F4C53B1D84024F868 /* E2bSessionStore.swift in Sources */,
+				6F6A4D38AD1C8B8C918EFF4E /* E2bSessionView.swift in Sources */,
 				36D95BE4FFAAB05BA1BF5A90 /* EdgeFreeTTSService.swift in Sources */,
 				0901833F1F01E76E22709F68 /* EffortControl.swift in Sources */,
 				6E70EBF273945E0228C63049 /* EnvironmentConnectionPill.swift in Sources */,
