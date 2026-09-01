@@ -227,6 +227,211 @@ public enum DirectE2BError: Error, LocalizedError {
     }
 }
 
+// MARK: - Persistent sandbox primitives
+
+extension DirectE2BClient {
+    /// Execute an arbitrary Python script on a persistent sandbox
+    /// and return its stdout. Used by the chat-driven E2B agent
+    /// (file ops, git, PR creation) where the sandbox must stay
+    /// alive across multiple operations.
+    ///
+    /// The `code` runs inside the code-interpreter template's
+    /// Python REPL, with full filesystem + subprocess access.
+    /// On a non-zero exit (uncaught exception) the error message
+    /// is thrown as a `.stream` error. Stdout is returned
+    /// verbatim — callers are expected to format their scripts
+    /// to print JSON or another parseable format.
+    public func exec(
+        sandboxId: String,
+        accessToken: String?,
+        code: String,
+        timeoutMs: Int = 60_000,
+    ) async throws -> String {
+        let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw DirectE2BError.noApiKey }
+
+        let executeURL = URL(string: "https://\(DirectE2BClient.codeInterpreterPort)-\(sandboxId).e2b.dev/execute")!
+        var req = URLRequest(url: executeURL)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("anyprov-code", forHTTPHeaderField: "User-Agent")
+        if let token = accessToken {
+            req.setValue(token, forHTTPHeaderField: "X-Access-Token")
+        }
+        req.timeoutInterval = TimeInterval(timeoutMs) / 1000
+        let body: [String: Any] = ["code": code]
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await URLSession.shared.data(for: req)
+        } catch {
+            throw DirectE2BError.transport(error.localizedDescription)
+        }
+        guard let http = response as? HTTPURLResponse else {
+            throw DirectE2BError.stream("non-HTTP response from /execute")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw DirectE2BError.http(status: http.statusCode, body: body)
+        }
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    /// Run a shell command on a persistent sandbox and return
+    /// `(stdout, stderr, exitCode)`. Convenience wrapper around
+    /// `exec` that wraps `subprocess.run` for shell execution.
+    public func runShell(
+        sandboxId: String,
+        accessToken: String?,
+        command: String,
+        cwd: String? = nil,
+        timeoutSeconds: Int = 60,
+    ) async throws -> ShellResult {
+        let cwdLine = cwd.map { "cwd='\(escapePython($0))'; " } ?? ""
+        let script = """
+        import subprocess, json
+        try:
+            proc = subprocess.run(
+                \(escapePython(command)),
+                shell=True,
+                cwd=\(cwdLine.replacingOccurrences(of: "cwd=", with: ""))None,
+                capture_output=True,
+                text=True,
+                timeout=\(timeoutSeconds),
+            )
+            print(json.dumps({
+                "stdout": proc.stdout,
+                "stderr": proc.stderr,
+                "exit_code": proc.returncode,
+            }))
+        except subprocess.TimeoutExpired as exc:
+            print(json.dumps({
+                "stdout": "",
+                "stderr": f"timeout after {exc.timeout}s",
+                "exit_code": 124,
+            }))
+        except Exception as exc:
+            print(json.dumps({
+                "stdout": "",
+                "stderr": f"launch failed: {exc}",
+                "exit_code": 125,
+            }))
+        """
+        let raw = try await exec(sandboxId: sandboxId, accessToken: accessToken, code: script)
+        // `exec` returns whatever the sandbox endpoint serialised;
+        // the JSON we just printed is on the last non-empty line.
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = trimmed.data(using: .utf8),
+              let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return ShellResult(stdout: raw, stderr: "", exitCode: -1)
+        }
+        return ShellResult(
+            stdout: parsed["stdout"] as? String ?? "",
+            stderr: parsed["stderr"] as? String ?? "",
+            exitCode: parsed["exit_code"] as? Int ?? -1
+        )
+    }
+
+    /// Read a file from a persistent sandbox. Returns the file
+    /// contents (UTF-8) or throws if the path doesn't exist.
+    public func readFile(
+        sandboxId: String,
+        accessToken: String?,
+        path: String,
+    ) async throws -> String {
+        let script = """
+        import json, os
+        try:
+            with open(\(escapePython(path)), "r", encoding="utf-8") as f:
+                content = f.read()
+            print(json.dumps({"ok": True, "content": content}))
+        except FileNotFoundError:
+            print(json.dumps({"ok": False, "error": "file not found"}))
+        except Exception as exc:
+            print(json.dumps({"ok": False, "error": str(exc)}))
+        """
+        let raw = try await exec(sandboxId: sandboxId, accessToken: accessToken, code: script)
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = trimmed.data(using: .utf8),
+              let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            throw DirectE2BError.stream("invalid readFile response: \(raw)")
+        }
+        if let ok = parsed["ok"] as? Bool, ok {
+            return parsed["content"] as? String ?? ""
+        }
+        throw DirectE2BError.stream(parsed["error"] as? String ?? "read failed")
+    }
+
+    /// Write (or create) a file on a persistent sandbox.
+    /// `mkdir -p` the parent directory first.
+    public func writeFile(
+        sandboxId: String,
+        accessToken: String?,
+        path: String,
+        content: String,
+    ) async throws {
+        let script = """
+        import json, os
+        try:
+            os.makedirs(os.path.dirname(\(escapePython(path))) or ".", exist_ok=True)
+            with open(\(escapePython(path)), "w", encoding="utf-8") as f:
+                f.write(\(escapePython(content)))
+            print(json.dumps({"ok": True}))
+        except Exception as exc:
+            print(json.dumps({"ok": False, "error": str(exc)}))
+        """
+        let raw = try await exec(sandboxId: sandboxId, accessToken: accessToken, code: script)
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = trimmed.data(using: .utf8),
+              let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            throw DirectE2BError.stream("writeFile failed: \(raw)")
+        }
+        if let ok = parsed["ok"] as? Bool, ok { return }
+        let err = parsed["error"] as? String ?? raw
+        throw DirectE2BError.stream("writeFile failed: \(err)")
+    }
+
+    /// Apply a unified-diff patch to a file on a persistent
+    /// sandbox. Convenience helper for the agent loop's
+    /// `edit_file` tool — takes the full file contents and
+    /// writes them back, since a true patch applier is overkill
+    /// for an MVP.
+    public func writeFileFull(
+        sandboxId: String,
+        accessToken: String?,
+        path: String,
+        newContent: String,
+    ) async throws {
+        try await writeFile(
+            sandboxId: sandboxId,
+            accessToken: accessToken,
+            path: path,
+            content: newContent
+        )
+    }
+}
+
+/// Result of `runShell`. The stdout / stderr are the captured
+/// streams from the subprocess; `exitCode` follows Unix
+/// convention (0 = success, anything else = failure).
+public struct ShellResult: Sendable, Hashable {
+    public let stdout: String
+    public let stderr: String
+    public let exitCode: Int
+    public var ok: Bool { exitCode == 0 }
+}
+
+/// Python-string escaping used by the exec helpers. Mirrors the
+/// `PythonQuote.escape` in the shim builder so the phone-side
+/// scripts and the shim agree on quoting rules.
+private func escapePython(_ value: String) -> String {
+    PythonQuote.escape(value)
+}
+
 /// Out-of-session client for the E2B.dev HTTP API. Used when the user
 /// wants to spin up a sandbox from the phone without a paired desktop.
 ///
