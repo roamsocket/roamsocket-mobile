@@ -279,6 +279,32 @@ struct CodeHomeView: View {
     /// persisted history survives via `PhoneRunPersistence`.
     @StateObject private var store = SandboxesStore()
 
+    /// Which sub-tab is on screen. Both tabs do the same broad
+    /// thing (run code) but the runtime is different: a fresh
+    /// e2b.dev sandbox per run vs. a long-lived session on a
+    /// paired desktop. The user picks at the top.
+    @State private var tab: CodeTab = .sandbox
+
+    /// Which sub-tab is on screen.
+    enum CodeTab: String, CaseIterable, Hashable {
+        case sandbox
+        case desktop
+
+        var label: String {
+            switch self {
+            case .sandbox: return "Sandboxes"
+            case .desktop: return "Desktop"
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .sandbox: return "shippingbox"
+            case .desktop: return "desktopcomputer"
+            }
+        }
+    }
+
     private var isPaired: Bool {
         state.serverToken != nil && (state.serverName?.isEmpty == false)
     }
@@ -287,48 +313,51 @@ struct CodeHomeView: View {
         ZStack(alignment: .bottomTrailing) {
             Theme.background.ignoresSafeArea()
             VStack(spacing: 0) {
-                ScrollView {
-                    LazyVStack(spacing: 12) {
-                        // Path 1: desktop session. The full agent
-                        // loop path — only shown when the user has
-                        // paired a desktop. Tap → open a new
-                        // session (or resume the most recent) →
-                        // SessionView fullScreenCover.
-                        if isPaired {
-                            desktopCard
-                        } else {
-                            pairDesktopCard
-                        }
-                        // Path 2: phone sandbox (E2B). Always
-                        // shown. This is the default path.
-                        e2bSection
+                // Segmented picker at the top — same UX as the
+                // Settings quick-access cards but cleaner for two
+                // parallel runtimes.
+                Picker("Run on", selection: $tab) {
+                    ForEach(CodeTab.allCases, id: \.self) { tab in
+                        Label(tab.label, systemImage: tab.systemImage)
+                            .tag(tab)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 4)
+
+                Group {
+                    switch tab {
+                    case .sandbox: e2bSection
+                    case .desktop: desktopSection
+                    }
                 }
             }
-            // Floating "Start a run" affordance. Disabled until the
-            // user has an e2b key; the empty state surfaces the
-            // "Add your e2b.dev key" CTA in that case.
-            VStack {
-                Spacer()
-                Button {
-                    showStartSheet = true
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "play.fill")
-                        Text("Start a run")
+            // Floating "Start a run" affordance for the sandbox
+            // tab. Disabled until the user has an e2b key; the
+            // empty state surfaces the "Add your e2b.dev key" CTA.
+            if tab == .sandbox {
+                VStack {
+                    Spacer()
+                    Button {
+                        showStartSheet = true
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "play.fill")
+                            Text("Start a run")
+                        }
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Theme.background)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 10)
+                        .background(state.e2bKeyStore.hasKey ? Theme.accent : Theme.textTertiary,
+                                    in: Capsule())
                     }
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Theme.background)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 10)
-                    .background(state.e2bKeyStore.hasKey ? Theme.accent : Theme.textTertiary,
-                                in: Capsule())
+                    .buttonStyle(.plain)
+                    .disabled(!state.e2bKeyStore.hasKey)
+                    .padding(.bottom, 24)
                 }
-                .buttonStyle(.plain)
-                .disabled(!state.e2bKeyStore.hasKey)
-                .padding(.bottom, 24)
             }
         }
         .navigationTitle("Code")
@@ -443,6 +472,26 @@ struct CodeHomeView: View {
     }
 
     // MARK: - Sections
+
+    /// Desktop tab body. Shows the paired-desktop card when a
+    /// desktop is connected, the "pair a desktop" prompt when
+    /// not, and the desktop-session list (recent agent sessions
+    /// that the user can re-open). One path through the full
+    /// agent loop.
+    @ViewBuilder
+    private var desktopSection: some View {
+        ScrollView {
+            VStack(spacing: 12) {
+                if isPaired {
+                    desktopCard
+                } else {
+                    pairDesktopCard
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+        }
+    }
 
     /// E2B sandboxes section. Pinned active run + history, or the
     /// empty state if there are no runs yet.
