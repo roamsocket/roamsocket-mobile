@@ -23,6 +23,10 @@ struct E2bSessionView: View {
 
     @State private var draft: String = ""
     @State private var isSending: Bool = false
+    /// The in-flight agent turn's task. Held so the Stop button
+    /// can cancel a long-running tool call (Claude is mid-tool or
+    /// a shell is still streaming). `nil` when no turn is active.
+    @State private var agentTask: Task<Void, Never>?
     @FocusState private var inputFocused: Bool
 
     private var session: E2bCodeSession? { store.session(id: sessionId) }
@@ -144,21 +148,36 @@ struct E2bSessionView: View {
                 .lineLimit(1...5)
                 .focused($inputFocused)
                 .textFieldStyle(.plain)
+                .disabled(isSending)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .background(Theme.surfaceElevated, in: RoundedRectangle(cornerRadius: 18))
                 .onSubmit(send)
-                Button {
-                    send()
-                } label: {
-                    Image(systemName: "paperplane.fill")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 36, height: 36)
-                        .background(canSend ? Theme.accent : Theme.textTertiary, in: Circle())
+                if isSending {
+                    Button {
+                        agentTask?.cancel()
+                    } label: {
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 36, height: 36)
+                            .background(.red, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Stop agent")
+                } else {
+                    Button {
+                        send()
+                    } label: {
+                        Image(systemName: "paperplane.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 36, height: 36)
+                            .background(canSend ? Theme.accent : Theme.textTertiary, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canSend)
                 }
-                .buttonStyle(.plain)
-                .disabled(!canSend)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -242,7 +261,11 @@ struct E2bSessionView: View {
             repoFullName: s.repoFullName,
             branch: s.branch
         )
-        Task {
+        // Cancel any in-flight turn (e.g. user retried) and start
+        // a fresh task. The Stop button cancels via the same
+        // `agentTask` reference.
+        agentTask?.cancel()
+        agentTask = Task { @MainActor in
             await runAgentLoop(
                 system: system,
                 sandboxId: sandboxId,
@@ -251,6 +274,10 @@ struct E2bSessionView: View {
                 anthropicApiKey: apiKey,
                 modelName: model.modelID,
             )
+            // Clear the task reference when we exit so a Stop tap
+            // after completion is a no-op rather than cancelling a
+            // freshly-started turn.
+            self.agentTask = nil
         }
     }
 
@@ -282,7 +309,7 @@ struct E2bSessionView: View {
         // Drive the loop. We cap at the runner's own maxSteps
         // (12) so a runaway conversation can't burn the user's
         // API budget.
-        while true {
+        while !Task.isCancelled {
             // Re-read the sandbox state in case it was killed
             // mid-loop.
             guard let s = store.session(id: sessionId), s.isLive else { return }
@@ -309,6 +336,18 @@ struct E2bSessionView: View {
                     ))
                     return
                 }
+            } catch is CancellationError {
+                store.appendMessage(sessionId: sessionId, .init(
+                    kind: .notice,
+                    text: "Stopped by you."
+                ))
+                return
+            } catch let error as URLError where error.code == .cancelled {
+                store.appendMessage(sessionId: sessionId, .init(
+                    kind: .notice,
+                    text: "Stopped by you."
+                ))
+                return
             } catch {
                 store.appendMessage(sessionId: sessionId, .init(
                     kind: .notice,
@@ -439,11 +478,23 @@ struct E2bSessionView: View {
 
 /// One transcript line rendered as a chat bubble. The styling
 /// mirrors the desktop session's item rendering so the phone
-/// and desktop paths can share the same look.
+/// and desktop paths can share the same look. Tool messages
+/// get a distinct card with a header (icon + tool name + status
+/// pill) and a monospaced output body — much more useful than
+/// the small caption the bubble used to render.
 private struct MessageBubble: View {
     let message: E2bCodeMessage
 
     var body: some View {
+        switch message.kind {
+        case .tool:
+            ToolCard(message: message)
+        default:
+            textBubble
+        }
+    }
+
+    private var textBubble: some View {
         HStack {
             if isUser { Spacer(minLength: 32) }
             VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
@@ -454,12 +505,6 @@ private struct MessageBubble: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(bubbleBackground, in: RoundedRectangle(cornerRadius: 14))
-                if let tool = message.tool {
-                    Text(tool)
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Theme.textTertiary)
-                        .padding(.horizontal, 4)
-                }
             }
             if !isUser { Spacer(minLength: 32) }
         }
@@ -471,9 +516,9 @@ private struct MessageBubble: View {
         switch message.kind {
         case .user: return Theme.accent.opacity(0.15)
         case .assistant: return Theme.surface
-        case .tool: return Theme.surfaceElevated
         case .diff: return Theme.selection.opacity(0.15)
         case .notice: return Theme.surfaceElevated
+        default: return Theme.surface
         }
     }
 
@@ -482,6 +527,166 @@ private struct MessageBubble: View {
         case .user: return Theme.accent
         case .notice: return Theme.textSecondary
         default: return Theme.textPrimary
+        }
+    }
+}
+
+/// Tool-call card. Renders a header (icon + tool name + status
+/// pill) and a monospaced body for the output. Status comes
+/// from the message text ("running…" → spinner; "exit 0\n…"
+/// → green check; anything else → red x). Tinted per status
+/// so the user can scan a long transcript at a glance.
+private struct ToolCard: View {
+    let message: E2bCodeMessage
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            header
+            output
+        }
+        .padding(10)
+        .background(Theme.surfaceElevated, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(tint.opacity(0.3), lineWidth: 1)
+        )
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 18, height: 18)
+                .background(tint.opacity(0.12), in: Circle())
+            VStack(alignment: .leading, spacing: 0) {
+                Text(toolName)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                    .lineLimit(1)
+                if let detail = toolDetail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(Theme.textSecondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer()
+            statusPill
+        }
+    }
+
+    private var output: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            Text(message.text)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(Theme.textPrimary)
+                .textSelection(.enabled)
+                .lineLimit(20)
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxHeight: 240)
+        .background(Theme.background, in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    private var toolName: String {
+        // message.tool is "name — input summary" for tool events.
+        // For the "running…" intermediate card the tool field is
+        // set to "name — input summary" too; for the result card
+        // the tool field is nil and we infer the name from the
+        // output prefix.
+        if let t = message.tool, t.contains(" — ") {
+            return String(t.split(separator: " — ").first ?? Substring(t))
+        }
+        if message.text.hasPrefix("wrote ") { return "write_file" }
+        if message.text.hasPrefix("edited ") { return "edit_file" }
+        if message.text.hasPrefix("read_file failed") { return "read_file" }
+        if message.text.hasPrefix("run_shell failed") { return "run_shell" }
+        if message.text.hasPrefix("write_file failed") { return "write_file" }
+        if message.text.hasPrefix("git_commit failed") { return "git_commit" }
+        if message.text.hasPrefix("git_push failed") { return "git_push" }
+        if message.text.hasPrefix("create_pr failed") { return "create_pr" }
+        if message.text.hasPrefix("exit ") { return "run_shell" }
+        return "tool"
+    }
+
+    private var toolDetail: String? {
+        if let t = message.tool, t.contains(" — ") {
+            return String(t.split(separator: " — ").dropFirst().joined(separator: " — "))
+        }
+        return nil
+    }
+
+    private var status: Status {
+        if message.text == "running…" { return .running }
+        // Successful run_shell outputs start with "exit 0".
+        if message.text.hasPrefix("exit 0") { return .ok }
+        // "wrote <path>" / "edited <path>" are success.
+        if message.text.hasPrefix("wrote ") || message.text.hasPrefix("edited ") { return .ok }
+        // "git commit:" with a SHA at the end is success.
+        if message.text.hasPrefix("commit: ") && !message.text.contains("failed") { return .ok }
+        // Anything that contains "failed" or starts with a non-zero exit is an error.
+        if message.text.contains("failed") { return .error }
+        if let line = message.text.split(separator: "\n").first,
+           line.hasPrefix("exit "),
+           let code = Int(line.dropFirst("exit ".count)),
+           code != 0 {
+            return .error
+        }
+        return .ok
+    }
+
+    private enum Status { case running, ok, error }
+
+    private var tint: Color {
+        switch status {
+        case .running: return Theme.accent
+        case .ok: return Theme.selection
+        case .error: return .red
+        }
+    }
+
+    private var icon: String {
+        switch toolName {
+        case "run_shell": return "terminal"
+        case "read_file": return "doc.text"
+        case "write_file": return "square.and.pencil"
+        case "edit_file": return "pencil"
+        case "git_commit": return "checkmark.circle"
+        case "git_push": return "arrow.up.circle"
+        case "create_pr": return "arrow.triangle.branch"
+        default: return "gearshape"
+        }
+    }
+
+    private var statusPill: some View {
+        HStack(spacing: 3) {
+            switch status {
+            case .running:
+                ProgressView().controlSize(.mini)
+            case .ok:
+                Image(systemName: "checkmark")
+                    .font(.system(size: 9, weight: .bold))
+            case .error:
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+            }
+            Text(pillText)
+                .font(.system(size: 9, weight: .semibold))
+                .textCase(.uppercase)
+        }
+        .foregroundStyle(tint)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(tint.opacity(0.12), in: Capsule())
+    }
+
+    private var pillText: String {
+        switch status {
+        case .running: return "Running"
+        case .ok: return "Done"
+        case .error: return "Error"
         }
     }
 }
