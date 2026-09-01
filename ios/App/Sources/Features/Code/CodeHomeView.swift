@@ -280,12 +280,55 @@ struct CodeHomeView: View {
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
+                    // Pinned active run (if any) at the top, then
+                    // history below. Mirrors the desktop Code home's
+                    // "current session" / "history" split — the
+                    // active run is the focus, the history is
+                    // reference.
+                    let active = rows.first(where: {
+                        $0.status == "running" || $0.status == "queued"
+                    })
                     ScrollView {
                         LazyVStack(spacing: 12) {
-                            ForEach(rows) { row in
-                                RunRowView(row: row, onStop: {
-                                    state.sandboxesStore.cancelPhoneRun(runId: row.id)
-                                })
+                            if let active {
+                                Section {
+                                    HStack {
+                                        Image(systemName: "bolt.fill")
+                                            .font(.system(size: 11, weight: .bold))
+                                            .foregroundStyle(Theme.accent)
+                                        Text("Active sandbox")
+                                            .font(.system(size: 12, weight: .semibold))
+                                            .foregroundStyle(Theme.textSecondary)
+                                            .textCase(.uppercase)
+                                    }
+                                    .padding(.horizontal, 4)
+                                    RunRowView(row: active, onStop: {
+                                        state.sandboxesStore.cancelPhoneRun(runId: active.id)
+                                    }, onRerun: { rerun(row: active) })
+                                } header: {
+                                    EmptyView()
+                                }
+                            }
+                            let past = rows.filter {
+                                $0.status != "running" && $0.status != "queued"
+                            }
+                            if !past.isEmpty {
+                                Section {
+                                        ForEach(past) { row in
+                                            RunRowView(row: row, onStop: {
+                                                state.sandboxesStore.cancelPhoneRun(runId: row.id)
+                                            }, onRerun: { rerun(row: row) })
+                                        }
+                                } header: {
+                                    HStack {
+                                        Text("History")
+                                            .font(.system(size: 12, weight: .semibold))
+                                            .foregroundStyle(Theme.textSecondary)
+                                            .textCase(.uppercase)
+                                        Spacer()
+                                    }
+                                    .padding(.horizontal, 4)
+                                }
                             }
                         }
                         .padding(.horizontal, 16)
@@ -377,6 +420,47 @@ struct CodeHomeView: View {
             request: req,
         )
         showStartSheet = false
+    }
+
+    /// Re-run a finished run with the same repo + branch + command.
+    /// `E2bPhoneRun` doesn't currently persist the install
+    /// command or the original `E2bPhoneRepoSelection` (just the
+    /// display name), so the re-run skips the install step and
+    /// infers GitHub vs URL from the display name. For a URL repo
+    /// the re-run will still work — the URL is reconstructed from
+    /// the `owner/repo` shape — but for non-GitHub URLs the user
+    /// is better off re-running from the start sheet.
+    private func rerun(row: RunRow) {
+        guard let apiKey = state.e2bKeyStore.get(), !apiKey.isEmpty else {
+            startError = "Add your e2b.dev API key in Settings first."
+            return
+        }
+        let repo = inferRepoSelection(from: row.repoFullName)
+        let req = E2bPhoneRunRequest(
+            repo: repo,
+            branch: row.branch,
+            command: row.command,
+            installCommand: nil, // not persisted; user can re-add via start sheet
+            githubToken: state.githubToken,
+            preset: nil,
+        )
+        state.sandboxesStore.startPhoneRun(
+            apiKey: apiKey,
+            githubToken: state.githubToken,
+            request: req,
+        )
+    }
+
+    /// Best-effort repo selection inference from the display name.
+    /// If it starts with `http://` or `https://` it's a URL; else
+    /// treat it as `owner/repo` for GitHub. This handles the common
+    /// case (a GitHub `owner/repo` re-run) and the URL case for
+    /// paste-style runs.
+    private func inferRepoSelection(from displayName: String) -> E2bPhoneRepoSelection {
+        if displayName.hasPrefix("http://") || displayName.hasPrefix("https://") {
+            return .url(displayName)
+        }
+        return .github(fullName: displayName)
     }
 }
 

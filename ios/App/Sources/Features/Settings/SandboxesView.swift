@@ -109,6 +109,37 @@ struct SandboxesView: View {
         showStartSheet = false
     }
 
+    /// Re-run a finished run with the same repo + branch + command.
+    /// The display name tells us whether it was a GitHub repo or a
+    /// pasted URL (the only kind the run sheet supports). The
+    /// install step isn't persisted on the run so re-run skips it —
+    /// the user can re-trigger install via the start sheet.
+    private func rerun(row: RunRow) {
+        guard let apiKey = state.e2bKeyStore.get(), !apiKey.isEmpty else {
+            showError = "Add your e2b.dev API key in Settings → Sandboxes (E2B) first."
+            return
+        }
+        let repo: E2bPhoneRepoSelection = {
+            if row.repoFullName.hasPrefix("http://") || row.repoFullName.hasPrefix("https://") {
+                return .url(row.repoFullName)
+            }
+            return .github(fullName: row.repoFullName)
+        }()
+        let req = E2bPhoneRunRequest(
+            repo: repo,
+            branch: row.branch,
+            command: row.command,
+            installCommand: nil,
+            githubToken: state.githubToken,
+            preset: nil,
+        )
+        store.startPhoneRun(
+            apiKey: apiKey,
+            githubToken: state.githubToken,
+            request: req,
+        )
+    }
+
     @ViewBuilder
     private var content: some View {
         if rows.isEmpty {
@@ -122,7 +153,7 @@ struct SandboxesView: View {
                     ForEach(rows) { row in
                         RunRowView(row: row, onStop: {
                             store.cancelPhoneRun(runId: row.id)
-                        })
+                        }, onRerun: { rerun(row: row) })
                     }
                 }
                 .padding(.horizontal, 16)
@@ -137,9 +168,24 @@ struct SandboxesView: View {
 struct RunRowView: View {
     let row: RunRow
     let onStop: () -> Void
+    /// Re-run with the same repo + branch + command. No-op by
+    /// default — parents opt in by passing a closure.
+    var onRerun: () -> Void = {}
 
-    @State private var expanded = false
+    @State private var expanded: Bool
     @Environment(\.openURL) private var openURL
+
+    init(row: RunRow, onStop: @escaping () -> Void, onRerun: @escaping () -> Void = {}) {
+        self.row = row
+        self.onStop = onStop
+        self.onRerun = onRerun
+        // Auto-expand active runs so the live output is visible
+        // without an extra tap. Once a run is queued / running, the
+        // user wants to see what's happening — collapsing it by
+        // default would defeat the purpose of the phone-driven
+        // code-running experience.
+        self._expanded = State(initialValue: row.status == "running" || row.status == "queued")
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -154,7 +200,8 @@ struct RunRowView: View {
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(Theme.separator.opacity(0.6), lineWidth: 1)
+                .strokeBorder(row.status == "running" ? Theme.accent.opacity(0.4) : Theme.separator.opacity(0.6),
+                              lineWidth: row.status == "running" ? 1.5 : 1)
         )
     }
 
@@ -170,16 +217,29 @@ struct RunRowView: View {
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(1)
                     Spacer()
+                    // Trailing action: Stop for active, Re-run for
+                    // terminal. Mirrors the desktop Code home's
+                    // "stop session" / "re-run" affordances.
                     if row.status == "running" {
                         Button("Stop", action: onStop)
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(.red)
                             .buttonStyle(.plain)
-                    } else {
-                        Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(Theme.textTertiary)
+                    } else if row.status == "completed" || row.status == "failed" || row.status == "killed" {
+                        Button(action: onRerun) {
+                            HStack(spacing: 3) {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 11, weight: .bold))
+                                Text("Re-run")
+                                    .font(.system(size: 12, weight: .semibold))
+                            }
+                            .foregroundStyle(Theme.accent)
+                        }
+                        .buttonStyle(.plain)
                     }
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.textTertiary)
                 }
                 HStack(spacing: 8) {
                     Text(row.branch)
