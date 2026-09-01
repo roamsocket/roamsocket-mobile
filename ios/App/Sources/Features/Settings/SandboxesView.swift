@@ -5,7 +5,7 @@ import UIKit
 /// One row in the Sandboxes list. Always phone-originated now —
 /// the desktop no longer brokers E2B runs, so the view doesn't
 /// need a `source` field or a unified-runs computed property.
-fileprivate struct RunRow: Identifiable, Hashable {
+struct RunRow: Identifiable, Hashable {
     let id: String
     let repoFullName: String
     let branch: String
@@ -27,7 +27,9 @@ struct SandboxesView: View {
     @EnvironmentObject private var state: AppState
     @Environment(\.dismiss) private var dismiss
 
-    @StateObject private var store = SandboxesStore()
+    /// Shared with the Code home screen via `AppState.sandboxesStore`
+    /// so an in-flight run is visible from both surfaces.
+    private var store: SandboxesStore { state.sandboxesStore }
 
     @State private var showError: String?
     @State private var showStartSheet = false
@@ -132,7 +134,7 @@ struct SandboxesView: View {
 
 // MARK: - Run row
 
-private struct RunRowView: View {
+struct RunRowView: View {
     let row: RunRow
     let onStop: () -> Void
 
@@ -297,7 +299,7 @@ private struct RunRowView: View {
 
 /// Compact "Clone" / "Install" / "Test" pill for the pipeline view.
 /// Reflects the per-step status from the run's `steps` array.
-private struct StepPill: View {
+struct StepPill: View {
     let step: E2bPhoneRunStep
 
     var body: some View {
@@ -346,7 +348,7 @@ private struct StepPill: View {
     }
 }
 
-private struct StatusDot: View {
+struct StatusDot: View {
     let status: String
     var body: some View {
         Circle()
@@ -365,7 +367,7 @@ private struct StatusDot: View {
 
 // MARK: - Empty state
 
-private struct EmptyState: View {
+struct EmptyState: View {
     let hasPhoneKey: Bool
     let onStart: () -> Void
     var body: some View {
@@ -407,7 +409,7 @@ private struct EmptyState: View {
 /// "Start a run" sheet. The user picks a repo (GitHub list or
 /// pasted URL), a branch, and a preset. The phone drives the
 /// run directly via e2b.dev — no desktop required.
-private struct StartRunSheet: View {
+struct StartRunSheet: View {
     let onStart: (E2bPhoneRunRequest) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -639,7 +641,7 @@ private struct StartRunSheet: View {
 
 /// User-facing run preset. Drives the chip row + the `E2bPhoneRunRequest.preset`
 /// string so the Sandboxes view can label the pill ("Test" / "Build" / etc.).
-private enum RunPreset: String, CaseIterable, Hashable {
+enum RunPreset: String, CaseIterable, Hashable {
     case test, build, lint, install, custom
     var displayName: String {
         switch self {
@@ -664,7 +666,7 @@ private enum RunPreset: String, CaseIterable, Hashable {
     }
 }
 
-private struct PresetChipsRow: View {
+struct PresetChipsRow: View {
     @Binding var preset: RunPreset
     let manifest: ProjectManifest
 

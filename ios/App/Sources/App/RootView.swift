@@ -150,6 +150,17 @@ struct RootView: View {
             SandboxesView()
                 .environmentObject(state)
         }
+        // E2B key entry sheet. Same pattern as the Sandboxes
+        // sheet: lifted to RootView so the same UI opens from
+        // any surface (Settings, the unpaired Code home, the
+        // Sandboxes empty state).
+        .sheet(isPresented: Binding(
+            get: { state.showE2BKeySheet },
+            set: { state.showE2BKeySheet = $0 }
+        )) {
+            E2BKeySheet()
+                .environmentObject(state)
+        }
         .sheet(isPresented: $showIncognitoSheet) {
             IncognitoChatSheet(
                 history: history,
