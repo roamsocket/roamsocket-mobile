@@ -638,14 +638,16 @@ public final class DirectE2BClient: @unchecked Sendable {
                     onEvent(.stepSkipped(stepId: id))
                     if currentStepId == id { currentStepId = nil }
                 case let .exit(code):
+                    // The shim's only `EXIT:` emission is the final
+                    // process exit code for the user step. Per-step
+                    // failures arrive as `STEP:<id>:failed:N` (handled
+                    // above) and short-circuit the run before we
+                    // ever see the EXIT line.
                     exitCode = code
-                case let .cloneFailed(code):
-                    streamError = "git clone failed (exit \(code))"
-                case .checkoutFailed:
-                    streamError = "git checkout failed"
-                case .launchFailed:
-                    streamError = "command launch failed"
                 case let .passthrough(raw):
+                    // Forward-compat for any future shim output the
+                    // parser doesn't recognise — show it as stdout so
+                    // the user doesn't lose the line.
                     onEvent(.log(stream: "stdout", line: raw, stepId: currentStepId))
                 }
             }
@@ -724,16 +726,16 @@ public enum PythonQuote {
 /// `STEP:<id>:...` / `EXIT:` and the client demuxes that into
 /// structured events so the view-model and the unit tests can stay
 /// in sync.
-public enum E2bPhoneStreamEvent: Sendable, Hashable {
+///
+/// Internal because the only legitimate consumer is the `run()` loop
+/// in this file. The static `parse` function is `internal` too, so
+/// the unit tests in the same target can exercise it directly.
+enum E2bPhoneStreamEvent: Sendable, Hashable {
     case stdout(String)
     case stderr(String)
     /// Process exit code. `nil` exit means the stream ended before
     /// the shim sent an EXIT line — usually a sandbox crash.
     case exit(Int)
-    /// The shim caught a fatal error before launching the user command.
-    case cloneFailed(exitCode: Int)
-    case checkoutFailed
-    case launchFailed
     /// Step lifecycle. `clone`, `install`, `user` are the step ids
     /// the current shim emits; the parser is forward-compatible with
     /// new step ids.
@@ -745,8 +747,9 @@ public enum E2bPhoneStreamEvent: Sendable, Hashable {
     /// as stdout so it isn't lost (forward-compat for new shim output).
     case passthrough(String)
 
-    /// Pure parser. Exposed for unit tests.
-    public static func parse(line: String) -> E2bPhoneStreamEvent {
+    /// Pure parser. `internal` so unit tests in the same target can
+    /// drive it without exposing the wire format on the public API.
+    static func parse(line: String) -> E2bPhoneStreamEvent {
         guard let sep = line.firstIndex(of: ":") else {
             return .passthrough(line)
         }
@@ -776,12 +779,10 @@ public enum E2bPhoneStreamEvent: Sendable, Hashable {
                 return .passthrough(line)
             }
         case "EXIT":
-            if value.hasPrefix("clone-failed:") {
-                let code = Int(value.dropFirst("clone-failed:".count)) ?? -1
-                return .cloneFailed(exitCode: code)
-            }
-            if value == "checkout-failed" { return .checkoutFailed }
-            if value == "launch-failed" { return .launchFailed }
+            // The shim only emits `emit("exit", str(user_code))` —
+            // the per-step failures are now reported as
+            // `STEP:<id>:failed:N`, not as `EXIT:<error>`. Any
+            // `EXIT:` line is therefore the final process exit code.
             return .exit(Int(value) ?? -1)
         default:
             return .passthrough(line)

@@ -44,24 +44,25 @@ final class DirectE2BClientTests: XCTestCase {
         XCTAssertEqual(E2bPhoneStreamEvent.parse(line: "EXIT:127"), .exit(127))
     }
 
-    func testStreamParseCloneFailed() {
+    /// The old shim used `EXIT:clone-failed:<n>` etc. for fatal
+    /// errors. The new shim only emits `EXIT:<code>` for the final
+    /// process exit; per-step failures arrive as `STEP:<id>:failed:N`.
+    /// Lock the new behaviour: the parser drops any non-integer
+    /// EXIT payload to the `-1` sentinel. A regression that
+    /// resurrects the old format would surface as a phantom
+    /// `.exit(-1)` plus a missing `STEP:<id>:failed:N` event.
+    func testStreamParseExitAlwaysMapsToExitCode() {
         XCTAssertEqual(
             E2bPhoneStreamEvent.parse(line: "EXIT:clone-failed:128"),
-            .cloneFailed(exitCode: 128)
+            .exit(-1)
         )
-    }
-
-    func testStreamParseCheckoutFailed() {
         XCTAssertEqual(
             E2bPhoneStreamEvent.parse(line: "EXIT:checkout-failed"),
-            .checkoutFailed
+            .exit(-1)
         )
-    }
-
-    func testStreamParseLaunchFailed() {
         XCTAssertEqual(
             E2bPhoneStreamEvent.parse(line: "EXIT:launch-failed"),
-            .launchFailed
+            .exit(-1)
         )
     }
 

@@ -1924,20 +1924,21 @@ private struct SettingsE2BKeySheet: View {
                             // something — the placeholder
                             // "e2b_…" shouldn't count as an error.
                             let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                            if trimmed.isEmpty {
+                            switch E2BKeyStore.validate(trimmed) {
+                            case .missing:
                                 validationError = nil
-                            } else if case let .invalid(reason) = E2BKeyStore.validate(trimmed) {
+                            case .valid:
+                                validationError = nil
+                            case let .invalid(reason):
                                 validationError = reason
-                            } else {
-                                validationError = nil
                             }
-                            // A new draft invalidates any previous
-                            // verification status from a prior save.
-                            if case .verified = verification {} else if case .failed = verification {
-                                verification = .idle
-                            } else {
-                                verification = .idle
-                            }
+                            // A new draft invalidates any prior
+                            // verification result. The "Verifying…"
+                            // state is a transient that's about to
+                            // land anyway; resetting it is harmless
+                            // and avoids showing a "Verifying…" badge
+                            // for a draft the user hasn't saved.
+                            verification = .idle
                         }
                     if let validationError {
                         Label(validationError, systemImage: "exclamationmark.triangle.fill")

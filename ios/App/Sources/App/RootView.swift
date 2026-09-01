@@ -383,6 +383,16 @@ struct RootView: View {
             history.forgetActiveIfOnExit()
             path = [.browser]
             setSidebarOpen(false)
+        case .sandboxes:
+            // Open the Sandboxes sheet. The E2B flow is phone-only
+            // (see Sandboxes/DirectE2BClient.swift) and works
+            // without a paired desktop. The actual sheet is owned by
+            // AppSettingsView; flipping `state.showSandboxes` here
+            // requests presentation from any surface.
+            history.discardActiveIfBlank()
+            history.forgetActiveIfOnExit()
+            state.showSandboxes = true
+            setSidebarOpen(false)
         case .models:
             history.discardActiveIfBlank()
             history.forgetActiveIfOnExit()
