@@ -392,6 +392,22 @@ struct CodeHomeView: View {
         // The custom `topBar` above replaces it, so only the hamburger
         // shows — the back button can never appear.
         .toolbar(.hidden, for: .navigationBar)
+        .task {
+            // Re-list the catalog the first time Code is shown so
+            // the "Start a session" flow and any pills inside the
+            // session view have models to pick. Same defensive
+            // pattern Vision uses on appear; the Code surface is
+            // reached via the sidebar (not the chat path) so
+            // RootView's .task isn't always a guarantee.
+            if state.allModels.isEmpty {
+                await state.refreshModels()
+            }
+            // And pin the lane to a coding-capable model — the
+            // E2B session pill is `requiresCodingAgent: true`, so
+            // a chat default like Apple Intelligence would render
+            // as "+ Add a model" otherwise.
+            state.applyDefault(for: .code)
+        }
         .sheet(isPresented: $showStartSheet) {
             StartRunSheet(onStart: { req in startRun(req) })
                 .presentationDetents([.large])

@@ -90,6 +90,18 @@ struct ChatView: View {
         .onAppear {
             bindAndLoad()
         }
+        .task {
+            // The chat path is reached via RootView's task today,
+            // but the Sandboxes sidebar entry used to be a
+            // second refresh hook — and other surfaces (Code /
+            // E2B / Sandboxes in Settings) already call
+            // `refreshModels` on appear. Pin the chat to the same
+            // contract so the model pill never opens an empty
+            // picker just because the user landed here first.
+            if state.allModels.isEmpty {
+                await state.refreshModels()
+            }
+        }
         .onChange(of: resumeToken) {
             // Switching chats / new chat while this screen stays mounted.
             persistAndAutoTitleOnLeave()

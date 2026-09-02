@@ -57,6 +57,25 @@ struct E2bSessionView: View {
             }
             .navigationTitle(session?.title ?? "Session")
             .navigationBarTitleDisplayMode(.inline)
+            .task {
+                // Same reason Vision calls `refreshModels` on
+                // appear: this surface is reached via a sheet off
+                // the Code home, and the global catalog is the
+                // only source of models the pill + picker can
+                // show. If the user landed here without opening
+                // Vision first, the catalog would otherwise be
+                // empty and the picker would render with no rows.
+                if state.allModels.isEmpty {
+                    await state.refreshModels()
+                }
+                // The pill has `requiresCodingAgent: true`, so a
+                // non-coding default (e.g. Apple Intelligence set
+                // as the chat default) reads as "+ Add a model"
+                // even when the catalog is healthy. Apply the
+                // code-lane default to keep the pill honest
+                // before the user has to think about it.
+                state.applyDefault(for: .code)
+            }
             .sheet(isPresented: $showModelPicker, onDismiss: syncSessionModelFromGlobal) {
                 ModelPickerSheet(codingOnly: true)
                     .environmentObject(state)
