@@ -837,4 +837,42 @@ final class DirectE2BClientTests: XCTestCase {
         )
         XCTAssertEqual(mistral.baseURL.absoluteString, "https://api.mistral.ai")
     }
+
+    // MARK: - Stream timeout (hanging-model guard)
+
+    /// When a model accepts the request but never sends a
+    /// terminating chunk — usually because it doesn't actually
+    /// support OpenAI's tool-calling wire format — the loop
+    /// would otherwise block on `bytes.lines` forever, pinning
+    /// the E2B session at "Working" indefinitely. The agent
+    /// surfaces a `streamTimeout` error instead, with a message
+    /// that points the user at "try a different model". Lock
+    /// that surface so a future refactor doesn't accidentally
+    /// regress to the silent-hang behaviour.
+    func testStreamTimeoutErrorMessageMentionsModelSwap() {
+        let err: LocalizedError = OpenAICompatibleError.streamTimeout(elapsed: 300)
+        let message = err.errorDescription ?? ""
+        XCTAssertTrue(
+            message.contains("timed out"),
+            "stream timeout error must say it timed out; got: \(message)"
+        )
+        XCTAssertTrue(
+            message.contains("model"),
+            "stream timeout error must mention that the model is the likely cause; got: \(message)"
+        )
+    }
+
+    /// Default deadline is generous (covers thinking models) but
+    /// bounded — 5 minutes is the upper bound, anything higher
+    /// would risk leaving the user stranded.
+    func testStreamTimeoutDefaultIsBounded() {
+        XCTAssertGreaterThan(
+            OpenAICompatibleAgentLLM.maxStreamSeconds, 60,
+            "default must exceed 1 min (gives tool-using turns room to finish)"
+        )
+        XCTAssertLessThanOrEqual(
+            OpenAICompatibleAgentLLM.maxStreamSeconds, 600,
+            "default must be at most 10 min so a stuck model surfaces within a user-tolerable window"
+        )
+    }
 }

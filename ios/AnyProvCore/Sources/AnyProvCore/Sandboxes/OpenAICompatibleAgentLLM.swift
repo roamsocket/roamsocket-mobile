@@ -71,7 +71,15 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
                         let body = String(data: bodyData, encoding: .utf8) ?? ""
                         throw OpenAICompatibleError.httpStatus(code, body)
                     }
-                    var eventName = ""
+                    // Cap the wall-clock duration of the stream so
+                    // a model that opens a chunked response but
+                    // never sends `[DONE]` (or `finish_reason`) —
+                    // usually a provider whose tool-calling format
+                    // is incomplete or unsupported — doesn't pin
+                    // the runner at "thinking…" forever. 5 minutes
+                    // is generous for a single agent turn; the
+                    // runner can always issue a fresh request.
+                    let deadline = Date().addingTimeInterval(Self.maxStreamSeconds)
                     var dataBuffer = ""
                     // Per OpenAI streaming: each SSE event is
                     // `data: {json}\n\n` (no `event:` line). The
@@ -79,6 +87,11 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
                     var inToolCalls: [Int: ToolCallAcc] = [:]
                     for try await line in bytes.lines {
                         if Task.isCancelled { break }
+                        if Date() > deadline {
+                            throw OpenAICompatibleError.streamTimeout(
+                                elapsed: Self.maxStreamSeconds
+                            )
+                        }
                         if line.isEmpty {
                             if !dataBuffer.isEmpty {
                                 let trimmed = dataBuffer.trimmingCharacters(in: .whitespaces)
@@ -112,6 +125,13 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
             }
         }
     }
+
+    /// Wall-clock cap on a single streamed response. Most models
+    /// finish a tool-using turn in under 90s; we add headroom
+    /// for thinking / reasoning variants. Public so the runner
+    /// (or future config) can read the default for known-slow
+    /// models without changing the protocol surface.
+    nonisolated public static let maxStreamSeconds: TimeInterval = 300
 
     /// Mutable accumulator for one in-flight tool call. The
     /// OpenAI stream gives us `id` on the first chunk, `name` on
@@ -315,6 +335,12 @@ enum OpenAICompatibleError: Error, LocalizedError {
     case httpStatus(Int, String)
     case transport(String)
     case decoding(String)
+    /// The upstream opened the stream but never produced a
+    /// terminating chunk in time. Usually means the chosen
+    /// model doesn't actually support OpenAI's tool-calling
+    /// wire format (chat-only models) — the runner surfaces
+    /// this so the user can swap models.
+    case streamTimeout(elapsed: TimeInterval)
 
     var errorDescription: String? {
         switch self {
@@ -323,6 +349,8 @@ enum OpenAICompatibleError: Error, LocalizedError {
             return "LLM HTTP \(code)\(snippet)"
         case let .transport(msg): return "LLM transport: \(msg)"
         case let .decoding(msg): return "LLM decode: \(msg)"
+        case let .streamTimeout(elapsed):
+            return "LLM stream timed out after \(Int(elapsed))s. The model accepted the request but never sent a complete response — usually means it doesn't support the tool-calling format the E2B agent uses. Try a different model."
         }
     }
 }
