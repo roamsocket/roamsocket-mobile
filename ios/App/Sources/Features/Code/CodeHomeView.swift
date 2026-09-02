@@ -352,7 +352,13 @@ struct CodeHomeView: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(!state.e2bKeyStore.hasKey)
-                    Button { showSessionSheet = true } label: {
+                    Button {
+                        if state.e2bKeyStore.hasKey {
+                            showSessionSheet = true
+                        } else {
+                            state.showE2BKeySheet = true
+                        }
+                    } label: {
                         HStack(spacing: 6) {
                             Image(systemName: "play.fill")
                             Text("Start a session")
@@ -707,7 +713,7 @@ struct CodeHomeView: View {
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "play.fill")
-                        Text("Start desktop session")
+                        Text("Start a session")
                     }
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Theme.background)
@@ -731,9 +737,10 @@ struct CodeHomeView: View {
     /// Card shown when no desktop is paired. Directs the user to
     /// the pairing flow (also reachable from Settings).
     private var pairDesktopCard: some View {
-        Button {
-            showPairing = true
-        } label: {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                showPairing = true
+            } label: {
             HStack(spacing: 12) {
                 Image(systemName: "desktopcomputer")
                     .font(.system(size: 18, weight: .semibold))
@@ -758,8 +765,25 @@ struct CodeHomeView: View {
                 RoundedRectangle(cornerRadius: 12)
                     .strokeBorder(Theme.separator.opacity(0.6), lineWidth: 1)
             )
+            }
+            .buttonStyle(.plain)
+            Button {
+                launchDesktopSession()
+            } label: {
+                Label("Start a session", systemImage: "play.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.background)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Theme.accent, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(!canLaunchDesktop)
+            .opacity(canLaunchDesktop ? 1 : 0.5)
         }
-        .buttonStyle(.plain)
+        .padding(12)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.separator.opacity(0.6), lineWidth: 1))
     }
 
     private var desktopSubtitle: String {
