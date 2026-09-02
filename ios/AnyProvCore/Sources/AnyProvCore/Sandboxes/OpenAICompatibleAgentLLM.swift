@@ -668,21 +668,68 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
 
         // 1. Pull thinking out. Same tag names as the chat
         //    composer's ThinkingExtractor so the runner /
-        //    view can reuse the existing pipeline.
-        var thinking: String?
-        if let thinkRange = text.range(
-            of: #"<(think|thinking|reasoning|reflection|thought|analysis)\b[^>]*>[\s\S]*?</\1>"#,
-            options: [.regularExpression, .caseInsensitive]
-        ) {
-            let inner = text[thinkRange]
-            // Strip the outer tags.
-            if let openEnd = inner.range(of: ">"),
-               let closeStart = inner.range(of: "</", options: .backwards) {
-                let body = inner[openEnd.upperBound..<closeStart.lowerBound]
-                thinking = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        //    view can reuse the existing pipeline. We loop
+        //    over every paired `<think>…</think>` block (the
+        //    model sometimes emits several in a row) and then
+        //    sweep stray open/close tags and unclosed open
+        //    tags so `</think>` / `<think>` never leak into
+        //    the visible bubble.
+        var thinkingParts: [String] = []
+        let pairedThink = try? NSRegularExpression(
+            pattern: #"<(think|thinking|reasoning|reflection|thought|analysis)\b[^>]*>[\s\S]*?</\1>"#,
+            options: [.caseInsensitive]
+        )
+        if let regex = pairedThink {
+            let full = NSRange(text.startIndex..., in: text)
+            let matches = regex.matches(in: text, range: full)
+            for match in matches {
+                guard match.numberOfRanges > 1,
+                      let innerRange = Range(match.range(at: 0), in: text)
+                else { continue }
+                let inner = text[innerRange]
+                if let openEnd = inner.range(of: ">"),
+                   let closeStart = inner.range(of: "</", options: .backwards) {
+                    let body = inner[openEnd.upperBound..<closeStart.lowerBound]
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !body.isEmpty { thinkingParts.append(body) }
+                }
             }
-            text.replaceSubrange(thinkRange, with: "")
+            text = regex.stringByReplacingMatches(
+                in: text, options: [], range: full, withTemplate: ""
+            )
         }
+        // Unclosed `<think>` (still streaming) — capture the
+        // body after it and drop the tag so it doesn't leak.
+        let openOnlyThink = try? NSRegularExpression(
+            pattern: #"<(think|thinking|reasoning|reflection|thought|analysis)\b[^>]*>[\s\S]*$"#,
+            options: [.caseInsensitive]
+        )
+        if let regex = openOnlyThink {
+            let range = NSRange(text.startIndex..., in: text)
+            if let match = regex.firstMatch(in: text, range: range),
+               let innerRange = Range(match.range(at: 0), in: text),
+               let openEnd = text[innerRange].range(of: ">") {
+                let body = text[innerRange][openEnd.upperBound...]
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !body.isEmpty { thinkingParts.append(body) }
+                text = String(text[..<innerRange.lowerBound])
+            }
+        }
+        // Stray open/close tags left after the primary
+        // extraction. The chat composer's ThinkingExtractor
+        // does the same sweep so any pair the model emits
+        // without a matching opener is still scrubbed.
+        let residualThink = try? NSRegularExpression(
+            pattern: #"</?(think|thinking|reasoning|reflection|thought|analysis)\b[^>]*>"#,
+            options: [.caseInsensitive]
+        )
+        if let regex = residualThink {
+            let range = NSRange(text.startIndex..., in: text)
+            text = regex.stringByReplacingMatches(
+                in: text, options: [], range: range, withTemplate: ""
+            )
+        }
+        let thinking: String? = thinkingParts.isEmpty ? nil : thinkingParts.joined(separator: "\n\n")
 
         // 2. Extract tool calls. Each block starts with a
         //    marker and ends at the next marker or end of

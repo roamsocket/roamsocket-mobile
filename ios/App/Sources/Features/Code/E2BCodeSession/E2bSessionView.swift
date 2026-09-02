@@ -812,11 +812,15 @@ private struct MessageBubble: View {
 /// with colour-tinted diff lines (green `+`, red `-`).
 private struct ToolCard: View {
     let message: E2bCodeMessage
+    @State private var isExpanded: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             header
             output
+            if canExpand {
+                expandToggle
+            }
         }
         .padding(10)
         .background(Theme.surfaceElevated, in: RoundedRectangle(cornerRadius: 10))
@@ -824,6 +828,35 @@ private struct ToolCard: View {
             RoundedRectangle(cornerRadius: 10)
                 .strokeBorder(tint.opacity(0.3), lineWidth: 1)
         )
+    }
+
+    /// Output is "expandable" when it has more lines than the
+    /// collapsed view shows (20) or when the diff body
+    /// overflows the 240pt cap. Keeps the toggle hidden for
+    /// short output so a tap doesn't feel like a no-op.
+    private var canExpand: Bool {
+        let body = message.text
+        if isDiffBody(body) { return true }
+        let lineCount = body.components(separatedBy: "\n").count
+        // Use a soft char threshold too so a single
+        // very-long line is still expandable.
+        return lineCount > 20 || body.count > 2_000
+    }
+
+    private var expandToggle: some View {
+        Button {
+            isExpanded.toggle()
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                Text(isExpanded ? "Show less" : "Show more")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .foregroundStyle(Theme.accent)
+        }
+        .buttonStyle(.plain)
+        .padding(.top, 2)
     }
 
     private var header: some View {
@@ -865,7 +898,11 @@ private struct ToolCard: View {
                 }
                 .padding(8)
             }
-            .frame(maxHeight: 240)
+            // Expanded view caps at a generous height
+            // (1200pt) so a 10k-line diff doesn't blow up
+            // the transcript; collapsed caps at 240pt to
+            // match the existing single-line body.
+            .frame(maxHeight: isExpanded ? 1200 : 240)
             .background(Theme.background, in: RoundedRectangle(cornerRadius: 6))
         } else {
             ScrollView(.horizontal, showsIndicators: false) {
@@ -873,11 +910,14 @@ private struct ToolCard: View {
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(Theme.textPrimary)
                     .textSelection(.enabled)
-                    .lineLimit(20)
+                    // Collapsed: 20-line cap. Expanded:
+                    // unbounded so the user can scroll the
+                    // full output inside the scrollview.
+                    .lineLimit(isExpanded ? nil : 20)
                     .padding(8)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxHeight: 240)
+            .frame(maxHeight: isExpanded ? 1200 : 240)
             .background(Theme.background, in: RoundedRectangle(cornerRadius: 6))
         }
     }

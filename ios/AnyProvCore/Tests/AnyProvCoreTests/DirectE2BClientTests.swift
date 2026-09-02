@@ -1212,6 +1212,125 @@ final class DirectE2BClientTests: XCTestCase {
         )
     }
 
+    /// The actual emit the user pasted from a live E2B
+    /// session: a stuffed marker with a backslash-escaped
+    /// JSON value and a long shell command containing
+    /// `*`, `|`, and double-quoted paths. This locks the
+    /// fix so a regex tweak can't regress it to "raw
+    /// markup leaks into the chat bubble".
+    ///
+    /// Note: the model emitted a stray `</command>` inside
+    /// the JSON string — it's mixing the XML and JSON
+    /// shapes — so the extracted command carries that
+    /// suffix verbatim. The runner's shell handler will
+    /// fail with "command not found" or similar, but the
+    /// visible bubble stays clean and the call is at
+    /// least dispatched (instead of being mis-parsed as
+    /// zero calls).
+    func testParseProviderTextToolCallsStuffedFindCommand() {
+        let raw = #"""
+        [tool_call: run_shell id=tc_text_0_E2DDB5B5 input={"command":"find /code -name \"*.json\" -not -path \"*/node_modules/*\" -not -path \"*/.git/*\" | sort</command>"}]
+        """#
+        let parsed = OpenAICompatibleAgentLLM.parseProviderTextToolCalls(raw)
+        XCTAssertEqual(
+            parsed.toolCalls.count, 1,
+            "expected one parsed call; content=\(parsed.content)"
+        )
+        XCTAssertEqual(parsed.toolCalls.first?.name, "run_shell")
+        let args = try! XCTUnwrap(
+            try? JSONSerialization.jsonObject(
+                with: Data(parsed.toolCalls[0].argumentsJSON.utf8)
+            ) as? [String: Any]
+        )
+        XCTAssertEqual(
+            args["command"] as? String,
+            "find /code -name \"*.json\" -not -path \"*/node_modules/*\" -not -path \"*/.git/*\" | sort</command>",
+            "command must be extracted from the stuffed marker; argumentsJSON=\(parsed.toolCalls[0].argumentsJSON)"
+        )
+        // The whole marker must be stripped from the
+        // visible content — the e2b sandbox result will
+        // be shown in its own tool card.
+        XCTAssertTrue(
+            parsed.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            "stuffed-marker markup must NOT leak into visible content; got: \(parsed.content)"
+        )
+    }
+
+    /// MiniMax M3 sometimes emits multiple paired
+    /// `<think>…</think>` blocks in one turn (the model
+    /// pauses its "reasoning" then continues, then pauses
+    /// again). Only the FIRST block was being captured by
+    /// the old extraction; the rest leaked into the
+    /// visible bubble as raw `</think>` tokens. Loop over
+    /// every match so the runner gets the full reasoning
+    /// body and the chat stays clean.
+    func testParseProviderTextToolCallsMultipleThinkBlocks() {
+        let raw = """
+        <think>first thought</think> prose between <think>second thought</think> trailing prose
+        """
+        let parsed = OpenAICompatibleAgentLLM.parseProviderTextToolCalls(raw)
+        XCTAssertEqual(
+            parsed.thinking,
+            "first thought\n\nsecond thought",
+            "both think blocks must be captured; got: \(parsed.thinking ?? "<nil>")"
+        )
+        XCTAssertFalse(
+            parsed.content.contains("<think>"),
+            "open think tag must be stripped; got: \(parsed.content)"
+        )
+        XCTAssertFalse(
+            parsed.content.contains("</think>"),
+            "close think tag must be stripped; got: \(parsed.content)"
+        )
+        XCTAssertTrue(
+            parsed.content.contains("prose between"),
+            "inter-block prose must be preserved; got: \(parsed.content)"
+        )
+        XCTAssertTrue(
+            parsed.content.contains("trailing prose"),
+            "post-block prose must be preserved; got: \(parsed.content)"
+        )
+    }
+
+    /// Stray close tag without a matching open. The model
+    /// sometimes emits just `</think>` mid-stream (or
+    /// after a streaming disconnect). The old extraction
+    /// left these in the visible bubble; the chat
+    /// composer's ThinkingExtractor strips them, and the
+    /// E2B parser must too.
+    func testParseProviderTextToolCallsStrayCloseTagStripped() {
+        let raw = "Just prose, then a stray close: </think> more prose"
+        let parsed = OpenAICompatibleAgentLLM.parseProviderTextToolCalls(raw)
+        XCTAssertNil(
+            parsed.thinking,
+            "stray close without matching open is not a think block; got: \(parsed.thinking ?? "<nil>")"
+        )
+        XCTAssertFalse(
+            parsed.content.contains("</think>"),
+            "stray close tag must be stripped; got: \(parsed.content)"
+        )
+        XCTAssertTrue(
+            parsed.content.contains("Just prose"),
+            "prose preserved; got: \(parsed.content)"
+        )
+    }
+
+    /// Unclosed open `<think>` (still streaming). Drop
+    /// the tag and everything after it (the body is
+    /// presumably mid-flight and will be re-emitted).
+    func testParseProviderTextToolCallsUnclosedThinkOpenStripped() {
+        let raw = "Some prose, then a streaming <think>and the model cuts off"
+        let parsed = OpenAICompatibleAgentLLM.parseProviderTextToolCalls(raw)
+        XCTAssertFalse(
+            parsed.content.contains("<think>"),
+            "unclosed open tag must be stripped; got: \(parsed.content)"
+        )
+        XCTAssertTrue(
+            parsed.content.contains("Some prose"),
+            "pre-tag prose must be preserved; got: \(parsed.content)"
+        )
+    }
+
     // MARK: - Stream timeout (hanging-model guard)
 
     /// When a model accepts the request but never sends a
