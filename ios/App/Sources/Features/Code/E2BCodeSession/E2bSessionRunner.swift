@@ -1,6 +1,22 @@
 import Foundation
 import AnyProvCore
 
+/// GitHub context a session was opened with. `create_pr` and
+/// `git_push` run from the phone (E2B sandboxes don't guarantee
+/// GitHub egress), so the runner needs the token + repo + branch
+/// instead of reading env vars inside the sandbox.
+public struct GitHubContext: Sendable, Hashable {
+    public let token: String?
+    public let repoFullName: String
+    public let branch: String
+
+    public init(token: String?, repoFullName: String, branch: String) {
+        self.token = token
+        self.repoFullName = repoFullName
+        self.branch = branch
+    }
+}
+
 /// Orchestrates the chat-driven E2B agent loop. Provider-agnostic
 /// via `AgentLLM` — the runner talks to whatever LLM the user
 /// picked (Anthropic, OpenAI, Groq, OpenRouter, xAI, Mistral,
@@ -17,14 +33,21 @@ public actor E2bSessionRunner {
     /// that includes tool calls counts as one step; each
     /// end_turn ends the loop.
     let maxSteps: Int
+    /// GitHub credentials + repo context so git push / PR creation
+    /// can run from the phone. E2B sandboxes have no guaranteed
+    /// network egress to GitHub, so the design doc routes these
+    /// through the iOS backend instead of the sandbox shell.
+    let github: GitHubContext
 
     public init(
         e2b: DirectE2BClient,
         agentLLM: AgentLLM,
+        github: GitHubContext,
         maxSteps: Int = 12,
     ) {
         self.e2b = e2b
         self.agentLLM = agentLLM
+        self.github = github
         self.maxSteps = maxSteps
     }
 
@@ -56,6 +79,10 @@ public actor E2bSessionRunner {
            `git_push` then `create_pr`. The user has a GitHub
            token configured in the iOS app, which the runner
            forwards for you.
+
+        You can keep a short task checklist with the `todos` tool
+        (list / add / finish / clear) — it persists in the sandbox
+        across messages.
 
         Be concise. Prefer running tests over guessing. Do not
         create files outside `/code`. The user can see every
@@ -308,7 +335,7 @@ public actor E2bSessionRunner {
         ),
         .init(
             name: "create_pr",
-            description: "Open a pull request via the GitHub API (or `gh` CLI). Title and body are required. The head branch is the current sandbox branch; base defaults to the repo's default branch.",
+            description: "Open a pull request via the GitHub API from the iOS app (the sandbox has no guaranteed GitHub access). Title and body are required. The head branch is the current session branch; base defaults to `main`.",
             inputSchema: .init(
                 type: "object",
                 properties: [
@@ -326,6 +353,28 @@ public actor E2bSessionRunner {
                     )
                 ],
                 required: ["title", "body"]
+            )
+        ),
+        .init(
+            name: "todos",
+            description: "Maintain a task checklist for this session. Actions: `list` shows the current list, `add` appends a task, `finish` marks one done by 1-based index, `clear` empties it. The list is stored in the sandbox so it survives across messages.",
+            inputSchema: .init(
+                type: "object",
+                properties: [
+                    "action": .init(
+                        type: "string",
+                        description: "list | add | finish | clear"
+                    ),
+                    "task": .init(
+                        type: "string",
+                        description: "The task text for `add`."
+                    ),
+                    "index": .init(
+                        type: "integer",
+                        description: "1-based task index for `finish`."
+                    )
+                ],
+                required: ["action"]
             )
         ),
     ]
@@ -353,7 +402,25 @@ public actor E2bSessionRunner {
             return await gitPushTool(input: input, sandboxId: sandboxId, sandboxAccessToken: sandboxAccessToken)
         case "create_pr":
             return await createPrTool(input: input, sandboxId: sandboxId, sandboxAccessToken: sandboxAccessToken)
+        case "todos":
+            return await todosTool(input: input, sandboxId: sandboxId, sandboxAccessToken: sandboxAccessToken)
         default:
+            // The paired-desktop agent exposes more capabilities than
+            // the phone sandbox. Surface the known ones as friendly
+            // "not supported in cloud mode" messages (E2B design doc),
+            // and offer the desktop fallback instead of a generic dump.
+            let cloudUnsupported = [
+                "skills_sync", "skills", "mcp_sync", "mcp", "memory_sync", "memory",
+                "connector", "connectors", "terminal", "file_explorer", "port_manager",
+                "ports", "tunnel", "tunnels", "goal", "task_list",
+            ]
+            if cloudUnsupported.contains(name) {
+                return (
+                    "`\(name)` is not supported in cloud (E2B) mode. "
+                        + "Pair a desktop and run the session there if you need this feature.",
+                    true
+                )
+            }
             return ("Unknown tool: \(name)", true)
         }
     }
@@ -501,10 +568,21 @@ public actor E2bSessionRunner {
     private func gitPushTool(input: AgentLLMInput, sandboxId: String, sandboxAccessToken: String?) async -> (String, Bool) {
         do {
             let setUpstream = input.boolValue(for: "setUpstream") ?? true
+            // Push straight to the GitHub URL with the user's token
+            // embedded, mirroring how the pre-clone authenticates. The
+            // sandbox's configured `origin` may point at an
+            // unauthenticated https URL (fine for public repos, useless
+            // for pushing private ones or new branches).
+            var pushTarget = "origin"
+            if let token = github.token, !token.isEmpty {
+                let encoded = token.addingPercentEncoding(withAllowedCharacters: .urlUserAllowed) ?? token
+                pushTarget = "https://oauth2:\(encoded)@github.com/\(github.repoFullName).git"
+            }
             let script = """
             import subprocess
+            remote = \(escapePythonForInline(pushTarget))
             r = subprocess.run(
-                ["git", "push", "origin", "HEAD"] + (["-u"] if \(setUpstream ? "True" : "False") else []),
+                ["git", "push", remote, "HEAD"] + (["-u"] if \(setUpstream ? "True" : "False") else []),
                 capture_output=True, text=True, cwd="/code",
             )
             print(r.stdout, end="")
@@ -521,41 +599,110 @@ public actor E2bSessionRunner {
         }
     }
 
+    /// Create the PR from the phone via the GitHub REST API. The
+    /// previous implementation shelled out to `gh` inside the sandbox
+    /// and read `GITHUB_TOKEN` / `REPO` / `BRANCH` env vars that were
+    /// never set there — and E2B sandboxes have no guaranteed GitHub
+    /// egress. The design doc routes this through the iOS backend.
     private func createPrTool(input: AgentLLMInput, sandboxId: String, sandboxAccessToken: String?) async -> (String, Bool) {
         guard let title = input.stringValue(for: "title"),
               let body = input.stringValue(for: "body") else {
             return ("missing required fields (title, body)", true)
         }
         let base = input.stringValue(for: "base") ?? "main"
+        guard let token = github.token, !token.isEmpty else {
+            return (
+                "create_pr needs a GitHub token — link GitHub in Settings, then ask me to try again.",
+                true
+            )
+        }
+        guard !github.repoFullName.isEmpty, !github.branch.isEmpty else {
+            return ("create_pr needs a repo + branch — start the session from a repository.", true)
+        }
+
+        var req = URLRequest(
+            url: URL(string: "https://api.github.com/repos/\(github.repoFullName)/pulls")!
+        )
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "title": title,
+            "head": github.branch,
+            "base": base,
+            "body": body,
+        ])
+        let (data, response): (Data, URLResponse)
         do {
-            let script = """
-            import os, subprocess
-            token = os.environ.get("GITHUB_TOKEN", "")
-            os.environ["GH_TOKEN"] = token
-            r = subprocess.run(
-                [
-                    "gh", "pr", "create",
-                    "--title", \(escapePythonForInline(title)),
-                    "--body", \(escapePythonForInline(body)),
-                    "--base", \(escapePythonForInline(base)),
-                    "--head", os.environ.get("BRANCH", ""),
-                    "--repo", os.environ.get("REPO", ""),
-                ],
-                capture_output=True, text=True, cwd="/code",
-                env={**os.environ, "GH_TOKEN": token} if token else None,
-            )
-            print(r.stdout, end="")
-            print(r.stderr, end="")
-            if r.returncode != 0:
-                raise SystemExit(r.returncode)
-            """
-            let raw = try await e2b.exec(
-                sandboxId: sandboxId, accessToken: sandboxAccessToken, code: script,
-            )
-            return (raw, false)
+            (data, response) = try await URLSession.shared.data(for: req)
         } catch {
             return ("create_pr failed: \(error.localizedDescription)", true)
         }
+        guard let http = response as? HTTPURLResponse else {
+            return ("create_pr failed: non-HTTP response from GitHub.", true)
+        }
+        if (200..<300).contains(http.statusCode) {
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let url = json["html_url"] as? String {
+                return ("PR created: \(url)", false)
+            }
+            return ("PR created.", false)
+        }
+        let bodyText = String(data: data, encoding: .utf8) ?? ""
+        let message = DirectE2BError.friendlyMessage(status: http.statusCode, body: bodyText)
+        return ("create_pr failed (HTTP \(http.statusCode)): \(message)", true)
+    }
+
+    /// Session-scoped task checklist, kept in the sandbox at
+    /// `/home/user/todos.json` so it survives across messages and
+    /// agent restarts (the runner itself is rebuilt per send). Actions:
+    /// list, add, finish (1-based index), clear.
+    private func todosTool(input: AgentLLMInput, sandboxId: String, sandboxAccessToken: String?) async -> (String, Bool) {
+        let action = input.stringValue(for: "action") ?? "list"
+        let todosPath = "/home/user/todos.json"
+        var items: [String] = []
+        if let raw = try? await e2b.readFile(
+            sandboxId: sandboxId, accessToken: sandboxAccessToken, path: todosPath
+        ), let data = raw.data(using: .utf8),
+           let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let stored = parsed["items"] as? [String] {
+            items = stored
+        }
+        switch action {
+        case "add":
+            let task = (input.stringValue(for: "task") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !task.isEmpty else { return ("todos add needs a `task` value.", true) }
+            items.append(task)
+        case "finish":
+            if let index = input.intValue(for: "index") {
+                guard (1...items.count).contains(index) else {
+                    return ("todos finish: index \(index) is out of range (list has \(items.count) tasks).", true)
+                }
+                items.remove(at: index - 1)
+            } else if let marker = input.stringValue(for: "task"), !marker.isEmpty,
+                      let idx = items.firstIndex(where: { $0 == marker }) {
+                items.remove(at: idx)
+            } else {
+                return ("todos finish needs a 1-based `index` (or the exact `task` text).", true)
+            }
+        case "clear":
+            items = []
+        default:
+            break // list
+        }
+        // Persist (best-effort; a failed write still reports the list).
+        if let data = try? JSONSerialization.data(withJSONObject: ["items": items]),
+           let content = String(data: data, encoding: .utf8) {
+            try? await e2b.writeFile(
+                sandboxId: sandboxId, accessToken: sandboxAccessToken, path: todosPath, content: content
+            )
+        }
+        if items.isEmpty {
+            return ("No pending tasks.", false)
+        }
+        let list = items.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
+        return ("Tasks:\n\(list)", false)
     }
 
     private func escapePythonForInline(_ value: String) -> String {

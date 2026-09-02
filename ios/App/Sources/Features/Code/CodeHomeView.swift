@@ -317,6 +317,12 @@ struct CodeHomeView: View {
         ZStack(alignment: .bottomTrailing) {
             Theme.background.ignoresSafeArea()
             VStack(spacing: 0) {
+                // Own top bar: Code is a sidebar-level destination, so the
+                // leading edge shows the drawer button, never a back
+                // chevron. The system nav bar is hidden entirely
+                // (`.toolbar(.hidden, for: .navigationBar)` below) so a back
+                // button can't reappear next to the hamburger.
+                topBar
                 // Segmented picker at the top — same UX as the
                 // Settings quick-access cards but cleaner for two
                 // parallel runtimes.
@@ -337,47 +343,55 @@ struct CodeHomeView: View {
                     case .desktop: desktopSection
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
-            // Floating "Start a run" affordance for the sandbox
-            // tab. Disabled until the user has an e2b key; the
-            // empty state surfaces the "Add your e2b.dev key" CTA.
+            // FABs for the sandbox tab: terminal/cursor quick run at left,
+            // followed by the primary new-session action.
             if tab == .sandbox {
-                VStack {
-                    Spacer()
+                HStack(spacing: 10) {
                     Button {
-                        showStartSheet = true
+                        if state.e2bKeyStore.hasKey {
+                            showStartSheet = true
+                        } else {
+                            state.showE2BKeySheet = true
+                        }
+                    } label: {
+                        Image(systemName: "chevron.left.forwardslash.chevron.right")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(Theme.textPrimary)
+                            .frame(width: 48, height: 48)
+                            .background(Theme.surfaceElevated, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    Button {
+                        if state.e2bKeyStore.hasKey {
+                            showSessionSheet = true
+                        } else {
+                            state.showE2BKeySheet = true
+                        }
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: "play.fill")
-                            Text("Start a run")
+                            Text("Start a session")
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 11, weight: .bold))
                         }
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(Theme.background)
-                        .padding(.horizontal, 18)
-                        .padding(.vertical, 10)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
                         .background(state.e2bKeyStore.hasKey ? Theme.accent : Theme.textTertiary,
                                     in: Capsule())
                     }
                     .buttonStyle(.plain)
-                    .disabled(!state.e2bKeyStore.hasKey)
-                    .padding(.bottom, 24)
                 }
+                .padding(.bottom, 24)
             }
         }
-        .navigationTitle("Code")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button(action: onOpenSidebar) {
-                    Image(systemName: "line.3.horizontal")
-                        .font(.system(size: 18, weight: .medium))
-                        .foregroundStyle(Theme.textPrimary)
-                        .frame(width: 36, height: 36)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Open sidebar")
-            }
-        }
+        // Hide the system navigation bar (same pattern as BrowserHomeView).
+        // The custom `topBar` above replaces it, so only the hamburger
+        // shows — the back button can never appear.
+        .toolbar(.hidden, for: .navigationBar)
         .sheet(isPresented: $showStartSheet) {
             StartRunSheet(onStart: { req in startRun(req) })
                 .presentationDetents([.large])
@@ -427,6 +441,26 @@ struct CodeHomeView: View {
         } message: {
             Text(startError ?? "")
         }
+    }
+
+    /// Top-left hamburger that opens the sidebar drawer. Replaces the
+    /// system back button (see `body`: the nav bar is hidden entirely).
+    private var topBar: some View {
+        HStack(spacing: 0) {
+            Button(action: onOpenSidebar) {
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(Theme.textPrimary)
+                    .frame(width: 36, height: 36)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open sidebar")
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
     }
 
     private var rows: [RunRow] {
@@ -521,9 +555,12 @@ struct CodeHomeView: View {
                     pairDesktopCard
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .top)
             .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.top, 12)
+            .padding(.bottom, 96)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     /// E2B sandboxes section. Shows the user's long-lived code
@@ -534,10 +571,11 @@ struct CodeHomeView: View {
     @ViewBuilder
     private var e2bSection: some View {
         let sessions = state.e2bSessionStore.sessions
-        if rows.isEmpty && sessions.isEmpty {
+        ScrollView {
+            if rows.isEmpty && sessions.isEmpty {
             CodeEmptyState(
                 hasPhoneKey: state.e2bKeyStore.hasKey,
-                onStart: { showStartSheet = true },
+                onStart: { showSessionSheet = true },
                 onAddKey: { state.showE2BKeySheet = true },
             )
             .frame(maxWidth: .infinity)
@@ -614,6 +652,11 @@ struct CodeHomeView: View {
                     }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .top)
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 96)
+        }
         }
     }
 
@@ -701,7 +744,7 @@ struct CodeHomeView: View {
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "play.fill")
-                        Text("Start desktop session")
+                        Text("Start a session")
                     }
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Theme.background)
@@ -725,9 +768,10 @@ struct CodeHomeView: View {
     /// Card shown when no desktop is paired. Directs the user to
     /// the pairing flow (also reachable from Settings).
     private var pairDesktopCard: some View {
-        Button {
-            showPairing = true
-        } label: {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                showPairing = true
+            } label: {
             HStack(spacing: 12) {
                 Image(systemName: "desktopcomputer")
                     .font(.system(size: 18, weight: .semibold))
@@ -752,8 +796,25 @@ struct CodeHomeView: View {
                 RoundedRectangle(cornerRadius: 12)
                     .strokeBorder(Theme.separator.opacity(0.6), lineWidth: 1)
             )
+            }
+            .buttonStyle(.plain)
+            Button {
+                launchDesktopSession()
+            } label: {
+                    Label("Start a session", systemImage: "play.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.background)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Theme.accent, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(!canLaunchDesktop)
+            .opacity(canLaunchDesktop ? 1 : 0.5)
         }
-        .buttonStyle(.plain)
+        .padding(12)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.separator.opacity(0.6), lineWidth: 1))
     }
 
     private var desktopSubtitle: String {
@@ -849,6 +910,7 @@ private struct NewE2BSessionSheet: View {
     @State private var title: String = ""
     @State private var branch: String = "main"
     @State private var isOpening: Bool = false
+    @State private var showRepositoryPicker = false
 
     var body: some View {
         NavigationStack {
@@ -856,6 +918,19 @@ private struct NewE2BSessionSheet: View {
                 Theme.background.ignoresSafeArea()
                 Form {
                     Section {
+                        Button {
+                            showRepositoryPicker = true
+                        } label: {
+                            HStack {
+                                Image(systemName: "folder")
+                                Text(state.selectedRepo?.fullName ?? "Choose repository")
+                                    .foregroundStyle(state.selectedRepo == nil ? Theme.textSecondary : Theme.textPrimary)
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .foregroundStyle(Theme.textTertiary)
+                            }
+                        }
+                        .buttonStyle(.plain)
                         TextField("Session title (optional)", text: $title)
                         TextField("Branch", text: $branch)
                             .textInputAutocapitalization(.never)
@@ -863,11 +938,7 @@ private struct NewE2BSessionSheet: View {
                     } header: {
                         Text("Repository")
                     } footer: {
-                        if let repo = state.selectedRepo {
-                            Text("Will open \(repo.fullName) on a fresh e2b sandbox.")
-                        } else {
-                            Text("Choose a repository on the home screen first.")
-                        }
+                        Text(state.selectedRepo.map { "Will open \($0.fullName) on a fresh e2b sandbox." } ?? "Choose a repository above.")
                     }
                 }
                 .scrollContentBackground(.hidden)
@@ -890,6 +961,10 @@ private struct NewE2BSessionSheet: View {
                     .disabled(state.selectedRepo == nil || isOpening)
                 }
             }
+        }
+        .sheet(isPresented: $showRepositoryPicker) {
+            RepositoryPickerSheet()
+                .environmentObject(state)
         }
     }
 }

@@ -4,12 +4,37 @@ import XCTest
 final class DirectE2BClientTests: XCTestCase {
     // MARK: - PythonQuote
 
-    func testPythonQuoteLeavesSafeStringsAlone() {
-        XCTAssertEqual(PythonQuote.escape("hello"), "hello")
-        XCTAssertEqual(PythonQuote.escape("/usr/local/bin"), "/usr/local/bin")
-        // No spaces, no special chars → passed through unchanged.
-        XCTAssertEqual(PythonQuote.escape("npm-test"), "npm-test")
-        XCTAssertEqual(PythonQuote.escape("v1.2.3"), "v1.2.3")
+    /// Every value lands inside single quotes. The old "safe char"
+    /// short-circuit was the root cause of the pre-clone
+    /// `invalid syntax (481837546.py, line 3)` error: a clone URL
+    /// such as `https://github.com/owner/repo.git` only contains
+    /// alphanumerics + `:` / `/` / `.`, all of which the old
+    /// implementation treated as "safe" and emitted unquoted, so the
+    /// generated Python source became `clone_url = https://...` —
+    /// a syntax error. Always quote.
+    func testPythonQuoteAlwaysQuotes() {
+        XCTAssertEqual(PythonQuote.escape("hello"), "'hello'")
+        XCTAssertEqual(PythonQuote.escape("/usr/local/bin"), "'/usr/local/bin'")
+        XCTAssertEqual(PythonQuote.escape("npm-test"), "'npm-test'")
+        XCTAssertEqual(PythonQuote.escape("v1.2.3"), "'v1.2.3'")
+    }
+
+    /// Branch names and clone URLs are the actual values spliced into
+    /// the pre-clone / shim Python source. They must come out quoted
+    /// so the script is valid Python.
+    func testPythonQuoteQuotesUrlsAndBranches() {
+        let url = "https://github.com/owner/repo.git"
+        let branch = "feat/cool-thing"
+        XCTAssertEqual(
+            PythonQuote.escape(url),
+            "'https://github.com/owner/repo.git'",
+            "clone URL must be wrapped so the embedded `:` and `/` are not parsed as Python operators"
+        )
+        XCTAssertEqual(
+            PythonQuote.escape(branch),
+            "'feat/cool-thing'",
+            "branch name must be wrapped so the `/` is not a division"
+        )
     }
 
     func testPythonQuoteWrapsSpacesInSingleQuotes() {
@@ -23,6 +48,145 @@ final class DirectE2BClientTests: XCTestCase {
 
     func testPythonQuoteEmptyBecentsEmptyQuoted() {
         XCTAssertEqual(PythonQuote.escape(""), "''")
+    }
+
+    // MARK: - Pre-clone / shim script validity (PythonQuote fix)
+
+    /// The pre-clone script is the original "invalid syntax
+    /// (481837546.py, line 3)" failure site: it interpolated
+    /// `clone_url = <PythonQuote.escape(url)>` and the URL came out
+    /// unquoted, so the very first `git clone` line raised
+    /// `SyntaxError` and the session fell back to "the agent can
+    /// run `git clone` itself". Lock the script: every value we
+    /// splice into an assignment must be a quoted Python literal.
+    func testPreCloneScriptIsSyntacticallyValidPython() {
+        let url = "https://github.com/owner/repo.git"
+        let branch = "feat/cool-thing"
+        // The script is built inline in E2bSessionStore; instead of
+        // exposing it (it isn't public), we reproduce the exact
+        // interpolation pattern and assert the substitution is
+        // quoted. If `PythonQuote.escape` ever regresses, this test
+        // fails before the script is even handed to e2b.
+        let cloneLine = "clone_url = \(PythonQuote.escape(url))"
+        let branchLine = "branch = \(PythonQuote.escape(branch))"
+        XCTAssertTrue(
+            cloneLine.contains("clone_url = 'https://github.com/owner/repo.git'"),
+            "clone URL assignment must be a quoted Python literal; got: \(cloneLine)"
+        )
+        XCTAssertFalse(
+            cloneLine.contains("clone_url = https://"),
+            "clone URL must NOT be interpolated as a bare expression"
+        )
+        XCTAssertTrue(
+            branchLine.contains("branch = 'feat/cool-thing'"),
+            "branch assignment must be a quoted Python literal; got: \(branchLine)"
+        )
+        XCTAssertFalse(
+            branchLine.contains("branch = feat/"),
+            "branch must NOT be interpolated as a bare expression (the `/` would be parsed as division)"
+        )
+    }
+
+    /// Same regression lock for the long-lived code-session shim.
+    /// `makeShimScript` interpolates branch / URL / command /
+    /// install command the same way. If PythonQuote regresses, the
+    /// shim becomes invalid Python and the session never gets past
+    /// `import`.
+    func testShimScriptQuotesAllInterpolatedStrings() {
+        let script = DirectE2BClient.makeShimScript(
+            repo: .github(fullName: "owner/repo"),
+            branch: "main",
+            command: "npm test",
+            githubToken: nil
+        )
+        // Each assignment must produce a quoted literal.
+        XCTAssertTrue(
+            script.contains("clone_url = 'https://github.com/owner/repo.git'"),
+            "shim clone URL must be quoted; got a sample: \(Self.first(containing: "clone_url", in: script) ?? "<missing>")"
+        )
+        XCTAssertTrue(
+            script.contains("branch = 'main'"),
+            "shim branch must be quoted; got a sample: \(Self.first(containing: "branch =", in: script) ?? "<missing>")"
+        )
+        XCTAssertTrue(
+            script.contains("user_cmd = 'npm test'"),
+            "shim user command must be quoted; got a sample: \(Self.first(containing: "user_cmd =", in: script) ?? "<missing>")"
+        )
+        // Bare-expression forms must NOT appear anywhere in the
+        // script (these are the exact patterns that produced the
+        // "line 3" SyntaxError).
+        XCTAssertFalse(
+            script.contains("clone_url = https://"),
+            "shim must not interpolate the URL as a bare expression"
+        )
+        XCTAssertFalse(
+            script.contains("branch = main\n") || script.contains("branch = main "),
+            "shim must not interpolate the branch as a bare identifier"
+        )
+        XCTAssertFalse(
+            script.contains("user_cmd = npm test"),
+            "shim must not interpolate the user command as a bare expression"
+        )
+    }
+
+    private static func first(containing needle: String, in haystack: String) -> String? {
+        guard let r = haystack.range(of: needle) else { return nil }
+        let end = haystack.index(r.lowerBound, offsetBy: 120, limitedBy: haystack.endIndex) ?? haystack.endIndex
+        return String(haystack[r.lowerBound..<end])
+    }
+
+    // MARK: - /execute NDJSON unwrapping
+
+    func testStdoutFromExecResponseCollectsStdoutRecords() {
+        let raw = #"""
+        {"type": "number_of_executions", "execution_count": 1}
+        {"type": "stdout", "text": "{\"ok\": true, \"sha\": \"abc\"}"}
+        {"type": "result", "content_type": "application/json", "data": {}}
+        {"type": "status", "status": "completed"}
+        """#
+        XCTAssertEqual(
+            DirectE2BClient.stdoutFromExecResponse(raw),
+            #"{"ok": true, "sha": "abc"}"#
+        )
+    }
+
+    func testStdoutFromExecResponseSurfacesErrorValue() {
+        let raw = """
+        {"type": "number_of_executions", "execution_count": 1}
+        {"type": "error", "name": "SyntaxError", "value": "invalid syntax (481837546.py, line 3)", "traceback": []}
+        """
+        XCTAssertEqual(
+            DirectE2BClient.stdoutFromExecResponse(raw),
+            "invalid syntax (481837546.py, line 3)"
+        )
+    }
+
+    func testStdoutFromExecResponsePassesThroughNonJSON() {
+        XCTAssertEqual(DirectE2BClient.stdoutFromExecResponse("plain\ntext"), "plain\ntext")
+    }
+
+    func testExpandStreamLineUnwrapsNDJSONStdout() {
+        let line = #"{"type": "stdout", "text": "STDOUT:hello\nSTDOUT:world"}"#
+        XCTAssertEqual(
+            DirectE2BClient.expandStreamLine(line),
+            ["STDOUT:hello", "STDOUT:world"]
+        )
+    }
+
+    func testExpandStreamLineSurfacesErrorAsStderr() {
+        let line = #"{"type": "error", "name": "SyntaxError", "value": "bad syntax"}"#
+        XCTAssertEqual(
+            DirectE2BClient.expandStreamLine(line),
+            ["STDERR:bad syntax"]
+        )
+    }
+
+    func testExpandStreamLinePassthroughForRawLines() {
+        XCTAssertEqual(
+            DirectE2BClient.expandStreamLine("STDOUT:as-is"),
+            ["STDOUT:as-is"]
+        )
+        XCTAssertEqual(DirectE2BClient.expandStreamLine(""), [])
     }
 
     // MARK: - E2bPhoneStreamEvent.parse
@@ -306,10 +470,11 @@ final class DirectE2BClientTests: XCTestCase {
     }
 
     /// e2b.dev rejects `timeout` values over 1 hour with a
-    /// confusing server-side error. The client clamps to the
-    /// ceiling so callers can't trip the API. Verify the clamp
-    /// via the captured request body: a 2-hour timeout must
-    /// arrive at the server as 3,600,000.
+    /// confusing server-side error ("Timeout can not be greater
+    /// than 1 hours"). The client clamps to the ceiling and sends
+    /// the value in **seconds**. Verify via the captured request
+    /// body: a 2-hour (7,200,000 ms) timeout must arrive as
+    /// 3,600 seconds, not 3,600,000.
     func testCreateSandboxClampsTimeoutToOneHour() async throws {
         final class CapturingHTTP: HTTPClient, @unchecked Sendable {
             var capturedBody: Data?
@@ -336,8 +501,9 @@ final class DirectE2BClientTests: XCTestCase {
         let body = try XCTUnwrap(cap.capturedBody)
         let obj = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
         let timeout = try XCTUnwrap(obj["timeout"] as? Int)
-        XCTAssertEqual(timeout, 3_600_000, "timeout must be clamped to 1 hour")
+        XCTAssertEqual(timeout, 3_600, "timeout must be sent in seconds, clamped to 1 hour")
         XCTAssertEqual(DirectE2BClient.maxSandboxTimeoutMs, 3_600_000)
+        XCTAssertEqual(DirectE2BClient.maxSandboxTimeoutSeconds, 3_600)
     }
 
     /// Negative or zero timeouts shouldn't blow up — clamp to 0
@@ -402,6 +568,68 @@ final class DirectE2BClientTests: XCTestCase {
         // No HTTP client needed — empty key short-circuits.
         let client = DirectE2BClient(apiKey: "   ", http: MockHTTPClient(routes: []))
         await client.killSandbox(sandboxId: "sb_xyz") // should not throw
+    }
+
+    // MARK: - extendTimeout
+
+    func testExtendTimeoutPostsSecondsToTimeoutEndpoint() async throws {
+        final class Capturing: HTTPClient, @unchecked Sendable {
+            var lastMethod: String?
+            var lastURL: String?
+            var capturedBody: Data?
+            func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+                lastMethod = request.httpMethod
+                lastURL = request.url?.absoluteString
+                capturedBody = request.httpBody
+                return (Data(), HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: nil
+                )!)
+            }
+        }
+        let cap = Capturing()
+        let client = DirectE2BClient(
+            apiKey: "e2b_testkey1234567890abcdef",
+            http: cap
+        )
+        let status = try await client.extendTimeout(sandboxId: "sb_xyz")
+        XCTAssertEqual(status, 200)
+        XCTAssertEqual(cap.lastMethod, "POST")
+        XCTAssertEqual(cap.lastURL?.contains("/sandboxes/sb_xyz/timeout"), true)
+        let obj = try XCTUnwrap(
+            cap.capturedBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        )
+        // e2b's endpoint counts TTL in seconds — the wire value must
+        // never be the ms number (same trap as createSandbox).
+        XCTAssertEqual(obj["timeout"] as? Int, 3600)
+    }
+
+    func testExtendTimeoutClampsToMax() async throws {
+        final class Capturing: HTTPClient, @unchecked Sendable {
+            var capturedBody: Data?
+            func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+                capturedBody = request.httpBody
+                return (Data(), HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: nil
+                )!)
+            }
+        }
+        let cap = Capturing()
+        let client = DirectE2BClient(
+            apiKey: "e2b_testkey1234567890abcdef",
+            http: cap
+        )
+        // Ask for 2 hours — must clamp down to 1 hour, in seconds.
+        try await client.extendTimeout(sandboxId: "sb_xyz", timeoutSeconds: 7_200)
+        let obj = try XCTUnwrap(
+            cap.capturedBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        )
+        XCTAssertEqual(obj["timeout"] as? Int, 3_600)
     }
 
     // MARK: - verifyKey

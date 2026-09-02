@@ -52,6 +52,24 @@ struct E2bSessionView: View {
             .navigationTitle(session?.title ?? "Session")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                // Leave the chat without killing the sandbox — the
+                // session stays listed on the Code home and can be
+                // reopened later. "End session" (in the trailing
+                // menu) is the only action that tears the sandbox
+                // down, so the back button is the cheap escape.
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        inputFocused = false
+                        dismiss()
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(Theme.textPrimary)
+                            .frame(width: 36, height: 36)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Back")
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         if let s = session, s.isLive {
@@ -367,7 +385,12 @@ struct E2bSessionView: View {
                 e2bKey: e2bKey,
                 anthropicApiKey: apiKey,  // legacy: ignored for non-Anthropic
                 modelName: model.modelID,
-                agentLLM: agentLLM
+                agentLLM: agentLLM,
+                github: GitHubContext(
+                    token: state.githubToken,
+                    repoFullName: s.repoFullName,
+                    branch: s.branch
+                )
             )
             self.agentTask = nil
         }
@@ -386,6 +409,7 @@ struct E2bSessionView: View {
         anthropicApiKey: String,
         modelName: String,
         agentLLM: AgentLLM,
+        github: GitHubContext,
     ) async {
         // Flip the session status to .working so the Code home
         // shows the right pill on this row. Restore to .idle at
@@ -402,10 +426,16 @@ struct E2bSessionView: View {
             history = s.transcript.compactMap(messageToAgent)
         }
         let e2b = DirectE2BClient(apiKey: e2bKey)
-        let runner = E2bSessionRunner(e2b: e2b, agentLLM: agentLLM)
+        let runner = E2bSessionRunner(e2b: e2b, agentLLM: agentLLM, github: github)
 
         while !Task.isCancelled {
             guard let s = store.session(id: sessionId), s.isLive else { return }
+            // Keep-alive: e2b sandboxes expire 1 hour after creation
+            // (or the last timeout reset). Reset the clock on every
+            // step — this is the `setTimeout(...)` per user_message /
+            // tool_call the E2B design doc prescribes. Best effort:
+            // a failed extension shouldn't fail the turn.
+            try? await e2b.extendTimeout(sandboxId: s.sandboxId ?? sandboxId)
             do {
                 let result = try await runner.step(
                     system: system,
