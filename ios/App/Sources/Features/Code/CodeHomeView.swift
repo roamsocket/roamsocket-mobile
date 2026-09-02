@@ -432,6 +432,7 @@ struct CodeHomeView: View {
     @State private var showModelPicker = false
     @State private var showNewSession = false
     @State private var showSandboxRuns = false
+    @State private var codeMode: CodeMode = .sandboxes
     @State private var showArchived = false
     /// Live coding session presented as a full-screen cover (same path as Chat).
     /// Nested `navigationDestination` under Code was unreliable: sessions never
@@ -462,107 +463,15 @@ struct CodeHomeView: View {
             Theme.background.ignoresSafeArea()
             VStack(spacing: 0) {
                 header
+                modePicker
                 // Keep the content in a flexible scroll view so the home screen
                 // fills the available height instead of collapsing toward the bottom.
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Devices")
-                                .font(.system(size: 17))
-                                .foregroundStyle(Theme.textSecondary)
-                            if state.serverName == nil && state.serverToken == nil {
-                            Button {
-                                presentPairingSheet()
-                            } label: {
-                                devicesEmpty
-                            }
-                            .buttonStyle(.plain)
-                            .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
-                            .accessibilityHint("Opens pairing to connect a desktop server")
+                        if codeMode == .sandboxes {
+                            sandboxHome
                         } else {
-                            Button {
-                                Task { await handleDeviceTap() }
-                            } label: {
-                                deviceRow(
-                                    name: state.serverName ?? "Desktop",
-                                    status: state.desktopReachability
-                                )
-                            }
-                            .buttonStyle(.plain)
-                            .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
-                            .accessibilityHint("Reconnect to the desktop server")
-                        }
-                    }
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Text("Sessions")
-                                    .font(.system(size: 17))
-                                    .foregroundStyle(Theme.textSecondary)
-                                Spacer()
-                                Button { showFilterSheet = true } label: {
-                                    HStack(spacing: 4) {
-                                        Text(statusFilter?.rawValue ?? "All")
-                                            .font(.system(size: 14))
-                                            .foregroundStyle(Theme.textPrimary)
-                                        Image(systemName: "chevron.down")
-                                            .font(.system(size: 12))
-                                            .foregroundStyle(Theme.textTertiary)
-                                    }
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 6)
-                                    .background(Theme.surfaceElevated, in: Capsule())
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("Filter sessions")
-                            }
-                            if filteredSessions.isEmpty {
-                                sessionsEmpty
-                        } else {
-                            ForEach(filteredSessions) { session in
-                                Button {
-                                    Task { await reattach(session: session) }
-                                } label: {
-                                    sessionCard(session)
-                                }
-                                .buttonStyle(.plain)
-                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                    Button {
-                                        requestArchive(session)
-                                    } label: {
-                                        Label("Archive", systemImage: "archivebox")
-                                    }
-                                    .tint(Theme.accent)
-                                    Button {
-                                        beginRename(session)
-                                    } label: {
-                                        Label("Rename", systemImage: "pencil")
-                                    }
-                                    .tint(Theme.textSecondary)
-                                }
-                                .contextMenu {
-                                    Button {
-                                        beginRename(session)
-                                    } label: {
-                                        Label("Rename", systemImage: "pencil")
-                                    }
-                                    Button {
-                                        requestArchive(session)
-                                    } label: {
-                                        Label("Archive", systemImage: "archivebox")
-                                    }
-                                    Button(role: .destructive) {
-                                        sessionStore.remove(session.id)
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
-                                }
-                            }
-                        }
+                            desktopContent
                         }
                     }
                     .padding(.horizontal, 16)
@@ -712,6 +621,24 @@ struct CodeHomeView: View {
 
     // MARK: - Header
 
+    private enum CodeMode: String, CaseIterable, Identifiable {
+        case sandboxes = "Sandboxes"
+        case desktop = "Desktop"
+        var id: String { rawValue }
+    }
+
+    private var modePicker: some View {
+        Picker("Code mode", selection: $codeMode) {
+            ForEach(CodeMode.allCases) { mode in
+                Text(mode.rawValue).tag(mode)
+            }
+        }
+        .pickerStyle(.segmented)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .accessibilityLabel("Code mode")
+    }
+
     private var header: some View {
         HStack(spacing: 12) {
             Button(action: onOpenSidebar) {
@@ -757,6 +684,88 @@ struct CodeHomeView: View {
         .padding(.horizontal, 16)
         .padding(.top, 14)
         .padding(.bottom, 4)
+    }
+
+    // MARK: - Mode content
+
+    private var desktopContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Devices")
+                    .font(.system(size: 17))
+                    .foregroundStyle(Theme.textSecondary)
+                if state.serverName == nil && state.serverToken == nil {
+                    Button { presentPairingSheet() } label: { devicesEmpty }
+                        .buttonStyle(.plain)
+                } else {
+                    Button { Task { await handleDeviceTap() } } label: {
+                        deviceRow(name: state.serverName ?? "Desktop", status: state.desktopReachability)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Sessions")
+                        .font(.system(size: 17))
+                        .foregroundStyle(Theme.textSecondary)
+                    Spacer()
+                    Button { showFilterSheet = true } label: {
+                        Text(statusFilter?.rawValue ?? "All")
+                            .font(.system(size: 14))
+                            .foregroundStyle(Theme.textPrimary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Theme.surfaceElevated, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+                if filteredSessions.isEmpty {
+                    sessionsEmpty
+                } else {
+                    ForEach(filteredSessions) { session in
+                        Button { Task { await reattach(session: session) } } label: {
+                            sessionCard(session)
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            Button { beginRename(session) } label: { Label("Rename", systemImage: "pencil") }
+                            Button { requestArchive(session) } label: { Label("Archive", systemImage: "archivebox") }
+                            Button(role: .destructive) { sessionStore.remove(session.id) } label: { Label("Delete", systemImage: "trash") }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var sandboxHome: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Sandboxes")
+                .font(.system(size: 17))
+                .foregroundStyle(Theme.textSecondary)
+            Button { showSandboxRuns = true } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "shippingbox")
+                        .font(.system(size: 22))
+                        .foregroundStyle(Theme.accent)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("E2B sandbox runs")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(Theme.textPrimary)
+                        Text("Run commands in a clean environment and view output.")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Theme.textSecondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .foregroundStyle(Theme.textTertiary)
+                }
+                .padding(14)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+            }
+            .buttonStyle(.plain)
+        }
     }
 
     // MARK: - Devices
