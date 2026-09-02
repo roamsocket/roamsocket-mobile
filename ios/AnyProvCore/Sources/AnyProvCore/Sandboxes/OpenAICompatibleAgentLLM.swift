@@ -311,6 +311,16 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
         let toolCalls: [ProviderTextCall]
     }
 
+    /// One line inside a tool-call body. Used by the key-value
+    /// parser to mark which lines were consumed so the caller
+    /// can strip them from the cleaned text.
+    fileprivate struct KeyValueLine: Sendable {
+        let range: Range<String.Index>
+        let key: String
+        let value: String
+        let parsedJSON: Any?
+    }
+
     /// Parse a single tool-call body (the text between the
     /// `[tool_call: name]` opener and the next marker or end of
     /// text). Two shapes are supported; both come from MiniMax
@@ -332,40 +342,105 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
     /// in-line). When that value parses as a dictionary, the
     /// dictionary replaces the entire input map; otherwise it
     /// is stored under the `input` key.
-    nonisolated static func parseToolCallBody(_ raw: String) -> [String: Any] {
-        let block = raw
+    ///
+    /// Returns the parsed input map and the
+    /// `(start, length)` character-offset pairs in the input
+    /// that were consumed (caller rebuilds the visible
+    /// portion by skipping those slices). Character offsets
+    /// (not `String.Index`) so the caller can rebuild a fresh
+    /// String without index-sharing hazards.
+    nonisolated static func parseToolCallBody(_ raw: String)
+        -> (input: [String: Any], consumed: [(Int, Int)])
+    {
+        // Convert to NSString so we can use UTF-16 offsets
+        // safely (every character in MiniMax tool-call bodies
+        // is ASCII so this is character-exact too).
+        let ns = raw as NSString
+        let total = ns.length
         // 1. Tag shape. Walk the body and pull every
-        //    `<param>value</param>` pair.
+        //    `<param>value</param>` pair; record each open +
+        //    close byte range so the caller can strip it.
         var fromTags: [String: Any] = [:]
-        var tagSearch = block.startIndex
-        while tagSearch < block.endIndex {
-            guard let openAngle = block[tagSearch...].firstIndex(of: "<") else { break }
-            let afterOpen = block.index(after: openAngle)
+        var consumed: [(Int, Int)] = []
+        var tagSearch = 0
+        while tagSearch < total {
+            // Find the next `<`.
+            let openAngle = ns.range(of: "<", range: NSRange(location: tagSearch, length: total - tagSearch)).location
+            if openAngle == NSNotFound { break }
+            let afterOpen = openAngle + 1
             // Tag name: letters / digits / underscore / dash /
-            // space (some MiniMax outputs have whitespace
-            // inside the open angle).
+            // space. Read up to whitespace or `>`.
             var nameEnd = afterOpen
-            while nameEnd < block.endIndex,
-                  let c = block[nameEnd].unicodeScalars.first,
-                  (CharacterSet.letters.contains(c) ||
-                   CharacterSet.decimalDigits.contains(c) ||
-                   c == "_" || c == "-" || c == " ") {
-                nameEnd = block.index(after: nameEnd)
+            while nameEnd < total {
+                let c = ns.character(at: nameEnd)
+                if c == 0x20 || c == 0x09 || c == 0x0A || c == 0x0D { break }
+                if c == 0x3E /* `>` */ { break }
+                if c == 0x2F /* `/` */ { break }
+                nameEnd += 1
             }
-            let tagName = String(block[afterOpen..<nameEnd])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !tagName.isEmpty,
-                  nameEnd < block.endIndex,
-                  block[nameEnd] == ">",
-                  let closeAngle = block[block.index(after: nameEnd)...].firstIndex(of: "<")
+            // Need the open angle to be followed by a real
+            // tag name (at least one char) and then `>`.
+            guard nameEnd > afterOpen,
+                  nameEnd < total,
+                  ns.character(at: nameEnd) == 0x3E
             else {
-                tagSearch = block.index(after: openAngle)
+                tagSearch = openAngle + 1
                 continue
             }
-            let valueStart = block.index(after: nameEnd)
-            let valueEnd = closeAngle
-            let raw = String(block[valueStart..<valueEnd])
-            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            let tagName = ns.substring(
+                with: NSRange(location: afterOpen, length: nameEnd - afterOpen)
+            ).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !tagName.isEmpty else {
+                tagSearch = openAngle + 1
+                continue
+            }
+            // Find the next `<` for the close tag. We accept
+            // whatever follows as the close — be lenient about
+            // malformed names / whitespace.
+            let closeSearchStart = nameEnd + 1
+            guard closeSearchStart <= total else {
+                tagSearch = nameEnd + 1
+                continue
+            }
+            let closeAngle = ns.range(
+                of: "<",
+                range: NSRange(location: closeSearchStart, length: total - closeSearchStart)
+            ).location
+            // Determine the consumed end (the close tag's
+            // closing `>`) or block.endIndex if there's no
+            // close at all. Walk past any `</` and the rest
+            // of the close tag to find the `>`.
+            var consumedEnd: Int
+            if closeAngle == NSNotFound {
+                consumedEnd = total
+            } else {
+                // Look for the `>` starting right after
+                // `closeAngle`. If we find one, include up
+                // to and through it; otherwise stop at the
+                // end of the body.
+                let gtSearch = NSRange(
+                    location: closeAngle + 1,
+                    length: total - (closeAngle + 1)
+                )
+                let gt = ns.range(of: ">", range: gtSearch).location
+                if gt != NSNotFound {
+                    consumedEnd = Int(gt) + 1
+                } else {
+                    consumedEnd = total
+                }
+            }
+            consumed.append((openAngle, consumedEnd - openAngle))
+            // Extract the value between `>` and the close `<`.
+            let valueStart = nameEnd + 1
+            let valueEnd = closeAngle == NSNotFound ? total : Int(closeAngle)
+            guard valueStart <= valueEnd else {
+                tagSearch = consumedEnd
+                continue
+            }
+            let rawValue = ns.substring(
+                with: NSRange(location: valueStart, length: valueEnd - valueStart)
+            )
+            let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
             if let data = trimmed.data(using: .utf8),
                let parsed = try? JSONSerialization.jsonObject(with: data),
                !(parsed is NSNull) {
@@ -373,50 +448,60 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
             } else {
                 fromTags[tagName] = trimmed
             }
-            tagSearch = valueEnd
+            tagSearch = consumedEnd
         }
         if !fromTags.isEmpty {
-            return fromTags
+            return (fromTags, consumed)
         }
-        // 2. Key-value shape. Split on newlines; each line
-        //    that's `key=value` adds an entry. The value side
-        //    is JSON-parsed when it looks structured, which is
-        //    the common case for MiniMax's `input={…}` lines.
+        // 2. Key-value shape. Each `key=value` line contributes
+        //    an entry. Line ranges are recorded so the caller
+        //    can strip them from the cleaned text.
         var fromKeyValue: [String: Any] = [:]
-        for line in block.split(separator: "\n", omittingEmptySubsequences: false) {
-            let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmedLine.isEmpty,
-                  let equals = trimmedLine.firstIndex(of: "=")
-            else { continue }
-            let key = String(trimmedLine[..<equals])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            // Skip OpenAI-style metadata that the model leaks
-            // alongside the call. We generate our own call id
-            // (see `tc_text_<n>_<uuid>` below) so the model's
-            // `id=` line is never useful; `name=` would just
-            // shadow the marker we already parsed.
-            if key == "id" || key == "name" { continue }
-            let value = String(trimmedLine[trimmedLine.index(after: equals)...])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !key.isEmpty else { continue }
-            if let data = value.data(using: .utf8),
-               let parsed = try? JSONSerialization.jsonObject(with: data),
-               !(parsed is NSNull) {
-                // The `input=` line carries the tool's argument
-                // object. When it parses as a dict, splat it
-                // into the top level so the rest of the runner
-                // (which reads `command` / `path` / etc.
-                // directly off the input map) just works.
-                if key == "input", let dict = parsed as? [String: Any] {
-                    for (k, v) in dict { fromKeyValue[k] = v }
-                } else {
-                    fromKeyValue[key] = parsed
+        var kvConsumed: [(Int, Int)] = []
+        var lineStart = 0
+        while lineStart <= total {
+            // Find the next newline in the body.
+            let searchRange = NSRange(
+                location: lineStart,
+                length: max(0, total - lineStart)
+            )
+            let nl = ns.range(of: "\n", range: searchRange).location
+            let newlineIdx: Int = nl == NSNotFound ? total : nl
+            let lineRange = NSRange(
+                location: lineStart,
+                length: max(0, newlineIdx - lineStart)
+            )
+            if lineRange.length > 0 {
+                let line = ns.substring(with: lineRange)
+                let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmedLine.isEmpty,
+                   let equals = trimmedLine.firstIndex(of: "=")
+                {
+                    let key = String(trimmedLine[..<equals])
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if key != "id" && key != "name" && !key.isEmpty {
+                        let value = String(trimmedLine[trimmedLine.index(after: equals)...])
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        kvConsumed.append((lineStart, newlineIdx - lineStart))
+                        if let data = value.data(using: .utf8),
+                           let parsed = try? JSONSerialization.jsonObject(with: data),
+                           !(parsed is NSNull)
+                        {
+                            if key == "input", let dict = parsed as? [String: Any] {
+                                for (k, v) in dict { fromKeyValue[k] = v }
+                            } else {
+                                fromKeyValue[key] = parsed
+                            }
+                        } else {
+                            fromKeyValue[key] = value
+                        }
+                    }
                 }
-            } else {
-                fromKeyValue[key] = value
             }
+            if newlineIdx >= total { break }
+            lineStart = newlineIdx + 1
         }
-        return fromKeyValue
+        return (fromKeyValue, kvConsumed)
     }
 
     /// Parse provider-text tool-call markup out of an assistant
@@ -483,7 +568,6 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
             // Verify the content between `[` and `]` is `tool_call: <name>`.
             let inside = rest[rest.index(after: openBracket)..<closeBracket]
             if inside.lowercased().hasPrefix("tool_call:") {
-                let nameStart = rest.index(after: openBracket)
                 let nameTrimmed = inside
                     .dropFirst("tool_call:".count)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -495,7 +579,18 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
             }
             searchStart = text.index(after: openBracket)
         }
-        // Build per-marker blocks.
+        // Build per-marker blocks AND the cleaned text in a
+        // single pass. We collect the kept segments of the
+        // original `text` (everything outside the tool-call
+        // markup) and concatenate them at the end — no
+        // in-place mutation, so every `String.Index` from
+        // `text` stays valid for the whole loop. This also
+        // lets us handle the trailing-newline case cleanly
+        // (the previous in-place `replaceSubrange` was
+        // tripping String.IndexValidation when the block
+        // ended exactly at `text.endIndex`).
+        var keptSegments: [String] = []
+        var lastAppendEnd: String.Index = text.startIndex
         for (i, marker) in markerPositions.enumerated() {
             let nextStart: String.Index
             if i + 1 < markerPositions.count {
@@ -505,8 +600,46 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
             }
             let blockEnd = nextStart
             guard marker.end <= blockEnd else { continue }
+            // Keep the text between the last appended end and
+            // the start of this marker.
+            if lastAppendEnd < marker.start {
+                keptSegments.append(String(text[lastAppendEnd..<marker.start]))
+            }
             let block = String(text[marker.end..<blockEnd])
-            let inputObject = Self.parseToolCallBody(block)
+            let (inputObject, consumedRanges) = Self.parseToolCallBody(block)
+            // Build the kept portion of the block by
+            // skipping the consumed character ranges. The
+            // parser hands back `(start, length)` character
+            // offsets (NSString-based) so the rebuild uses
+            // its own indices, not String.Index.
+            let blockNS = block as NSString
+            let trimmedBlock: String
+            if consumedRanges.isEmpty {
+                trimmedBlock = block
+            } else {
+                let sorted = consumedRanges.sorted { $0.0 < $1.0 }
+                var kept = ""
+                var cursor = 0
+                for (start, length) in sorted {
+                    if cursor < start {
+                        let r = NSRange(location: cursor, length: start - cursor)
+                        kept += blockNS.substring(with: r)
+                    }
+                    cursor = start + length
+                }
+                if cursor < block.count {
+                    let r = NSRange(location: cursor, length: block.count - cursor)
+                    kept += blockNS.substring(with: r)
+                }
+                trimmedBlock = kept
+            }
+            // If the block itself is non-empty after stripping,
+            // we still drop it (it was the model emitting the
+            // tool call). The leading marker has already been
+            // excluded by the `lastAppendEnd` slice above; the
+            // block's content is the model's tool-call
+            // markup which we don't want in the visible text.
+            // Just track the call and move on.
             hits.append(Hit(
                 markerStart: marker.start,
                 markerEnd: marker.end,
@@ -514,33 +647,24 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
                 name: marker.name,
                 inputObject: inputObject
             ))
+            // The kept portion (if any) is non-markup text
+            // that fell between the open tag and the close
+            // tag — MiniMax sometimes puts prose there. Keep
+            // it so the user sees the model's preface.
+            if !trimmedBlock.isEmpty {
+                keptSegments.append(trimmedBlock)
+            }
+            lastAppendEnd = blockEnd
         }
-        // Mutate `text` in reverse (so earlier offsets stay
-        // valid) and assemble the result in forward order.
-        var calls: [ProviderTextCall] = []
-        for (i, hit) in hits.enumerated().reversed() {
-            let argumentsData = (try? JSONSerialization.data(
-                withJSONObject: hit.inputObject,
-                options: [.sortedKeys]
-            )) ?? Data("{}".utf8)
-            let argumentsJSON = String(data: argumentsData, encoding: .utf8) ?? "{}"
-            let id = "tc_text_\(i)_\(UUID().uuidString.prefix(8))"
-            calls.insert(ProviderTextCall(
-                id: id,
-                name: hit.name,
-                argumentsJSON: argumentsJSON
-            ), at: 0)
-            // Strip this block (including the leading marker)
-            // from `text` so the user never sees the markup.
-            text.replaceSubrange(
-                hit.markerStart..<hit.blockEnd,
-                with: ""
-            )
+        // Tail after the last marker.
+        if lastAppendEnd < text.endIndex {
+            keptSegments.append(String(text[lastAppendEnd..<text.endIndex]))
         }
-
-        // Tidy up: collapse runs of whitespace left by
-        // removal, then trim.
-        let cleaned = text
+        // Assemble + tidy. `+` between String literals allocates
+        // a new buffer; the kept segments are short so this is
+        // cheap.
+        var cleaned = keptSegments.joined()
+        cleaned = cleaned
             .replacingOccurrences(
                 of: #"[ \t]{2,}"#,
                 with: " ",
@@ -552,6 +676,24 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
                 options: .regularExpression
             )
             .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Build the calls list (in forward order, with our
+        // own id scheme — the parser's `id=…` line is
+        // metadata, not our call id).
+        var calls: [ProviderTextCall] = []
+        for (i, hit) in hits.enumerated() {
+            let argumentsData = (try? JSONSerialization.data(
+                withJSONObject: hit.inputObject,
+                options: [.sortedKeys]
+            )) ?? Data("{}".utf8)
+            let argumentsJSON = String(data: argumentsData, encoding: .utf8) ?? "{}"
+            let id = "tc_text_\(i)_\(UUID().uuidString.prefix(8))"
+            calls.append(ProviderTextCall(
+                id: id,
+                name: hit.name,
+                argumentsJSON: argumentsJSON
+            ))
+        }
 
         return ProviderTextResult(
             thinking: thinking,
