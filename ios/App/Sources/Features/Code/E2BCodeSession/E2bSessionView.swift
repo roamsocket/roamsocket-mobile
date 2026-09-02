@@ -965,9 +965,13 @@ private struct ToolCard: View {
             // the transcript; collapsed-by-user caps at
             // 240pt to match the existing single-line body;
             // collapsed-by-parent shows just the preview
-            // lines.
+            // lines. Non-collapsed (most recent tool card)
+            // gets 600pt so a long `run_shell` output (a
+            // test suite summary, an `npm install`) has
+            // room to breathe without forcing the user to
+            // tap "Show full" for a 25-line result.
             .frame(
-                maxHeight: showFull ? 1200 : (isCollapsed ? 140 : 240)
+                maxHeight: showFull ? 1200 : (isCollapsed ? 140 : 600)
             )
             .background(Theme.background, in: RoundedRectangle(cornerRadius: 6))
         } else {
@@ -981,7 +985,7 @@ private struct ToolCard: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(
-                maxHeight: showFull ? 1200 : (isCollapsed ? 110 : 240)
+                maxHeight: showFull ? 1200 : (isCollapsed ? 110 : 600)
             )
             .background(Theme.background, in: RoundedRectangle(cornerRadius: 6))
         }
@@ -991,10 +995,20 @@ private struct ToolCard: View {
     /// order: parent-collapsed (small preview) wins over the
     /// user-toggled expand/collapse, so opening a child card
     /// doesn't blow up the transcript.
+    ///
+    /// The non-collapsed case returns `nil` (unlimited) so
+    /// the most recent `run_shell` card — the one the user is
+    /// actively looking at — shows the full output. With the
+    /// old 20-line cap the agent would run a long test suite
+    /// and the card would only show the first 20 lines, so the
+    /// model started quoting the output in its prose to make
+    /// it visible. Letting the card carry the full output
+    /// (capped at 1200pt below) removes the duplication and
+    /// keeps the test summary in one place.
     private func lineLimitForState(showFull: Bool) -> Int? {
         if isCollapsed && !showFull { return Self.collapsedPreviewLines }
         if showFull { return nil }
-        return 20
+        return nil
     }
 
     private var toolName: String {
