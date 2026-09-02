@@ -1,0 +1,594 @@
+import Foundation
+import AnyProvCore
+
+/// Orchestrates the chat-driven E2B agent loop. Provider-agnostic
+/// via `AgentLLM` — the runner talks to whatever LLM the user
+/// picked (Anthropic, OpenAI, Groq, OpenRouter, xAI, Mistral,
+/// custom) and dispatches tool calls against the persistent
+/// e2b sandbox via `DirectE2BClient`.
+///
+/// The runner is an actor so the streaming LLM events can be
+/// surfaced to the chat view's `@MainActor` context via the
+/// `@Sendable` `onEvent` callback.
+public actor E2bSessionRunner {
+    let e2b: DirectE2BClient
+    let agentLLM: AgentLLM
+    /// Step limit to avoid runaway loops. Each Claude response
+    /// that includes tool calls counts as one step; each
+    /// end_turn ends the loop.
+    let maxSteps: Int
+
+    public init(
+        e2b: DirectE2BClient,
+        agentLLM: AgentLLM,
+        maxSteps: Int = 12,
+    ) {
+        self.e2b = e2b
+        self.agentLLM = agentLLM
+        self.maxSteps = maxSteps
+    }
+
+    // MARK: - Public
+
+    /// System prompt for the agent. The agent is told the
+    /// sandbox is fresh, what tools it has, and that it should
+    /// work step-by-step. The first user message primes it
+    /// with the repo + branch context.
+    public static func systemPrompt(repoFullName: String, branch: String) -> String {
+        return """
+        You are an autonomous coding agent running inside a fresh
+        Ubuntu sandbox on e2b.dev. The user is working on the repo
+        `\(repoFullName)` on branch `\(branch)`. The repo has
+        already been cloned into `/code` and the branch checked
+        out, so start with `ls /code` and `git status` rather
+        than re-cloning. You have shell access, can read and
+        write files in the sandbox, and can run `git` to commit,
+        push, and open pull requests.
+
+        Workflow:
+        1. Use `run_shell` to inspect the working tree (e.g.
+           `ls /code`, `git status`, `git log -5`).
+        2. Make changes with `write_file` (full file content) or
+           `edit_file` (find/replace on a single occurrence).
+        3. Verify your changes with `run_shell` (e.g. `python -m
+           pytest`, `npm test`, `cargo check`).
+        4. When the change is good, use `git_commit` then
+           `git_push` then `create_pr`. The user has a GitHub
+           token configured in the iOS app, which the runner
+           forwards for you.
+
+        Be concise. Prefer running tests over guessing. Do not
+        create files outside `/code`. The user can see every
+        command and file change you make; you don't need to
+        re-explain them.
+        """
+    }
+
+    /// One step in the agent loop. Uses the `AgentLLM.stream`
+    /// SSE channel so the agent's text comes in as deltas and
+    /// the UI can show a typing indicator.
+    ///
+    /// The `history` array uses the provider-agnostic
+    /// `AgentLLMMessage` type. The runner mutates it to
+    /// append the assistant turn after each response, so the
+    /// next request has the full context.
+    public func step(
+        system: String,
+        history: inout [AgentLLMMessage],
+        sandboxId: String,
+        sandboxAccessToken: String?,
+        onEvent: @Sendable (StepEvent) -> Void,
+    ) async throws -> StepResult {
+        let tools = Self.tools
+        onEvent(.streamStarted)
+        var streamedText: [String] = []
+        // Each tool call: id, name, accumulated input JSON.
+        var toolCalls: [(id: String, name: String, inputJSON: String)] = []
+        var streamedUsage: (input: Int, output: Int)?
+
+        for try await event in agentLLM.stream(
+            system: system,
+            messages: history,
+            tools: tools,
+            maxTokens: 4096
+        ) {
+            if Task.isCancelled { break }
+            switch event {
+            case let .textDelta(text):
+                streamedText.append(text)
+                onEvent(.textDelta(text: text))
+            case let .toolCallStart(id, name, input):
+                // The wrapper client already yielded start; we
+                // also record the call so we can dispatch it
+                // once the input JSON is complete.
+                toolCalls.append((id: id, name: name, inputJSON: ""))
+                // Stash the initial input (may be empty).
+                if case let .object(dict) = input.raw, !dict.isEmpty {
+                    let data = try? JSONSerialization.data(withJSONObject: dict.mapValues { $0.value }, options: [.sortedKeys])
+                    let str = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                    if let last = toolCalls.last, last.id == id {
+                        toolCalls[toolCalls.count - 1].inputJSON = str
+                    }
+                }
+            case let .toolCallInputDelta(id, partial):
+                if let idx = toolCalls.firstIndex(where: { $0.id == id }) {
+                    toolCalls[idx].inputJSON.append(partial)
+                }
+            case let .toolCallEnd(id):
+                if let idx = toolCalls.firstIndex(where: { $0.id == id }) {
+                    onEvent(.toolCallStarted(
+                        id: id,
+                        name: toolCalls[idx].name,
+                        input: .init(raw: .object([:]))
+                    ))
+                }
+            case let .usage(input, output):
+                streamedUsage = (input, output)
+            case .stop:
+                break
+            }
+        }
+
+        if let usage = streamedUsage {
+            onEvent(.usageRecorded(
+                inputTokens: usage.input,
+                outputTokens: usage.output
+            ))
+        }
+        onEvent(.streamFinished(text: streamedText.joined()))
+
+        // Build the final assistant turn: text + tool calls in
+        // order, so the next request has the full context.
+        var finalContent: String = streamedText.joined()
+        // Fold tool calls in as text so the provider-agnostic
+        // message history sees them (the wrapper client
+        // reconstructs tool calls from streamed events; the
+        // history passed back is just the text + a per-tool
+        // summary so the model sees what happened).
+        if !toolCalls.isEmpty {
+            for call in toolCalls {
+                finalContent += "\n\n[tool_call: \(call.name) id=\(call.id) input=\(call.inputJSON)]"
+            }
+        }
+        history.append(.init(role: .assistant, content: finalContent))
+
+        guard !toolCalls.isEmpty else {
+            return .finished
+        }
+        if history.filter({ $0.role == .assistant }).count >= maxSteps {
+            return .hitStepLimit
+        }
+        // Execute each tool call against the sandbox and collect
+        // the results into a single user message.
+        var toolResults: [AgentLLMMessage] = []
+        for call in toolCalls {
+            let parsed = parseToolInputJSON(call.inputJSON)
+            let input = AgentLLMInput(raw: parsed)
+            let (output, isError) = await runTool(
+                name: call.name,
+                input: input,
+                sandboxId: sandboxId,
+                sandboxAccessToken: sandboxAccessToken,
+            )
+            onEvent(.toolCallFinished(
+                id: call.id,
+                name: call.name,
+                output: output,
+                isError: isError
+            ))
+            let role: AgentLLMMessage.Role = isError ? .user : .user
+            let prefix = isError ? "[tool_error] " : "[tool_result] "
+            toolResults.append(.init(role: role, content: prefix + output))
+        }
+        history.append(contentsOf: toolResults)
+        return .continued
+    }
+
+    // MARK: - Tools
+
+    public enum StepResult: Sendable, Equatable {
+        case continued
+        case finished
+        case hitStepLimit
+    }
+
+    public enum StepEvent: Sendable {
+        case toolCallStarted(id: String, name: String, input: AgentLLMInput)
+        case toolCallFinished(id: String, name: String, output: String, isError: Bool)
+        case usageRecorded(inputTokens: Int, outputTokens: Int)
+        /// Fired once at the start of each step so the UI can
+        /// show a typing indicator.
+        case streamStarted
+        /// Fired for each text delta the model streams.
+        case textDelta(text: String)
+        /// Fired when the model finishes streaming text. The
+        /// `text` is the joined full text of the turn.
+        case streamFinished(text: String)
+    }
+
+    /// The tool definitions Claude (or any OpenAI-compatible
+    /// model with tool use) sees. Names + descriptions matter —
+    /// the model uses them to decide when to call.
+    public static let tools: [AgentLLMTool] = [
+        .init(
+            name: "run_shell",
+            description: "Run a shell command inside the sandbox. Returns stdout, stderr, and the exit code. Use this for builds, tests, and git operations.",
+            inputSchema: .init(
+                type: "object",
+                properties: [
+                    "command": .init(
+                        type: "string",
+                        description: "The shell command to run. Use shell syntax; e.g. `ls -la`, `pytest -q`, `git status`."
+                    )
+                ],
+                required: ["command"]
+            )
+        ),
+        .init(
+            name: "read_file",
+            description: "Read a UTF-8 text file from the sandbox. Returns the file contents.",
+            inputSchema: .init(
+                type: "object",
+                properties: [
+                    "path": .init(
+                        type: "string",
+                        description: "Absolute path to the file, e.g. /code/src/main.py."
+                    )
+                ],
+                required: ["path"]
+            )
+        ),
+        .init(
+            name: "write_file",
+            description: "Write a UTF-8 text file. Creates parent directories as needed.",
+            inputSchema: .init(
+                type: "object",
+                properties: [
+                    "path": .init(
+                        type: "string",
+                        description: "Absolute path to the file."
+                    ),
+                    "content": .init(
+                        type: "string",
+                        description: "The new file content."
+                    )
+                ],
+                required: ["path", "content"]
+            )
+        ),
+        .init(
+            name: "edit_file",
+            description: "Apply a single-occurrence find/replace to a UTF-8 text file. Returns an error if the find string isn't present or appears more than once.",
+            inputSchema: .init(
+                type: "object",
+                properties: [
+                    "path": .init(
+                        type: "string",
+                        description: "Absolute path to the file."
+                    ),
+                    "find": .init(
+                        type: "string",
+                        description: "The exact text to find. Must appear exactly once in the file."
+                    ),
+                    "replace": .init(
+                        type: "string",
+                        description: "The replacement text."
+                    )
+                ],
+                required: ["path", "find", "replace"]
+            )
+        ),
+        .init(
+            name: "git_commit",
+            description: "Stage all changes in the current sandbox working tree and commit with the given message. Returns the new commit SHA.",
+            inputSchema: .init(
+                type: "object",
+                properties: [
+                    "message": .init(
+                        type: "string",
+                        description: "The commit message. First line is the subject; rest is the body."
+                    )
+                ],
+                required: ["message"]
+            )
+        ),
+        .init(
+            name: "git_push",
+            description: "Push the current branch to origin. Returns the upstream URL on success.",
+            inputSchema: .init(
+                type: "object",
+                properties: [
+                    "setUpstream": .init(
+                        type: "boolean",
+                        description: "Whether to set the upstream (-u). Default true for the first push on a new branch."
+                    )
+                ],
+                required: nil
+            )
+        ),
+        .init(
+            name: "create_pr",
+            description: "Open a pull request via the GitHub API (or `gh` CLI). Title and body are required. The head branch is the current sandbox branch; base defaults to the repo's default branch.",
+            inputSchema: .init(
+                type: "object",
+                properties: [
+                    "title": .init(
+                        type: "string",
+                        description: "PR title."
+                    ),
+                    "body": .init(
+                        type: "string",
+                        description: "PR body / description."
+                    ),
+                    "base": .init(
+                        type: "string",
+                        description: "Base branch. Defaults to `main` if omitted."
+                    )
+                ],
+                required: ["title", "body"]
+            )
+        ),
+    ]
+
+    // MARK: - Dispatch
+
+    private func runTool(
+        name: String,
+        input: AgentLLMInput,
+        sandboxId: String,
+        sandboxAccessToken: String?,
+    ) async -> (String, Bool) {
+        switch name {
+        case "run_shell":
+            return await runShellTool(input: input, sandboxId: sandboxId, sandboxAccessToken: sandboxAccessToken)
+        case "read_file":
+            return await readFileTool(input: input, sandboxId: sandboxId, sandboxAccessToken: sandboxAccessToken)
+        case "write_file":
+            return await writeFileTool(input: input, sandboxId: sandboxId, sandboxAccessToken: sandboxAccessToken)
+        case "edit_file":
+            return await editFileTool(input: input, sandboxId: sandboxId, sandboxAccessToken: sandboxAccessToken)
+        case "git_commit":
+            return await gitCommitTool(input: input, sandboxId: sandboxId, sandboxAccessToken: sandboxAccessToken)
+        case "git_push":
+            return await gitPushTool(input: input, sandboxId: sandboxId, sandboxAccessToken: sandboxAccessToken)
+        case "create_pr":
+            return await createPrTool(input: input, sandboxId: sandboxId, sandboxAccessToken: sandboxAccessToken)
+        default:
+            return ("Unknown tool: \(name)", true)
+        }
+    }
+
+    private func runShellTool(input: AgentLLMInput, sandboxId: String, sandboxAccessToken: String?) async -> (String, Bool) {
+        guard let command = input.stringValue(for: "command") else {
+            return ("missing 'command' field", true)
+        }
+        do {
+            let result = try await e2b.runShell(
+                sandboxId: sandboxId,
+                accessToken: sandboxAccessToken,
+                command: command,
+                cwd: "/code"
+            )
+            let text = "exit \(result.exitCode)\n--- stdout ---\n\(result.stdout)\n--- stderr ---\n\(result.stderr)"
+            return (text, !result.ok)
+        } catch {
+            return ("run_shell failed: \(error.localizedDescription)", true)
+        }
+    }
+
+    private func readFileTool(input: AgentLLMInput, sandboxId: String, sandboxAccessToken: String?) async -> (String, Bool) {
+        guard let path = input.stringValue(for: "path") else {
+            return ("missing 'path' field", true)
+        }
+        do {
+            let contents = try await e2b.readFile(
+                sandboxId: sandboxId,
+                accessToken: sandboxAccessToken,
+                path: path
+            )
+            return (contents, false)
+        } catch {
+            return ("read_file failed: \(error.localizedDescription)", true)
+        }
+    }
+
+    private func writeFileTool(input: AgentLLMInput, sandboxId: String, sandboxAccessToken: String?) async -> (String, Bool) {
+        guard let path = input.stringValue(for: "path") else {
+            return ("missing 'path' field", true)
+        }
+        guard let content = input.stringValue(for: "content") else {
+            return ("missing 'content' field", true)
+        }
+        do {
+            try await e2b.writeFile(
+                sandboxId: sandboxId,
+                accessToken: sandboxAccessToken,
+                path: path,
+                content: content
+            )
+            return ("wrote \(path)", false)
+        } catch {
+            return ("write_file failed: \(error.localizedDescription)", true)
+        }
+    }
+
+    private func editFileTool(input: AgentLLMInput, sandboxId: String, sandboxAccessToken: String?) async -> (String, Bool) {
+        guard let path = input.stringValue(for: "path"),
+              let find = input.stringValue(for: "find"),
+              let replace = input.stringValue(for: "replace") else {
+            return ("missing required fields (path, find, replace)", true)
+        }
+        do {
+            let current = try await e2b.readFile(
+                sandboxId: sandboxId, accessToken: sandboxAccessToken, path: path
+            )
+            var searchStart = current.startIndex
+            var foundRange: Range<String.Index>? = nil
+            var count = 0
+            while searchStart < current.endIndex,
+                  let r = current.range(of: find, range: searchStart..<current.endIndex) {
+                foundRange = r
+                count += 1
+                searchStart = r.upperBound
+            }
+            guard count == 1, let r = foundRange else {
+                return ("edit_file: 'find' must appear exactly once (found \(count))", true)
+            }
+            let updated = current.replacingCharacters(in: r, with: replace)
+            try await e2b.writeFile(
+                sandboxId: sandboxId, accessToken: sandboxAccessToken, path: path, content: updated
+            )
+            let diff = Self.miniDiff(find: find, replace: replace)
+            let header = "edited \(path)"
+            return ([header, diff].joined(separator: "\n\n"), false)
+        } catch {
+            return ("edit_file failed: \(error.localizedDescription)", true)
+        }
+    }
+
+    /// Minimal context-preserving diff. We have the exact
+    /// `find` and `replace` strings, so the only line-level
+    /// change is the substitution. Emit ` ` (context), `-`
+    /// (removed), `+` (added) lines with a `@@` hunk header.
+    /// Truncated to 200 lines so a giant edit doesn't blow up
+    /// the tool card.
+    private static func miniDiff(find: String, replace: String) -> String {
+        let oldLines = find.components(separatedBy: "\n")
+        let newLines = replace.components(separatedBy: "\n")
+        var out: [String] = ["@@ -\(oldLines.count) +\(newLines.count) @@"]
+        for line in oldLines {
+            out.append("-\(line)")
+        }
+        for line in newLines {
+            out.append("+\(line)")
+        }
+        if out.count > 200 {
+            out = Array(out.prefix(199))
+            out.append("… (diff truncated, see file in the sandbox for full content)")
+        }
+        return out.joined(separator: "\n")
+    }
+
+    private func gitCommitTool(input: AgentLLMInput, sandboxId: String, sandboxAccessToken: String?) async -> (String, Bool) {
+        guard let message = input.stringValue(for: "message") else {
+            return ("missing 'message' field", true)
+        }
+        do {
+            let script = """
+            import subprocess
+            def run(*args):
+                return subprocess.run(list(args), capture_output=True, text=True, cwd="/code")
+            a = run("git", "add", "-A")
+            if a.returncode != 0:
+                print("git add failed:", a.stderr); return
+            c = run("git", "commit", "-m", \(escapePythonForInline(message)))
+            if c.returncode != 0:
+                print("git commit failed:", c.stderr); return
+            sha = run("git", "rev-parse", "HEAD")
+            print("commit:", sha.stdout.strip())
+            """
+            let raw = try await e2b.exec(
+                sandboxId: sandboxId,
+                accessToken: sandboxAccessToken,
+                code: script,
+            )
+            return (raw, false)
+        } catch {
+            return ("git_commit failed: \(error.localizedDescription)", true)
+        }
+    }
+
+    private func gitPushTool(input: AgentLLMInput, sandboxId: String, sandboxAccessToken: String?) async -> (String, Bool) {
+        do {
+            let setUpstream = input.boolValue(for: "setUpstream") ?? true
+            let script = """
+            import subprocess
+            r = subprocess.run(
+                ["git", "push", "origin", "HEAD"] + (["-u"] if \(setUpstream ? "True" : "False") else []),
+                capture_output=True, text=True, cwd="/code",
+            )
+            print(r.stdout, end="")
+            print(r.stderr, end="")
+            if r.returncode != 0:
+                raise SystemExit(r.returncode)
+            """
+            let raw = try await e2b.exec(
+                sandboxId: sandboxId, accessToken: sandboxAccessToken, code: script,
+            )
+            return (raw, false)
+        } catch {
+            return ("git_push failed: \(error.localizedDescription)", true)
+        }
+    }
+
+    private func createPrTool(input: AgentLLMInput, sandboxId: String, sandboxAccessToken: String?) async -> (String, Bool) {
+        guard let title = input.stringValue(for: "title"),
+              let body = input.stringValue(for: "body") else {
+            return ("missing required fields (title, body)", true)
+        }
+        let base = input.stringValue(for: "base") ?? "main"
+        do {
+            let script = """
+            import os, subprocess
+            token = os.environ.get("GITHUB_TOKEN", "")
+            os.environ["GH_TOKEN"] = token
+            r = subprocess.run(
+                [
+                    "gh", "pr", "create",
+                    "--title", \(escapePythonForInline(title)),
+                    "--body", \(escapePythonForInline(body)),
+                    "--base", \(escapePythonForInline(base)),
+                    "--head", os.environ.get("BRANCH", ""),
+                    "--repo", os.environ.get("REPO", ""),
+                ],
+                capture_output=True, text=True, cwd="/code",
+                env={**os.environ, "GH_TOKEN": token} if token else None,
+            )
+            print(r.stdout, end="")
+            print(r.stderr, end="")
+            if r.returncode != 0:
+                raise SystemExit(r.returncode)
+            """
+            let raw = try await e2b.exec(
+                sandboxId: sandboxId, accessToken: sandboxAccessToken, code: script,
+            )
+            return (raw, false)
+        } catch {
+            return ("create_pr failed: \(error.localizedDescription)", true)
+        }
+    }
+
+    private func escapePythonForInline(_ value: String) -> String {
+        value.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
+    }
+
+    /// Parse a tool input JSON string into an `AnyJSON` object.
+    /// Best-effort — falls back to `.object([:])` on parse failure
+    /// so the runner never crashes mid-step.
+    private func parseToolInputJSON(_ s: String) -> AnyJSON {
+        guard let data = s.data(using: .utf8),
+              let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return .object([:]) }
+        return Self.dictionaryToAnyJSON(parsed)
+    }
+
+    private static func dictionaryToAnyJSON(_ dict: [String: Any]) -> AnyJSON {
+        var out: [String: AnyJSON] = [:]
+        for (k, v) in dict {
+            out[k] = anyToAnyJSON(v)
+        }
+        return .object(out)
+    }
+
+    private static func anyToAnyJSON(_ v: Any) -> AnyJSON {
+        if v is NSNull { return .nullValue }
+        if let b = v as? Bool { return .bool(b) }
+        if let i = v as? Int { return .int(i) }
+        if let d = v as? Double { return .double(d) }
+        if let s = v as? String { return .string(s) }
+        if let a = v as? [Any] { return .array(a.map(anyToAnyJSON)) }
+        if let o = v as? [String: Any] { return dictionaryToAnyJSON(o) }
+        return .nullValue
+    }
+}
