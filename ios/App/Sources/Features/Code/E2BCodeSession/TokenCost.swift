@@ -50,18 +50,23 @@ public enum TokenCost {
     }
 
     /// Cost in USD for the given token usage at the given rate.
+    /// Provider-agnostic: takes primitives so callers don't have
+    /// to depend on a specific LLM client type.
     public static func costUSD(
-        usage: AnthropicClient.Response.Usage,
+        inputTokens: Int,
+        outputTokens: Int,
+        cacheReadTokens: Int? = nil,
+        cacheWriteTokens: Int? = nil,
         rate: Rate,
     ) -> Double {
-        let inputCost = Double(usage.inputTokens) / 1_000_000.0 * rate.inputPerMTok
-        let outputCost = Double(usage.outputTokens) / 1_000_000.0 * rate.outputPerMTok
+        let inputCost = Double(inputTokens) / 1_000_000.0 * rate.inputPerMTok
+        let outputCost = Double(outputTokens) / 1_000_000.0 * rate.outputPerMTok
         var cacheCost = 0.0
-        if let cacheRead = usage.cacheReadInputTokens, let ratePerMTok = rate.cacheReadPerMTok {
-            cacheCost += Double(cacheRead) / 1_000_000.0 * ratePerMTok
+        if let cacheRead = cacheReadTokens, let r = rate.cacheReadPerMTok {
+            cacheCost += Double(cacheRead) / 1_000_000.0 * r
         }
-        if let cacheWrite = usage.cacheCreationInputTokens, let ratePerMTok = rate.cacheWritePerMTok {
-            cacheCost += Double(cacheWrite) / 1_000_000.0 * ratePerMTok
+        if let cacheWrite = cacheWriteTokens, let r = rate.cacheWritePerMTok {
+            cacheCost += Double(cacheWrite) / 1_000_000.0 * r
         }
         return inputCost + outputCost + cacheCost
     }

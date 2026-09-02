@@ -2,16 +2,19 @@ import SwiftUI
 import AnyProvCore
 
 /// Chat-style UI for an E2B code session. The user types a
-/// message at the bottom; the runner (placeholder for now:
-/// the E2bSessionRunner that's wired in a follow-up commit)
-/// produces a response that streams into the transcript.
+/// message at the bottom; the agent loop (driven by
+/// `E2bSessionRunner`) streams the model's text into the
+/// transcript and dispatches tool calls against the live e2b
+/// sandbox. The runner picks the right `AgentLLM` based on the
+/// user's selected provider (Anthropic, OpenAI, Groq, OpenRouter,
+/// xAI, Mistral, custom OpenAI-compatible endpoints).
 ///
 /// The session is identified by its `E2bCodeSession.id` so the
 /// view reuses the store's session instance across renders.
-/// Closing the view (sheet dismiss, back button) does *not*
-/// kill the sandbox — the user can return to the same session
-/// from the Code home. An explicit "End session" button in
-/// the toolbar calls `closeSession` on the store.
+/// Closing the view (sheet dismiss, back button) does *not* kill
+/// the sandbox — the user can return to the same session from
+/// the Code home. An explicit "End session" button in the toolbar
+/// calls `closeSession` on the store.
 struct E2bSessionView: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
@@ -23,9 +26,12 @@ struct E2bSessionView: View {
 
     @State private var draft: String = ""
     @State private var isSending: Bool = false
-    /// The in-flight agent turn's task. Held so the Stop button
-    /// can cancel a long-running tool call (Claude is mid-tool or
-    /// a shell is still streaming). `nil` when no turn is active.
+    /// Local-only buffer for the currently-streaming assistant
+    /// message. While non-empty we render a bubble after the
+    /// regular transcript so the user sees the model typing.
+    /// When the stream finishes we flush it to the store as a
+    /// normal `assistant` message and clear the buffer.
+    @State private var streamingText: String = ""
     @State private var agentTask: Task<Void, Never>?
     @FocusState private var inputFocused: Bool
     @Environment(\.openURL) private var openURL
@@ -123,7 +129,25 @@ struct E2bSessionView: View {
                                 .id(message.id)
                         }
                     }
-                    if isSending {
+                    // Streaming assistant message: ephemeral,
+                    // shows the model typing in real time. Disappears
+                    // once the turn's .streamFinished flushes it
+                    // into the transcript as a regular message.
+                    if !streamingText.isEmpty {
+                        HStack(alignment: .top, spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text(streamingText)
+                                .font(.system(size: 14))
+                                .foregroundStyle(Theme.textPrimary)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14))
+                        .id("streaming-anchor")
+                    }
+                    if isSending && streamingText.isEmpty {
                         HStack(spacing: 6) {
                             ProgressView().controlSize(.small)
                             Text("Thinking…")
@@ -138,32 +162,31 @@ struct E2bSessionView: View {
                 .padding(.vertical, 8)
             }
             .onChange(of: session?.transcript.count ?? 0) { _, _ in
-                withAnimation(.easeOut(duration: 0.2)) {
-                    if isSending {
-                        proxy.scrollTo("sending-anchor", anchor: .bottom)
-                    } else if let last = session?.transcript.last {
-                        proxy.scrollTo(last.id, anchor: .bottom)
-                    }
+                if isSending {
+                    proxy.scrollTo("sending-anchor", anchor: .bottom)
+                } else if let last = session?.transcript.last {
+                    proxy.scrollTo(last.id, anchor: .bottom)
+                }
+            }
+            .onChange(of: streamingText) { _, _ in
+                // Auto-scroll as the model types so the user
+                // sees the latest text without having to drag.
+                withAnimation(.easeOut(duration: 0.15)) {
+                    proxy.scrollTo("streaming-anchor", anchor: .bottom)
                 }
             }
         }
     }
 
     /// Thin footer showing the running token total + estimated
-    /// USD cost. Pulls the pricing for the session's model id
-    /// and renders the running cost compactly. Hidden when both
-    /// counters are zero (no agent turn has happened yet).
+    /// USD cost. Hidden when both counters are zero.
     private var costFooter: some View {
         Group {
             if let s = session, s.totalInputTokens + s.totalOutputTokens > 0 {
                 let rate = TokenCost.pricingFor(modelID: s.modelID)
                 let total = TokenCost.costUSD(
-                    usage: .init(
-                        inputTokens: s.totalInputTokens,
-                        outputTokens: s.totalOutputTokens,
-                        cacheReadInputTokens: nil,
-                        cacheCreationInputTokens: nil
-                    ),
+                    inputTokens: s.totalInputTokens,
+                    outputTokens: s.totalOutputTokens,
                     rate: rate
                 )
                 HStack(spacing: 6) {
@@ -253,10 +276,12 @@ struct E2bSessionView: View {
     // MARK: - Actions
 
     /// Send the current draft as a user message. Drives the
-    /// Claude agent loop via `E2bSessionRunner` until Claude
-    /// returns `end_turn` or we hit the step limit. Each step
-    /// appends its tool calls + assistant text to the transcript
-    /// as the loop runs.
+    /// agent loop via `E2bSessionRunner` until the model ends
+    /// the turn or we hit the step limit. The runner picks the
+    /// right `AgentLLM` based on the user's selected model +
+    /// provider, so this works for Anthropic, OpenAI, Groq,
+    /// OpenRouter, xAI, Mistral, and any custom OpenAI-compatible
+    /// endpoint the user has added.
     private func send() {
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let s = session, s.isLive else { return }
@@ -269,21 +294,10 @@ struct E2bSessionView: View {
         let sandboxId = s.sandboxId ?? ""
         let sandboxAccessToken = s.sandboxAccessToken
 
-        // Pick the LLM client from the user's selected model. v1
-        // only supports the Anthropic provider — anything else
-        // gets a clear "select Claude" message.
         guard let model = state.selectedModel else {
             store.appendMessage(sessionId: sessionId, .init(
                 kind: .notice,
-                text: "Pick a Claude model on the home screen first."
-            ))
-            isSending = false
-            return
-        }
-        guard model.provider == .anthropic else {
-            store.appendMessage(sessionId: sessionId, .init(
-                kind: .notice,
-                text: "The phone E2B agent only supports Anthropic Claude for now — switch the selected model to Claude."
+                text: "Pick a model on the home screen first."
             ))
             isSending = false
             return
@@ -292,7 +306,7 @@ struct E2bSessionView: View {
         guard !apiKey.isEmpty else {
             store.appendMessage(sessionId: sessionId, .init(
                 kind: .notice,
-                text: "Add an Anthropic API key in Settings → Providers first."
+                text: "Add an API key for \(model.provider.displayName) in Settings → Providers first."
             ))
             isSending = false
             return
@@ -309,7 +323,7 @@ struct E2bSessionView: View {
         // Stamp the model id onto the session so the cost
         // estimate stays consistent even if the user later changes
         // the selected model in Settings.
-        if let s = store.session(id: sessionId), s.modelID != model.modelID {
+        if s.modelID != model.modelID {
             store.setModelID(sessionId, modelID: model.modelID)
         }
 
@@ -317,69 +331,80 @@ struct E2bSessionView: View {
             repoFullName: s.repoFullName,
             branch: s.branch
         )
-        // Cancel any in-flight turn (e.g. user retried) and start
-        // a fresh task. The Stop button cancels via the same
-        // `agentTask` reference.
+        // Build the right AgentLLM for the user's provider. The
+        // base URL + model name come from the selected model +
+        // provider. The factory hides the Anthropic vs OpenAI
+        // split from the runner.
+        let agentLLM: AgentLLM
+        do {
+            // The factory picks the right default base URL for
+            // built-in providers (OpenAI, Groq, etc.); pass `nil`
+            // so the factory owns the URL choice. Custom providers
+            // need their own URL stored on `model` — fall back to
+            // nil here and the user can re-add the key if needed.
+            let baseURL: URL? = nil
+            agentLLM = try AgentLLMFactory.make(
+                provider: model.provider,
+                modelID: model.modelID,
+                apiKey: apiKey,
+                baseURL: baseURL
+            )
+        } catch {
+            store.appendMessage(sessionId: sessionId, .init(
+                kind: .notice,
+                text: "Couldn't build LLM client: \(error.localizedDescription)"
+            ))
+            isSending = false
+            return
+        }
+
         agentTask?.cancel()
         agentTask = Task { @MainActor in
             await runAgentLoop(
                 system: system,
                 sandboxId: sandboxId,
                 sandboxAccessToken: sandboxAccessToken,
-                e2bApiKey: e2bKey,
-                anthropicApiKey: apiKey,
+                e2bKey: e2bKey,
+                anthropicApiKey: apiKey,  // legacy: ignored for non-Anthropic
                 modelName: model.modelID,
+                agentLLM: agentLLM
             )
-            // Clear the task reference when we exit so a Stop tap
-            // after completion is a no-op rather than cancelling a
-            // freshly-started turn.
             self.agentTask = nil
         }
     }
 
     /// The agent loop. Builds the runner, replays the session
-    /// transcript into a `messages` array, then steps until
-    /// Claude ends the turn or the step limit is hit. Each step
+    /// transcript into a `messages` array, then steps until the
+    /// model ends the turn or the step limit is hit. Each step
     /// surfaces its tool calls as transcript cards and the
     /// assistant's text as a normal message.
     private func runAgentLoop(
         system: String,
         sandboxId: String,
         sandboxAccessToken: String?,
-        e2bApiKey: String,
+        e2bKey: String,
         anthropicApiKey: String,
         modelName: String,
+        agentLLM: AgentLLM,
     ) async {
         // Flip the session status to .working so the Code home
-        // shows the right pill on this row. We restore to .idle
-        // (or .failed) at the bottom of the function.
+        // shows the right pill on this row. Restore to .idle at
+        // the bottom of the function.
         store.setStatus(sessionId, .working)
         defer {
             isSending = false
-            // Pick the right "post-loop" status. `.failed` if
-            // we surfaced a non-cancellation error; `.idle` if
-            // Claude finished cleanly or the user stopped.
-            // (Cancellation is the common case; we want it
-            // to look idle so the user can re-prompt.)
             store.setStatus(sessionId, .idle)
         }
-        // Pull the current transcript into Anthropic Messages.
-        // Keep them in memory; the runner mutates the local array
-        // as it appends tool_use / tool_result blocks.
-        var history: [AnthropicClient.Message] = []
+        // Pull the current transcript into a common message
+        // array (provider-agnostic) for the AgentLLM to consume.
+        var history: [AgentLLMMessage] = []
         if let s = store.session(id: sessionId) {
-            history = s.transcript.compactMap(messageToAnthropic)
+            history = s.transcript.compactMap(messageToAgent)
         }
-        let e2b = DirectE2BClient(apiKey: e2bApiKey)
-        let anthropic = AnthropicClient(apiKey: anthropicApiKey, model: modelName)
-        let runner = E2bSessionRunner(e2b: e2b, anthropic: anthropic)
+        let e2b = DirectE2BClient(apiKey: e2bKey)
+        let runner = E2bSessionRunner(e2b: e2b, agentLLM: agentLLM)
 
-        // Drive the loop. We cap at the runner's own maxSteps
-        // (12) so a runaway conversation can't burn the user's
-        // API budget.
         while !Task.isCancelled {
-            // Re-read the sandbox state in case it was killed
-            // mid-loop.
             guard let s = store.session(id: sessionId), s.isLive else { return }
             do {
                 let result = try await runner.step(
@@ -393,10 +418,8 @@ struct E2bSessionView: View {
                     }
                 }
                 switch result {
-                case .continued:
-                    continue
-                case .finished:
-                    return
+                case .continued: continue
+                case .finished: return
                 case .hitStepLimit:
                     store.appendMessage(sessionId: sessionId, .init(
                         kind: .notice,
@@ -423,13 +446,16 @@ struct E2bSessionView: View {
                 ))
                 return
             }
+            _ = modelName  // unused after refactor; kept for debugging
+            _ = anthropicApiKey
         }
     }
 
     /// Apply a runner event to the transcript. Tool call starts
     /// get a placeholder card that's filled in on finish. Usage
-    /// events are routed to the store so the chat footer can
-    /// surface running cost.
+    /// events are routed to the store. Stream events drive the
+    /// local `streamingText` buffer and commit to the store when
+    /// the model finishes.
     private func apply(event: E2bSessionRunner.StepEvent) {
         switch event {
         case let .toolCallStarted(id, name, input):
@@ -439,27 +465,12 @@ struct E2bSessionView: View {
                 text: "running…",
                 tool: "\(name) — \(summary)"
             )
-            // Encode the id so the finished event can find the
-            // matching row. We stash it in the message id, but
-            // that's the wrong field — instead, push a transient
-            // id on the message via the existing field. For v1
-            // we just append a new card and update it on finish.
-            pendingToolIds[id] = msg.id
             store.appendMessage(sessionId: sessionId, msg)
         case let .toolCallFinished(id, _, output, isError):
-            // Find the pending card by id; for v1 we just append
-            // a final result card next to the running one. (We
-            // could later collapse the two into one with an
-            // animated transition; for now, separate cards are
-            // clearer in the transcript.)
-            _ = pendingToolIds.removeValue(forKey: id)
             let kind: E2bCodeMessage.Kind = isError ? .notice : .tool
             store.appendMessage(
                 sessionId: sessionId,
-                .init(
-                    kind: kind,
-                    text: output,
-                )
+                .init(kind: kind, text: output)
             )
         case let .usageRecorded(inputTokens, outputTokens):
             store.recordUsage(
@@ -467,42 +478,42 @@ struct E2bSessionView: View {
                 inputTokens: inputTokens,
                 outputTokens: outputTokens,
             )
+        case .streamStarted:
+            streamingText = ""
+        case let .textDelta(text):
+            streamingText.append(text)
+        case let .streamFinished(text):
+            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                store.appendMessage(
+                    sessionId: sessionId,
+                    .init(kind: .assistant, text: text)
+                )
+            }
+            streamingText = ""
         }
     }
 
-    /// Pending tool card ids, so the start/finish events can
-    /// match up if we later collapse them into a single card.
-    @State private var pendingToolIds: [String: String] = [:]
-
-    /// Convert an `E2bCodeMessage` into an `AnthropicClient.Message`
-    /// suitable for the Messages API. The `user` role passes
-    /// text through; `assistant` passes text; `tool` and `notice`
-    /// get folded into the assistant turn as plain text so the
-    /// model sees what the tools did.
-    private func messageToAnthropic(_ message: E2bCodeMessage) -> AnthropicClient.Message? {
+    /// Convert an `E2bCodeMessage` to the provider-agnostic
+    /// `AgentLLMMessage` the runner consumes. Tools + notices are
+    /// folded into the assistant turn as plain text so the model
+    /// sees what happened.
+    private func messageToAgent(_ message: E2bCodeMessage) -> AgentLLMMessage? {
         switch message.kind {
         case .user:
-            return .init(role: "user", content: [.text(message.text)])
+            return .init(role: .user, content: message.text)
         case .assistant:
-            return .init(role: "assistant", content: [.text(message.text)])
+            return .init(role: .assistant, content: message.text)
         case .tool:
-            return .init(role: "assistant", content: [.text(
-                "[tool: \(message.tool ?? "?")] \(message.text)"
-            )])
+            return .init(role: .assistant, content: "[tool: \(message.tool ?? "?")] \(message.text)")
         case .notice:
-            return .init(role: "user", content: [.text(
-                "[system notice] \(message.text)"
-            )])
+            return .init(role: .user, content: "[system notice] \(message.text)")
         case .diff:
-            return .init(role: "assistant", content: [.text(
-                "[diff: \(message.path ?? "?")] +\(message.added ?? 0) -\(message.removed ?? 0)"
-            )])
+            return .init(role: .assistant, content: "[diff: \(message.path ?? "?")] +\(message.added ?? 0) -\(message.removed ?? 0)")
         }
     }
 
     /// Short human-readable summary of a tool call's input.
-    /// Truncated to keep the card header one line.
-    private func summariseInput(name: String, input: AnyJSON) -> String {
+    private func summariseInput(name: String, input: AgentLLMInput) -> String {
         switch name {
         case "run_shell":
             let cmd = input.stringValue(for: "command") ?? ""
@@ -552,12 +563,11 @@ struct E2bSessionView: View {
     }
 }
 
-/// One transcript line rendered as a chat bubble. The styling
-/// mirrors the desktop session's item rendering so the phone
-/// and desktop paths can share the same look. Tool messages
+// MARK: - Message bubble
+
+/// One transcript line rendered as a chat bubble. Tool messages
 /// get a distinct card with a header (icon + tool name + status
-/// pill) and a monospaced output body — much more useful than
-/// the small caption the bubble used to render.
+/// pill) and a monospaced output body.
 private struct MessageBubble: View {
     let message: E2bCodeMessage
 
@@ -607,11 +617,11 @@ private struct MessageBubble: View {
     }
 }
 
-/// Tool-call card. Renders a header (icon + tool name + status
-/// pill) and a monospaced body for the output. Status comes
-/// from the message text ("running…" → spinner; "exit 0\n…"
-/// → green check; anything else → red x). Tinted per status
-/// so the user can scan a long transcript at a glance.
+// MARK: - Tool card
+
+/// Tool-call card. Header (icon + tool name + status pill) +
+/// monospaced body. For `edit_file` results the body is rendered
+/// with colour-tinted diff lines (green `+`, red `-`).
 private struct ToolCard: View {
     let message: E2bCodeMessage
 
@@ -654,11 +664,6 @@ private struct ToolCard: View {
 
     @ViewBuilder
     private var output: some View {
-        // Render the body. If the body looks like our mini-diff
-        // (lines starting with `+` / `-` / ` ` and a `@@` header)
-        // render each line colour-tinted so the user can scan
-        // the change at a glance. Otherwise fall back to a
-        // plain monospaced text view.
         let body = message.text
         if isDiffBody(body) {
             ScrollView(.horizontal, showsIndicators: false) {
@@ -689,39 +694,7 @@ private struct ToolCard: View {
         }
     }
 
-    /// `edit_file` outputs a `@@ -\(m) +\(n) @@` header followed
-    /// by lines starting with `+`, `-`, or ` `. Detect that
-    /// shape so we can render with the right colours.
-    private func isDiffBody(_ body: String) -> Bool {
-        guard let first = body.split(separator: "\n").first,
-              first.hasPrefix("@@") else { return false }
-        return body.contains("\n+") || body.contains("\n-")
-    }
-
-    private struct DiffLine { let text: String; let color: Color }
-
-    private func diffLines(_ body: String) -> [DiffLine] {
-        body.split(separator: "\n", omittingEmptySubsequences: false).map { raw in
-            let s = String(raw)
-            if s.hasPrefix("@@") {
-                return DiffLine(text: s, color: Theme.accent)
-            }
-            if s.hasPrefix("+") {
-                return DiffLine(text: s, color: Theme.selection)
-            }
-            if s.hasPrefix("-") {
-                return DiffLine(text: s, color: .red)
-            }
-            return DiffLine(text: s, color: Theme.textSecondary)
-        }
-    }
-
     private var toolName: String {
-        // message.tool is "name — input summary" for tool events.
-        // For the "running…" intermediate card the tool field is
-        // set to "name — input summary" too; for the result card
-        // the tool field is nil and we infer the name from the
-        // output prefix.
         if let t = message.tool, t.contains(" — ") {
             return String(t.split(separator: " — ").first ?? Substring(t))
         }
@@ -746,13 +719,9 @@ private struct ToolCard: View {
 
     private var status: Status {
         if message.text == "running…" { return .running }
-        // Successful run_shell outputs start with "exit 0".
         if message.text.hasPrefix("exit 0") { return .ok }
-        // "wrote <path>" / "edited <path>" are success.
         if message.text.hasPrefix("wrote ") || message.text.hasPrefix("edited ") { return .ok }
-        // "git commit:" with a SHA at the end is success.
         if message.text.hasPrefix("commit: ") && !message.text.contains("failed") { return .ok }
-        // Anything that contains "failed" or starts with a non-zero exit is an error.
         if message.text.contains("failed") { return .error }
         if let line = message.text.split(separator: "\n").first,
            line.hasPrefix("exit "),
@@ -813,6 +782,24 @@ private struct ToolCard: View {
         case .running: return "Running"
         case .ok: return "Done"
         case .error: return "Error"
+        }
+    }
+
+    private func isDiffBody(_ body: String) -> Bool {
+        guard let first = body.split(separator: "\n").first,
+              first.hasPrefix("@@") else { return false }
+        return body.contains("\n+") || body.contains("\n-")
+    }
+
+    private struct DiffLine { let text: String; let color: Color }
+
+    private func diffLines(_ body: String) -> [DiffLine] {
+        body.split(separator: "\n", omittingEmptySubsequences: false).map { raw in
+            let s = String(raw)
+            if s.hasPrefix("@@") { return DiffLine(text: s, color: Theme.accent) }
+            if s.hasPrefix("+") { return DiffLine(text: s, color: Theme.selection) }
+            if s.hasPrefix("-") { return DiffLine(text: s, color: .red) }
+            return DiffLine(text: s, color: Theme.textSecondary)
         }
     }
 }
