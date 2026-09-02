@@ -639,7 +639,6 @@ struct CodeHomeView: View {
             .padding(.top, 12)
             .padding(.bottom, 96)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     /// Row for one E2B code session. Tap to open the chat.
@@ -779,12 +778,13 @@ struct CodeHomeView: View {
                     .strokeBorder(Theme.separator.opacity(0.6), lineWidth: 1)
             )
             }
-            .buttonStyle(.plain)                Button {
-                    launchDesktopSession()
-                } label: {
+            .buttonStyle(.plain)
+            Button {
+                launchDesktopSession()
+            } label: {
                     Label("Start a session", systemImage: "play.fill")
                         .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Theme.background)
+                        .foregroundStyle(Theme.background)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
                     .background(Theme.accent, in: Capsule())
