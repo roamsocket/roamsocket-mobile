@@ -343,7 +343,13 @@ struct CodeHomeView: View {
             // followed by the primary new-session action.
             if tab == .sandbox {
                 HStack(spacing: 10) {
-                    Button { showStartSheet = true } label: {
+                    Button {
+                        if state.e2bKeyStore.hasKey {
+                            showStartSheet = true
+                        } else {
+                            state.showE2BKeySheet = true
+                        }
+                    } label: {
                         Image(systemName: "terminal.cursor")
                             .font(.system(size: 17, weight: .semibold))
                             .foregroundStyle(Theme.textPrimary)
@@ -351,7 +357,6 @@ struct CodeHomeView: View {
                             .background(Theme.surfaceElevated, in: Circle())
                     }
                     .buttonStyle(.plain)
-                    .disabled(!state.e2bKeyStore.hasKey)
                     Button {
                         if state.e2bKeyStore.hasKey {
                             showSessionSheet = true
@@ -373,7 +378,6 @@ struct CodeHomeView: View {
                                     in: Capsule())
                     }
                     .buttonStyle(.plain)
-                    .disabled(!state.e2bKeyStore.hasKey)
                 }
                 .padding(.bottom, 24)
             }
@@ -766,12 +770,11 @@ struct CodeHomeView: View {
                     .strokeBorder(Theme.separator.opacity(0.6), lineWidth: 1)
             )
             }
-            .buttonStyle(.plain)
-            Button {
-                launchDesktopSession()
-            } label: {
-                Label("Start a session", systemImage: "play.fill")
-                    .font(.system(size: 14, weight: .semibold))
+            .buttonStyle(.plain)                Button {
+                    launchDesktopSession()
+                } label: {
+                    Label("Start a session", systemImage: "play.fill")
+                        .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Theme.background)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
