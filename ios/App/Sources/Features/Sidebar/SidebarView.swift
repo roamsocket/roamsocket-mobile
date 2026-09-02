@@ -135,15 +135,6 @@ struct SidebarView: View {
                 SidebarRow(systemImage: "chevron.left.forwardslash.chevron.right", title: "Code") {
                     onSelect(.code)
                 }
-                // Sandboxes (E2B) is a first-class destination: the
-                // phone drives e2b.dev sandboxes directly with the
-                // user's own API key, so this works whether or not a
-                // desktop is paired. Surfacing it in the sidebar
-                // makes the "run code without a desktop" path
-                // discoverable from anywhere in the app.
-                SidebarRow(systemImage: "shippingbox", title: "Sandboxes") {
-                    onSelect(.sandboxes)
-                }
             }
             SidebarRow(systemImage: "globe", title: "Browser") {
                 onSelect(.browser)

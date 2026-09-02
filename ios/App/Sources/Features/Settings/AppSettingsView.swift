@@ -56,6 +56,7 @@ struct AppSettingsView: View {
                         quickAccessSection
                         accountSection
                         desktopServerSection
+                        sandboxesSection
                         defaultModelSection
                         appearanceSection
                         chatSection
