@@ -240,1106 +240,805 @@ final class CodeSessionStore: ObservableObject, @unchecked Sendable {
     }
 }
 
-/// The Code home screen: Devices (recent paired laptops) and Sessions
-/// (recent coding sessions with status filters). A floating "New session"
-/// button captures the task and routes through the plan intake sheet.
-/// Builds a `SessionConfig` from the current `AppState`. Centralized so the
-/// Code home screen and the plan intake sheet construct sessions the same
-/// way.
-@MainActor
-enum SessionLauncher {
-    /// Build a session config for the given task description. Returns nil when
-    /// the prerequisites (paired server, selected repo, model with API key)
-    /// aren't met — callers should surface a friendly error in that case.
-    static func makeConfig(
-        in state: AppState,
-        task: String,
-        skills: [Skill]? = nil,
-        mcpServers: [MCPServerConfig]? = nil
-    ) -> SessionConfig? {
-        guard let endpoint = state.serverEndpoint,
-              let token = state.serverToken,
-              let repo = state.selectedRepo,
-              let model = state.modelSelectionForSession() else {
-            return nil
-        }
-        let activeSkills = skills ?? state.skillManager.enabledSkills
-        let activeMCP = mcpServers ?? state.mcpManager.configuredMCPServers
-        let prefix = state.codeBranchPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
-        let branchPrefix = prefix.isEmpty ? "roamsocket" : prefix
-        let workBranch = "\(branchPrefix)/\(slug(from: task))-\(shortId())"
-        let wireId = "s_\(shortId())"
-        let repoRef = RepoRef(
-            fullName: repo.fullName,
-            baseBranch: repo.defaultBranch,
-            workBranch: workBranch,
-            githubToken: state.githubToken
-        )
-        return SessionConfig(
-            wireSessionId: wireId,
-            endpoint: endpoint,
-            token: token,
-            repo: repoRef,
-            environment: state.selectedEnvironment,
-            model: model,
-            permissionMode: state.permissionMode,
-            firstMessage: task,
-            skills: activeSkills.map(\.content),
-            mcpServers: activeMCP
-        )
-    }
-
-    static func missingRequirements(in state: AppState) -> [String] {
-        var missing: [String] = []
-        if state.serverToken == nil || state.serverName == nil {
-            missing.append("Pair a desktop server in Settings.")
-        }
-        if state.selectedRepo == nil {
-            missing.append("Choose a repository on the home screen.")
-        }
-        if state.selectedModel == nil {
-            missing.append("Pick a model.")
-        } else if state.resolvedAPIKey(for: state.selectedModel!.provider).isEmpty {
-            missing.append("Add an API key for \(state.selectedModel!.provider.displayName).")
-        }
-        return missing
-    }
-
-    private static func slug(from text: String) -> String {
-        let lowered = text.lowercased()
-        let allowed = lowered.unicodeScalars.map { scalar -> Character in
-            if CharacterSet.alphanumerics.contains(scalar) { return Character(scalar) }
-            return "-"
-        }
-        let collapsed = String(allowed)
-            .split(separator: "-", omittingEmptySubsequences: true)
-            .joined(separator: "-")
-        return String(collapsed.prefix(40))
-    }
-
-    private static func shortId() -> String {
-        String(UUID().uuidString.prefix(8)).lowercased()
-    }
-}
-
-extension PermissionMode {
-    var icon: String {
-        switch self {
-        case .acceptEdits: return "checkmark.circle"
-        case .plan: return "list.bullet.clipboard"
-        case .ask: return "questionmark.circle"
-        }
-    }
-}
-
-/// Compact git / session status pill shared by Code home and the in-session
-/// commit / push / PR strip.
-struct SessionGitStatusBadge: View {
-    let icon: String
-    let label: String
-    let tint: Color
-
-    var body: some View {
-        HStack(spacing: 4) {
-            Image(systemName: icon)
-                .font(.system(size: 11, weight: .semibold))
-            Text(label)
-                .font(.system(size: 11, weight: .semibold))
-        }
-        .foregroundStyle(tint)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(tint.opacity(0.15), in: Capsule())
-        .accessibilityLabel(label)
-    }
-
-    /// Map a persisted session status to a lightweight badge.
-    static func forSessionStatus(_ status: CodeSession.Status) -> SessionGitStatusBadge {
-        switch status {
-        case .working:
-            return SessionGitStatusBadge(
-                icon: "arrow.up.circle.fill",
-                label: "ahead",
-                tint: Theme.accent
-            )
-        case .needsInput:
-            return SessionGitStatusBadge(
-                icon: "exclamationmark.circle.fill",
-                label: "blocked",
-                tint: .orange
-            )
-        case .readyForReview:
-            return SessionGitStatusBadge(
-                icon: "checkmark.circle.fill",
-                label: "ready",
-                tint: Theme.selection
-            )
-        case .completed:
-            return SessionGitStatusBadge(
-                icon: "checkmark.seal.fill",
-                label: "merged",
-                tint: Theme.textSecondary
-            )
-        case .archived:
-            return SessionGitStatusBadge(
-                icon: "archivebox.fill",
-                label: "archived",
-                tint: Theme.textTertiary
-            )
-        }
-    }
-
-    /// Live badge for an open coding session (diff / PR / agent state).
-    static func live(
-        isRunning: Bool,
-        hasDiffs: Bool,
-        hasPR: Bool,
-        needsInput: Bool
-    ) -> SessionGitStatusBadge {
-        if needsInput {
-            return forSessionStatus(.needsInput)
-        }
-        if hasPR {
-            return SessionGitStatusBadge(
-                icon: "arrow.triangle.branch",
-                label: "pr open",
-                tint: Theme.selection
-            )
-        }
-        if isRunning {
-            return forSessionStatus(.working)
-        }
-        if hasDiffs {
-            return SessionGitStatusBadge(
-                icon: "arrow.up.circle.fill",
-                label: "ahead",
-                tint: Theme.accent
-            )
-        }
-        return SessionGitStatusBadge(
-            icon: "checkmark.circle",
-            label: "clean",
-            tint: Theme.textSecondary
-        )
-    }
-}
-
+/// The Code home screen on iOS. Two paths live here, side by side:
+///   - **Phone sandbox (E2B)**: the default. Pick a repo, run a
+///     command on a fresh e2b.dev sandbox. The sandbox is a
+///     one-shot: clone → install → run. History persists.
+///   - **Desktop session**: the full agent loop. Requires a
+///     paired desktop running the server (the existing path
+///     that drives `SessionView` / `SessionViewModel`). The
+///     phone is a thin client; the desktop does the work.
+///
+/// Both paths land in a chat-style session UI. The phone sandbox
+/// path is currently one-shot (no agent loop on the phone); the
+/// desktop path has the full agent. Bridging the two — running
+/// the agent loop on the phone by orchestrating the E2B sandbox
+/// — is the next phase. Until then, the desktop path is the way
+/// to get AI-driven multi-step code changes.
 struct CodeHomeView: View {
     @EnvironmentObject var state: AppState
-    @State private var statusFilter: CodeSession.Status? = nil
-    @State private var showFilterSheet = false
-    @State private var showEnvironmentPicker = false
-    @State private var showModelPicker = false
-    @State private var showNewSession = false
-    @State private var showArchived = false
-    /// Live coding session presented as a full-screen cover (same path as Chat).
-    /// Nested `navigationDestination` under Code was unreliable: sessions never
-    /// opened and toolbar actions looked dead.
-    @State private var activeSessionConfig: SessionConfig?
-    /// Session prepared while New Session is open — presented after that cover dismisses.
-    @State private var pendingSessionConfig: SessionConfig?
-    /// Session to re-open after the archived list sheet finishes dismissing.
-    @State private var pendingReattachSession: CodeSession?
-    @State private var archiveCandidate: CodeSession?
-    @State private var showArchiveKillConfirm = false
-    @State private var renameTarget: CodeSession?
-    @State private var renameDraft = ""
-    @State private var showServerPairing = false
-    @State private var showDeviceConnectionHelp = false
-    @State private var tokenWhenPairingPresented: String?
-    @State private var launchError: String?
+    /// Drives the "Start a run" sheet (repo / branch / preset / command).
+    @State private var showStartSheet = false
+    /// Inline error from the start sheet (missing key, sandbox create
+    /// failed, etc.) — surfaces as an alert above the run history.
+    @State private var startError: String?
+    /// Desktop session launched from this screen, if any. When
+    /// non-nil, `SessionView` is presented as a fullScreenCover.
+    @State private var desktopSession: SessionConfig?
+    /// Sheet for the desktop pairing flow. Independent of the
+    /// Settings card so the user can pair without leaving Code.
+    @State private var showPairing = false
+    /// Sheet for opening a new E2B code session (repo + branch picker).
+    @State private var showSessionSheet = false
+    /// Active E2B code session presented as a chat fullScreenCover.
+    @State private var activeE2bSession: UUID?
 
     /// Opens the root sidebar drawer. Wired from `RootView` so Code can open
     /// the same destinations as Chat even though this screen hides the
     /// system navigation bar.
     var onOpenSidebar: () -> Void = {}
 
-    private var sessionStore: CodeSessionStore { state.codeSessionStore }
+    /// Per-screen store for the phone-originated runs. Lifted out of
+    /// `@StateObject` so the screen is cheap to recreate; the
+    /// persisted history survives via `PhoneRunPersistence`.
+    @StateObject private var store = SandboxesStore()
+
+    /// Which sub-tab is on screen. Both tabs do the same broad
+    /// thing (run code) but the runtime is different: a fresh
+    /// e2b.dev sandbox per run vs. a long-lived session on a
+    /// paired desktop. The user picks at the top.
+    @State private var tab: CodeTab = .sandbox
+
+    /// Which sub-tab is on screen.
+    enum CodeTab: String, CaseIterable, Hashable {
+        case sandbox
+        case desktop
+
+        var label: String {
+            switch self {
+            case .sandbox: return "Sandboxes"
+            case .desktop: return "Desktop"
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .sandbox: return "shippingbox"
+            case .desktop: return "desktopcomputer"
+            }
+        }
+    }
+
+    private var isPaired: Bool {
+        state.serverToken != nil && (state.serverName?.isEmpty == false)
+    }
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             Theme.background.ignoresSafeArea()
             VStack(spacing: 0) {
-                header
-                // Single List so swipe-to-archive works (swipeActions need List rows).
-                // Prefer plain Buttons over onTapGesture so taps always fire.
-                List {
-                    Section {
-                        if state.serverName == nil && state.serverToken == nil {
-                            Button {
-                                presentPairingSheet()
-                            } label: {
-                                devicesEmpty
-                            }
-                            .buttonStyle(.plain)
-                            .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
-                            .accessibilityHint("Opens pairing to connect a desktop server")
-                        } else {
-                            Button {
-                                Task { await handleDeviceTap() }
-                            } label: {
-                                deviceRow(
-                                    name: state.serverName ?? "Desktop",
-                                    status: state.desktopReachability
-                                )
-                            }
-                            .buttonStyle(.plain)
-                            .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
-                            .accessibilityHint("Reconnect to the desktop server")
-                        }
-                    } header: {
-                        Text("Devices")
-                            .font(.system(size: 17))
-                            .foregroundStyle(Theme.textSecondary)
-                            .textCase(nil)
-                    }
-
-                    Section {
-                        if filteredSessions.isEmpty {
-                            sessionsEmpty
-                                .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-                                .listRowBackground(Color.clear)
-                                .listRowSeparator(.hidden)
-                        } else {
-                            ForEach(filteredSessions) { session in
-                                Button {
-                                    Task { await reattach(session: session) }
-                                } label: {
-                                    sessionCard(session)
-                                }
-                                .buttonStyle(.plain)
-                                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
-                                .listRowBackground(Color.clear)
-                                .listRowSeparator(.hidden)
-                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                    Button {
-                                        requestArchive(session)
-                                    } label: {
-                                        Label("Archive", systemImage: "archivebox")
-                                    }
-                                    .tint(Theme.accent)
-                                    Button {
-                                        beginRename(session)
-                                    } label: {
-                                        Label("Rename", systemImage: "pencil")
-                                    }
-                                    .tint(Theme.textSecondary)
-                                }
-                                .contextMenu {
-                                    Button {
-                                        beginRename(session)
-                                    } label: {
-                                        Label("Rename", systemImage: "pencil")
-                                    }
-                                    Button {
-                                        requestArchive(session)
-                                    } label: {
-                                        Label("Archive", systemImage: "archivebox")
-                                    }
-                                    Button(role: .destructive) {
-                                        sessionStore.remove(session.id)
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
-                                }
-                            }
-                        }
-                    } header: {
-                        HStack {
-                            Text("Sessions")
-                                .font(.system(size: 17))
-                                .foregroundStyle(Theme.textSecondary)
-                            Spacer()
-                            Button {
-                                showFilterSheet = true
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Text(statusFilter?.rawValue ?? "All")
-                                        .font(.system(size: 14))
-                                        .foregroundStyle(Theme.textPrimary)
-                                    Image(systemName: "chevron.down")
-                                        .font(.system(size: 12))
-                                        .foregroundStyle(Theme.textTertiary)
-                                }
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(Theme.surfaceElevated, in: Capsule())
-                                .contentShape(Capsule())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Filter sessions")
-                        }
-                        .textCase(nil)
+                // Own top bar: Code is a sidebar-level destination, so the
+                // leading edge shows the drawer button, never a back
+                // chevron. The system nav bar is hidden entirely
+                // (`.toolbar(.hidden, for: .navigationBar)` below) so a back
+                // button can't reappear next to the hamburger.
+                topBar
+                // Segmented picker at the top — same UX as the
+                // Settings quick-access cards but cleaner for two
+                // parallel runtimes.
+                Picker("Run on", selection: $tab) {
+                    ForEach(CodeTab.allCases, id: \.self) { tab in
+                        Label(tab.label, systemImage: tab.systemImage)
+                            .tag(tab)
                     }
                 }
-                .listStyle(.plain)
-                .scrollContentBackground(.hidden)
-                .padding(.bottom, 80)
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 4)
+
+                Group {
+                    switch tab {
+                    case .sandbox: e2bSection
+                    case .desktop: desktopSection
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
-            newSessionFAB
-                .padding(.trailing, 18)
-                .padding(.bottom, 22)
-                .zIndex(1)
+            // FABs for the sandbox tab: terminal/cursor quick run at left,
+            // followed by the primary new-session action.
+            if tab == .sandbox {
+                HStack(spacing: 10) {
+                    Button {
+                        if state.e2bKeyStore.hasKey {
+                            showStartSheet = true
+                        } else {
+                            state.showE2BKeySheet = true
+                        }
+                    } label: {
+                        Image(systemName: "chevron.left.forwardslash.chevron.right")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(Theme.textPrimary)
+                            .frame(width: 48, height: 48)
+                            .background(Theme.surfaceElevated, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    Button {
+                        if state.e2bKeyStore.hasKey {
+                            showSessionSheet = true
+                        } else {
+                            state.showE2BKeySheet = true
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "play.fill")
+                            Text("Start a session")
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 11, weight: .bold))
+                        }
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Theme.background)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .background(state.e2bKeyStore.hasKey ? Theme.accent : Theme.textTertiary,
+                                    in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.bottom, 24)
+            }
         }
+        // Hide the system navigation bar (same pattern as BrowserHomeView).
+        // The custom `topBar` above replaces it, so only the hamburger
+        // shows — the back button can never appear.
         .toolbar(.hidden, for: .navigationBar)
-        .onAppear {
-            // Apply the user's code default if the current selection isn't a
-            // coding-capable model (or isn't set at all). Per-chat / per-session
-            // overrides already set `selectedModel` to a valid coding model and
-            // are left alone. This runs synchronously so the "Pick a model"
-            // hint under the start button reflects the default on first render.
+        .task {
+            // Re-list the catalog the first time Code is shown so
+            // the "Start a session" flow and any pills inside the
+            // session view have models to pick. Same defensive
+            // pattern Vision uses on appear; the Code surface is
+            // reached via the sidebar (not the chat path) so
+            // RootView's .task isn't always a guarantee.
+            if state.allModels.isEmpty {
+                await state.refreshModels()
+            }
+            // And pin the lane to a coding-capable model — the
+            // E2B session pill is `requiresCodingAgent: true`, so
+            // a chat default like Apple Intelligence would render
+            // as "+ Add a model" otherwise.
             state.applyDefault(for: .code)
         }
-        .task {
-            // Refresh desktop reachability whenever Code home is shown.
-            // Coalesces with launch reconnect via AppState.reconnectTask.
-            guard state.serverToken != nil else { return }
-            await state.attemptServerReconnect()
+        .sheet(isPresented: $showStartSheet) {
+            StartRunSheet(onStart: { req in startRun(req) })
+                .presentationDetents([.large])
         }
-        // Match Chat: present sessions in a full-screen NavigationStack so
-        // toolbar / sheets / dismiss work even though Code hides its own bar.
-        .fullScreenCover(item: $activeSessionConfig) { config in
-            NavigationStack {
-                SessionView(config: config)
-            }
-            .environmentObject(state)
-        }
-        .sheet(isPresented: $showFilterSheet) {
-            SessionFilterSheet(selection: $statusFilter)
-        }
-        .sheet(isPresented: $showEnvironmentPicker) {
-            EnvironmentPickerSheet()
-                .environmentObject(state)
-        }
-        .sheet(isPresented: $showModelPicker) {
-            ModelPickerSheet(codingOnly: true)
-                .environmentObject(state)
-        }
-        .sheet(isPresented: $showArchived, onDismiss: {
-            guard let session = pendingReattachSession else { return }
-            pendingReattachSession = nil
-            Task { await reattach(session: session) }
-        }) {
-            ArchivedSessionsView { session in
-                pendingReattachSession = session
-                showArchived = false
-            }
-            .environmentObject(state)
-        }
-        .sheet(isPresented: $showServerPairing, onDismiss: {
-            // After a successful re-pair, re-check reachability for the Devices row.
-            let newToken = state.serverToken
-            guard let newToken, !newToken.isEmpty, newToken != tokenWhenPairingPresented else {
-                return
-            }
-            Task { await state.attemptServerReconnect() }
-        }) {
+        .sheet(isPresented: $showPairing) {
             NavigationStack { ServerPairingView() }
                 .environmentObject(state)
         }
-        .sheet(isPresented: $showDeviceConnectionHelp) {
-            DeviceConnectionHelpSheet {
-                // Dismiss help first so the pairing sheet can present cleanly.
-                showDeviceConnectionHelp = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                    presentPairingSheet()
+        .sheet(isPresented: $showSessionSheet) {
+            NewE2BSessionSheet(
+                onStart: { title, branch, _ in
+                    showSessionSheet = false
+                    startE2BSession(
+                        title: title,
+                        repoFullName: "",
+                        branch: branch,
+                        onOpen: { sessionId in
+                            // Wait a beat so the sheet can dismiss
+                            // before we present the chat cover.
+                            Task { @MainActor in
+                                try? await Task.sleep(nanoseconds: 250_000_000)
+                                activeE2bSession = sessionId
+                            }
+                        }
+                    )
                 }
-            }
-            .environmentObject(state)
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
-        }
-        .fullScreenCover(isPresented: $showNewSession, onDismiss: {
-            // Present the new session only after this cover is fully gone —
-            // simultaneous cover + cover / nav is a common silent no-op.
-            guard let pending = pendingSessionConfig else { return }
-            pendingSessionConfig = nil
-            DispatchQueue.main.async {
-                activeSessionConfig = pending
-            }
-        }) {
-            NewSessionView { config, task in
-                pendingSessionConfig = storeNewSession(config: config, title: task)
-            }
-            .environmentObject(state)
-        }
-        .confirmationDialog(
-            "Stop work on the desktop?",
-            isPresented: $showArchiveKillConfirm,
-            titleVisibility: .visible,
-            presenting: archiveCandidate
-        ) { session in
-            Button("Stop agent and archive", role: .destructive) {
-                performArchive(session, killAgent: true)
-            }
-            Button("Keep running, archive chat") {
-                performArchive(session, killAgent: false)
-            }
-            Button("Cancel", role: .cancel) {
-                archiveCandidate = nil
-            }
-        } message: { session in
-            Text("“\(session.title)” may still be running on the desktop. Stop it, or leave it running and just archive this chat?")
-        }
-        .alert("Rename session", isPresented: Binding(
-            get: { renameTarget != nil },
-            set: { if !$0 { renameTarget = nil } }
-        )) {
-            TextField("Title", text: $renameDraft)
-            Button("Cancel", role: .cancel) {
-                renameTarget = nil
-            }
-            Button("Save") {
-                if let target = renameTarget {
-                    sessionStore.rename(target.id, title: renameDraft)
-                }
-                renameTarget = nil
-            }
-        } message: {
-            Text("Choose a short name for this coding session.")
-        }
-        .alert(
-            "Can't open session",
-            isPresented: Binding(
-                get: { launchError != nil },
-                set: { if !$0 { launchError = nil } }
             )
-        ) {
-            Button("OK", role: .cancel) { launchError = nil }
+            .environmentObject(state)
+            .presentationDetents([.medium])
+        }
+        .fullScreenCover(item: $desktopSession) { config in
+            NavigationStack { SessionView(config: config) }
+                .environmentObject(state)
+        }
+        .fullScreenCover(item: Binding(
+            get: { activeE2bSession.map { E2BSessionCover(id: $0) } },
+            set: { activeE2bSession = $0?.id }
+        )) { cover in
+            E2bSessionView(sessionId: cover.id, store: state.e2bSessionStore)
+                .environmentObject(state)
+        }
+        .alert("Run error", isPresented: Binding(
+            get: { startError != nil },
+            set: { if !$0 { startError = nil } }
+        )) {
+            Button("OK", role: .cancel) { startError = nil }
         } message: {
-            Text(launchError ?? "")
+            Text(startError ?? "")
         }
     }
 
-    // MARK: - Header
-
-    private var header: some View {
-        HStack(spacing: 12) {
+    /// Top-left hamburger that opens the sidebar drawer. Replaces the
+    /// system back button (see `body`: the nav bar is hidden entirely).
+    private var topBar: some View {
+        HStack(spacing: 0) {
             Button(action: onOpenSidebar) {
                 Image(systemName: "line.3.horizontal")
                     .font(.system(size: 18, weight: .medium))
                     .foregroundStyle(Theme.textPrimary)
-                    .frame(width: 44, height: 44)
-                    .background(Theme.surfaceElevated, in: Circle())
-                    .contentShape(Circle())
+                    .frame(width: 36, height: 36)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Open sidebar")
-
-            Text("Code")
-                .font(.system(size: 22, weight: .semibold))
-                .foregroundStyle(Theme.textPrimary)
-            Spacer()
-            Button {
-                showArchived = true
-            } label: {
-                Image(systemName: "archivebox")
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(Theme.textPrimary)
-                    .frame(width: 44, height: 44)
-                    .background(Theme.surfaceElevated, in: Circle())
-                    .contentShape(Circle())
-                    .overlay(alignment: .topTrailing) {
-                        let n = sessionStore.archivedSessions.count
-                        if n > 0 {
-                            Text(n > 9 ? "9+" : "\(n)")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(Theme.background)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 2)
-                                .background(Theme.accent, in: Capsule())
-                                .offset(x: 4, y: -2)
-                        }
-                    }
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Archived sessions")
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 14)
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
         .padding(.bottom, 4)
     }
 
-    // MARK: - Devices
-
-    private var devicesEmpty: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 14) {
-                Image(systemName: "laptopcomputer")
-                    .font(.system(size: 22))
-                    .foregroundStyle(Theme.textTertiary)
-                Image(systemName: "iphone")
-                    .font(.system(size: 22))
-                    .foregroundStyle(Theme.textTertiary)
-            }
-            Text("No recently connected devices")
-                .font(.system(size: 14))
-                .foregroundStyle(Theme.textTertiary)
-            Text("Tap to pair a desktop server on this network.")
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.accent)
-                .multilineTextAlignment(.center)
+    private var rows: [RunRow] {
+        state.sandboxesStore.phoneRuns.map { run in
+            RunRow(
+                id: run.id,
+                repoFullName: run.repoFullName,
+                branch: run.branch,
+                status: run.status,
+                exitCode: run.exitCode,
+                sandboxUrl: run.sandboxUrl,
+                command: run.command,
+                outputTail: run.outputTail,
+                error: run.error,
+                startedAt: run.startedAt,
+                steps: run.steps,
+            )
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 24)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
     }
 
-    private func deviceRow(name: String, status: AppState.DesktopReachability) -> some View {
-        HStack(spacing: 12) {
-            ZStack(alignment: .bottomTrailing) {
-                Image(systemName: "laptopcomputer")
-                    .font(.system(size: 22))
-                    .foregroundStyle(Theme.selection)
-                    .frame(width: 36, height: 36)
-                Circle()
-                    .fill(deviceStatusColor(status))
-                    .frame(width: 10, height: 10)
-                    .overlay(
-                        Circle()
-                            .stroke(Theme.surface, lineWidth: 2)
-                    )
-                    .offset(x: 2, y: 2)
-                    .accessibilityHidden(true)
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(name)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(Theme.textPrimary)
-                Text(deviceStatusSubtitle(status))
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.textTertiary)
-                    .lineLimit(2)
-            }
-            Spacer()
-            Group {
-                if state.isReconnecting {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(Theme.textSecondary)
+    private func startRun(_ req: E2bPhoneRunRequest) {
+        guard let apiKey = state.e2bKeyStore.get(), !apiKey.isEmpty else {
+            // Belt-and-braces: the FAB is disabled when there's no key,
+            // but if the user reaches this path via a deep link or a
+            // paste from elsewhere, route them to the key sheet.
+            state.showE2BKeySheet = true
+            return
+        }
+        state.sandboxesStore.startPhoneRun(
+            apiKey: apiKey,
+            githubToken: state.githubToken,
+            request: req,
+        )
+        showStartSheet = false
+    }
+
+    /// Re-run a finished run with the same repo + branch + command.
+    /// `E2bPhoneRun` doesn't currently persist the install
+    /// command or the original `E2bPhoneRepoSelection` (just the
+    /// display name), so the re-run skips the install step and
+    /// infers GitHub vs URL from the display name. For a URL repo
+    /// the re-run will still work — the URL is reconstructed from
+    /// the `owner/repo` shape — but for non-GitHub URLs the user
+    /// is better off re-running from the start sheet.
+    private func rerun(row: RunRow) {
+        guard let apiKey = state.e2bKeyStore.get(), !apiKey.isEmpty else {
+            startError = "Add your e2b.dev API key in Settings first."
+            return
+        }
+        let repo = inferRepoSelection(from: row.repoFullName)
+        let req = E2bPhoneRunRequest(
+            repo: repo,
+            branch: row.branch,
+            command: row.command,
+            installCommand: nil, // not persisted; user can re-add via start sheet
+            githubToken: state.githubToken,
+            preset: nil,
+        )
+        state.sandboxesStore.startPhoneRun(
+            apiKey: apiKey,
+            githubToken: state.githubToken,
+            request: req,
+        )
+    }
+
+    /// Best-effort repo selection inference from the display name.
+    /// If it starts with `http://` or `https://` it's a URL; else
+    /// treat it as `owner/repo` for GitHub. This handles the common
+    /// case (a GitHub `owner/repo` re-run) and the URL case for
+    /// paste-style runs.
+    private func inferRepoSelection(from displayName: String) -> E2bPhoneRepoSelection {
+        if displayName.hasPrefix("http://") || displayName.hasPrefix("https://") {
+            return .url(displayName)
+        }
+        return .github(fullName: displayName)
+    }
+
+    // MARK: - Sections
+
+    /// Desktop tab body. Shows the paired-desktop card when a
+    /// desktop is connected, the "pair a desktop" prompt when
+    /// not, and the desktop-session list (recent agent sessions
+    /// that the user can re-open). One path through the full
+    /// agent loop.
+    @ViewBuilder
+    private var desktopSection: some View {
+        ScrollView {
+            VStack(spacing: 12) {
+                if isPaired {
+                    desktopCard
                 } else {
-                    Image(systemName: status == .connected ? "checkmark.circle" : "arrow.clockwise")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(status == .connected ? Theme.selection : Theme.textSecondary)
+                    pairDesktopCard
                 }
             }
-            .frame(width: 36, height: 36)
-            .background(Theme.surfaceElevated, in: Circle())
-            .accessibilityHidden(true)
+            .frame(maxWidth: .infinity, alignment: .top)
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 96)
         }
-        .padding(14)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(name), \(deviceStatusSubtitle(status))")
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
-    private func deviceStatusSubtitle(_ status: AppState.DesktopReachability) -> String {
-        if state.isReconnecting {
-            return "Connecting…"
-        }
-        if status == .connected {
-            return status.label
-        }
-        if let message = state.reconnectMessage, !message.isEmpty {
-            return message
-        }
-        return status.label
-    }
-
-    /// Tap Devices row: reconnect, re-pair if the token is dead, otherwise
-    /// open the Wi‑Fi / rescan recovery sheet.
-    private func handleDeviceTap() async {
-        // Unpaired (name present without token is unusual) → pair.
-        if state.serverToken == nil || (state.serverToken ?? "").isEmpty {
-            presentPairingSheet()
-            return
-        }
-
-        // Already know the saved token was rejected — skip another probe.
-        if state.needsServerRePair {
-            presentPairingSheet()
-            return
-        }
-
-        // Join any in-flight reconnect, or start a fresh one.
-        let outcome = await state.attemptServerReconnect()
-        switch outcome {
-        case .connected:
-            break
-        case .needsRePair, .unpaired:
-            presentPairingSheet()
-        case .unreachable:
-            showDeviceConnectionHelp = true
-        }
-    }
-
-    private func presentPairingSheet() {
-        tokenWhenPairingPresented = state.serverToken
-        showServerPairing = true
-    }
-
-    /// Ensure the desktop is reachable before opening a coding session.
-    /// Returns true when the caller may proceed with navigation.
-    @discardableResult
-    private func ensureDesktopConnected() async -> Bool {
-        if state.serverToken == nil || (state.serverToken ?? "").isEmpty {
-            presentPairingSheet()
-            return false
-        }
-        if state.needsServerRePair {
-            presentPairingSheet()
-            return false
-        }
-        if state.desktopReachability == .connected, !state.isReconnecting {
-            return true
-        }
-        let outcome = await state.attemptServerReconnect()
-        switch outcome {
-        case .connected:
-            return true
-        case .needsRePair, .unpaired:
-            presentPairingSheet()
-            return false
-        case .unreachable:
-            showDeviceConnectionHelp = true
-            return false
-        }
-    }
-
-    private func deviceStatusColor(_ status: AppState.DesktopReachability) -> Color {
-        switch status {
-        case .connected:
-            return Color.green
-        case .connecting:
-            return Color.orange
-        case .unreachable:
-            return Color.red
-        case .unpaired:
-            return Theme.textTertiary
-        }
-    }
-
-    // MARK: - Sessions
-
-    private var filteredSessions: [CodeSession] {
-        let active = sessionStore.activeSessions
-        if let filter = statusFilter, filter != .archived {
-            return active.filter { $0.status == filter }
-        }
-        // Main list never shows archived rows (use header archive button).
-        return active
-    }
-
-    private func sessionCard(_ session: CodeSession) -> some View {
-        HStack(spacing: 12) {
-            ZStack {
-                Circle()
-                    .fill(Theme.surfaceElevated)
-                    .frame(width: 36, height: 36)
-                Image(systemName: session.status.icon)
-                    .font(.system(size: 16))
-                    .foregroundStyle(statusColor(session.status))
+    /// E2B sandboxes section. Shows the user's long-lived code
+    /// sessions at the top (each is a chat-driven agent loop
+    /// against a persistent e2b sandbox) and the one-shot run
+    /// list below. The "Start a session" CTA opens a chat; the
+    /// "Start a run" CTA opens the one-shot runner.
+    @ViewBuilder
+    private var e2bSection: some View {
+        let sessions = state.e2bSessionStore.sessions
+        ScrollView {
+            if rows.isEmpty && sessions.isEmpty {
+            CodeEmptyState(
+                hasPhoneKey: state.e2bKeyStore.hasKey,
+                onStart: { showSessionSheet = true },
+                onAddKey: { state.showE2BKeySheet = true },
+            )
+            .frame(maxWidth: .infinity)
+            .padding(.top, 24)
+        } else {
+            VStack(alignment: .leading, spacing: 12) {
+                // Code sessions (long-lived, agent-driven).
+                HStack {
+                    Image(systemName: "bubble.left.and.bubble.right.fill")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Theme.accent)
+                    Text("Sessions")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.textSecondary)
+                        .textCase(.uppercase)
+                    Spacer()
+                    Button {
+                        showSessionSheet = true
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: "plus")
+                                .font(.system(size: 11, weight: .bold))
+                            Text("New")
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                        .foregroundStyle(Theme.accent)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!state.e2bKeyStore.hasKey)
+                }
+                .padding(.horizontal, 4)
+                if sessions.isEmpty {
+                    Text("No sessions yet. Start a chat with a repo to write code, run, and commit.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textTertiary)
+                        .padding(.horizontal, 4)
+                } else {
+                    ForEach(sessions) { session in
+                        sessionRow(session)
+                    }
+                }
+                Divider().overlay(Theme.separator).padding(.vertical, 4)
+                // One-shot run list (existing flow).
+                HStack {
+                    Image(systemName: "play.square")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Theme.accent)
+                    Text("Quick runs")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.textSecondary)
+                        .textCase(.uppercase)
+                    Spacer()
+                }
+                .padding(.horizontal, 4)
+                if rows.isEmpty {
+                    Text("No runs yet. Tap play below to start a one-shot sandbox run.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textTertiary)
+                        .padding(.horizontal, 4)
+                } else {
+                    let active = rows.first(where: { $0.status == "running" || $0.status == "queued" })
+                    let past = rows.filter { $0.status != "running" && $0.status != "queued" }
+                    if let active {
+                        RunRowView(row: active, onStop: {
+                            state.sandboxesStore.cancelPhoneRun(runId: active.id)
+                        }, onRerun: { rerun(row: active) })
+                    }
+                    if !past.isEmpty {
+                        ForEach(past) { row in
+                            RunRowView(row: row, onStop: {
+                                state.sandboxesStore.cancelPhoneRun(runId: row.id)
+                            }, onRerun: { rerun(row: row) })
+                        }
+                    }
+                }
             }
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
+            .frame(maxWidth: .infinity, alignment: .top)
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 96)
+        }
+        }
+    }
+
+    /// Row for one E2B code session. Tap to open the chat.
+    private func sessionRow(_ session: E2bCodeSession) -> some View {
+        Button {
+            activeE2bSession = session.id
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: session.isLive ? "circle.fill" : "circle")
+                    .font(.system(size: 10))
+                    .foregroundStyle(session.isLive ? Theme.selection : Theme.textTertiary)
+                VStack(alignment: .leading, spacing: 2) {
                     Text(session.title)
-                        .font(.system(size: 16, weight: .medium))
+                        .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(1)
-                        .layoutPriority(1)
-                    Image(systemName: "arrow.triangle.branch")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Theme.textTertiary)
-                    Text(session.workBranch)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.textTertiary)
-                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text(session.repoFullName)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(Theme.textSecondary)
+                            .lineLimit(1)
+                        Text("·")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.textTertiary)
+                        Text(session.branch)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(Theme.textSecondary)
+                            .lineLimit(1)
+                    }
                 }
-                HStack(spacing: 6) {
-                    Image(systemName: "folder")
-                        .font(.system(size: 11))
-                    Text(session.repoFullName)
-                        .font(.system(size: 12))
-                        .lineLimit(1)
-                }
-                .foregroundStyle(Theme.textTertiary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                Spacer()
+                Text(sessionStatusLabel(session))
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Theme.textTertiary)
+                    .textCase(.uppercase)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.textTertiary)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            // Relative time sits where the old "ahead"/git badge was.
-            Text(relativeTime(session.updatedAt))
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(Theme.textTertiary)
-                .fixedSize()
-        }
-        .padding(14)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
-    }
-
-    private func beginRename(_ session: CodeSession) {
-        renameTarget = session
-        renameDraft = session.title
-    }
-
-    private var sessionsEmpty: some View {
-        Text("No sessions yet. Start one below.")
-            .font(.system(size: 14))
-            .foregroundStyle(Theme.textTertiary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 16)
-            .padding(.horizontal, 14)
+            .padding(12)
             .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
-    }
-
-    private func statusColor(_ status: CodeSession.Status) -> Color {
-        switch status {
-        case .needsInput: return .orange
-        case .readyForReview: return Theme.selection
-        case .working: return Theme.accent
-        case .completed: return Theme.textTertiary
-        case .archived: return Theme.textTertiary
-        }
-    }
-
-    // MARK: - New session FAB
-
-    private var newSessionFAB: some View {
-        Button {
-            Task {
-                // Require a live desktop before the new-session flow; recovery
-                // sheet / re-pair covers the cases SessionLauncher can't fix.
-                guard await ensureDesktopConnected() else { return }
-                showNewSession = true
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "square.and.pencil")
-                    .font(.system(size: 15, weight: .semibold))
-                Text("New session")
-                    .font(.system(size: 15, weight: .semibold))
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background(Theme.accent, in: Capsule())
-            .shadow(color: .black.opacity(0.35), radius: 8, x: 0, y: 4)
-            .contentShape(Capsule())
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(Theme.separator.opacity(0.6), lineWidth: 1)
+            )
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Start a new coding session")
     }
 
-    // MARK: - Session lifecycle
-
-    // MARK: - Archive / rename
-
-    private func requestArchive(_ session: CodeSession) {
-        // Only prompt when the desktop agent is actually mid-turn — not merely
-        // because the row filter status is still "Working" from an earlier open.
-        let live = sessionStore.session(id: session.id) ?? session
-        if live.agentActive {
-            archiveCandidate = live
-            showArchiveKillConfirm = true
-        } else {
-            performArchive(live, killAgent: false)
+    private func sessionStatusLabel(_ s: E2bCodeSession) -> String {
+        switch s.status {
+        case .provisioning: return "Provisioning"
+        case .idle: return "Idle"
+        case .working: return "Working"
+        case .readyForReview: return "Ready"
+        case .failed: return "Failed"
+        case .killed: return "Closed"
         }
     }
 
-    private func performArchive(_ session: CodeSession, killAgent: Bool) {
-        archiveCandidate = nil
-        if killAgent {
-            Task { await interruptRemoteAgent(wireSessionId: session.wireSessionId) }
-            sessionStore.archive(session.id, disconnectWhenDone: false)
-            sessionStore.setAgentActive(session.id, false)
-        } else {
-            // Leave desktop work running only when it is actually mid-turn.
-            let keepRunning = session.agentActive
-            sessionStore.archive(session.id, disconnectWhenDone: keepRunning)
-            if !keepRunning {
-                sessionStore.setAgentActive(session.id, false)
+    /// Card shown when a desktop is paired. Offers the full
+    /// agent-loop path: open a new session on the desktop, which
+    /// drives the existing `SessionView` fullScreenCover.
+    private var desktopCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Image(systemName: "desktopcomputer")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                    .frame(width: 28)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(state.serverName ?? "Desktop")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                    Text(desktopSubtitle)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textSecondary)
+                }
+                Spacer()
+            }
+            HStack(spacing: 8) {
+                Button {
+                    launchDesktopSession()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "play.fill")
+                        Text("Start a session")
+                    }
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.background)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Theme.accent, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(!canLaunchDesktop)
+                .opacity(canLaunchDesktop ? 1 : 0.5)
             }
         }
-        // If this session is open full-screen, close it so the connection policy applies.
-        if activeSessionConfig?.localSessionId == session.id {
-            if killAgent {
-                activeSessionConfig = nil
+        .padding(12)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(Theme.separator.opacity(0.6), lineWidth: 1)
+        )
+    }
+
+    /// Card shown when no desktop is paired. Directs the user to
+    /// the pairing flow (also reachable from Settings).
+    private var pairDesktopCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                showPairing = true
+            } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "desktopcomputer")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Theme.textTertiary)
+                    .frame(width: 28)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Pair a desktop for the full agent loop")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                    Text("Phone sandboxes run one command. A paired desktop adds AI-driven multi-step edits, git, and PRs.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textSecondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.textTertiary)
             }
-            // When keeping agent running, SessionViewModel observes disconnectWhenDone
-            // and tears down the phone socket on session_done.
+            .padding(12)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(Theme.separator.opacity(0.6), lineWidth: 1)
+            )
+            }
+            .buttonStyle(.plain)
+            Button {
+                launchDesktopSession()
+            } label: {
+                    Label("Start a session", systemImage: "play.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.background)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Theme.accent, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(!canLaunchDesktop)
+            .opacity(canLaunchDesktop ? 1 : 0.5)
+        }
+        .padding(12)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.separator.opacity(0.6), lineWidth: 1))
+    }
+
+    private var desktopSubtitle: String {
+        let status = state.desktopReachability
+        switch status {
+        case .connected: return "Connected · start a session to drive the agent loop."
+        case .connecting: return "Connecting…"
+        case .unreachable: return "Unreachable — try pairing again."
+        case .unpaired: return "Paired · ready."
         }
     }
 
-    private func interruptRemoteAgent(wireSessionId: String) async {
-        guard let endpoint = state.serverEndpoint, let token = state.serverToken else { return }
-        let client = ServerClient()
-        do {
-            _ = try await client.connect(endpoint: endpoint, token: token)
-            try await client.send(.interrupt(sessionId: wireSessionId))
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            await client.disconnect()
-        } catch {
-            // Best-effort — archive still proceeds.
-            await client.disconnect()
-        }
+    /// Prerequisite check for launching a desktop session. Mirrors
+    /// the desktop's pre-session checks: repo selected, model with
+    /// API key, and the desktop actually reachable.
+    private var canLaunchDesktop: Bool {
+        guard state.desktopReachability == .connected else { return false }
+        guard state.selectedRepo != nil else { return false }
+        guard let model = state.selectedModel else { return false }
+        return !state.resolvedAPIKey(for: model.provider).isEmpty
     }
 
-    /// Persist a new session row and return the config used to open SessionView.
-    /// Presentation is owned by the caller (deferred when New Session is open).
-    private func storeNewSession(config: SessionConfig, title: String) -> SessionConfig {
-        let session = CodeSession(
-            title: title,
-            repoFullName: config.repo.fullName,
-            baseBranch: config.repo.baseBranch ?? "main",
-            workBranch: config.repo.workBranch,
-            wireSessionId: config.wireSessionId,
-            environment: config.environment
-        )
-        sessionStore.add(session)
-        return SessionConfig(
-            id: config.id,
-            wireSessionId: config.wireSessionId,
-            localSessionId: session.id,
-            endpoint: config.endpoint,
-            token: config.token,
-            repo: config.repo,
-            environment: config.environment,
-            model: config.model,
-            permissionMode: config.permissionMode,
-            firstMessage: config.firstMessage,
-            skills: config.skills,
-            mcpServers: config.mcpServers,
-            resuming: false
-        )
-    }
-
-    private func presentSession(_ config: SessionConfig) {
-        activeSessionConfig = config
-    }
-
-    private func reattach(session: CodeSession) async {
-        // Rebuild from the persisted session — do not require the currently
-        // selected repo (that blocked opening history until a new session).
-        // Always open a fresh WS and send create_session with the same wire
-        // id so the desktop rebinds (live) or re-clones (after restart).
-        guard await ensureDesktopConnected() else { return }
-        guard let endpoint = state.serverEndpoint, let token = state.serverToken else {
-            launchError = "Pair a desktop server in Settings, then try again."
+    /// Build a `SessionConfig` and trigger the desktop-session cover.
+    /// Surfaces a friendly error if the prerequisites aren't met.
+    private func launchDesktopSession() {
+        let missing = SessionLauncher.missingRequirements(in: state)
+        if !missing.isEmpty {
+            startError = missing.joined(separator: " ")
             return
         }
-        guard let model = state.modelSelectionForSession() else {
-            let missing = SessionLauncher.missingRequirements(in: state)
-            launchError = missing.isEmpty
-                ? "Pick a coding model with an API key, then open this session again."
-                : missing.joined(separator: " ")
+        guard let config = SessionLauncher.makeConfig(in: state, task: "Start a new coding session.") else {
+            startError = "Couldn't build a session config. Check pairing + repo + API key."
             return
         }
-        let repoRef = RepoRef(
-            fullName: session.repoFullName,
-            baseBranch: session.baseBranch,
-            workBranch: session.workBranch,
-            githubToken: state.githubToken
-        )
-        // Re-open does not mean the agent is mid-turn yet.
-        sessionStore.update(session.id) {
-            $0.status = .working
-            $0.agentActive = false
-        }
-        let config = SessionConfig(
-            wireSessionId: session.wireSessionId,
-            localSessionId: session.id,
-            endpoint: endpoint,
-            token: token,
-            repo: repoRef,
-            // Environment is fixed for the life of the session.
-            environment: session.environment ?? state.selectedEnvironment,
-            model: model,
-            permissionMode: state.permissionMode,
-            firstMessage: session.title,
-            skills: state.skillManager.enabledSkills.map(\.content),
-            mcpServers: state.mcpManager.configuredMCPServers,
-            resuming: true,
-            prURL: session.prURL
-        )
-        presentSession(config)
+        desktopSession = config
     }
 
-    private func relativeTime(_ date: Date) -> String {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .abbreviated
-        return f.localizedString(for: date, relativeTo: Date())
+    /// Open a new E2B code session. Called from the NewE2BSessionSheet.
+    /// The sandbox is provisioned asynchronously; the caller is
+    /// expected to navigate to the chat cover on `onOpen`.
+    private func startE2BSession(
+        title: String,
+        repoFullName: String,
+        branch: String,
+        onOpen: @escaping (UUID) -> Void,
+    ) {
+        guard state.e2bKeyStore.hasKey else {
+            startError = "Add your e2b.dev API key in Settings first."
+            return
+        }
+        guard let repo = state.selectedRepo else {
+            startError = "Choose a repository on the home screen first."
+            return
+        }
+        let fullName = repoFullName.isEmpty ? repo.fullName : repoFullName
+        let githubToken = state.githubToken
+        Task { @MainActor in
+            do {
+                let id = try await state.e2bSessionStore.openSession(
+                    title: title.isEmpty ? "\(fullName) · \(branch)" : title,
+                    repoFullName: fullName,
+                    branch: branch,
+                    githubToken: githubToken
+                )
+                onOpen(id)
+            } catch {
+                startError = "Couldn't open sandbox: \(error.localizedDescription)"
+            }
+        }
     }
 }
 
-// MARK: - New session prompt removed
+/// Identifiable wrapper for the `fullScreenCover(item:)` so the
+/// active session id is captured in a binding-friendly shape.
+private struct E2BSessionCover: Identifiable, Hashable {
+    let id: UUID
+}
 
-// MARK: - Archived sessions
+// MARK: - New E2B session sheet
 
-struct ArchivedSessionsView: View {
+/// Quick picker for a new E2B code session. Uses the user's
+/// currently selected repo + lets them name the session and
+/// override the branch. Hands the values back to the parent
+/// which drives provisioning.
+private struct NewE2BSessionSheet: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
-    var onOpen: (CodeSession) -> Void
-    @State private var renameTarget: CodeSession?
-    @State private var renameDraft = ""
+    /// Title / branch / repo are the user's choices; the
+    /// parent kicks off the actual sandbox provisioning and
+    /// navigation.
+    let onStart: (String, String, AnyProvCore.GitHubRepo) -> Void
 
-    private var sessions: [CodeSession] { state.codeSessionStore.archivedSessions }
-
-    var body: some View {
-        NavigationStack {
-            Group {
-                if sessions.isEmpty {
-                    ContentUnavailableView(
-                        "No archived sessions",
-                        systemImage: "archivebox",
-                        description: Text("Swipe left on a session to archive it.")
-                    )
-                } else {
-                    List {
-                        ForEach(sessions) { session in
-                            Button {
-                                onOpen(session)
-                            } label: {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(session.title)
-                                        .font(.system(size: 16, weight: .medium))
-                                        .foregroundStyle(Theme.textPrimary)
-                                        .lineLimit(2)
-                                    Text("\(session.repoFullName) · \(session.transcript.count) messages")
-                                        .font(.system(size: 12))
-                                        .foregroundStyle(Theme.textTertiary)
-                                }
-                                .padding(.vertical, 4)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .swipeActions(edge: .trailing) {
-                                Button(role: .destructive) {
-                                    state.codeSessionStore.remove(session.id)
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
-                                Button {
-                                    state.codeSessionStore.unarchive(session.id)
-                                } label: {
-                                    Label("Restore", systemImage: "arrow.uturn.backward")
-                                }
-                                .tint(Theme.accent)
-                            }
-                            .contextMenu {
-                                Button {
-                                    renameTarget = session
-                                    renameDraft = session.title
-                                } label: {
-                                    Label("Rename", systemImage: "pencil")
-                                }
-                                Button {
-                                    state.codeSessionStore.unarchive(session.id)
-                                } label: {
-                                    Label("Restore", systemImage: "arrow.uturn.backward")
-                                }
-                                Button(role: .destructive) {
-                                    state.codeSessionStore.remove(session.id)
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
-                            }
-                        }
-                    }
-                    .scrollContentBackground(.hidden)
-                }
-            }
-            .background(Theme.background)
-            .navigationTitle("Archived")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
-            .alert("Rename session", isPresented: Binding(
-                get: { renameTarget != nil },
-                set: { if !$0 { renameTarget = nil } }
-            )) {
-                TextField("Title", text: $renameDraft)
-                Button("Cancel", role: .cancel) {
-                    renameTarget = nil
-                }
-                Button("Save") {
-                    if let target = renameTarget {
-                        state.codeSessionStore.rename(target.id, title: renameDraft)
-                    }
-                    renameTarget = nil
-                }
-            }
-        }
-    }
-}
-
-// MARK: - Filter sheet
-
-struct SessionFilterSheet: View {
-    @Binding var selection: CodeSession.Status?
-    @Environment(\.dismiss) private var dismiss
+    @State private var title: String = ""
+    @State private var branch: String = "main"
+    @State private var isOpening: Bool = false
+    @State private var showRepositoryPicker = false
 
     var body: some View {
         NavigationStack {
-            List {
-                Button {
-                    selection = nil
-                    dismiss()
-                } label: {
-                    HStack {
-                        Text("All")
-                            .foregroundStyle(Theme.textPrimary)
-                        Spacer()
-                        if selection == nil {
-                            Image(systemName: "checkmark")
-                                .foregroundStyle(Theme.selection)
-                        }
-                    }
-                }
-                ForEach(CodeSession.Status.allCases.filter { $0 != .archived }) { status in
-                    Button {
-                        selection = status
-                        dismiss()
-                    } label: {
-                        HStack {
-                            Text(status.rawValue)
-                                .foregroundStyle(Theme.textPrimary)
-                            Spacer()
-                            if selection == status {
-                                Image(systemName: "checkmark")
-                                    .foregroundStyle(Theme.selection)
+            ZStack {
+                Theme.background.ignoresSafeArea()
+                Form {
+                    Section {
+                        Button {
+                            showRepositoryPicker = true
+                        } label: {
+                            HStack {
+                                Image(systemName: "folder")
+                                Text(state.selectedRepo?.fullName ?? "Choose repository")
+                                    .foregroundStyle(state.selectedRepo == nil ? Theme.textSecondary : Theme.textPrimary)
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .foregroundStyle(Theme.textTertiary)
                             }
                         }
+                        .buttonStyle(.plain)
+                        TextField("Session title (optional)", text: $title)
+                        TextField("Branch", text: $branch)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                    } header: {
+                        Text("Repository")
+                    } footer: {
+                        Text(state.selectedRepo.map { "Will open \($0.fullName) on a fresh e2b sandbox." } ?? "Choose a repository above.")
                     }
                 }
+                .scrollContentBackground(.hidden)
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .background(Theme.background)
-            .navigationTitle("Filter by status")
+            .navigationTitle("New code session")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Open") {
+                        guard let repo = state.selectedRepo else { return }
+                        let titleTrimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let branchTrimmed = branch.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let resolvedBranch = branchTrimmed.isEmpty ? repo.defaultBranch : branchTrimmed
+                        isOpening = true
+                        onStart(titleTrimmed, resolvedBranch, repo)
+                    }
+                    .disabled(state.selectedRepo == nil || isOpening)
+                }
             }
         }
-        .presentationDetents([.medium])
+        .sheet(isPresented: $showRepositoryPicker) {
+            RepositoryPickerSheet()
+                .environmentObject(state)
+        }
     }
 }
 
-extension MCPManager {
-    /// Wire-format subset of the user's MCP servers. Sent to the desktop
-    /// server on session create. The desktop side decides which ones to
-    /// start based on transport + its own enabled flag.
-    var configuredMCPServers: [MCPServerConfig] {
-        // Full MCPServer wire shape (id / description / isEnabled required by desktop Zod).
-        configuredServers.map { MCPServerConfig($0) }
+// MARK: - Code-home empty state
+
+/// Code-home variant of the Sandboxes empty state. Adds the
+/// "Add your e2b.dev key" CTA when the user has no key set, so
+/// the Code tab is usable from cold start (no Settings round-trip
+/// required to discover the key).
+private struct CodeEmptyState: View {
+    let hasPhoneKey: Bool
+    let onStart: () -> Void
+    let onAddKey: () -> Void
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "shippingbox")
+                .font(.system(size: 36, weight: .light))
+                .foregroundStyle(Theme.textTertiary)
+            Text("Run code on a phone sandbox")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(Theme.textPrimary)
+            Text(hasPhoneKey
+                 ? "Tap Start a run to spin up a fresh e2b sandbox and run a command on your repo."
+                 : "Add your e2b.dev API key, then tap Start a run to spin up a fresh e2b sandbox.")
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.textSecondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+            if hasPhoneKey {
+                Button(action: onStart) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "play.fill")
+                        Text("Start a run")
+                    }
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.background)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 10)
+                    .background(Theme.accent, in: Capsule())
+                }
+                .buttonStyle(.plain)
+            } else {
+                Button(action: onAddKey) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "key")
+                        Text("Add your e2b.dev API key")
+                    }
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.background)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 10)
+                    .background(Theme.accent, in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

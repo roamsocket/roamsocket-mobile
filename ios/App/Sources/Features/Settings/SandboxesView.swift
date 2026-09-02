@@ -2,13 +2,11 @@ import SwiftUI
 import AnyProvCore
 import UIKit
 
-/// Unified run row — desktop-originated runs get `source = .desktop`
-/// and phone-originated runs get `source = .phone`. Keeps the view
-/// logic from caring which kind each card came from.
-fileprivate struct RunRow: Identifiable, Hashable {
-    enum Source: String, Hashable { case desktop, phone }
+/// One row in the Sandboxes list. Always phone-originated now —
+/// the desktop no longer brokers E2B runs, so the view doesn't
+/// need a `source` field or a unified-runs computed property.
+struct RunRow: Identifiable, Hashable {
     let id: String
-    let source: Source
     let repoFullName: String
     let branch: String
     let status: String
@@ -18,28 +16,28 @@ fileprivate struct RunRow: Identifiable, Hashable {
     let outputTail: [String]
     let error: String?
     let startedAt: Double?
+    let steps: [E2bPhoneRunStep]
 }
 
-/// Sandboxes (E2B) — see the runs the desktop server kicked off after each
-/// `git_publish`, set a per-connection user-override API key, **or** start
-/// a run directly from the phone (no desktop required) by talking to
-/// e2b.dev with the user's own API key.
+/// Sandboxes (E2B) — phone-originated runs only. The desktop
+/// server is no longer in the loop: the iOS app talks to e2b.dev
+/// directly with the user's own API key. The view shows the
+/// in-flight + historical runs and exposes a "Start a run" sheet.
 struct SandboxesView: View {
     @EnvironmentObject private var state: AppState
     @Environment(\.dismiss) private var dismiss
 
-    @StateObject private var store = SandboxesStore()
+    /// Shared with the Code home screen via `AppState.sandboxesStore`
+    /// so an in-flight run is visible from both surfaces.
+    private var store: SandboxesStore { state.sandboxesStore }
 
-    @State private var showKeySheet = false
-    @State private var keyDraft = ""
     @State private var showError: String?
     @State private var showStartSheet = false
 
-    private var unifiedRuns: [RunRow] {
-        let desktop = store.runs.map { run in
+    private var rows: [RunRow] {
+        store.phoneRuns.map { run in
             RunRow(
                 id: run.id,
-                source: .desktop,
                 repoFullName: run.repoFullName,
                 branch: run.branch,
                 status: run.status,
@@ -49,25 +47,8 @@ struct SandboxesView: View {
                 outputTail: run.outputTail,
                 error: run.error,
                 startedAt: run.startedAt,
+                steps: run.steps,
             )
-        }
-        let phone = store.phoneRuns.map { run in
-            RunRow(
-                id: run.id,
-                source: .phone,
-                repoFullName: run.repoFullName,
-                branch: run.branch,
-                status: run.status,
-                exitCode: run.exitCode,
-                sandboxUrl: run.sandboxUrl,
-                command: run.command,
-                outputTail: run.outputTail,
-                error: run.error,
-                startedAt: run.startedAt,
-            )
-        }
-        return (desktop + phone).sorted { (a, b) in
-            (a.startedAt ?? 0) > (b.startedAt ?? 0)
         }
     }
 
@@ -89,48 +70,15 @@ struct SandboxesView: View {
                     } label: {
                         Image(systemName: "play.fill")
                     }
-                }
-                ToolbarItem(placement: .secondaryAction) {
-                    Button {
-                        keyDraft = ""
-                        showKeySheet = true
-                    } label: {
-                        Image(systemName: store.hasUserKey ? "key.fill" : "key")
-                    }
-                }
-            }
-            .task {
-                if state.serverEndpoint != nil && state.serverToken != nil {
-                    await store.start(
-                        endpoint: state.serverEndpoint,
-                        token: state.serverToken,
-                    )
+                    .disabled(!state.e2bKeyStore.hasKey)
                 }
             }
             .onDisappear {
                 store.stop()
             }
-            .sheet(isPresented: $showKeySheet) {
-                E2bKeySheet(
-                    hasUserKey: store.hasUserKey,
-                    draft: $keyDraft,
-                    onSave: { newKey in
-                        Task { await store.setKey(newKey) }
-                        showKeySheet = false
-                    },
-                    onClear: {
-                        Task { await store.setKey("") }
-                        showKeySheet = false
-                    },
-                )
-            }
             .sheet(isPresented: $showStartSheet) {
                 StartRunSheet(
-                    desktopPaired: state.serverEndpoint != nil && state.serverToken != nil,
-                    desktopKeyHint: store.hasUserKey,
-                    onStart: { req in
-                        startRun(req)
-                    },
+                    onStart: { req in startRun(req) },
                 )
                 .presentationDetents([.large])
             }
@@ -149,11 +97,6 @@ struct SandboxesView: View {
     }
 
     private func startRun(_ req: E2bPhoneRunRequest) {
-        // The phone always drives "Start a run" directly via e2b.dev —
-        // even when a desktop is paired. The desktop's e2b_start path
-        // requires an active session, which a user coming from the
-        // Sandboxes sheet doesn't necessarily have. Direct keeps the
-        // UX consistent: one tap on "Start" → run starts.
         guard let apiKey = state.e2bKeyStore.get(), !apiKey.isEmpty else {
             showError = "Add your e2b.dev API key in Settings → Sandboxes (E2B) first."
             return
@@ -166,24 +109,40 @@ struct SandboxesView: View {
         showStartSheet = false
     }
 
+    /// Re-run a finished run with the same repo + branch + command.
+    /// The display name tells us whether it was a GitHub repo or a
+    /// pasted URL (the only kind the run sheet supports). The
+    /// install step isn't persisted on the run so re-run skips it —
+    /// the user can re-trigger install via the start sheet.
+    private func rerun(row: RunRow) {
+        guard let apiKey = state.e2bKeyStore.get(), !apiKey.isEmpty else {
+            showError = "Add your e2b.dev API key in Settings → Sandboxes (E2B) first."
+            return
+        }
+        let repo: E2bPhoneRepoSelection = {
+            if row.repoFullName.hasPrefix("http://") || row.repoFullName.hasPrefix("https://") {
+                return .url(row.repoFullName)
+            }
+            return .github(fullName: row.repoFullName)
+        }()
+        let req = E2bPhoneRunRequest(
+            repo: repo,
+            branch: row.branch,
+            command: row.command,
+            installCommand: nil,
+            githubToken: state.githubToken,
+            preset: nil,
+        )
+        store.startPhoneRun(
+            apiKey: apiKey,
+            githubToken: state.githubToken,
+            request: req,
+        )
+    }
+
     @ViewBuilder
     private var content: some View {
-        if !store.isReady && store.runs.isEmpty && store.phoneRuns.isEmpty {
-            VStack(spacing: 12) {
-                if state.serverEndpoint != nil && state.serverToken != nil {
-                    ProgressView().tint(Theme.accent)
-                    Text("Connecting to desktop…")
-                        .font(.system(size: 14))
-                        .foregroundStyle(Theme.textSecondary)
-                } else {
-                    NoDesktopEmptyState(
-                        hasKey: state.e2bKeyStore.hasKey,
-                        onStart: { showStartSheet = true },
-                    )
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if unifiedRuns.isEmpty {
+        if rows.isEmpty {
             EmptyState(
                 hasPhoneKey: state.e2bKeyStore.hasKey,
                 onStart: { showStartSheet = true },
@@ -191,17 +150,10 @@ struct SandboxesView: View {
         } else {
             ScrollView {
                 LazyVStack(spacing: 12) {
-                    if !store.isReady {
-                        KeyBanner(
-                            hasUserKey: store.hasUserKey,
-                            lastStatus: store.lastStatusLabel,
-                            onTapKey: { showKeySheet = true },
-                        )
-                    }
-                    ForEach(unifiedRuns) { row in
-                        RunRowView(row: row, onAbort: {
-                            Task { await store.abort(runId: row.id) }
-                        })
+                    ForEach(rows) { row in
+                        RunRowView(row: row, onStop: {
+                            store.cancelPhoneRun(runId: row.id)
+                        }, onRerun: { rerun(row: row) })
                     }
                 }
                 .padding(.horizontal, 16)
@@ -213,24 +165,43 @@ struct SandboxesView: View {
 
 // MARK: - Run row
 
-private struct RunRowView: View {
+struct RunRowView: View {
     let row: RunRow
-    let onAbort: () -> Void
+    let onStop: () -> Void
+    /// Re-run with the same repo + branch + command. No-op by
+    /// default — parents opt in by passing a closure.
+    var onRerun: () -> Void = {}
 
-    @State private var expanded = false
+    @State private var expanded: Bool
     @Environment(\.openURL) private var openURL
+
+    init(row: RunRow, onStop: @escaping () -> Void, onRerun: @escaping () -> Void = {}) {
+        self.row = row
+        self.onStop = onStop
+        self.onRerun = onRerun
+        // Auto-expand active runs so the live output is visible
+        // without an extra tap. Once a run is queued / running, the
+        // user wants to see what's happening — collapsing it by
+        // default would defeat the purpose of the phone-driven
+        // code-running experience.
+        self._expanded = State(initialValue: row.status == "running" || row.status == "queued")
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
             if expanded {
+                if !row.steps.isEmpty {
+                    stepPills
+                }
                 outputBody
             }
         }
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(Theme.separator.opacity(0.6), lineWidth: 1)
+                .strokeBorder(row.status == "running" ? Theme.accent.opacity(0.4) : Theme.separator.opacity(0.6),
+                              lineWidth: row.status == "running" ? 1.5 : 1)
         )
     }
 
@@ -245,25 +216,30 @@ private struct RunRowView: View {
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(Theme.textPrimary)
                         .lineLimit(1)
-                    if row.source == .phone {
-                        Text("PHONE")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(Theme.background)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 2)
-                            .background(Theme.accent, in: Capsule())
-                    }
                     Spacer()
+                    // Trailing action: Stop for active, Re-run for
+                    // terminal. Mirrors the desktop Code home's
+                    // "stop session" / "re-run" affordances.
                     if row.status == "running" {
-                        Button("Stop", action: onAbort)
+                        Button("Stop", action: onStop)
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(.red)
                             .buttonStyle(.plain)
-                    } else {
-                        Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(Theme.textTertiary)
+                    } else if row.status == "completed" || row.status == "failed" || row.status == "killed" {
+                        Button(action: onRerun) {
+                            HStack(spacing: 3) {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 11, weight: .bold))
+                                Text("Re-run")
+                                    .font(.system(size: 12, weight: .semibold))
+                            }
+                            .foregroundStyle(Theme.accent)
+                        }
+                        .buttonStyle(.plain)
                     }
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.textTertiary)
                 }
                 HStack(spacing: 8) {
                     Text(row.branch)
@@ -296,9 +272,28 @@ private struct RunRowView: View {
         .buttonStyle(.plain)
     }
 
+    /// Compact "Clone → Install → Test" pipeline pills. Mirrors the
+    /// current `E2bPhoneRunStep` state for each step.
+    private var stepPills: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Divider().overlay(Theme.separator)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(row.steps) { step in
+                        StepPill(step: step)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+            }
+        }
+    }
+
     private var outputBody: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Divider().overlay(Theme.separator)
+            if !row.steps.isEmpty {
+                Divider().overlay(Theme.separator)
+            }
             if row.command.isEmpty && row.outputTail.isEmpty && row.error == nil {
                 Text("No output yet.")
                     .font(.system(size: 12))
@@ -325,7 +320,7 @@ private struct RunRowView: View {
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
                 }
-                if let err = row.error, !err.isEmpty {
+                if let err = row.error, !err.isEmpty, row.status != "killed" {
                     HStack(alignment: .top, spacing: 6) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.system(size: 12))
@@ -347,7 +342,7 @@ private struct RunRowView: View {
         case "running": return "RUNNING"
         case "completed": return row.exitCode.map { "DONE · \($0)" } ?? "DONE"
         case "failed": return row.exitCode.map { "FAILED · \($0)" } ?? "FAILED"
-        case "killed": return "KILLED"
+        case "killed": return "STOPPED"
         default: return row.status.uppercased()
         }
     }
@@ -362,7 +357,58 @@ private struct RunRowView: View {
     }
 }
 
-private struct StatusDot: View {
+/// Compact "Clone" / "Install" / "Test" pill for the pipeline view.
+/// Reflects the per-step status from the run's `steps` array.
+struct StepPill: View {
+    let step: E2bPhoneRunStep
+
+    var body: some View {
+        HStack(spacing: 4) {
+            statusIcon
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(tint)
+            Text(step.name)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(step.status == "pending" ? Theme.textTertiary : Theme.textPrimary)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(background, in: Capsule())
+    }
+
+    @ViewBuilder
+    private var statusIcon: some View {
+        switch step.status {
+        case "running": ProgressView().controlSize(.mini)
+        case "completed": Image(systemName: "checkmark")
+        case "failed": Image(systemName: "xmark")
+        case "skipped": Image(systemName: "minus")
+        default: Image(systemName: "circle")
+        }
+    }
+
+    private var tint: Color {
+        switch step.status {
+        case "running": return Theme.accent
+        case "completed": return Theme.selection
+        case "failed": return .red
+        case "skipped": return Theme.textTertiary
+        default: return Theme.textTertiary
+        }
+    }
+
+    private var background: Color {
+        switch step.status {
+        case "running": return Theme.accent.opacity(0.15)
+        case "completed": return Theme.selection.opacity(0.15)
+        case "failed": return Color.red.opacity(0.15)
+        case "skipped": return Theme.surfaceElevated
+        default: return Theme.surfaceElevated
+        }
+    }
+}
+
+struct StatusDot: View {
     let status: String
     var body: some View {
         Circle()
@@ -379,9 +425,9 @@ private struct StatusDot: View {
     }
 }
 
-// MARK: - Empty states
+// MARK: - Empty state
 
-private struct EmptyState: View {
+struct EmptyState: View {
     let hasPhoneKey: Bool
     let onStart: () -> Void
     var body: some View {
@@ -392,53 +438,14 @@ private struct EmptyState: View {
             Text("No sandbox runs yet")
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(Theme.textPrimary)
-            Text("Start a run from your phone to spin up a clean E2B sandbox — no PC required.")
+            Text(hasPhoneKey
+                 ? "Tap play to spin up a fresh e2b sandbox and run a command on your repo."
+                 : "Add your e2b.dev key in Settings → Sandboxes (E2B) to start runs from this device.")
                 .font(.system(size: 13))
                 .foregroundStyle(Theme.textSecondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
-            Button(action: onStart) {
-                HStack(spacing: 6) {
-                    Image(systemName: "play.fill")
-                    Text("Start a run")
-                }
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(Theme.background)
-                .padding(.horizontal, 18)
-                .padding(.vertical, 10)
-                .background(Theme.accent, in: Capsule())
-            }
-            .buttonStyle(.plain)
-            if !hasPhoneKey {
-                Text("Add your e2b.dev key in Settings → Sandboxes (E2B) to start runs without a paired desktop.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.textTertiary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 40)
-                    .padding(.top, 4)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-private struct NoDesktopEmptyState: View {
-    let hasKey: Bool
-    let onStart: () -> Void
-    var body: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "shippingbox")
-                .font(.system(size: 40, weight: .light))
-                .foregroundStyle(Theme.textTertiary)
-            Text("No desktop paired")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(Theme.textPrimary)
-            Text("You can still run sandboxes from this device by setting your e2b.dev API key in Settings, then tapping Start a run.")
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.textSecondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
-            if hasKey {
+            if hasPhoneKey {
                 Button(action: onStart) {
                     HStack(spacing: 6) {
                         Image(systemName: "play.fill")
@@ -457,50 +464,12 @@ private struct NoDesktopEmptyState: View {
     }
 }
 
-// MARK: - Key banner
-
-private struct KeyBanner: View {
-    let hasUserKey: Bool
-    let lastStatus: String?
-    var onTapKey: () -> Void
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: hasUserKey ? "key.fill" : "key.slash")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(hasUserKey ? Theme.accent : Theme.textTertiary)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(hasUserKey ? "Using your own E2B key" : "Using the admin-managed E2B key")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Theme.textPrimary)
-                if let lastStatus {
-                    Text(lastStatus)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.textSecondary)
-                }
-            }
-            Spacer()
-            Button(hasUserKey ? "Change" : "Set your own", action: onTapKey)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Theme.accent)
-        }
-        .padding(12)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(Theme.separator.opacity(0.6), lineWidth: 1)
-        )
-    }
-}
-
 // MARK: - Start a run sheet (phone-originated runs)
 
-/// "Start a run" sheet. The user picks a repo (GitHub list or pasted
-/// URL), a branch, and a command. The phone drives the run directly
-/// via e2b.dev — no desktop required.
-private struct StartRunSheet: View {
-    let desktopPaired: Bool
-    let desktopKeyHint: Bool
+/// "Start a run" sheet. The user picks a repo (GitHub list or
+/// pasted URL), a branch, and a preset. The phone drives the
+/// run directly via e2b.dev — no desktop required.
+struct StartRunSheet: View {
     let onStart: (E2bPhoneRunRequest) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -511,6 +480,11 @@ private struct StartRunSheet: View {
     @State private var command: String = "ls -la"
     @State private var showRepoPicker = false
     @State private var hasGitHubToken = false
+    /// When the user picks a preset, the `command` field is
+    /// populated with the manifest's command and locked. Free-form
+    /// command editing requires the "Custom" preset.
+    @State private var preset: RunPreset = .test
+    @State private var manifest: ProjectManifest = .unknown
 
     @EnvironmentObject private var state: AppState
 
@@ -582,23 +556,37 @@ private struct StartRunSheet: View {
                     }
 
                     Section {
-                        TextField("npm test", text: $command, axis: .vertical)
+                        // Preset chips. The chips that don't apply to
+                        // the detected manifest are greyed out so the
+                        // user can't pick something that will fail
+                        // silently. "Custom" is always available.
+                        PresetChipsRow(preset: $preset, manifest: manifest)
+                    } header: {
+                        Text("Run")
+                    } footer: {
+                        Text(presetFooter)
+                            .font(.system(size: 11))
+                    }
+
+                    Section {
+                        TextField("command", text: $command, axis: .vertical)
                             .lineLimit(2...5)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .font(.system(size: 14, design: .monospaced))
+                            .disabled(preset != .custom)
                     } header: {
                         Text("Command")
                     } footer: {
-                        Text("Runs inside the cloned repo at /code. Use shell syntax — e.g. `npm test`, `pytest -q`, `cargo test --quiet`.")
+                        Text(preset == .custom
+                             ? "Runs inside the cloned repo at /code."
+                             : "Auto-filled from the preset. Switch to Custom to edit.")
                             .font(.system(size: 11))
                     }
 
                     Section {
                         Label {
-                            Text(desktopPaired
-                                 ? "Will run from this device (desktop auto-runs stay as-is)."
-                                 : "Will run from this device using your e2b.dev key.")
+                            Text("Runs from this device using your e2b.dev key.")
                         } icon: {
                             Image(systemName: "iphone")
                         }
@@ -623,9 +611,6 @@ private struct StartRunSheet: View {
                 RepositoryPickerSheet()
                     .environmentObject(state)
                     .onDisappear {
-                        // After the picker dismisses, try to grab the
-                        // most recently selected repo from the sheet's
-                        // published state via the global `state`.
                         if let recent = state.selectedRepo {
                             pickedRepo = recent
                             if branch.isEmpty || branch == "main" {
@@ -636,7 +621,28 @@ private struct StartRunSheet: View {
             }
             .onAppear {
                 hasGitHubToken = !(state.githubToken ?? "").isEmpty
+                // Pre-populate the command from the manifest's test
+                // preset so the sheet lands in a useful state.
+                applyPreset(.test)
             }
+            .onChange(of: pickedRepo) { _, _ in
+                // Project manifest detection would happen here once
+                // the user picks a repo — the iOS app would need a
+                // small GitHub contents API call. For the MVP, we
+                // leave the manifest as .unknown; the user can still
+                // pick any preset and the shim will run the chosen
+                // command. A future commit adds manifest detection.
+            }
+        }
+    }
+
+    private var presetFooter: String {
+        switch preset {
+        case .test: return "Runs the project test command (e.g. `npm test`, `pytest -q`)."
+        case .build: return "Runs the project build command (e.g. `npm run build`, `cargo build`)."
+        case .lint: return "Runs the project lint command (e.g. `npm run lint`, `ruff check`)."
+        case .install: return "Just installs dependencies, then exits."
+        case .custom: return "Type any shell command. Use shell syntax — e.g. `pytest -q -k auth`."
         }
     }
 
@@ -656,63 +662,104 @@ private struct StartRunSheet: View {
         case .url:
             repo = .url(url.trimmingCharacters(in: .whitespacesAndNewlines))
         }
+        // The install step is only added when the user picked the
+        // "install" preset — otherwise the shim emits
+        // STEP:install:skipped and falls straight through.
+        let installCommand: String? = {
+            switch preset {
+            case .install: return manifest.installCommand ?? "true"
+            default: return manifest.installCommand
+            }
+        }()
         onStart(E2bPhoneRunRequest(
             repo: repo,
             branch: branch.trimmingCharacters(in: .whitespacesAndNewlines),
             command: command.trimmingCharacters(in: .whitespacesAndNewlines),
+            installCommand: installCommand,
             githubToken: state.githubToken,
+            preset: preset.rawValue,
         ))
+    }
+
+    private func applyPreset(_ p: RunPreset) {
+        preset = p
+        switch p {
+        case .test:
+            command = manifest.testCommand ?? "echo \"(no test command for this project — switch to Custom)\""
+        case .build:
+            command = manifest.buildCommand ?? manifest.testCommand ?? "echo \"(no build command — switch to Custom)\""
+        case .lint:
+            command = manifest.lintCommand ?? "echo \"(no lint command — switch to Custom)\""
+        case .install:
+            command = manifest.installCommand ?? "true"
+        case .custom:
+            // Leave the field alone — the user types into it.
+            break
+        }
     }
 }
 
-// MARK: - E2B key sheet (in-Sandboxes toolbar)
+/// User-facing run preset. Drives the chip row + the `E2bPhoneRunRequest.preset`
+/// string so the Sandboxes view can label the pill ("Test" / "Build" / etc.).
+enum RunPreset: String, CaseIterable, Hashable {
+    case test, build, lint, install, custom
+    var displayName: String {
+        switch self {
+        case .test: return "Test"
+        case .build: return "Build"
+        case .lint: return "Lint"
+        case .install: return "Install"
+        case .custom: return "Custom"
+        }
+    }
+    /// Which presets apply to a given manifest. `custom` is always
+    /// available. Unknown manifests offer all presets via
+    /// "echo" fallbacks (handled in `applyPreset`) so the user can
+    /// still hit Start.
+    static func available(for manifest: ProjectManifest) -> Set<RunPreset> {
+        var s: Set<RunPreset> = [.custom]
+        if manifest.testCommand != nil { s.insert(.test) }
+        if manifest.buildCommand != nil { s.insert(.build) }
+        if manifest.lintCommand != nil { s.insert(.lint) }
+        if manifest.installCommand != nil { s.insert(.install) }
+        return s
+    }
+}
 
-private struct E2bKeySheet: View {
-    let hasUserKey: Bool
-    @Binding var draft: String
-    var onSave: (String) -> Void
-    var onClear: () -> Void
-    @Environment(\.dismiss) private var dismiss
+struct PresetChipsRow: View {
+    @Binding var preset: RunPreset
+    let manifest: ProjectManifest
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                Theme.background.ignoresSafeArea()
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("Desktop E2B key")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(Theme.textPrimary)
-                    Text("Override the admin-managed E2B key on the desktop for this connection. Held in memory only.")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Theme.textSecondary)
-                    SecureField("e2b_…", text: $draft)
-                        .textContentType(.password)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                        .padding(12)
-                        .background(Theme.surfaceElevated, in: RoundedRectangle(cornerRadius: 10))
-                    HStack {
-                        if hasUserKey {
-                            Button(role: .destructive) {
-                                onClear()
-                            } label: {
-                                Text("Clear override")
-                            }
-                        }
-                        Spacer()
-                        Button("Cancel") { dismiss() }
-                            .foregroundStyle(Theme.textSecondary)
-                        Button("Save") { onSave(draft) }
-                            .foregroundStyle(Theme.accent)
-                            .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        let available = RunPreset.available(for: manifest)
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(RunPreset.allCases, id: \.self) { p in
+                    let isAvailable = available.contains(p)
+                    Button {
+                        preset = p
+                    } label: {
+                        Text(p.displayName)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(foreground(for: p, isAvailable: isAvailable))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(background(for: p, isAvailable: isAvailable), in: Capsule())
                     }
-                    Spacer()
+                    .buttonStyle(.plain)
+                    .disabled(!isAvailable)
                 }
-                .padding(20)
             }
-            .navigationTitle("E2B key")
-            .navigationBarTitleDisplayMode(.inline)
         }
-        .presentationDetents([.medium])
+    }
+
+    private func foreground(for p: RunPreset, isAvailable: Bool) -> Color {
+        if !isAvailable { return Theme.textTertiary }
+        return p == preset ? Theme.background : Theme.textPrimary
+    }
+
+    private func background(for p: RunPreset, isAvailable: Bool) -> Color {
+        if !isAvailable { return Theme.surfaceElevated }
+        return p == preset ? Theme.accent : Theme.surfaceElevated
     }
 }

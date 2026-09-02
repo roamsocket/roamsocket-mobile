@@ -264,11 +264,34 @@ private struct CodeBlockView: View {
 
     @State private var showPreview = false
     @State private var didCopy = false
+    @State private var isExpanded: Bool = false
+
+    /// Number of preview lines shown when the block is
+    /// collapsed. Generous enough that a 1-line `bun` or
+    /// `npm` snippet still gets context, but tight enough
+    /// that a 60-line diff / shell transcript doesn't push
+    /// the next message off screen.
+    private static let previewLines: Int = 3
+
+    /// A code block is "expandable" when it has more lines
+    /// than the preview allows. The toggle stays hidden for
+    /// short blocks so a tap doesn't feel like a no-op.
+    private var isExpandable: Bool {
+        let lines = code.components(separatedBy: "\n")
+        // A trailing newline doesn't add a real line; trim
+        // it so a single-line block doesn't suddenly claim
+        // to have two.
+        let nonEmpty = lines.last == "" ? Array(lines.dropLast()) : lines
+        return nonEmpty.count > Self.previewLines
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
             codeBody
+            if isExpandable {
+                expandToggle
+            }
         }
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
@@ -326,18 +349,75 @@ private struct CodeBlockView: View {
 
     @ViewBuilder
     private var codeBody: some View {
-        if kind == .code {
-            HighlightedCodeView(text: code, language: language)
-        } else {
-            ScrollView(.horizontal, showsIndicators: false) {
-                Text(code.isEmpty ? " " : code)
-                    .font(.system(size: 12.5, design: .monospaced))
-                    .foregroundStyle(Theme.textPrimary)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(12)
+        if isExpanded {
+            // Full body — same rendering as the original
+            // CodeBlockView. `.code` keeps the Highlightr
+            // pipeline; `.snippet` keeps the raw horizontal
+            // scroll. Both honour `textSelection` so the
+            // user can copy a specific line.
+            if kind == .code {
+                HighlightedCodeView(text: code, language: language)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    Text(code.isEmpty ? " " : code)
+                        .font(.system(size: 12.5, design: .monospaced))
+                        .foregroundStyle(Theme.textPrimary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                }
             }
+        } else {
+            // Collapsed preview — a plain monospaced `Text`
+            // capped at `previewLines`. We deliberately do
+            // NOT route through Highlightr here so the
+            // preview stays cheap to re-render on every
+            // transcript update, and so an empty / short
+            // block (e.g. a `text` fence the model wrote
+            // without body) still shows a clear preview
+            // rather than an empty Highlightr canvas.
+            let previewText = collapsedPreview
+            Text(previewText.isEmpty ? " " : previewText)
+                .font(.system(size: 12.5, design: .monospaced))
+                .foregroundStyle(Theme.textPrimary)
+                .textSelection(.enabled)
+                .lineLimit(Self.previewLines)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
         }
+    }
+
+    /// First `previewLines` of the body, trimmed. A trailing
+    /// newline (common after the model's fence) is dropped so
+    /// it doesn't count as an empty extra line.
+    private var collapsedPreview: String {
+        let raw = code.components(separatedBy: "\n")
+        let lines = raw.last == "" ? Array(raw.dropLast()) : raw
+        return lines.prefix(Self.previewLines).joined(separator: "\n")
+    }
+
+    // MARK: Expand toggle
+
+    private var expandToggle: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isExpanded.toggle()
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                Text(isExpanded ? "Show less" : "Show more")
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .foregroundStyle(Theme.accent)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+        }
+        .buttonStyle(.plain)
+        .background(Theme.surfaceElevated.opacity(0.6))
+        .contentShape(Rectangle())
     }
 
     // MARK: Preview sheet (snippet only)

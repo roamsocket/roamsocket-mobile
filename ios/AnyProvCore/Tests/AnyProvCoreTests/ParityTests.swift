@@ -184,11 +184,6 @@ final class ParityTests: XCTestCase {
             return ["kind": "transcript_replay", "sessionId": sessionId,
                     "truncated": truncated, "isLive": isLive,
                     "events": events.map(Self.normalize(transcriptEvent:))]
-        case let .e2bList(sessionId, runs):
-            return ["kind": "e2b_list", "sessionId": sessionId as Any? ?? NSNull(),
-                    "runs": runs.map(Self.normalize(e2bRun:))]
-        case let .e2bKeyAck(overrideActive):
-            return ["kind": "e2b_key_ack", "overrideActive": overrideActive]
         default:
             return ["kind": "unhandled_parity_case"]
         }
@@ -210,20 +205,6 @@ final class ParityTests: XCTestCase {
     private static func normalize(tunnel t: ServerMessage.TunnelPayload) -> [String: Any] {
         ["id": t.id, "port": t.port, "provider": t.provider, "status": t.status,
          "url": t.url ?? NSNull()]
-    }
-
-    private static func normalize(e2bRun r: E2bRunPayload) -> [String: Any] {
-        [
-            "id": r.id, "sessionId": r.sessionId, "repoFullName": r.repoFullName,
-            "branch": r.branch, "command": r.command, "status": r.status,
-            "exitCode": r.exitCode as Any? ?? NSNull(),
-            "sandboxId": r.sandboxId as Any? ?? NSNull(),
-            "sandboxUrl": r.sandboxUrl as Any? ?? NSNull(),
-            "startedAt": r.startedAt as Any? ?? NSNull(),
-            "finishedAt": r.finishedAt as Any? ?? NSNull(),
-            "outputTail": r.outputTail,
-            "error": r.error as Any? ?? NSNull(),
-        ]
     }
 
     private static func normalize(transcriptEvent e: ServerMessage.TranscriptEvent) -> [String: Any] {
