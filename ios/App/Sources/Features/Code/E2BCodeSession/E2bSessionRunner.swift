@@ -179,6 +179,18 @@ public actor E2bSessionRunner {
         }
         history.append(.init(role: .assistant, content: finalContent))
 
+        // If the model returned neither text nor tool calls, the
+        // request "succeeded" but produced nothing — usually
+        // because the model doesn't actually support the tool-
+        // calling wire format we sent (chat-only models).
+        // Surfacing this as a thrown error means the view shows
+        // a notice instead of silently dropping the turn. The
+        // user can swap models rather than re-typing the prompt.
+        let trimmed = finalContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        if toolCalls.isEmpty && trimmed.isEmpty {
+            throw StepError.emptyResponse
+        }
+
         guard !toolCalls.isEmpty else {
             return .finished
         }
@@ -217,6 +229,25 @@ public actor E2bSessionRunner {
         case continued
         case finished
         case hitStepLimit
+    }
+
+    /// Errors that surface to the E2B session view as a
+    /// transcript notice (via the existing `catch` arm). Kept
+    /// narrow on purpose — only the cases the user can act on
+    /// (swap models, etc.) belong here.
+    public enum StepError: Error, LocalizedError {
+        /// The model accepted the request and closed the stream
+        /// cleanly but produced no text and no tool calls. The
+        /// E2B agent can do nothing useful with an empty turn,
+        /// so we surface this instead of silently dropping it.
+        case emptyResponse
+
+        public var errorDescription: String? {
+            switch self {
+            case .emptyResponse:
+                return "The model returned an empty response. It may not support the tool-calling format the E2B agent uses — try a different model."
+            }
+        }
     }
 
     public enum StepEvent: Sendable {
