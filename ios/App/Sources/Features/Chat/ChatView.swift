@@ -101,6 +101,17 @@ struct ChatView: View {
             if state.allModels.isEmpty {
                 await state.refreshModels()
             }
+            // Even after the catalog loads, the model pill on
+            // the home screen reads "Add a model" if no
+            // selection has been made yet — the user might
+            // have added an API key in Settings without
+            // explicitly picking a default. Honor any stored
+            // chat default so a configured provider lands
+            // visibly on the composer. The `if let` in
+            // `applyDefault(for:)` is a no-op when a usable
+            // selection already exists, so this never
+            // stomps a deliberate pick.
+            state.applyDefault(for: .chat)
         }
         .onChange(of: resumeToken) {
             // Switching chats / new chat while this screen stays mounted.
