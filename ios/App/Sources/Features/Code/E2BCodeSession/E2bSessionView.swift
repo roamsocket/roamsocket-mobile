@@ -186,8 +186,27 @@ struct E2bSessionView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     if let s = session {
-                        ForEach(s.transcript) { message in
-                            MessageBubble(message: message)
+                        // Find the index of the last `run_shell`
+                        // tool card. Every earlier run_shell
+                        // card renders in a collapsed "header +
+                        // preview" form so a long agent loop
+                        // (e.g. 12+ `run_shell` calls in a row)
+                        // doesn't push the live result off the
+                        // screen. The most recent run_shell and
+                        // all non-run_shell cards stay full-size.
+                        let lastShellIndex = s.transcript
+                            .lastIndex { msg in
+                                msg.kind == .tool
+                                    && ToolCard.toolName(for: msg) == "run_shell"
+                            }
+                        ForEach(Array(s.transcript.enumerated()), id: \.element.id) { index, message in
+                            let isCollapsed: Bool = {
+                                guard message.kind == .tool,
+                                      ToolCard.toolName(for: message) == "run_shell"
+                                else { return false }
+                                return index != lastShellIndex
+                            }()
+                            MessageBubble(message: message, isCollapsed: isCollapsed)
                                 .id(message.id)
                         }
                     }
@@ -742,46 +761,64 @@ struct E2bSessionView: View {
 /// One transcript line rendered as a chat bubble. Tool messages
 /// get a distinct card with a header (icon + tool name + status
 /// pill) and a monospaced output body.
+///
+/// `isCollapsed` is passed through to `run_shell` tool cards so
+/// the transcript can collapse all but the most recent terminal
+/// run. Other tool kinds and non-tool messages ignore the flag.
 private struct MessageBubble: View {
     let message: E2bCodeMessage
+    var isCollapsed: Bool = false
 
     var body: some View {
         switch message.kind {
         case .tool:
-            ToolCard(message: message)
+            ToolCard(message: message, isCollapsed: isCollapsed)
         default:
             textBubble
         }
     }
 
     private var textBubble: some View {
-        HStack {
-            if isUser { Spacer(minLength: 32) }
-            VStack(alignment: isUser ? .trailing : .leading, spacing: 6) {
-                // Show a ThinkingBlock above the bubble for
-                // assistant turns where the model emitted
-                // reasoning (e.g. MiniMax's `<think>…</think>`
-                // text). Same component the chat composer uses
-                // — collapsed grey row, tap → "Thought
-                // process" sheet — so the two surfaces behave
-                // identically.
+        // User messages keep the chat-bubble shape (rounded
+        // background, right-aligned) so the prompt is easy to
+        // scan against the agent's output. Assistant turns
+        // render as in-line markdown — no bubble, no background
+        // — so the response reads as part of the transcript
+        // rather than a chat reply, and fenced code blocks
+        // (file contents, diffs, snippets) get the proper
+        // Highlightr treatment from `MarkdownContentView`.
+        if isUser {
+            return AnyView(
+                HStack {
+                    Spacer(minLength: 32)
+                    VStack(alignment: .trailing, spacing: 6) {
+                        if !message.text.isEmpty {
+                            Text(message.text)
+                                .font(.system(size: 14))
+                                .foregroundStyle(textColor)
+                                .textSelection(.enabled)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(bubbleBackground, in: RoundedRectangle(cornerRadius: 14))
+                        }
+                    }
+                }
+            )
+        }
+        return AnyView(
+            VStack(alignment: .leading, spacing: 6) {
                 if message.kind == .assistant,
                    let thinking = message.thoughtProcess,
                    !thinking.isEmpty {
                     ThinkingBlock(text: thinking)
                 }
                 if !message.text.isEmpty {
-                    Text(message.text)
-                        .font(.system(size: 14))
-                        .foregroundStyle(textColor)
-                        .textSelection(.enabled)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(bubbleBackground, in: RoundedRectangle(cornerRadius: 14))
+                    MarkdownContentView(text: message.text, fontSize: 14)
+                        .foregroundStyle(Theme.textPrimary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            if !isUser { Spacer(minLength: 32) }
-        }
+        )
     }
 
     private var isUser: Bool { message.kind == .user }
@@ -810,8 +847,16 @@ private struct MessageBubble: View {
 /// Tool-call card. Header (icon + tool name + status pill) +
 /// monospaced body. For `edit_file` results the body is rendered
 /// with colour-tinted diff lines (green `+`, red `-`).
+///
+/// `isCollapsed` (set by the parent when this is one of the
+/// older tool calls in a long run) trims the body to the
+/// header plus a handful of preview lines so a stack of
+/// `run_shell` cards doesn't push the live result off the
+/// screen. The user can still expand the card with the
+/// "Show full" / "Show more" affordance.
 private struct ToolCard: View {
     let message: E2bCodeMessage
+    var isCollapsed: Bool = false
     @State private var isExpanded: Bool = false
 
     var body: some View {
@@ -843,6 +888,13 @@ private struct ToolCard: View {
         return lineCount > 20 || body.count > 2_000
     }
 
+    /// Number of lines to show in the collapsed-by-parent
+    /// preview. Bigger than the 20-line "expanded" cap so a
+    /// collapsed card stays compact (just enough to remind
+    /// the user what the prior run did), and the "Show
+    /// full" affordance reveals the rest.
+    private static let collapsedPreviewLines: Int = 3
+
     private var expandToggle: some View {
         Button {
             isExpanded.toggle()
@@ -850,7 +902,7 @@ private struct ToolCard: View {
             HStack(spacing: 4) {
                 Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                     .font(.system(size: 10, weight: .semibold))
-                Text(isExpanded ? "Show less" : "Show more")
+                Text(isExpanded ? "Show less" : (isCollapsed ? "Show full" : "Show more"))
                     .font(.system(size: 11, weight: .medium))
             }
             .foregroundStyle(Theme.accent)
@@ -886,10 +938,20 @@ private struct ToolCard: View {
     @ViewBuilder
     private var output: some View {
         let body = message.text
+        // `isCollapsed` from the parent overrides the
+        // user-controlled `isExpanded` until they tap
+        // "Show full" — otherwise expanding a child would
+        // be confusing while the parent still calls this
+        // "previous run".
+        let showFull = isExpanded && !isCollapsed
         if isDiffBody(body) {
+            let lines = diffLines(body)
+            let visibleLines = (isCollapsed && !showFull)
+                ? Array(lines.prefix(Self.collapsedPreviewLines))
+                : lines
             ScrollView(.horizontal, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(diffLines(body).enumerated()), id: \.offset) { _, line in
+                    ForEach(Array(visibleLines.enumerated()), id: \.offset) { _, line in
                         Text(line.text)
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(line.color)
@@ -900,9 +962,13 @@ private struct ToolCard: View {
             }
             // Expanded view caps at a generous height
             // (1200pt) so a 10k-line diff doesn't blow up
-            // the transcript; collapsed caps at 240pt to
-            // match the existing single-line body.
-            .frame(maxHeight: isExpanded ? 1200 : 240)
+            // the transcript; collapsed-by-user caps at
+            // 240pt to match the existing single-line body;
+            // collapsed-by-parent shows just the preview
+            // lines.
+            .frame(
+                maxHeight: showFull ? 1200 : (isCollapsed ? 140 : 240)
+            )
             .background(Theme.background, in: RoundedRectangle(cornerRadius: 6))
         } else {
             ScrollView(.horizontal, showsIndicators: false) {
@@ -910,19 +976,37 @@ private struct ToolCard: View {
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(Theme.textPrimary)
                     .textSelection(.enabled)
-                    // Collapsed: 20-line cap. Expanded:
-                    // unbounded so the user can scroll the
-                    // full output inside the scrollview.
-                    .lineLimit(isExpanded ? nil : 20)
+                    .lineLimit(lineLimitForState(showFull: showFull))
                     .padding(8)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxHeight: isExpanded ? 1200 : 240)
+            .frame(
+                maxHeight: showFull ? 1200 : (isCollapsed ? 110 : 240)
+            )
             .background(Theme.background, in: RoundedRectangle(cornerRadius: 6))
         }
     }
 
+    /// `lineLimit` for the body. Three states, in priority
+    /// order: parent-collapsed (small preview) wins over the
+    /// user-toggled expand/collapse, so opening a child card
+    /// doesn't blow up the transcript.
+    private func lineLimitForState(showFull: Bool) -> Int? {
+        if isCollapsed && !showFull { return Self.collapsedPreviewLines }
+        if showFull { return nil }
+        return 20
+    }
+
     private var toolName: String {
+        Self.toolName(for: message)
+    }
+
+    /// Tool-name lookup used by both `ToolCard` (to render
+    /// the header icon + status pill) and the transcript
+    /// `ForEach` (to decide which older cards to collapse).
+    /// Mirrors the runner's status pill heuristics so the
+    /// header always agrees with the body.
+    static func toolName(for message: E2bCodeMessage) -> String {
         if let t = message.tool, t.contains(" — ") {
             return String(t.split(separator: " — ").first ?? Substring(t))
         }
