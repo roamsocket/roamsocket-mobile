@@ -404,60 +404,56 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
             while tagSearch < block.endIndex {
                 guard let openAngle = block[tagSearch...].firstIndex(of: "<") else { break }
                 let afterOpen = block.index(after: openAngle)
-                // Tag name: letters / digits / underscore / dash,
-                // terminated by whitespace or `>`.
+                // Tag name: letters / digits / underscore / dash /
+                // space. Some MiniMax outputs have whitespace
+                // inside the open angle (e.g. `< command>`,
+                // `< command >`) — accept that rather than
+                // dropping the value.
                 var nameEnd = afterOpen
                 while nameEnd < block.endIndex,
                       let c = block[nameEnd].unicodeScalars.first,
                       (CharacterSet.letters.contains(c) ||
                        CharacterSet.decimalDigits.contains(c) ||
-                       c == "_" || c == "-") {
+                       c == "_" || c == "-" || c == " ") {
                     nameEnd = block.index(after: nameEnd)
                 }
-                guard nameEnd > afterOpen,
-                      block[nameEnd] == ">",
-                      let closeAngle = block[nameEnd...].firstIndex(of: "<"),
-                      block[closeAngle...].hasPrefix("</")
-                else {
-                    // No more parseable tag on this line — bail.
-                    break
-                }
                 let tagName = String(block[afterOpen..<nameEnd])
-                // Match `</tagName>` exactly so we don't accidentally
-                // close on a similarly-named inner tag.
-                let expectedCloseStart = closeAngle
-                let closeTagNameStart = block.index(after: expectedCloseStart)
-                guard closeTagNameStart < block.endIndex,
-                      block[closeTagNameStart] == "/"
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !tagName.isEmpty,
+                      nameEnd < block.endIndex,
+                      block[nameEnd] == ">",
+                      let closeAngle = block[block.index(after: nameEnd)...].firstIndex(of: "<")
                 else {
-                    // Malformed close tag — skip.
-                    tagSearch = block.index(after: openAngle)
-                    continue
-                }
-                let closeTagNameAfterSlash = block.index(after: closeTagNameStart)
-                var closeNameEnd = closeTagNameAfterSlash
-                while closeNameEnd < block.endIndex,
-                      let c = block[closeNameEnd].unicodeScalars.first,
-                      (CharacterSet.letters.contains(c) ||
-                       CharacterSet.decimalDigits.contains(c) ||
-                       c == "_" || c == "-") {
-                    closeNameEnd = block.index(after: closeNameEnd)
-                }
-                guard closeNameEnd < block.endIndex,
-                      block[closeNameEnd] == ">"
-                else {
-                    // Malformed close tag — skip.
-                    tagSearch = block.index(after: openAngle)
-                    continue
-                }
-                let closeTagName = String(block[closeTagNameAfterSlash..<closeNameEnd])
-                guard closeTagName == tagName else {
-                    // Mismatched close tag — skip this open.
+                    // No parseable open tag on this stretch —
+                    // skip past it and try again.
                     tagSearch = block.index(after: openAngle)
                     continue
                 }
                 let valueStart = block.index(after: nameEnd)
-                let valueEnd = expectedCloseStart
+                let valueEnd = closeAngle
+                // Be lenient about the close tag: anything that
+                // starts with `</` and ends at the first `>`
+                // after the value is treated as the close, even
+                // if the name is missing, has whitespace, or
+                // doesn't match. MiniMax has shipped every
+                // variant of this in the wild (`</command>`,
+                // `</ command>`, `</invoke>`, a stray
+                // `</tool_call>` mid-block, etc.) and the
+                // user-visible contract is "first `</` after
+                // the open tag closes the value".
+                let closeStart = block.index(after: valueEnd)
+                if closeStart < block.endIndex,
+                   block[closeStart...] == "/" || block[closeStart...].hasPrefix("/") {
+                    if let closeAngleEnd = block[closeStart...].firstIndex(of: ">") {
+                        tagSearch = block.index(after: closeAngleEnd)
+                    } else {
+                        tagSearch = block.endIndex
+                    }
+                } else {
+                    // No close tag at all — take the rest of
+                    // the block as the value and stop.
+                    tagSearch = block.endIndex
+                }
                 let raw = String(block[valueStart..<valueEnd])
                 let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
                 if let data = trimmed.data(using: .utf8),
@@ -467,8 +463,6 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
                 } else {
                     inputObject[tagName] = trimmed
                 }
-                // Continue scanning after the close tag.
-                tagSearch = block.index(after: closeNameEnd)
             }
             hits.append(Hit(
                 markerStart: marker.start,

@@ -963,6 +963,27 @@ final class DirectE2BClientTests: XCTestCase {
         XCTAssertEqual(parsed.content, raw)
     }
 
+    /// MiniMax sometimes ships the close tag with stray
+    /// whitespace (`</ command>` instead of `</command>`) and
+    /// dangling end tags (`</invoke>`, `</tool_call>`)
+    /// mid-block. The parser must still extract the value
+    /// because the e2b agent would otherwise print the
+    /// command text and never run it.
+    func testParseProviderTextToolCallsTolerantCloseTags() {
+        let raw = "[tool_call: run_shell]<command>ls /code</ command></invoke>"
+        let parsed = OpenAICompatibleAgentLLM.parseProviderTextToolCalls(raw)
+        XCTAssertEqual(parsed.toolCalls.count, 1, "expected one parsed call; content=\(parsed.content)")
+        XCTAssertEqual(parsed.toolCalls.first?.name, "run_shell")
+        let args = try! XCTUnwrap(
+            try? JSONSerialization.jsonObject(with: Data(parsed.toolCalls[0].argumentsJSON.utf8)) as? [String: Any]
+        )
+        XCTAssertEqual(
+            args["command"] as? String,
+            "ls /code",
+            "value must be extracted despite the malformed close tag; argumentsJSON=\(parsed.toolCalls[0].argumentsJSON)"
+        )
+    }
+
     // MARK: - Stream timeout (hanging-model guard)
 
     /// When a model accepts the request but never sends a
