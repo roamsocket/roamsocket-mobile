@@ -130,17 +130,26 @@ public enum DirectE2BError: Error, LocalizedError {
 /// Out-of-session client for the E2B.dev HTTP API. Used when the user
 /// wants to spin up a sandbox from the phone without a paired desktop.
 ///
-/// Implementation note: e2b.dev exposes a full envd Connect-RPC API for
-/// the general `base` template. Implementing Connect-RPC + protobuf from
-/// scratch in Swift is a large lift, so this MVP routes shell commands
-/// through the simpler `code-interpreter` template's JSON streaming
-/// endpoint. The shell command runs inside a Python `subprocess` that
-/// streams each line back through the code-interpreter NDJSON response.
+/// Wiring note: the iOS app talks to the *base* sandbox template via
+/// envd's `process.Process/Start` Connect-RPC endpoint. We don't use the
+/// code-interpreter template's `/execute` anymore — that path was a
+/// Python shim that ran inside a Jupyter kernel, and the kernel's
+/// auto-indent prepended env-var code to our script, which was the
+/// source of the "invalid syntax" failures on first run. The envd
+/// `bash -l -c "<script>"` route takes a plain string and runs it as a
+/// real shell, so the clone + checkout + user command all flow through
+/// the envd HTTP API with no Python involved.
 public final class DirectE2BClient: @unchecked Sendable {
     /// e2b's API host. Public — the desktop runner uses the same one.
     public static let apiHost = "api.e2b.dev"
-    public static let codeInterpreterPort = 49999
-    public static let codeInterpreterTemplate = "code-interpreter-beta"
+    /// envd is the daemon inside every sandbox. It speaks Connect-RPC on
+    /// this port and is the canonical way to run shell commands.
+    public static let envdPort = 49_983
+    /// `base` is the default e2b template; it's the smallest envd-only
+    /// image and has `git`, `bash`, etc. preinstalled.
+    public static let defaultTemplate = "base"
+    /// Connect-RPC streaming endpoint inside the sandbox.
+    public static let processStartPath = "/process.Process/Start"
 
     private let http: HTTPClient
     private let apiKey: String
@@ -161,7 +170,7 @@ public final class DirectE2BClient: @unchecked Sendable {
     /// Create a fresh sandbox. Returns the e2b sandbox id and the
     /// "X-Access-Token" the sandbox returned; the token is needed to
     /// authenticate follow-up calls into the sandbox itself.
-    public func createSandbox(template: String = DirectE2BClient.codeInterpreterTemplate, timeoutMs: Int = 600_000) async throws -> E2bSandboxInfo {
+    public func createSandbox(template: String = DirectE2BClient.defaultTemplate, timeoutMs: Int = 600_000) async throws -> E2bSandboxInfo {
         let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw DirectE2BError.noApiKey }
 
@@ -170,9 +179,12 @@ public final class DirectE2BClient: @unchecked Sendable {
         req.setValue(trimmed, forHTTPHeaderField: "X-API-Key")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("anyprov-code", forHTTPHeaderField: "User-Agent")
+        // e2b's hard cap is 1 hour. Clamp anything larger so we never
+        // burn the user a 24-hour sandbox by accident.
+        let clamped = max(60_000, min(timeoutMs, 3_600_000))
         let body: [String: Any] = [
             "templateID": template,
-            "timeout": timeoutMs,
+            "timeout": clamped,
         ]
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
@@ -219,12 +231,22 @@ public final class DirectE2BClient: @unchecked Sendable {
         _ = try? await http.data(for: req)
     }
 
-    // MARK: - Run a shell command via the code-interpreter shim
+    // MARK: - Run a shell command via envd
 
-    /// Build the Python shim that clones `repo`, checks out `branch`,
-    /// then runs `command`. Output is streamed back via the
-    /// code-interpreter's NDJSON response.
-    private static func buildShimScript(repo: E2bPhoneRepoSelection, branch: String, command: String, githubToken: String?) -> String {
+    /// Build the shell snippet that clones `repo`, checks out `branch`,
+    /// and runs `command`. Returns the raw string passed to
+    /// `bash -l -c` — no Python involved.
+    ///
+    /// Behaviour notes:
+    ///   * `--depth 1` keeps the clone cheap on the e2b VM.
+    ///   * We always fetch the requested branch shallowly, because the
+    ///     initial `--depth 1` clone only checks out the repo's default
+    ///     branch. Without the second fetch, a non-default branch would
+    ///     fail `git checkout` with "reference not found".
+    ///   * Each step exits early on failure so we never silently run
+    ///     the user's command on top of a half-cloned repo.
+    ///   * The script is plain bash — it goes through envd unchanged.
+    internal static func buildShellScript(repo: E2bPhoneRepoSelection, branch: String, command: String, githubToken: String?) -> String {
         // `git clone` URL. For private GitHub repos we inject the token
         // as a basic-auth user (`oauth2:<token>@github.com/...`).
         let cloneURL: String
@@ -238,89 +260,14 @@ public final class DirectE2BClient: @unchecked Sendable {
         case let .url(u):
             cloneURL = u
         }
-        // shlex.quote() prevents command injection from the user's
-        // command string.
-        let quotedBranch = PythonQuote.escape(branch)
-        let quotedURL = PythonQuote.escape(cloneURL)
-        let quotedCommand = PythonQuote.escape(command)
-        // The shim writes to /code (code-interpreter's default cwd).
-        // The streaming contract:
-        //   STDOUT:<line>\n
-        //   STDERR:<line>\n
-        //   EXIT:<code>\n
-        // The caller (this client) splits each NDJSON record on the
-        // first ':' to recover the stream type and the line.
         return """
-        import subprocess, sys, os, shlex
-
-        def emit(stream, line):
-            sys.stdout.write(f"{stream.upper()}:{line}")
-            if not line.endswith("\\n"):
-                sys.stdout.write("\\n")
-            sys.stdout.flush()
-
-        # 1. Clone the repo into /code.
-        clone_url = \(quotedURL)
-        branch = \(quotedBranch)
-        proc = subprocess.run(
-            ["git", "clone", "--depth", "1", clone_url, "/code"],
-            capture_output=True, text=True,
-        )
-        for line in proc.stdout.splitlines():
-            emit("stdout", line)
-        for line in proc.stderr.splitlines():
-            emit("stderr", line)
-        if proc.returncode != 0:
-            emit("exit", f"clone-failed:{proc.returncode}")
-            sys.exit(0)
-
-        # 2. Switch to the requested branch (depth-1 only has one
-        #    branch — fetch the other one if needed).
-        try:
-            proc = subprocess.run(
-                ["git", "fetch", "--depth", "1", "origin", branch],
-                cwd="/code", capture_output=True, text=True,
-            )
-            for line in proc.stderr.splitlines():
-                emit("stderr", line)
-            subprocess.run(
-                ["git", "checkout", branch],
-                cwd="/code", check=True, capture_output=True, text=True,
-            )
-        except Exception as exc:
-            emit("stderr", f"checkout failed: {exc}")
-            emit("exit", "checkout-failed")
-            sys.exit(0)
-
-        # 3. Run the user command with live streaming.
-        try:
-            proc = subprocess.Popen(
-                \(quotedCommand),
-                shell=True,
-                cwd="/code",
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
-            )
-        except Exception as exc:
-            emit("stderr", f"launch failed: {exc}")
-            emit("exit", "launch-failed")
-            sys.exit(0)
-
-        import threading
-        def pump(stream, label):
-            for line in stream:
-                emit(label, line.rstrip("\\n"))
-            stream.close()
-        t_out = threading.Thread(target=pump, args=(proc.stdout, "stdout"), daemon=True)
-        t_err = threading.Thread(target=pump, args=(proc.stderr, "stderr"), daemon=True)
-        t_out.start()
-        t_err.start()
-        proc.wait()
-        t_out.join(timeout=2)
-        t_err.join(timeout=2)
-        emit("exit", str(proc.returncode))
+        set -e
+        rm -rf /code
+        git clone --depth 1 \(ShellQuote.escape(cloneURL)) /code
+        cd /code
+        git fetch --depth 1 origin \(ShellQuote.escape(branch))
+        git checkout \(ShellQuote.escape(branch))
+        \(command)
         """
     }
 
@@ -368,24 +315,33 @@ public final class DirectE2BClient: @unchecked Sendable {
         run.status = "running"
         onEvent(.log(stream: "stdout", line: "Sandbox ready: \(sandbox.sandboxId)"))
 
-        // 2. POST the Python shim to the code-interpreter execute endpoint
-        //    and stream the NDJSON response.
-        let script = DirectE2BClient.buildShimScript(
+        // 2. POST the shell script to envd's process.Process/Start and
+        //    stream back the Connect-RPC envelopes.
+        let script = DirectE2BClient.buildShellScript(
             repo: request.repo,
             branch: request.branch,
             command: request.command,
             githubToken: request.githubToken,
         )
-        let executeURL = URL(string: "https://\(DirectE2BClient.codeInterpreterPort)-\(sandbox.sandboxId).\(sandbox.domain)/execute")!
-        var req = URLRequest(url: executeURL)
+        let startURL = URL(string: "https://\(DirectE2BClient.envdPort)-\(sandbox.sandboxId).\(sandbox.domain)\(DirectE2BClient.processStartPath)")!
+        var req = URLRequest(url: startURL)
         req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/connect+json", forHTTPHeaderField: "Content-Type")
+        req.setValue("1", forHTTPHeaderField: "Connect-Protocol-Version")
         req.setValue("anyprov-code", forHTTPHeaderField: "User-Agent")
         if let token = sandbox.accessToken {
             req.setValue(token, forHTTPHeaderField: "X-Access-Token")
         }
-        let body: [String: Any] = ["code": script]
-        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        // Connect envelope: 1 byte flags + 4 bytes big-endian length + JSON.
+        // Flags byte 0 = no compression, not end-of-stream.
+        let body: [String: Any] = [
+            "process": [
+                "cmd": "bash",
+                "args": ["-l", "-c", script],
+            ],
+        ]
+        let json = (try? JSONSerialization.data(withJSONObject: body)) ?? Data()
+        req.httpBody = ConnectEnvelope.wrap(json)
 
         let session = URLSession.shared
         var exitCode: Int?
@@ -395,33 +351,21 @@ public final class DirectE2BClient: @unchecked Sendable {
             guard let http = response as? HTTPURLResponse,
                   (200..<300).contains(http.statusCode) else {
                 let code = (response as? HTTPURLResponse)?.statusCode ?? -1
-                throw DirectE2BError.stream("execute HTTP \(code)")
+                throw DirectE2BError.stream("start HTTP \(code)")
             }
-            for try await line in bytes.lines {
-                // Each line is `STREAM:value` (or `EXIT:code`).
-                if let sep = line.firstIndex(of: ":") {
-                    let kind = String(line[..<sep])
-                    let value = String(line[line.index(after: sep)...])
-                    switch kind {
-                    case "STDOUT":
-                        onEvent(.log(stream: "stdout", line: value))
-                    case "STDERR":
-                        onEvent(.log(stream: "stderr", line: value))
-                    case "EXIT":
-                        if value.hasPrefix("clone-failed:") {
-                            streamError = "git clone failed (exit \(value.dropFirst("clone-failed:".count)))"
-                        } else if value == "checkout-failed" {
-                            streamError = "git checkout failed"
-                        } else if value == "launch-failed" {
-                            streamError = "command launch failed"
-                        } else {
-                            exitCode = Int(value)
-                        }
-                    default:
-                        onEvent(.log(stream: "stdout", line: line))
+            for try await event in ConnectEnvelope.stream(bytes) {
+                switch event {
+                case .start(let pid):
+                    onEvent(.log(stream: "stdout", line: "Started pid \(pid)"))
+                case let .data(stream, text):
+                    onEvent(.log(stream: stream, line: text))
+                case let .end(code, error):
+                    if let code {
+                        exitCode = Int(code)
                     }
-                } else {
-                    onEvent(.log(stream: "stdout", line: line))
+                    if let error, !error.isEmpty {
+                        streamError = error
+                    }
                 }
             }
         } catch {
@@ -463,14 +407,157 @@ public struct E2bSandboxInfo: Sendable, Hashable {
     }
 }
 
-/// Python shlex.quote replacement. Matches CPython's behavior: wraps
-/// the string in single quotes and escapes any embedded single quotes
-/// by closing + escaping + reopening the string.
-private enum PythonQuote {
+// MARK: - Connect streaming envelope
+
+/// Connect-RPC streaming uses a 5-byte envelope per message: 1 byte
+/// bitwise flags + 4 bytes big-endian message length, followed by the
+/// message payload (JSON for `application/connect+json`). Bit 0 of
+/// the flags byte = compressed (we never set it). Bit 1 = end-of-stream
+/// (set on the final envelope, with no payload).
+///
+/// See https://connectrpc.com/docs/protocol/ — the envelope layout is
+/// identical across connect-go, connect-web, and the envd daemon.
+enum ConnectEnvelope {
+    static let flagEndStream: UInt8 = 0b0000_0010
+
+    /// Wrap a single request body in the 5-byte Connect envelope.
+    static func wrap(_ payload: Data) -> Data {
+        var out = Data(capacity: 5 + payload.count)
+        out.append(0) // flags = 0 (uncompressed, not end-of-stream)
+        var length = UInt32(payload.count).bigEndian
+        withUnsafeBytes(of: &length) { out.append(contentsOf: $0) }
+        out.append(payload)
+        return out
+    }
+
+    enum Event {
+        case start(pid: Int)
+        /// Decoded text from one chunk. The e2b SDK uses incremental
+        /// UTF-8 decoding and treats bytes as `text/plain`, so we
+        /// convert the bytes to a String lossily here — partial
+        /// sequences at chunk boundaries surface as replacement chars,
+        /// which is the same behaviour the official SDK documents.
+        case data(stream: String, text: String)
+        case end(exitCode: Double?, error: String?)
+    }
+
+    /// Parse a stream of Connect envelopes out of `bytes`. Yields one
+    /// `Event` per envelope and finishes on the end-of-stream marker
+    /// or on a clean end-of-stream.
+    static func stream(_ bytes: URLSession.AsyncBytes) -> AsyncThrowingStream<Event, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                var buffer = Data()
+                do {
+                    for try await byte in bytes {
+                        buffer.append(byte)
+                        while let event = try parseNextEvent(from: &buffer) {
+                            if case .end = event {
+                                continuation.yield(event)
+                                continuation.finish()
+                                return
+                            }
+                            continuation.yield(event)
+                        }
+                    }
+                    // Server closed the stream without an end marker —
+                    // surface as a soft end so callers can still report
+                    // exit code 0 if data came through.
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// Pull one fully-formed envelope off the front of `buffer` and
+    /// return its decoded event. Returns `nil` if there isn't a full
+    /// envelope yet.
+    private static func parseNextEvent(from buffer: inout Data) throws -> Event? {
+        guard buffer.count >= 5 else { return nil }
+        let flags = buffer[0]
+        let length = (UInt32(buffer[1]) << 24)
+            | (UInt32(buffer[2]) << 16)
+            | (UInt32(buffer[3]) << 8)
+            | UInt32(buffer[4])
+        let total = 5 + Int(length)
+        guard buffer.count >= total else { return nil }
+        let payload = buffer.subdata(in: 5..<total)
+        buffer.removeSubrange(0..<total)
+        if flags & flagEndStream != 0 {
+            return .end(exitCode: nil, error: nil)
+        }
+        return try decode(payload)
+    }
+
+    private static func decode(_ payload: Data) throws -> Event {
+        let json = try JSONSerialization.jsonObject(with: payload)
+        // The Connect envelope wraps the protobuf JSON in a top-level
+        // `event` object, and inside that the actual `ProcessEvent`
+        // oneof. We unroll it here without a protobuf dep.
+        guard let outer = json as? [String: Any],
+              let event = outer["event"] as? [String: Any] else {
+            throw DirectE2BError.stream("unexpected envd envelope: missing event")
+        }
+        if let start = event["start"] as? [String: Any] {
+            let pid = (start["pid"] as? NSNumber)?.intValue ?? 0
+            return .start(pid: pid)
+        }
+        if let data = event["data"] as? [String: Any],
+           let output = data["output"] as? [String: Any] {
+            let (streamKey, raw) = decodeOutput(output)
+            let text = decodeBytes(raw)
+            return .data(stream: streamKey, text: text)
+        }
+        if let end = event["end"] as? [String: Any] {
+            let code: Double? = (end["exitCode"] as? NSNumber)?.doubleValue
+                ?? (end["exit_code"] as? NSNumber)?.doubleValue
+            let error = end["error"] as? String
+            return .end(exitCode: code, error: error)
+        }
+        throw DirectE2BError.stream("unknown envd event: \(event.keys.sorted())")
+    }
+
+    /// The connect+json wire format encodes the `output` oneof with the
+    /// stream field name as the key (`stdout` or `stderr`) and the
+    /// bytes as a base64 string. Return (stream label, raw value).
+    private static func decodeOutput(_ output: [String: Any]) -> (String, Any) {
+        if let raw = output["stdout"] { return ("stdout", raw) }
+        if let raw = output["stderr"] { return ("stderr", raw) }
+        if let raw = output["pty"] { return ("pty", raw) }
+        return ("stdout", "")
+    }
+
+    private static func decodeBytes(_ raw: Any) -> String {
+        if let s = raw as? String {
+            // e2b's connect+json path uses base64 because the field
+            // is `bytes` in the proto. Decode, then take the UTF-8
+            // view. The official SDK uses an incremental decoder that
+            // surfaces partial sequences as U+FFFD; we approximate
+            // that with `String(decoding:as:)` which is loss-free for
+            // complete chunks and replaces invalid bytes for partials.
+            if let data = Data(base64Encoded: s) {
+                return String(decoding: data, as: UTF8.self)
+            }
+            return s
+        }
+        if let data = raw as? Data {
+            return String(decoding: data, as: UTF8.self)
+        }
+        return ""
+    }
+}
+
+/// Single-quoted shell escape. `bash -l -c` doesn't go through another
+/// level of escaping, so this is the safe shape: wrap in single quotes
+/// and close+escape+reopen for any embedded single quote.
+enum ShellQuote {
     static func escape(_ value: String) -> String {
         if value.isEmpty { return "''" }
         let safe = CharacterSet.alphanumerics
-            .union(CharacterSet(charactersIn: "_-./:=@%+,"))
+            .union(CharacterSet(charactersIn: "_-./:=@%+,~"))
         if value.unicodeScalars.allSatisfy({ safe.contains($0) }) {
             return value
         }

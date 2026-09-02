@@ -17,6 +17,7 @@ sessions and code review.
 | File | Covers | Read when… |
 |------|--------|------------|
 | [`provider-response-quirks.md`](./provider-response-quirks.md) | Provider-specific leaks in plain-text SSE output (`<think>`, DeepSeek full-width `｜…｜`, Qwen3 missing-open, etc.) | …you're editing `ios/AnyProvCore/...` chat parsers, `ThinkingExtractor`, or any provider response normalization |
+| [`e2b-envd-protocol.md`](./e2b-envd-protocol.md) | e2b envd `process.Process/Start` Connect-RPC wire format + why the phone-originated run path now uses `base`/envd instead of the code-interpreter template | …you're editing `ios/AnyProvCore/Sources/AnyProvCore/Sandboxes/DirectE2BClient.swift` (or its Android twin) |
 
 ## Conventions used across these docs
 
