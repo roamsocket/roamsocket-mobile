@@ -321,6 +321,59 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
         let parsedJSON: Any?
     }
 
+    /// Parse the body of MiniMax M3's newest shape: a *log* of
+    /// an imagined shell run rather than a structured
+    /// parameter list. The model writes:
+    ///
+    ///     [tool: ?] <command>
+    ///     --- stdout ---
+    ///     <fabricated output>
+    ///     --- stderr ---
+    ///     <fabricated error>
+    ///
+    /// and emits one such block per imagined call. Only the
+    /// first line is real — the `--- stdout ---` / `--- stderr
+    /// ---` sections are the model confabulating results the
+    /// e2b sandbox has not actually produced. We extract the
+    /// command, return it under the `command` key, and mark
+    /// the whole block consumed so the visible text drops the
+    /// fabricated output. The real e2b sandbox will produce
+    /// the authoritative result on dispatch and the runner
+    /// appends that to the transcript.
+    ///
+    /// The name field is irrelevant here — the dispatch
+    /// decision is made by the marker (`[tool: ?]` defaults
+    /// to `run_shell`). The body itself only contributes
+    /// `command`.
+    nonisolated static func parseLogStyleToolCallBody(_ raw: String)
+        -> (input: [String: Any], consumed: [(Int, Int)])
+    {
+        let ns = raw as NSString
+        let total = ns.length
+        // First line: from index 0 to the first newline, or
+        // the whole body if there is no newline. MiniMax
+        // puts the command on the same line as the marker
+        // (after a single space), so the first line of the
+        // body is the command.
+        let firstLineEnd: Int
+        if total == 0 {
+            firstLineEnd = 0
+        } else {
+            let nlRange = ns.range(of: "\n", range: NSRange(location: 0, length: total))
+            firstLineEnd = nlRange.location == NSNotFound ? total : Int(nlRange.location)
+        }
+        let command = ns.substring(
+            with: NSRange(location: 0, length: firstLineEnd)
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+        // Consume the whole block — the model's stdout /
+        // stderr is fabrication. The e2b sandbox result
+        // replaces it on the next dispatch.
+        if total == 0 {
+            return (["command": command], [])
+        }
+        return (["command": command], [(0, total)])
+    }
+
     /// Parse a single tool-call body (the text between the
     /// `[tool_call: name]` opener and the next marker or end of
     /// text). Two shapes are supported; both come from MiniMax
@@ -453,12 +506,32 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
         if !fromTags.isEmpty {
             return (fromTags, consumed)
         }
-        // 2. Key-value shape. Each `key=value` line contributes
-        //    an entry. Line ranges are recorded so the caller
-        //    can strip them from the cleaned text.
+        // 2. Key-value shape. Each `key=value` entry
+        //    contributes a value. Entries can appear on their
+        //    own line (`id=…\ninput={…}`) or on a single line
+        //    (`id=… input={…}` — MiniMax M3's newest emit
+        //    when it stuffs the structured form inside
+        //    `[tool_call: read_file id=… input={…}]`). The
+        //    pattern is `key=value` where the value is a
+        //    balanced JSON object / array or a run of
+        //    non-whitespace characters. Line ranges are
+        //    recorded so the caller can strip them from the
+        //    cleaned text.
         var fromKeyValue: [String: Any] = [:]
         var kvConsumed: [(Int, Int)] = []
         var lineStart = 0
+        // Cached regex for the key-value pattern. Values:
+        // 1. `{...}` — balanced JSON object (no nested braces,
+        //    which is fine for the parameter payloads the
+        //    model emits).
+        // 2. `[...]` — balanced JSON array, same constraint.
+        // 3. `\S+` — a single non-whitespace token (the call
+        //    id, a bare string, etc.).
+        let kvPattern = #"([A-Za-z_][A-Za-z0-9_]*)=(\{(?:[^{}]|\{[^{}]*\})*\}|\[(?:[^\[\]]|\[[^\[\]]*\])*\]|\S+)"#
+        let kvRegex = try? NSRegularExpression(
+            pattern: kvPattern,
+            options: []
+        )
         while lineStart <= total {
             // Find the next newline in the body.
             let searchRange = NSRange(
@@ -474,27 +547,52 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
             if lineRange.length > 0 {
                 let line = ns.substring(with: lineRange)
                 let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmedLine.isEmpty,
-                   let equals = trimmedLine.firstIndex(of: "=")
-                {
-                    let key = String(trimmedLine[..<equals])
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    if key != "id" && key != "name" && !key.isEmpty {
-                        let value = String(trimmedLine[trimmedLine.index(after: equals)...])
-                            .trimmingCharacters(in: .whitespacesAndNewlines)
-                        kvConsumed.append((lineStart, newlineIdx - lineStart))
-                        if let data = value.data(using: .utf8),
-                           let parsed = try? JSONSerialization.jsonObject(with: data),
-                           !(parsed is NSNull)
-                        {
-                            if key == "input", let dict = parsed as? [String: Any] {
-                                for (k, v) in dict { fromKeyValue[k] = v }
+                if !trimmedLine.isEmpty {
+                    // Collect every `key=value` match on the
+                    // line. If we find at least one, the whole
+                    // line is consumed (caller strips it from
+                    // the visible text).
+                    var matchedAny = false
+                    if let regex = kvRegex {
+                        let matchRange = NSRange(
+                            location: 0,
+                            length: (trimmedLine as NSString).length
+                        )
+                        regex.enumerateMatches(
+                            in: trimmedLine,
+                            options: [],
+                            range: matchRange
+                        ) { match, _, _ in
+                            guard let match = match,
+                                  match.numberOfRanges == 3
+                            else { return }
+                            let keyNSRange = match.range(at: 1)
+                            let valueNSRange = match.range(at: 2)
+                            guard let keyRange = Range(keyNSRange, in: trimmedLine),
+                                  let valueRange = Range(valueNSRange, in: trimmedLine)
+                            else { return }
+                            let key = String(trimmedLine[keyRange])
+                                .trimmingCharacters(in: .whitespacesAndNewlines)
+                            let value = String(trimmedLine[valueRange])
+                                .trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !key.isEmpty, key != "id", key != "name" else { return }
+                            matchedAny = true
+                            if let data = value.data(using: .utf8),
+                               let parsed = try? JSONSerialization.jsonObject(with: data),
+                               !(parsed is NSNull)
+                            {
+                                if key == "input", let dict = parsed as? [String: Any] {
+                                    for (k, v) in dict { fromKeyValue[k] = v }
+                                } else {
+                                    fromKeyValue[key] = parsed
+                                }
                             } else {
-                                fromKeyValue[key] = parsed
+                                fromKeyValue[key] = value
                             }
-                        } else {
-                            fromKeyValue[key] = value
                         }
+                    }
+                    if matchedAny {
+                        kvConsumed.append((lineStart, newlineIdx - lineStart))
                     }
                 }
             }
@@ -509,15 +607,64 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
     ///
     ///     `<think>…</think> [tool_call: run_shell]<command>ls /code</command>`
     ///
-    /// Each `[tool_call: name]` is followed by one or more
-    /// `<param>value</param>` blocks; the body of each block is
-    /// treated as a string unless it parses as JSON, in which
-    /// case the parsed value is used (lets `write_file` and
-    /// friends pass nested objects). Returns the visible
-    /// content with thinking + tool-call markup stripped so
-    /// the user never sees raw provider XML.
+    /// and the newer log-style emit:
+    ///
+    ///     `[tool: ?] <command>\n--- stdout ---\n<output>\n--- stderr ---\n<error>`
+    ///
+    /// For the structured marker (`[tool_call: name]`) the
+    /// body uses `<param>value</param>` blocks (each block's
+    /// value is treated as a string unless it parses as JSON,
+    /// in which case the parsed value is used — lets
+    /// `write_file` and friends pass nested objects). For the
+    /// log-style marker (`[tool: <name>]`), the body is the
+    /// model's imagined run log: only the first line is real
+    /// (the command), the `--- stdout ---` / `--- stderr ---`
+    /// sections are fabrication. We extract the command and
+    /// drop the rest from the visible text — the e2b sandbox
+    /// produces the authoritative result on dispatch. Returns
+    /// the visible content with thinking + tool-call markup
+    /// stripped so the user never sees raw provider XML.
     nonisolated static func parseProviderTextToolCalls(_ raw: String) -> ProviderTextResult {
         var text = raw
+
+        // 0. Normalise the "stuffed" key-value marker shape
+        //    that MiniMax M3 started emitting. The model
+        //    sometimes puts the structured payload INSIDE
+        //    the brackets instead of after them:
+        //      `[tool_call: read_file id=… input={…}]`
+        //    The rest of the parser (and the existing tests
+        //    / runner) expects the body AFTER the closing
+        //    `]`, so we rewrite this shape into the older
+        //      `[tool_call: read_file] id=… input={…}`
+        //    form before scanning. Doing the rewrite up
+        //    front (and outside the marker scan loop) keeps
+        //    the scanner simple and means every later pass
+        //    sees a single canonical shape.
+        if let newShapeRegex = try? NSRegularExpression(
+            pattern: #"\[(tool_call|tool):\s*([A-Za-z0-9_?]+)\s+([^\]]+)\]"#,
+            options: [.caseInsensitive]
+        ) {
+            let nsText = text as NSString
+            let allMatches = newShapeRegex.matches(
+                in: text,
+                range: NSRange(location: 0, length: nsText.length)
+            )
+            // Apply in reverse so each rewrite doesn't shift
+            // the ranges of the remaining matches.
+            for match in allMatches.reversed() {
+                guard match.numberOfRanges == 4,
+                      let fullRange = Range(match.range(at: 0), in: text),
+                      let prefixRange = Range(match.range(at: 1), in: text),
+                      let nameRange = Range(match.range(at: 2), in: text),
+                      let bodyRange = Range(match.range(at: 3), in: text)
+                else { continue }
+                let prefix = String(text[prefixRange]).lowercased()
+                let name = String(text[nameRange])
+                let body = String(text[bodyRange])
+                let rewritten = "[\(prefix): \(name)] \(body)"
+                text.replaceSubrange(fullRange, with: rewritten)
+            }
+        }
 
         // 1. Pull thinking out. Same tag names as the chat
         //    composer's ThinkingExtractor so the runner /
@@ -537,15 +684,17 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
             text.replaceSubrange(thinkRange, with: "")
         }
 
-        // 2. Extract tool calls. Each block starts with
-        //    `[tool_call: <name>]` and ends at the next
-        //    `[tool_call:` marker or end of text. Parameter
-        //    pairs are `<param>value</param>` tags inside the
-        //    block.
+        // 2. Extract tool calls. Each block starts with a
+        //    marker and ends at the next marker or end of
+        //    text. Two marker shapes are supported; both come
+        //    from MiniMax M3 at different temperatures:
+        //    - `[tool_call: <name>]` — tag / key-value body.
+        //    - `[tool: <name>]` — log-style body where the
+        //      model emits `<command>\n--- stdout ---\n<output>\n--- stderr ---\n<error>`.
         // Use Swift's String APIs for the marker scan so we
         // stay in character-space (no NSRange / UTF-16
         // round-tripping). The marker is the literal
-        // `[tool_call: <name>]` opener, and the block body
+        // `[<prefix>: <name>]` opener, and the block body
         // runs from the close `]` to the next opener or end
         // of text.
         struct Hit {
@@ -557,7 +706,7 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
         }
         var hits: [Hit] = []
         // Collect marker positions first.
-        var markerPositions: [(start: String.Index, end: String.Index, name: String)] = []
+        var markerPositions: [(start: String.Index, end: String.Index, name: String, isLogStyle: Bool)] = []
         var searchStart = text.startIndex
         while searchStart < text.endIndex {
             guard let openBracket = text[searchStart...].firstIndex(of: "[") else { break }
@@ -565,16 +714,44 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
             // Look for the closing `]` within the same line-ish window
             // (MiniMax emits `[tool_call: name]` on a single line).
             guard let closeBracket = rest.firstIndex(of: "]") else { break }
-            // Verify the content between `[` and `]` is `tool_call: <name>`.
+            // Verify the content between `[` and `]` is one of
+            // the accepted markers (`tool_call: <name>` for
+            // the structured shape, `tool: <name>` for the
+            // log-style shape). The pre-processor at the top
+            // of this function has already rewritten the
+            // "stuffed" shape (`[tool_call: read_file id=…
+            // input={…}]`) into the old shape, so the
+            // scanner only sees canonical markers here.
             let inside = rest[rest.index(after: openBracket)..<closeBracket]
-            if inside.lowercased().hasPrefix("tool_call:") {
-                let nameTrimmed = inside
-                    .dropFirst("tool_call:".count)
+            let insideLower = inside.lowercased()
+            var kind: String? = nil
+            var rawName: String = ""
+            if insideLower.hasPrefix("tool_call:") {
+                kind = "tool_call"
+                rawName = String(inside.dropFirst("tool_call:".count))
+            } else if insideLower.hasPrefix("tool:") {
+                kind = "tool"
+                rawName = String(inside.dropFirst("tool:".count))
+            }
+            if let kind {
+                let nameTrimmed = rawName
                     .trimmingCharacters(in: .whitespacesAndNewlines)
-                let name = String(nameTrimmed)
-                if !name.isEmpty,
-                   name.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }) {
-                    markerPositions.append((openBracket, rest.index(after: closeBracket), name))
+                // MiniMax M3 sometimes writes `[tool: ?]`
+                // (literal question mark) when the model
+                // hasn't filled in a name — every emit of
+                // that shape is a `run_shell` in practice, so
+                // normalise to keep the rest of the pipeline
+                // simple.
+                let normalisedName = (nameTrimmed == "?" || nameTrimmed.isEmpty)
+                    ? "run_shell"
+                    : nameTrimmed
+                if normalisedName.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }) {
+                    markerPositions.append((
+                        openBracket,
+                        rest.index(after: closeBracket),
+                        normalisedName,
+                        kind == "tool"
+                    ))
                 }
             }
             searchStart = text.index(after: openBracket)
@@ -598,7 +775,23 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
             } else {
                 nextStart = text.endIndex
             }
-            let blockEnd = nextStart
+            var blockEnd = nextStart
+            // For the LAST log-style marker, the body (from
+            // `marker.end` to `text.endIndex`) includes any
+            // trailing prose the model wrote after the log
+            // section. We must not consume that prose — it's
+            // user-visible content. The log section ends at
+            // the first blank line (`\n\n`), which is how
+            // MiniMax separates one log block from the next
+            // and from any closing prose. Intermediate
+            // log-style blocks already stop at the next
+            // marker, so this only fires for the last one.
+            if marker.isLogStyle && i + 1 == markerPositions.count {
+                let bodyRange = marker.end..<text.endIndex
+                if let blankLineLower = text.range(of: "\n\n", range: bodyRange) {
+                    blockEnd = blankLineLower.lowerBound
+                }
+            }
             guard marker.end <= blockEnd else { continue }
             // Keep the text between the last appended end and
             // the start of this marker.
@@ -606,7 +799,20 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
                 keptSegments.append(String(text[lastAppendEnd..<marker.start]))
             }
             let block = String(text[marker.end..<blockEnd])
-            let (inputObject, consumedRanges) = Self.parseToolCallBody(block)
+            // Two body shapes:
+            // - `[tool: <name>]` is the log-style emit
+            //   (`<command>\n--- stdout ---\n…`); the model
+            //   is fabricating both the call AND the result
+            //   so we extract just the first line and drop
+            //   the rest from the visible text.
+            // - `[tool_call: <name>]` is the structured emit
+            //   (`<param>value</param>` or `id=…\ninput={…}`).
+            let (inputObject, consumedRanges): ([String: Any], [(Int, Int)])
+            if marker.isLogStyle {
+                (inputObject, consumedRanges) = Self.parseLogStyleToolCallBody(block)
+            } else {
+                (inputObject, consumedRanges) = Self.parseToolCallBody(block)
+            }
             // Build the kept portion of the block by
             // skipping the consumed character ranges. The
             // parser hands back `(start, length)` character

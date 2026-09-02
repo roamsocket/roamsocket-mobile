@@ -1018,6 +1018,200 @@ final class DirectE2BClientTests: XCTestCase {
         )
     }
 
+    /// MiniMax M3's newest shape is a *log* of an imagined
+    /// shell run rather than a structured parameter list:
+    /// the model writes `[tool: ?] <command>\n--- stdout ---\n<output>\n--- stderr ---\n<error>`
+    /// and emits one block per imagined call. The model is
+    /// fabricating both the call AND the result instead of
+    /// asking the e2b sandbox. The parser has to (a) detect
+    /// the `[tool: ?]` marker as a `run_shell` call, (b)
+    /// extract the first line as the `command`, and (c)
+    /// DROP the fabricated stdout/stderr from the visible
+    /// text so the chat bubble stays clean. The runner then
+    /// dispatches the command to the e2b sandbox, which
+    /// produces the authoritative result.
+    func testParseProviderTextToolCallsLogStyle() {
+        let raw = """
+        Sure, I can poke around the repo to see what we're working with.
+
+        [tool: ?] cat package.json | head -60
+        --- stdout ---
+        "name": "kind365-glasscrm"
+        --- stderr ---
+
+        [tool: ?] pwd && ls
+        --- stdout ---
+        /home/user/coding_environment
+        --- stderr ---
+
+        [tool: ?] cd /code && pwd && ls
+        --- stdout ---
+        /code
+        CLAUDE.md
+        --- stderr ---
+
+        That's what I see so far.
+        """
+        let parsed = OpenAICompatibleAgentLLM.parseProviderTextToolCalls(raw)
+        // Three [tool: ?] markers → three run_shell calls.
+        XCTAssertEqual(
+            parsed.toolCalls.count, 3,
+            "expected three parsed calls (one per [tool: ?] marker); content=\(parsed.content)"
+        )
+        XCTAssertEqual(
+            parsed.toolCalls.map(\.name),
+            ["run_shell", "run_shell", "run_shell"],
+            "[tool: ?] must default to run_shell"
+        )
+        // First call's command is the first line of the first
+        // log-style body. Whitespace at the start (the
+        // `[tool: ?] ` prefix leaves a leading space) is
+        // trimmed.
+        let firstArgs = try! XCTUnwrap(
+            try? JSONSerialization.jsonObject(
+                with: Data(parsed.toolCalls[0].argumentsJSON.utf8)
+            ) as? [String: Any]
+        )
+        XCTAssertEqual(
+            firstArgs["command"] as? String,
+            "cat package.json | head -60",
+            "first command extracted; argumentsJSON=\(parsed.toolCalls[0].argumentsJSON)"
+        )
+        let secondArgs = try! XCTUnwrap(
+            try? JSONSerialization.jsonObject(
+                with: Data(parsed.toolCalls[1].argumentsJSON.utf8)
+            ) as? [String: Any]
+        )
+        XCTAssertEqual(secondArgs["command"] as? String, "pwd && ls")
+        let thirdArgs = try! XCTUnwrap(
+            try? JSONSerialization.jsonObject(
+                with: Data(parsed.toolCalls[2].argumentsJSON.utf8)
+            ) as? [String: Any]
+        )
+        XCTAssertEqual(thirdArgs["command"] as? String, "cd /code && pwd && ls")
+        // The fabricated stdout/stderr must NOT leak into
+        // the visible text — the e2b sandbox will produce
+        // the authoritative result on dispatch, and the
+        // log-style markup would only confuse the user
+        // ("why is the agent showing me its own output?").
+        XCTAssertFalse(
+            parsed.content.contains("--- stdout ---"),
+            "log-style markup must be stripped from visible content; got: \(parsed.content)"
+        )
+        XCTAssertFalse(
+            parsed.content.contains("--- stderr ---"),
+            "log-style markup must be stripped from visible content; got: \(parsed.content)"
+        )
+        XCTAssertFalse(
+            parsed.content.contains("kind365-glasscrm"),
+            "fabricated stdout must not leak; got: \(parsed.content)"
+        )
+        // The user's surrounding prose is preserved.
+        XCTAssertTrue(
+            parsed.content.contains("Sure, I can poke around the repo"),
+            "prose before the first marker is preserved; got: \(parsed.content)"
+        )
+        XCTAssertTrue(
+            parsed.content.contains("That's what I see so far"),
+            "prose after the last marker is preserved; got: \(parsed.content)"
+        )
+    }
+
+    /// The same log-style emit, but with an explicit tool
+    /// name in the marker (`[tool: run_shell]` rather than
+    /// `[tool: ?]`). The body parser only cares about the
+    /// first line, so the dispatch still works.
+    func testParseProviderTextToolCallsLogStyleWithExplicitName() {
+        let raw = """
+        [tool: read_file] /code/README.md
+        --- stdout ---
+        # repo
+        --- stderr ---
+        """
+        let parsed = OpenAICompatibleAgentLLM.parseProviderTextToolCalls(raw)
+        XCTAssertEqual(parsed.toolCalls.count, 1, "expected one parsed call; content=\(parsed.content)")
+        XCTAssertEqual(parsed.toolCalls.first?.name, "read_file")
+        let args = try! XCTUnwrap(
+            try? JSONSerialization.jsonObject(
+                with: Data(parsed.toolCalls[0].argumentsJSON.utf8)
+            ) as? [String: Any]
+        )
+        XCTAssertEqual(
+            args["command"] as? String,
+            "/code/README.md",
+            "log-style body extracts the first line as command; argumentsJSON=\(parsed.toolCalls[0].argumentsJSON)"
+        )
+        // The stdout/stderr confabulation is dropped.
+        XCTAssertFalse(
+            parsed.content.contains("# repo"),
+            "fabricated stdout must not leak; got: \(parsed.content)"
+        )
+    }
+
+    /// MiniMax M3's newest structured emit puts the call
+    /// metadata inside the marker itself:
+    /// `[tool_call: read_file id=call_… input={"path":"…"}]`.
+    /// The marker is just `[tool_call: read_file]` (the
+    /// first `]` ends it); the `id=…` and `input={…}` are
+    /// part of the body and must be tokenised as a
+    /// space-separated key-value list. Before this fix the
+    /// parser treated the whole body as the value of `id`
+    /// (which is excluded) and the runner saw an empty
+    /// argument map, surfacing as "missing 'path' field".
+    func testParseProviderTextToolCallsSingleLineKeyValue() {
+        let raw = """
+        [tool_call: read_file id=call_bfe5a96e7b6e64e43a85049c input={"path":"/code/README.md"}]
+        """
+        let parsed = OpenAICompatibleAgentLLM.parseProviderTextToolCalls(raw)
+        XCTAssertEqual(parsed.toolCalls.count, 1, "expected one parsed call; content=\(parsed.content)")
+        XCTAssertEqual(parsed.toolCalls.first?.name, "read_file")
+        let args = try! XCTUnwrap(
+            try? JSONSerialization.jsonObject(
+                with: Data(parsed.toolCalls[0].argumentsJSON.utf8)
+            ) as? [String: Any]
+        )
+        XCTAssertEqual(
+            args["path"] as? String,
+            "/code/README.md",
+            "input=… JSON value must be splatted into the argument map; argumentsJSON=\(parsed.toolCalls[0].argumentsJSON)"
+        )
+        // The `id` line is metadata — it must NOT shadow the
+        // runner's own id scheme (we generate `tc_text_<n>_…`).
+        XCTAssertFalse(
+            args.keys.contains("id"),
+            "the call id is generated by the parser, not lifted from the model output"
+        )
+        // The whole body is consumed; the visible content
+        // must be empty.
+        XCTAssertTrue(
+            parsed.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            "single-line key-value body must be stripped from visible content; got: \(parsed.content)"
+        )
+    }
+
+    /// Same shape but with the `input=` value containing a
+    /// JSON object whose inner string has spaces. The
+    /// tokenizer must respect the JSON braces (no premature
+    /// split on the inner space).
+    func testParseProviderTextToolCallsSingleLineKeyValueWithSpacesInValue() {
+        let raw = #"""
+        [tool_call: run_shell id=call_x input={"command":"ls -la && echo \"-----\" && git log --oneline -10"}]
+        """#
+        let parsed = OpenAICompatibleAgentLLM.parseProviderTextToolCalls(raw)
+        XCTAssertEqual(parsed.toolCalls.count, 1, "expected one parsed call; content=\(parsed.content)")
+        XCTAssertEqual(parsed.toolCalls.first?.name, "run_shell")
+        let args = try! XCTUnwrap(
+            try? JSONSerialization.jsonObject(
+                with: Data(parsed.toolCalls[0].argumentsJSON.utf8)
+            ) as? [String: Any]
+        )
+        XCTAssertEqual(
+            args["command"] as? String,
+            "ls -la && echo \"-----\" && git log --oneline -10",
+            "inner JSON string with spaces must round-trip; argumentsJSON=\(parsed.toolCalls[0].argumentsJSON)"
+        )
+    }
+
     // MARK: - Stream timeout (hanging-model guard)
 
     /// When a model accepts the request but never sends a
