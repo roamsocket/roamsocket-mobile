@@ -171,10 +171,26 @@ public enum AgentLLMFactory {
                 apiKey: apiKey,
                 modelID: modelID,
                 baseURL: baseURL ?? Self.defaultBaseURL(for: provider),
-                maxTokens: maxTokens
+                maxTokens: maxTokens,
+                useNonStreaming: Self.prefersNonStreaming(for: provider)
             )
         case .google, .localMetal, .appleFoundation:
             throw AgentLLMError.unsupportedProvider(provider.rawValue)
+        }
+    }
+
+    /// Whether the OpenAI-compatible agent for this provider
+    /// should issue a one-shot POST instead of an SSE stream.
+    /// MiniMax's streaming endpoint accepts the request but
+    /// returns an empty body when `tools` is set, leaving the
+    /// E2B agent pinned at "Working" — the desktop server's
+    /// E2B runner and the iOS chat composer both use the
+    /// non-streaming path for the same reason. Future providers
+    /// with the same shape can be added here.
+    private static func prefersNonStreaming(for provider: ProviderID) -> Bool {
+        switch provider {
+        case .minimax: return true
+        default: return false
         }
     }
 

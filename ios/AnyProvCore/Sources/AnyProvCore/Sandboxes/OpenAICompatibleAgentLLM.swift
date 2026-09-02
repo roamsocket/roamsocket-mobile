@@ -24,18 +24,32 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
     nonisolated let apiKey: String
     nonisolated let maxTokens: Int
     nonisolated let session: URLSession
+    /// When `true`, `stream(...)` issues a single non-streaming
+    /// POST and yields the full assistant turn as a single
+    /// `textDelta` (followed by `toolCall*` events and `.stop`).
+    /// Some OpenAI-compatible providers — most notably MiniMax
+    /// — accept the request but return an empty streaming
+    /// response when `tools` is set, leaving the agent pinned
+    /// at "Working". The desktop server's E2B runner and the
+    /// iOS chat composer both use the non-streaming code path
+    /// for the same reason. Streaming stays the default for
+    /// providers that handle it well; opt in per-provider
+    /// from `AgentLLMFactory`.
+    nonisolated let useNonStreaming: Bool
 
     public init(
         apiKey: String,
         modelID: String,
         baseURL: URL,
         maxTokens: Int = 4096,
+        useNonStreaming: Bool = false,
     ) {
         self.apiKey = apiKey
         self.modelID = modelID
         self.baseURL = baseURL
         self.maxTokens = maxTokens
         self.session = URLSession.shared
+        self.useNonStreaming = useNonStreaming
     }
 
     public nonisolated func stream(
@@ -44,6 +58,33 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
         tools: [AgentLLMTool],
         maxTokens: Int,
     ) -> AsyncThrowingStream<AgentLLMEvent, Error> {
+        // Non-streaming path. Some OpenAI-compatible providers
+        // (notably MiniMax) accept the request but return an
+        // empty streaming response when `tools` is set. Match
+        // the desktop server's E2B runner and the chat
+        // composer's working path: one POST, full JSON, emit
+        // the text + tool calls as a single batch.
+        if useNonStreaming {
+            return AsyncThrowingStream { continuation in
+                let task = Task {
+                    do {
+                        try await runNonStreaming(
+                            system: system,
+                            messages: messages,
+                            tools: tools,
+                            maxTokens: maxTokens,
+                            continuation: continuation
+                        )
+                        continuation.yield(.stop)
+                        continuation.finish()
+                    } catch {
+                        continuation.finish(throwing: error)
+                    }
+                }
+                continuation.onTermination = { _ in task.cancel() }
+            }
+        }
+
         let body = Self.buildBody(
             system: system,
             messages: messages,
@@ -122,6 +163,88 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
             }
             continuation.onTermination = { _ in
                 task.cancel()
+            }
+        }
+    }
+
+    /// One-shot, non-streaming POST. Parses the full Chat
+    /// Completions response and yields the same event stream
+    /// the streaming path would have produced, so the runner
+    /// (and tests) don't need to special-case it.
+    private nonisolated func runNonStreaming(
+        system: String,
+        messages: [AgentLLMMessage],
+        tools: [AgentLLMTool],
+        maxTokens: Int,
+        continuation: AsyncThrowingStream<AgentLLMEvent, Error>.Continuation,
+    ) async throws {
+        // Same body shape as the streaming path, minus the
+        // `stream: true` flag.
+        var body = Self.buildBody(
+            system: system,
+            messages: messages,
+            tools: tools,
+            modelID: modelID,
+            maxTokens: maxTokens
+        )
+        body.removeValue(forKey: "stream")
+
+        var req = URLRequest(url: baseURL.appendingPathComponent("v1/chat/completions"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        req.setValue("anyprov-code", forHTTPHeaderField: "User-Agent")
+        req.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode) else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+            let bodyText = String(data: data, encoding: .utf8) ?? ""
+            throw OpenAICompatibleError.httpStatus(code, bodyText)
+        }
+        guard let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let choices = parsed["choices"] as? [[String: Any]],
+              let first = choices.first,
+              let message = first["message"] as? [String: Any]
+        else {
+            throw OpenAICompatibleError.decoding(
+                "non-streaming response was not a recognised Chat Completions payload"
+            )
+        }
+        // Text.
+        if let content = message["content"] as? String, !content.isEmpty {
+            continuation.yield(.textDelta(text: content))
+        }
+        // Tool calls. Same `{id, type, function: {name, arguments}}`
+        // shape as the streaming `delta.tool_calls`, just on the
+        // final message instead of per-chunk.
+        if let toolCalls = message["tool_calls"] as? [[String: Any]] {
+            for tc in toolCalls {
+                let id = tc["id"] as? String ?? ""
+                let fn = tc["function"] as? [String: Any]
+                let name = fn?["name"] as? String ?? ""
+                let arguments = fn?["arguments"] as? String ?? ""
+                if id.isEmpty || name.isEmpty { continue }
+                continuation.yield(.toolCallStart(
+                    id: id, name: name, input: .init(raw: .object([:]))
+                ))
+                if !arguments.isEmpty {
+                    continuation.yield(.toolCallInputDelta(
+                        id: id, partialJSON: arguments
+                    ))
+                }
+                continuation.yield(.toolCallEnd(id: id))
+            }
+        }
+        // Usage (cumulative on the final chunk for OpenAI; on
+        // the message envelope for non-streaming). The shape
+        // matches the streaming branch's usage forwarding.
+        if let usage = parsed["usage"] as? [String: Any] {
+            let input = usage["prompt_tokens"] as? Int ?? 0
+            let output = usage["completion_tokens"] as? Int ?? 0
+            if input > 0 || output > 0 {
+                continuation.yield(.usage(inputTokens: input, outputTokens: output))
             }
         }
     }

@@ -838,6 +838,41 @@ final class DirectE2BClientTests: XCTestCase {
         XCTAssertEqual(mistral.baseURL.absoluteString, "https://api.mistral.ai")
     }
 
+    /// MiniMax's streaming endpoint accepts the request but
+    /// returns an empty body when `tools` is set, leaving the
+    /// E2B agent pinned at "Working" — the desktop server's
+    /// E2B runner and the iOS chat composer both use the
+    /// non-streaming path for the same reason. The factory
+    /// must opt MiniMax into the non-streaming code path so
+    /// the agent loop gets a usable response. Other OpenAI-
+    /// compatible providers stay on the streaming path (their
+    /// SSE endpoints work fine).
+    func testAgentLLMFactoryOptsMiniMaxIntoNonStreaming() throws {
+        let minimaxLLM = try XCTUnwrap(
+            try AgentLLMFactory.make(
+                provider: .minimax, modelID: "M3", apiKey: "k"
+            ) as? OpenAICompatibleAgentLLM
+        )
+        XCTAssertTrue(
+            minimaxLLM.useNonStreaming,
+            "MiniMax must use the non-streaming POST path; its streaming + tools endpoint returns empty"
+        )
+
+        // Other built-ins stay on streaming.
+        let openai = try XCTUnwrap(
+            try AgentLLMFactory.make(
+                provider: .openai, modelID: "gpt-x", apiKey: "k"
+            ) as? OpenAICompatibleAgentLLM
+        )
+        XCTAssertFalse(openai.useNonStreaming, "OpenAI streaming works fine")
+        let openrouter = try XCTUnwrap(
+            try AgentLLMFactory.make(
+                provider: .openrouter, modelID: "or-x", apiKey: "k"
+            ) as? OpenAICompatibleAgentLLM
+        )
+        XCTAssertFalse(openrouter.useNonStreaming, "OpenRouter streaming works fine")
+    }
+
     // MARK: - Stream timeout (hanging-model guard)
 
     /// When a model accepts the request but never sends a
