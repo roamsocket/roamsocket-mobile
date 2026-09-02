@@ -65,23 +65,46 @@ For `POST {envd-host}/process.Process/Start`:
     JSON `StartRequest` payload.
 * Response (chunked transfer, `HTTP/1.1` works without HTTP/2)
   * Stream of **Enveloped-Message**s. The last one has flags
-    `0x02` (end-of-stream) and an empty payload.
+    `0x02` (end-of-stream) and a `{}` body.
   * Normal data envelopes have flags `0` and a JSON `StartResponse`
-    payload of the form:
+    payload of the form (captured live 2026-09-01, envd 0.6.10 on
+    `base`):
     ```json
-    {"event": {"start":   {"pid": 4711}}}
-    {"event": {"data":    {"output": {"stdout": "<base64>"}}}}
-    {"event": {"data":    {"output": {"stderr": "<base64>"}}}}
-    {"event": {"end":     {"exitCode": 0, "error": ""}}}
+    {"event": {"start": {"pid": 2003}}}
+    {"event": {"data":  {"stdout": "aGVsbG8tZnJvbS1lbnZkCg=="}}}
+    {"event": {"data":  {"stderr": "PHNvbWUgdGV4dD4K"}}}
+    {"event": {"end":   {"exited": true, "status": "exit status 0"}}}
     ```
-  * `output` is a oneof — exactly one of `stdout` / `stderr` / `pty`
-    is set. The `bytes` proto field is base64 in `application/connect+json`.
 
 Source: Connect protocol spec
 (<https://connectrpc.com/docs/protocol/>), connect-go `envelope.go`
 (`prefix[0] = flags; binary.BigEndian.PutUint32(prefix[1:5], size)`),
 and the e2b Python SDK's `_ProtoJSONCodec` (confirms JSON encoding
 matches `useBinaryFormat: false` in the JS SDK).
+
+### Two traps the docs and SDK abstraction hide
+
+1. **The `data` event has no `output` wrapper.** The proto source
+   shows `Data { oneof output { … } }`, but the JSON envelope puts
+   the stream field (`stdout` / `stderr` / `pty`) directly under
+   `event.data`. We accept both shapes so a future envd release with
+   the wrapper doesn't break us.
+2. **The `end` event is `{"exited": true, "status": "exit status N"}`
+   (or `"signal: N"` for signalled processes), NOT `exitCode: N`.**
+   The e2b Python SDK converts this string into an `int` (with
+   signalled codes negated) inside `CommandResult`; the JS SDK does
+   the same in `AsyncCommandHandle`. If you go straight off the
+   wire you have to parse it yourself — see
+   `ConnectEnvelope.parseExitStatus` for the regex-free version.
+
+### Sandbox creation timeout is in *seconds*
+
+`POST /sandboxes` body: `{"templateID": "base", "timeout": 300}`.
+`timeout` is the sandbox lifetime, in **seconds**, with a hard cap
+of `3_600` (1 hour). Sending milliseconds — e.g. `300_000` —
+silently fails the request with `400 Timeout cannot be greater
+than 1 hours`. The e2b Python SDK's public surface uses
+`timeoutMs`, but it converts before sending.
 
 ### Envelope helpers in `DirectE2BClient.swift`
 
@@ -170,9 +193,13 @@ follows the documented Connect-RPC shape.
   against `code-interpreter/template/server/messaging.py` lines
   around `_get_code_indentation` / `_indent_code_with_level` /
   `_set_env_var_snippet`.
-
-Not yet directly observed (no live sandbox in this PR): the
-end-to-end stream with a real `e2b` account. The local Swift test
-suite covers the envelope codec, the shell script builder, and the
-shell-quoting helper. A real-e2b integration test belongs in a
-follow-up; running it requires an API key the agent doesn't have.
+* Live capture (envd 0.6.10, sandbox `i0zfplt6vp2znhcj3kna6a`,
+  2026-09-01): the response byte sequence and JSON shapes shown
+  in §2 came from a real `base` sandbox. The captured byte stream
+  is pinned by `testDecodesCapturedEnvdStream` in
+  `ios/AnyProvCore/Tests/AnyProvCoreTests/DirectE2BClientTests.swift`,
+  so a future envd refactor that changes either the envelope or
+  the JSON shape will fail the test loudly.
+* The `POST /sandboxes` `timeout` field is in seconds, confirmed
+  by `400 Timeout cannot be greater than 1 hours` when sending
+  `300_000`.

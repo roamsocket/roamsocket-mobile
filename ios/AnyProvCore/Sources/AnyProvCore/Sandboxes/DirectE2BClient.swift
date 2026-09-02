@@ -170,7 +170,7 @@ public final class DirectE2BClient: @unchecked Sendable {
     /// Create a fresh sandbox. Returns the e2b sandbox id and the
     /// "X-Access-Token" the sandbox returned; the token is needed to
     /// authenticate follow-up calls into the sandbox itself.
-    public func createSandbox(template: String = DirectE2BClient.defaultTemplate, timeoutMs: Int = 600_000) async throws -> E2bSandboxInfo {
+    public func createSandbox(template: String = DirectE2BClient.defaultTemplate, timeoutSeconds: Int = 600) async throws -> E2bSandboxInfo {
         let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw DirectE2BError.noApiKey }
 
@@ -179,9 +179,10 @@ public final class DirectE2BClient: @unchecked Sendable {
         req.setValue(trimmed, forHTTPHeaderField: "X-API-Key")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("anyprov-code", forHTTPHeaderField: "User-Agent")
-        // e2b's hard cap is 1 hour. Clamp anything larger so we never
-        // burn the user a 24-hour sandbox by accident.
-        let clamped = max(60_000, min(timeoutMs, 3_600_000))
+        // The e2b REST API takes `timeout` in *seconds*, not
+        // milliseconds. The hard cap is 1 hour; clamp anything larger
+        // so we never burn the user a 24-hour sandbox by accident.
+        let clamped = max(60, min(timeoutSeconds, 3_600))
         let body: [String: Any] = [
             "templateID": template,
             "timeout": clamped,
@@ -300,7 +301,7 @@ public final class DirectE2BClient: @unchecked Sendable {
 
         let sandbox: E2bSandboxInfo
         do {
-            sandbox = try await createSandbox()
+            sandbox = try await createSandbox(template: DirectE2BClient.defaultTemplate, timeoutSeconds: 600)
         } catch {
             var failed = run
             failed.status = "failed"
@@ -336,7 +337,7 @@ public final class DirectE2BClient: @unchecked Sendable {
         // Flags byte 0 = no compression, not end-of-stream.
         let body: [String: Any] = [
             "process": [
-                "cmd": "bash",
+                "cmd": "/bin/bash",
                 "args": ["-l", "-c", script],
             ],
         ]
@@ -359,12 +360,14 @@ public final class DirectE2BClient: @unchecked Sendable {
                     onEvent(.log(stream: "stdout", line: "Started pid \(pid)"))
                 case let .data(stream, text):
                     onEvent(.log(stream: stream, line: text))
-                case let .end(code, error):
-                    if let code {
-                        exitCode = Int(code)
-                    }
-                    if let error, !error.isEmpty {
-                        streamError = error
+                case let .end(code, rawStatus):
+                    exitCode = code
+                    // envd only sets `status` to a non-empty string on
+                    // abnormal termination; an `"exit status 0"` is
+                    // success, but anything else is worth surfacing.
+                    if let rawStatus, !rawStatus.isEmpty,
+                       !rawStatus.hasPrefix("exit status 0") {
+                        streamError = rawStatus
                     }
                 }
             }
@@ -438,7 +441,11 @@ enum ConnectEnvelope {
         /// sequences at chunk boundaries surface as replacement chars,
         /// which is the same behaviour the official SDK documents.
         case data(stream: String, text: String)
-        case end(exitCode: Double?, error: String?)
+        /// End-of-process from envd. `exitCode` is the parsed integer
+        /// (positive for `exit status N`, negated for `signal: N`).
+        /// `rawStatus` is the original `"exit status 0"` / `"signal: 9"`
+        /// string, kept for debugging.
+        case end(exitCode: Int?, rawStatus: String?)
     }
 
     /// Parse a stream of Connect envelopes out of `bytes`. Yields one
@@ -487,9 +494,16 @@ enum ConnectEnvelope {
         let payload = buffer.subdata(in: 5..<total)
         buffer.removeSubrange(0..<total)
         if flags & flagEndStream != 0 {
-            return .end(exitCode: nil, error: nil)
+            return .end(exitCode: nil, rawStatus: nil)
         }
         return try decode(payload)
+    }
+
+    /// Test-only wrapper so `DirectE2BClientTests` can drive the same
+    /// parser the production code uses, against captured real envd
+    /// responses.
+    internal static func parseNextEventForTest(from buffer: inout Data) throws -> Event? {
+        try parseNextEvent(from: &buffer)
     }
 
     private static func decode(_ payload: Data) throws -> Event {
@@ -505,29 +519,72 @@ enum ConnectEnvelope {
             let pid = (start["pid"] as? NSNumber)?.intValue ?? 0
             return .start(pid: pid)
         }
-        if let data = event["data"] as? [String: Any],
-           let output = data["output"] as? [String: Any] {
-            let (streamKey, raw) = decodeOutput(output)
-            let text = decodeBytes(raw)
-            return .data(stream: streamKey, text: text)
+        // Empirically (envd 0.6.x on a `base` sandbox, smoke test
+        // 2026-09-01), the `data` event has the stream name directly
+        // as a key under `event.data` — there is no `output` wrapper
+        // in the JSON envelope, even though the proto source shows
+        // one. We accept both shapes so a future envd release with
+        // the wrapper doesn't break us.
+        if let data = event["data"] as? [String: Any] {
+            if let (streamKey, raw) = decodeStreamField(in: data) {
+                return .data(stream: streamKey, text: decodeBytes(raw))
+            }
         }
         if let end = event["end"] as? [String: Any] {
-            let code: Double? = (end["exitCode"] as? NSNumber)?.doubleValue
-                ?? (end["exit_code"] as? NSNumber)?.doubleValue
-            let error = end["error"] as? String
-            return .end(exitCode: code, error: error)
+            // Empirically: envd returns `{"exited": true, "status":
+            // "exit status 0"}` (or `"signal: 9"` for signalled
+            // processes). The `exitCode` field shown in the e2b
+            // Python SDK is computed locally from this string.
+            let status = end["status"] as? String
+            let exited = (end["exited"] as? NSNumber)?.boolValue
+            return .end(
+                exitCode: parseExitStatus(status, exited: exited),
+                rawStatus: status,
+            )
         }
         throw DirectE2BError.stream("unknown envd event: \(event.keys.sorted())")
     }
 
-    /// The connect+json wire format encodes the `output` oneof with the
-    /// stream field name as the key (`stdout` or `stderr`) and the
-    /// bytes as a base64 string. Return (stream label, raw value).
-    private static func decodeOutput(_ output: [String: Any]) -> (String, Any) {
-        if let raw = output["stdout"] { return ("stdout", raw) }
-        if let raw = output["stderr"] { return ("stderr", raw) }
-        if let raw = output["pty"] { return ("pty", raw) }
-        return ("stdout", "")
+    /// Look up `stdout` / `stderr` / `pty` in either the new flat shape
+    /// (`event.data.stdout = "<base64>"`) or the proto-with-wrapper
+    /// shape (`event.data.output.stdout = "<base64>"`). Returns
+    /// `nil` if none of the three is set.
+    private static func decodeStreamField(in data: [String: Any]) -> (String, Any)? {
+        if let raw = data["stdout"] { return ("stdout", raw) }
+        if let raw = data["stderr"] { return ("stderr", raw) }
+        if let raw = data["pty"] { return ("pty", raw) }
+        if let output = data["output"] as? [String: Any] {
+            if let raw = output["stdout"] { return ("stdout", raw) }
+            if let raw = output["stderr"] { return ("stderr", raw) }
+            if let raw = output["pty"] { return ("pty", raw) }
+        }
+        return nil
+    }
+
+    /// Parse envd's human-readable status string into an integer exit
+    /// code. We negate signal codes so a signalled process is reported
+    /// with a negative number, matching the convention the e2b JS
+    /// SDK uses.
+    static func parseExitStatus(_ status: String?, exited: Bool?) -> Int? {
+        guard exited == true, let status, !status.isEmpty else { return nil }
+        // "exit status 0" / "exit status 1" / …
+        if let n = intAfter(prefix: "exit status ", in: status) {
+            return n
+        }
+        // "signal: 9" / "signal: SIGKILL" — envd's Go side reports the
+        // signal name sometimes and the number other times.
+        if let n = intAfter(prefix: "signal: ", in: status) {
+            return -n
+        }
+        return nil
+    }
+
+    private static func intAfter(prefix: String, in s: String) -> Int? {
+        guard s.hasPrefix(prefix) else { return nil }
+        let tail = s.dropFirst(prefix.count)
+        // Strip a possible trailing reason like "exit status 1 (boom)".
+        let head = tail.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true).first ?? ""
+        return Int(head)
     }
 
     private static func decodeBytes(_ raw: Any) -> String {
