@@ -25,6 +25,60 @@ final class DirectE2BClientTests: XCTestCase {
         XCTAssertEqual(PythonQuote.escape(""), "''")
     }
 
+    // MARK: - /execute NDJSON unwrapping
+
+    func testStdoutFromExecResponseCollectsStdoutRecords() {
+        let raw = #"""
+        {"type": "number_of_executions", "execution_count": 1}
+        {"type": "stdout", "text": "{\"ok\": true, \"sha\": \"abc\"}"}
+        {"type": "result", "content_type": "application/json", "data": {}}
+        {"type": "status", "status": "completed"}
+        """#
+        XCTAssertEqual(
+            DirectE2BClient.stdoutFromExecResponse(raw),
+            #"{"ok": true, "sha": "abc"}"#
+        )
+    }
+
+    func testStdoutFromExecResponseSurfacesErrorValue() {
+        let raw = """
+        {"type": "number_of_executions", "execution_count": 1}
+        {"type": "error", "name": "SyntaxError", "value": "invalid syntax (481837546.py, line 3)", "traceback": []}
+        """
+        XCTAssertEqual(
+            DirectE2BClient.stdoutFromExecResponse(raw),
+            "invalid syntax (481837546.py, line 3)"
+        )
+    }
+
+    func testStdoutFromExecResponsePassesThroughNonJSON() {
+        XCTAssertEqual(DirectE2BClient.stdoutFromExecResponse("plain\ntext"), "plain\ntext")
+    }
+
+    func testExpandStreamLineUnwrapsNDJSONStdout() {
+        let line = #"{"type": "stdout", "text": "STDOUT:hello\nSTDOUT:world"}"#
+        XCTAssertEqual(
+            DirectE2BClient.expandStreamLine(line),
+            ["STDOUT:hello", "STDOUT:world"]
+        )
+    }
+
+    func testExpandStreamLineSurfacesErrorAsStderr() {
+        let line = #"{"type": "error", "name": "SyntaxError", "value": "bad syntax"}"#
+        XCTAssertEqual(
+            DirectE2BClient.expandStreamLine(line),
+            ["STDERR:bad syntax"]
+        )
+    }
+
+    func testExpandStreamLinePassthroughForRawLines() {
+        XCTAssertEqual(
+            DirectE2BClient.expandStreamLine("STDOUT:as-is"),
+            ["STDOUT:as-is"]
+        )
+        XCTAssertEqual(DirectE2BClient.expandStreamLine(""), [])
+    }
+
     // MARK: - E2bPhoneStreamEvent.parse
 
     func testStreamParseStdout() {

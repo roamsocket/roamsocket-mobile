@@ -160,8 +160,8 @@ final class E2bSessionStore: ObservableObject {
         // Output is JSON so we can detect errors.
         let script = """
         import subprocess, json
-        clone_url = \(Self.escapePython(cloneURL))
-        branch = \(Self.escapePython(branch))
+        clone_url = \(PythonQuote.escape(cloneURL))
+        branch = \(PythonQuote.escape(branch))
         try:
             clone = subprocess.run(
                 ["git", "clone", "--depth", "1", clone_url, "/code"],
@@ -221,11 +221,6 @@ final class E2bSessionStore: ObservableObject {
             code: 1,
             userInfo: [NSLocalizedDescriptionKey: "pre-clone failed at \(step): \(stderr.prefix(400))"]
         )
-    }
-
-    private static func escapePython(_ s: String) -> String {
-        s.replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "'", with: "\\'")
     }
 
     /// Append a message to a session's transcript. Cheap —

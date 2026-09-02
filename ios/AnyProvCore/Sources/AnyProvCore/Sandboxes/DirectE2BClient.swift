@@ -306,7 +306,81 @@ extension DirectE2BClient {
             let body = String(data: data, encoding: .utf8) ?? ""
             throw DirectE2BError.http(status: http.statusCode, body: body)
         }
-        return String(data: data, encoding: .utf8) ?? ""
+        // The /execute endpoint replies in NDJSON records; reconstruct
+        // the script's plain stdout so every caller keeps parsing JSON
+        // exactly as before.
+        return Self.stdoutFromExecResponse(String(data: data, encoding: .utf8) ?? "")
+    }
+
+    /// Reconstruct a script's stdout from the code-interpreter
+    /// `/execute` NDJSON response. Each line is one JSON record
+    /// (`number_of_executions`, `stdout`, `result`, `error`, …);
+    /// only `stdout` records contribute text. An `error` record
+    /// contributes its `value` so failures read as messages instead
+    /// of raw traceback dumps. Non-JSON lines pass through verbatim
+    /// for forward-compat with a future raw-stream endpoint.
+    static func stdoutFromExecResponse(_ raw: String) -> String {
+        var out: [String] = []
+        for line in raw.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            guard let data = trimmed.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let type = obj["type"] as? String
+            else {
+                out.append(trimmed)
+                continue
+            }
+            switch type {
+            case "stdout":
+                if let text = obj["text"] as? String, !text.isEmpty { out.append(text) }
+                else if let text = obj["data"] as? String, !text.isEmpty { out.append(text) }
+            case "error":
+                if let value = obj["value"] as? String, !value.isEmpty { out.append(value) }
+            default:
+                break // execution_started / number_of_executions / result / status
+            }
+        }
+        return out.joined(separator: "\n")
+    }
+
+    /// Expand one streaming `/execute` NDJSON record back into shim
+    /// lines. The shim already prefixes its output with `STDOUT:` /
+    /// `STDERR:` / `STEP:` / `EXIT:`; inside the NDJSON envelope that
+    /// text sits in the `stdout` record, so we return its lines as-is
+    /// and let `E2bPhoneStreamEvent.parse` demux them. `error`
+    /// records surface their `value` as one `STDERR:` line. Records
+    /// that carry no shim text, and non-JSON lines (raw shim output,
+    /// future raw-stream modes), are handled with an empty / verbatim
+    /// result respectively.
+    static func expandStreamLine(_ line: String) -> [String] {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = trimmed.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let type = obj["type"] as? String
+        else {
+            return trimmed.isEmpty ? [] : [line]
+        }
+        switch type {
+        case "stdout":
+            if let text = obj["text"] as? String, !text.isEmpty {
+                return text.components(separatedBy: "\n")
+            }
+            return []
+        case "stderr":
+            if let text = obj["text"] as? String, !text.isEmpty {
+                return text.components(separatedBy: "\n").map { "STDERR:" + $0 }
+            }
+            return []
+        case "error":
+            if let value = obj["value"] as? String, !value.isEmpty {
+                return ["STDERR:" + value]
+            }
+            return []
+        default:
+            // execution_started / number_of_executions / result / status
+            return []
+        }
     }
 
     /// Run a shell command on a persistent sandbox and return
@@ -927,35 +1001,42 @@ public final class DirectE2BClient: @unchecked Sendable {
                 throw DirectE2BError.stream("execute HTTP \(code)")
             }
             for try await line in bytes.lines {
-                switch E2bPhoneStreamEvent.parse(line: line) {
-                case let .stdout(value):
-                    onEvent(.log(stream: "stdout", line: value, stepId: currentStepId))
-                case let .stderr(value):
-                    onEvent(.log(stream: "stderr", line: value, stepId: currentStepId))
-                case let .stepStart(id):
-                    currentStepId = id
-                    onEvent(.stepStarted(stepId: id))
-                case let .stepDone(id):
-                    onEvent(.stepDone(stepId: id))
-                    if currentStepId == id { currentStepId = nil }
-                case let .stepFailed(id, code):
-                    onEvent(.stepFailed(stepId: id, exitCode: code))
-                    if currentStepId == id { currentStepId = nil }
-                case let .stepSkipped(id):
-                    onEvent(.stepSkipped(stepId: id))
-                    if currentStepId == id { currentStepId = nil }
-                case let .exit(code):
-                    // The shim's only `EXIT:` emission is the final
-                    // process exit code for the user step. Per-step
-                    // failures arrive as `STEP:<id>:failed:N` (handled
-                    // above) and short-circuit the run before we
-                    // ever see the EXIT line.
-                    exitCode = code
-                case let .passthrough(raw):
-                    // Forward-compat for any future shim output the
-                    // parser doesn't recognise — show it as stdout so
-                    // the user doesn't lose the line.
-                    onEvent(.log(stream: "stdout", line: raw, stepId: currentStepId))
+                // Same NDJSON envelope as `exec`: the shim's
+                // `STDOUT:` / `STEP:` markers ride inside the
+                // `stdout` record text. Expand each record back
+                // into shim lines so the parser below is untouched;
+                // raw (non-JSON) lines pass through verbatim.
+                for shimLine in Self.expandStreamLine(line) {
+                    switch E2bPhoneStreamEvent.parse(line: shimLine) {
+                    case let .stdout(value):
+                        onEvent(.log(stream: "stdout", line: value, stepId: currentStepId))
+                    case let .stderr(value):
+                        onEvent(.log(stream: "stderr", line: value, stepId: currentStepId))
+                    case let .stepStart(id):
+                        currentStepId = id
+                        onEvent(.stepStarted(stepId: id))
+                    case let .stepDone(id):
+                        onEvent(.stepDone(stepId: id))
+                        if currentStepId == id { currentStepId = nil }
+                    case let .stepFailed(id, code):
+                        onEvent(.stepFailed(stepId: id, exitCode: code))
+                        if currentStepId == id { currentStepId = nil }
+                    case let .stepSkipped(id):
+                        onEvent(.stepSkipped(stepId: id))
+                        if currentStepId == id { currentStepId = nil }
+                    case let .exit(code):
+                        // The shim's only `EXIT:` emission is the final
+                        // process exit code for the user step. Per-step
+                        // failures arrive as `STEP:<id>:failed:N` (handled
+                        // above) and short-circuit the run before we
+                        // ever see the EXIT line.
+                        exitCode = code
+                    case let .passthrough(raw):
+                        // Forward-compat for any future shim output the
+                        // parser doesn't recognise — show it as stdout so
+                        // the user doesn't lose the line.
+                        onEvent(.log(stream: "stdout", line: raw, stepId: currentStepId))
+                    }
                 }
             }
         } catch {
