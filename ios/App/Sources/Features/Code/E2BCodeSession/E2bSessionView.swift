@@ -33,6 +33,11 @@ struct E2bSessionView: View {
     /// normal `assistant` message and clear the buffer.
     @State private var streamingText: String = ""
     @State private var agentTask: Task<Void, Never>?
+    /// Tracks the in-flight `running…` transcript row for each
+    /// tool call so the finish handler can update the same row
+    /// in place instead of leaving the placeholder stuck on
+    /// "running". Cleared when the call finishes.
+    @State private var toolCallRowByID: [String: String] = [:]
     /// Drives the model picker sheet. Surfaced as a small pill
     /// above the input bar so the user can change models without
     /// leaving the code session — the picker is filtered to
@@ -204,19 +209,31 @@ struct E2bSessionView: View {
                         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14))
                         .id("streaming-anchor")
                     }
+                    // Same "Thinking..." row as the chat composer:
+                    // collapsed grey block that opens a
+                    // "Thought process" sheet on tap. Reused
+                    // component so the two surfaces behave
+                    // identically; once the agent loop wires
+                    // up real thinking content (e.g. from
+                    // `<think>` tags or a future thinking event),
+                    // the same row will host it.
                     if isSending && streamingText.isEmpty {
-                        HStack(spacing: 6) {
-                            ProgressView().controlSize(.small)
-                            Text("Thinking…")
-                                .font(.system(size: 12))
-                                .foregroundStyle(Theme.textSecondary)
-                        }
-                        .padding(.horizontal, 14)
-                        .id("sending-anchor")
+                        ThinkingBlock(text: "")
+                            .padding(.horizontal, 4)
+                            .id("sending-anchor")
                     }
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
+            }
+            // Tapping the transcript area dismisses the keyboard
+            // without losing the focus chain (`.focused(false)`
+            // is enough — the text field re-focuses when the
+            // user taps the composer again). Same UX as the
+            // regular chat composer.
+            .contentShape(Rectangle())
+            .onTapGesture {
+                inputFocused = false
             }
             .onChange(of: session?.transcript.count ?? 0) { _, _ in
                 if isSending {
@@ -587,12 +604,29 @@ struct E2bSessionView: View {
                 tool: "\(name) — \(summary)"
             )
             store.appendMessage(sessionId: sessionId, msg)
+            // Stash the id so the finish handler can replace
+            // this row in place (otherwise the "running…"
+            // placeholder stays on screen while the result
+            // card lands a second row underneath).
+            if let last = store.session(id: sessionId)?.transcript.last,
+               last.id == msg.id {
+                toolCallRowByID[id] = msg.id
+            }
         case let .toolCallFinished(id, _, output, isError):
             let kind: E2bCodeMessage.Kind = isError ? .notice : .tool
-            store.appendMessage(
-                sessionId: sessionId,
-                .init(kind: kind, text: output)
+            let replacement = E2bCodeMessage(
+                kind: kind,
+                text: output,
+                ok: isError ? false : true
             )
+            if let rowID = toolCallRowByID.removeValue(forKey: id) {
+                store.updateMessage(sessionId: sessionId, id: rowID, replacement)
+            } else {
+                // No matching "running…" row (start event lost,
+                // or non-`running…` placeholder). Fall back to
+                // append so the user still sees the result.
+                store.appendMessage(sessionId: sessionId, replacement)
+            }
         case let .usageRecorded(inputTokens, outputTokens):
             store.recordUsage(
                 sessionId: sessionId,
@@ -611,6 +645,25 @@ struct E2bSessionView: View {
                 )
             }
             streamingText = ""
+        case let .assistantTurnComplete(thinking, text):
+            // Stamp the most recent assistant row with the
+            // reasoning body the runner collected, so the
+            // E2B session renders the same collapsed
+            // ThinkingBlock as the chat composer. Skip if the
+            // turn was empty (the streamFinished branch above
+            // didn't append anything) or the thinking was
+            // empty (nothing to render).
+            guard !thinking.isEmpty,
+                  let last = store.session(id: sessionId)?.transcript.last,
+                  last.kind == .assistant
+            else { return }
+            let updated = E2bCodeMessage(
+                id: last.id,
+                kind: .assistant,
+                text: text.isEmpty ? last.text : text,
+                thoughtProcess: thinking
+            )
+            store.updateMessage(sessionId: sessionId, id: last.id, updated)
         }
     }
 
@@ -704,14 +757,28 @@ private struct MessageBubble: View {
     private var textBubble: some View {
         HStack {
             if isUser { Spacer(minLength: 32) }
-            VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
-                Text(message.text)
-                    .font(.system(size: 14))
-                    .foregroundStyle(textColor)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(bubbleBackground, in: RoundedRectangle(cornerRadius: 14))
+            VStack(alignment: isUser ? .trailing : .leading, spacing: 6) {
+                // Show a ThinkingBlock above the bubble for
+                // assistant turns where the model emitted
+                // reasoning (e.g. MiniMax's `<think>…</think>`
+                // text). Same component the chat composer uses
+                // — collapsed grey row, tap → "Thought
+                // process" sheet — so the two surfaces behave
+                // identically.
+                if message.kind == .assistant,
+                   let thinking = message.thoughtProcess,
+                   !thinking.isEmpty {
+                    ThinkingBlock(text: thinking)
+                }
+                if !message.text.isEmpty {
+                    Text(message.text)
+                        .font(.system(size: 14))
+                        .foregroundStyle(textColor)
+                        .textSelection(.enabled)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(bubbleBackground, in: RoundedRectangle(cornerRadius: 14))
+                }
             }
             if !isUser { Spacer(minLength: 32) }
         }

@@ -109,6 +109,12 @@ public actor E2bSessionRunner {
         let tools = Self.tools
         onEvent(.streamStarted)
         var streamedText: [String] = []
+        // Reasoning body (e.g. MiniMax's `<think>…</think>` text).
+        // The non-streaming LLM client emits a single
+        // `thinkingDelta` after the parser peels the tag open;
+        // we thread it onto the final assistant message so the
+        // view can render a ThinkingBlock with it.
+        var streamedThinking: [String] = []
         // Each tool call: id, name, accumulated input JSON.
         var toolCalls: [(id: String, name: String, inputJSON: String)] = []
         var streamedUsage: (input: Int, output: Int)?
@@ -124,6 +130,8 @@ public actor E2bSessionRunner {
             case let .textDelta(text):
                 streamedText.append(text)
                 onEvent(.textDelta(text: text))
+            case let .thinkingDelta(text):
+                streamedThinking.append(text)
             case let .toolCallStart(id, name, input):
                 // The wrapper client already yielded start; we
                 // also record the call so we can dispatch it
@@ -176,6 +184,18 @@ public actor E2bSessionRunner {
             for call in toolCalls {
                 finalContent += "\n\n[tool_call: \(call.name) id=\(call.id) input=\(call.inputJSON)]"
             }
+        }
+        let thinking = streamedThinking.joined()
+        // The runner is provider-agnostic; it doesn't know how
+        // to attach `thoughtProcess` to a specific history row.
+        // Emit a dedicated event so the view can stamp the
+        // final assistant message with the reasoning body it
+        // would otherwise lose when the turn ends.
+        if !thinking.isEmpty {
+            onEvent(.assistantTurnComplete(
+                thinking: thinking,
+                text: finalContent
+            ))
         }
         history.append(.init(role: .assistant, content: finalContent))
 
@@ -262,6 +282,13 @@ public actor E2bSessionRunner {
         /// Fired when the model finishes streaming text. The
         /// `text` is the joined full text of the turn.
         case streamFinished(text: String)
+        /// Fired when the runner has both the visible text and
+        /// the model's reasoning (`<think>…</think>` body) for
+        /// the just-completed turn. The view stamps the
+        /// existing assistant transcript row with the thinking
+        /// so the E2B session renders the same collapsed
+        /// ThinkingBlock as the chat composer.
+        case assistantTurnComplete(thinking: String, text: String)
     }
 
     /// The tool definitions Claude (or any OpenAI-compatible

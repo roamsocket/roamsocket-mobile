@@ -100,6 +100,13 @@ public enum AgentLLMEvent: Sendable {
     /// Incremental text delta from the model. Several of these
     /// in a row compose the full assistant turn text.
     case textDelta(text: String)
+    /// Model reasoning / scratchpad content, emitted when the
+    /// upstream wraps it in `<think>…</think>` (or returns it
+    /// through a provider-specific reasoning channel). The
+    /// runner threads these into the assistant message so the
+    /// UI can show the same collapsed Thinking block as the
+    /// chat composer. Optional — most models never emit it.
+    case thinkingDelta(text: String)
     /// A new tool_use block has started. `input` is the
     /// currently-known input (often empty at start; the rest
     /// comes through `toolCallInputDelta`).

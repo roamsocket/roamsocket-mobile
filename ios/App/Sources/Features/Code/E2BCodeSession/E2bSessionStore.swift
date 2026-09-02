@@ -240,6 +240,40 @@ final class E2bSessionStore: ObservableObject {
         persist()
     }
 
+    /// Replace an existing message in the transcript. The E2B
+    /// session's tool calls work in two phases: the runner
+    /// appends a `running…` placeholder when the call starts
+    /// and needs to update that same message in place once
+    /// the result lands — appending a second card left the
+    /// placeholder stuck on "running" forever. No-op if the id
+    /// isn't in the transcript (a tool call that somehow
+    /// finishes before the start event surfaces).
+    func updateMessage(sessionId: UUID, id: String, _ replacement: E2bCodeMessage) {
+        guard let idx = sessions.firstIndex(where: { $0.id == sessionId }) else { return }
+        guard let midx = sessions[idx].transcript.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        // Preserve the original id even if the replacement
+        // carries a new one — the caller didn't intend to fork
+        // the transcript row.
+        var updated = replacement
+        updated = E2bCodeMessage(
+            id: id,
+            kind: replacement.kind,
+            text: replacement.text,
+            tool: replacement.tool,
+            ok: replacement.ok,
+            path: replacement.path,
+            added: replacement.added,
+            removed: replacement.removed,
+            thoughtProcess: replacement.thoughtProcess,
+            createdAt: sessions[idx].transcript[midx].createdAt
+        )
+        sessions[idx].transcript[midx] = updated
+        sessions[idx].updatedAt = Date()
+        persist()
+    }
+
     /// Kill the sandbox backing a session. Marks the session
     /// as `.killed` so the UI shows the closed state. No-op if
     /// the session is already killed or has no live sandbox.

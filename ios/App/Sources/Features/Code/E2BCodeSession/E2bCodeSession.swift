@@ -127,6 +127,11 @@ public struct E2bCodeMessage: Codable, Identifiable, Hashable, Sendable {
     public var path: String?
     public var added: Int?
     public var removed: Int?
+    /// Optional full reasoning body for the "Thinking" row. Mirrors
+    /// `ChatMessage.thoughtProcess` so the E2B session can reuse
+    /// the regular chat's `ThinkingBlock` (collapsed grey row,
+    /// tap → "Thought process" sheet).
+    public var thoughtProcess: String?
     public var createdAt: Date
 
     public init(
@@ -138,6 +143,7 @@ public struct E2bCodeMessage: Codable, Identifiable, Hashable, Sendable {
         path: String? = nil,
         added: Int? = nil,
         removed: Int? = nil,
+        thoughtProcess: String? = nil,
         createdAt: Date = Date(),
     ) {
         self.id = id
@@ -148,6 +154,7 @@ public struct E2bCodeMessage: Codable, Identifiable, Hashable, Sendable {
         self.path = path
         self.added = added
         self.removed = removed
+        self.thoughtProcess = thoughtProcess
         self.createdAt = createdAt
     }
 }

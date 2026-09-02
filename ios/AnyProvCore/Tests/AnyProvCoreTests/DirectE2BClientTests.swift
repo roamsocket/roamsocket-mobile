@@ -873,6 +873,96 @@ final class DirectE2BClientTests: XCTestCase {
         XCTAssertFalse(openrouter.useNonStreaming, "OpenRouter streaming works fine")
     }
 
+    // MARK: - Provider-text tool-call parsing (MiniMax M3)
+
+    /// The non-streaming LLM response is plain text for MiniMax
+    /// M3 — the `message.tool_calls` array is empty, the
+    /// reasoning lives in `<think>…</think>`, and tool calls
+    /// arrive as `[tool_call: name]<param>value</param>` blocks.
+    /// The parser has to peel all three out so the runner sees
+    /// the same `toolCallStart / toolCallInputDelta /
+    /// toolCallEnd` events the standard path would have
+    /// produced. Lock the shape so a regex tweak can't
+    /// silently regress the dispatch.
+    func testParseProviderTextToolCallsExtractsRunShell() {
+        let raw = """
+        <think> I have tool error. The user is just testing. Let me just check status with simpler commands. </think> [tool_call: run_shell]<command>ls /code</command>
+        """
+        let parsed = OpenAICompatibleAgentLLM.parseProviderTextToolCalls(raw)
+        XCTAssertEqual(
+            parsed.thinking,
+            "I have tool error. The user is just testing. Let me just check status with simpler commands.",
+            "thinking body must be peeled out of <think>…</think>"
+        )
+        XCTAssertTrue(
+            parsed.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            "the cleaned visible content must not contain the thinking or tool-call markup; got: \(parsed.content)"
+        )
+        XCTAssertEqual(parsed.toolCalls.count, 1)
+        let call = try! XCTUnwrap(parsed.toolCalls.first)
+        XCTAssertEqual(call.name, "run_shell")
+        let args = try! XCTUnwrap(
+            try? JSONSerialization.jsonObject(with: Data(call.argumentsJSON.utf8)) as? [String: Any]
+        )
+        XCTAssertEqual(args["command"] as? String, "ls /code")
+    }
+
+    /// Multiple tool calls in one response must each land as
+    /// a separate parsed entry. The user's example had one
+    /// `run_shell`; the parser must also handle the
+    /// `[tool_call: a]…[tool_call: b]…` shape so a single
+    /// model turn can dispatch a tool sequence.
+    func testParseProviderTextToolCallsExtractsMultipleCalls() {
+        let raw = """
+        <think>plan</think> [tool_call: read_file]<path>/code/README.md</path> [tool_call: run_shell]<command>cat /code/README.md | head</command>
+        """
+        let parsed = OpenAICompatibleAgentLLM.parseProviderTextToolCalls(raw)
+        XCTAssertEqual(parsed.thinking, "plan")
+        XCTAssertEqual(parsed.toolCalls.count, 2)
+        XCTAssertEqual(parsed.toolCalls.map(\.name), ["read_file", "run_shell"])
+        let first = try! XCTUnwrap(parsed.toolCalls.first)
+        let firstArgs = try! XCTUnwrap(
+            try? JSONSerialization.jsonObject(with: Data(first.argumentsJSON.utf8)) as? [String: Any]
+        )
+        XCTAssertEqual(firstArgs["path"] as? String, "/code/README.md")
+    }
+
+    /// Parameter values that look like JSON (`{` / `[`) must
+    /// be parsed, not blindly stringified. `write_file` /
+    /// `edit_file` / `todos` all need this so the inner
+    /// objects round-trip through the same `toolCallInputDelta`
+    /// path the OpenAI-shape calls use.
+    func testParseProviderTextToolCallsDecodesJSONParameterValues() {
+        // Simpler shape first — one tag whose value is a
+        // JSON array of one object.
+        let raw = #"""
+        [tool_call: todos]<items>[{"content":"ping"}]</items>
+        """#
+        let parsed = OpenAICompatibleAgentLLM.parseProviderTextToolCalls(raw)
+        XCTAssertEqual(parsed.toolCalls.count, 1, "expected one parsed tool call")
+        let argsJSON = parsed.toolCalls[0].argumentsJSON
+        XCTAssertNotEqual(argsJSON, "{}", "tag scan dropped the items tag; argumentsJSON=\(argsJSON)")
+        let args = try! XCTUnwrap(
+            try? JSONSerialization.jsonObject(with: Data(argsJSON.utf8)) as? [String: Any]
+        )
+        let items = try! XCTUnwrap(args["items"] as? [[String: Any]])
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items[0]["content"] as? String, "ping")
+    }
+
+    /// Body without any provider markup must pass through
+    /// untouched (no thinking extraction, no tool calls,
+    /// content preserved). Prevents the parser from
+    /// accidentally mutating responses from providers that
+    /// already speak the OpenAI wire format.
+    func testParseProviderTextToolCallsPassthrough() {
+        let raw = "Hello there. I'll get started."
+        let parsed = OpenAICompatibleAgentLLM.parseProviderTextToolCalls(raw)
+        XCTAssertNil(parsed.thinking, "no <think> tag → no thinking")
+        XCTAssertEqual(parsed.toolCalls.count, 0)
+        XCTAssertEqual(parsed.content, raw)
+    }
+
     // MARK: - Stream timeout (hanging-model guard)
 
     /// When a model accepts the request but never sends a

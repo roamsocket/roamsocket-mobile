@@ -212,14 +212,12 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
                 "non-streaming response was not a recognised Chat Completions payload"
             )
         }
-        // Text.
-        if let content = message["content"] as? String, !content.isEmpty {
-            continuation.yield(.textDelta(text: content))
-        }
         // Tool calls. Same `{id, type, function: {name, arguments}}`
         // shape as the streaming `delta.tool_calls`, just on the
         // final message instead of per-chunk.
-        if let toolCalls = message["tool_calls"] as? [[String: Any]] {
+        let toolCalls = message["tool_calls"] as? [[String: Any]]
+        let hasStandardToolCalls = !(toolCalls?.isEmpty ?? true)
+        if hasStandardToolCalls, let toolCalls {
             for tc in toolCalls {
                 let id = tc["id"] as? String ?? ""
                 let fn = tc["function"] as? [String: Any]
@@ -235,6 +233,35 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
                     ))
                 }
                 continuation.yield(.toolCallEnd(id: id))
+            }
+        }
+        // Text + thinking. Some OpenAI-compatible providers —
+        // most notably MiniMax M3 — accept the request but
+        // return tool calls as embedded text markup instead of
+        // the `message.tool_calls` array, e.g.
+        //   `<think>plan</think> [tool_call: run_shell]<command>ls /code</command>`
+        // When the array is empty but the content looks like
+        // that shape, parse it out and emit the same event
+        // sequence the standard path would have produced. The
+        // runner / dispatcher don't need to know the
+        // difference; the tool call lands in `toolCalls` and
+        // runs the same e2b sandbox tools either way.
+        if let content = message["content"] as? String, !content.isEmpty {
+            let parsed2 = Self.parseProviderTextToolCalls(content)
+            if let thinking = parsed2.thinking, !thinking.isEmpty {
+                continuation.yield(.thinkingDelta(text: thinking))
+            }
+            if !parsed2.content.isEmpty {
+                continuation.yield(.textDelta(text: parsed2.content))
+            }
+            for call in parsed2.toolCalls {
+                continuation.yield(.toolCallStart(
+                    id: call.id, name: call.name, input: .init(raw: .object([:]))
+                ))
+                continuation.yield(.toolCallInputDelta(
+                    id: call.id, partialJSON: call.argumentsJSON
+                ))
+                continuation.yield(.toolCallEnd(id: call.id))
             }
         }
         // Usage (cumulative on the final chunk for OpenAI; on
@@ -264,6 +291,236 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
         var id: String = ""
         var name: String = ""
         var arguments: String = ""
+    }
+
+    /// One parsed provider-text tool call. The arguments are
+    /// pre-serialised to JSON so the existing
+    /// `toolCallInputDelta(partialJSON:)` path can carry them
+    /// without a second translation step.
+    struct ProviderTextCall: Sendable {
+        let id: String
+        let name: String
+        let argumentsJSON: String
+    }
+
+    /// Result of `parseProviderTextToolCalls`: reasoning text,
+    /// cleaned visible content, and any extracted tool calls.
+    struct ProviderTextResult: Sendable {
+        let thinking: String?
+        let content: String
+        let toolCalls: [ProviderTextCall]
+    }
+
+    /// Parse provider-text tool-call markup out of an assistant
+    /// message body. Covers the MiniMax M3 format:
+    ///
+    ///     `<think>…</think> [tool_call: run_shell]<command>ls /code</command>`
+    ///
+    /// Each `[tool_call: name]` is followed by one or more
+    /// `<param>value</param>` blocks; the body of each block is
+    /// treated as a string unless it parses as JSON, in which
+    /// case the parsed value is used (lets `write_file` and
+    /// friends pass nested objects). Returns the visible
+    /// content with thinking + tool-call markup stripped so
+    /// the user never sees raw provider XML.
+    nonisolated static func parseProviderTextToolCalls(_ raw: String) -> ProviderTextResult {
+        var text = raw
+
+        // 1. Pull thinking out. Same tag names as the chat
+        //    composer's ThinkingExtractor so the runner /
+        //    view can reuse the existing pipeline.
+        var thinking: String?
+        if let thinkRange = text.range(
+            of: #"<(think|thinking|reasoning|reflection|thought|analysis)\b[^>]*>[\s\S]*?</\1>"#,
+            options: [.regularExpression, .caseInsensitive]
+        ) {
+            let inner = text[thinkRange]
+            // Strip the outer tags.
+            if let openEnd = inner.range(of: ">"),
+               let closeStart = inner.range(of: "</", options: .backwards) {
+                let body = inner[openEnd.upperBound..<closeStart.lowerBound]
+                thinking = body.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            text.replaceSubrange(thinkRange, with: "")
+        }
+
+        // 2. Extract tool calls. Each block starts with
+        //    `[tool_call: <name>]` and ends at the next
+        //    `[tool_call:` marker or end of text. Parameter
+        //    pairs are `<param>value</param>` tags inside the
+        //    block.
+        // Use Swift's String APIs for the marker scan so we
+        // stay in character-space (no NSRange / UTF-16
+        // round-tripping). The marker is the literal
+        // `[tool_call: <name>]` opener, and the block body
+        // runs from the close `]` to the next opener or end
+        // of text.
+        struct Hit {
+            let markerStart: String.Index
+            let markerEnd: String.Index
+            let blockEnd: String.Index
+            let name: String
+            let inputObject: [String: Any]
+        }
+        var hits: [Hit] = []
+        // Collect marker positions first.
+        var markerPositions: [(start: String.Index, end: String.Index, name: String)] = []
+        var searchStart = text.startIndex
+        while searchStart < text.endIndex {
+            guard let openBracket = text[searchStart...].firstIndex(of: "[") else { break }
+            let rest = text[openBracket...]
+            // Look for the closing `]` within the same line-ish window
+            // (MiniMax emits `[tool_call: name]` on a single line).
+            guard let closeBracket = rest.firstIndex(of: "]") else { break }
+            // Verify the content between `[` and `]` is `tool_call: <name>`.
+            let inside = rest[rest.index(after: openBracket)..<closeBracket]
+            if inside.lowercased().hasPrefix("tool_call:") {
+                let nameStart = rest.index(after: openBracket)
+                let nameTrimmed = inside
+                    .dropFirst("tool_call:".count)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let name = String(nameTrimmed)
+                if !name.isEmpty,
+                   name.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }) {
+                    markerPositions.append((openBracket, rest.index(after: closeBracket), name))
+                }
+            }
+            searchStart = text.index(after: openBracket)
+        }
+        // Build per-marker blocks.
+        for (i, marker) in markerPositions.enumerated() {
+            let nextStart: String.Index
+            if i + 1 < markerPositions.count {
+                nextStart = markerPositions[i + 1].start
+            } else {
+                nextStart = text.endIndex
+            }
+            let blockEnd = nextStart
+            guard marker.end <= blockEnd else { continue }
+            let block = String(text[marker.end..<blockEnd])
+            // Extract `<param>value</param>` pairs.
+            var inputObject: [String: Any] = [:]
+            var tagSearch = block.startIndex
+            while tagSearch < block.endIndex {
+                guard let openAngle = block[tagSearch...].firstIndex(of: "<") else { break }
+                let afterOpen = block.index(after: openAngle)
+                // Tag name: letters / digits / underscore / dash,
+                // terminated by whitespace or `>`.
+                var nameEnd = afterOpen
+                while nameEnd < block.endIndex,
+                      let c = block[nameEnd].unicodeScalars.first,
+                      (CharacterSet.letters.contains(c) ||
+                       CharacterSet.decimalDigits.contains(c) ||
+                       c == "_" || c == "-") {
+                    nameEnd = block.index(after: nameEnd)
+                }
+                guard nameEnd > afterOpen,
+                      block[nameEnd] == ">",
+                      let closeAngle = block[nameEnd...].firstIndex(of: "<"),
+                      block[closeAngle...].hasPrefix("</")
+                else {
+                    // No more parseable tag on this line — bail.
+                    break
+                }
+                let tagName = String(block[afterOpen..<nameEnd])
+                // Match `</tagName>` exactly so we don't accidentally
+                // close on a similarly-named inner tag.
+                let expectedCloseStart = closeAngle
+                let closeTagNameStart = block.index(after: expectedCloseStart)
+                guard closeTagNameStart < block.endIndex,
+                      block[closeTagNameStart] == "/"
+                else {
+                    // Malformed close tag — skip.
+                    tagSearch = block.index(after: openAngle)
+                    continue
+                }
+                let closeTagNameAfterSlash = block.index(after: closeTagNameStart)
+                var closeNameEnd = closeTagNameAfterSlash
+                while closeNameEnd < block.endIndex,
+                      let c = block[closeNameEnd].unicodeScalars.first,
+                      (CharacterSet.letters.contains(c) ||
+                       CharacterSet.decimalDigits.contains(c) ||
+                       c == "_" || c == "-") {
+                    closeNameEnd = block.index(after: closeNameEnd)
+                }
+                guard closeNameEnd < block.endIndex,
+                      block[closeNameEnd] == ">"
+                else {
+                    // Malformed close tag — skip.
+                    tagSearch = block.index(after: openAngle)
+                    continue
+                }
+                let closeTagName = String(block[closeTagNameAfterSlash..<closeNameEnd])
+                guard closeTagName == tagName else {
+                    // Mismatched close tag — skip this open.
+                    tagSearch = block.index(after: openAngle)
+                    continue
+                }
+                let valueStart = block.index(after: nameEnd)
+                let valueEnd = expectedCloseStart
+                let raw = String(block[valueStart..<valueEnd])
+                let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let data = trimmed.data(using: .utf8),
+                   let parsed = try? JSONSerialization.jsonObject(with: data),
+                   !(parsed is NSNull) {
+                    inputObject[tagName] = parsed
+                } else {
+                    inputObject[tagName] = trimmed
+                }
+                // Continue scanning after the close tag.
+                tagSearch = block.index(after: closeNameEnd)
+            }
+            hits.append(Hit(
+                markerStart: marker.start,
+                markerEnd: marker.end,
+                blockEnd: blockEnd,
+                name: marker.name,
+                inputObject: inputObject
+            ))
+        }
+        // Mutate `text` in reverse (so earlier offsets stay
+        // valid) and assemble the result in forward order.
+        var calls: [ProviderTextCall] = []
+        for (i, hit) in hits.enumerated().reversed() {
+            let argumentsData = (try? JSONSerialization.data(
+                withJSONObject: hit.inputObject,
+                options: [.sortedKeys]
+            )) ?? Data("{}".utf8)
+            let argumentsJSON = String(data: argumentsData, encoding: .utf8) ?? "{}"
+            let id = "tc_text_\(i)_\(UUID().uuidString.prefix(8))"
+            calls.insert(ProviderTextCall(
+                id: id,
+                name: hit.name,
+                argumentsJSON: argumentsJSON
+            ), at: 0)
+            // Strip this block (including the leading marker)
+            // from `text` so the user never sees the markup.
+            text.replaceSubrange(
+                hit.markerStart..<hit.blockEnd,
+                with: ""
+            )
+        }
+
+        // Tidy up: collapse runs of whitespace left by
+        // removal, then trim.
+        let cleaned = text
+            .replacingOccurrences(
+                of: #"[ \t]{2,}"#,
+                with: " ",
+                options: .regularExpression
+            )
+            .replacingOccurrences(
+                of: #"\n[ \t]+"#,
+                with: "\n",
+                options: .regularExpression
+            )
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return ProviderTextResult(
+            thinking: thinking,
+            content: cleaned,
+            toolCalls: calls
+        )
     }
 
     /// Build the Chat Completions request body. Messages are
