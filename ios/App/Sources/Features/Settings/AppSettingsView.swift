@@ -13,6 +13,7 @@ struct AppSettingsView: View {
     @State private var showMCP = false
     @State private var showMarketplace = false
     @State private var showMemory = false
+    @State private var showSandboxes = false
     @State private var showAbout = false
     @State private var showProviderKeys = false
     @State private var showLocalMetal = false
@@ -108,6 +109,10 @@ struct AppSettingsView: View {
         }
         .sheet(isPresented: $showMemory) {
             ManageMemoryView()
+                .environmentObject(state)
+        }
+        .sheet(isPresented: $showSandboxes) {
+            SandboxesView()
                 .environmentObject(state)
         }
         .sheet(isPresented: $showE2BKeySheet) {
@@ -219,7 +224,11 @@ struct AppSettingsView: View {
                     statusLabel: e2bQuickAccessStatus,
                     isReady: e2bQuickAccessIsReady,
                     action: {
-                        showE2BKeySheet = true
+                        if state.serverToken != nil || !(state.e2bKeyStore.get() ?? "").isEmpty {
+                            showSandboxes = true
+                        } else {
+                            showE2BKeySheet = true
+                        }
                     },
                 )
                 Divider().background(Theme.separator)

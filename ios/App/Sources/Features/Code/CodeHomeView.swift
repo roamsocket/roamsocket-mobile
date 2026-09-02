@@ -431,6 +431,7 @@ struct CodeHomeView: View {
     @State private var showEnvironmentPicker = false
     @State private var showModelPicker = false
     @State private var showNewSession = false
+    @State private var showSandboxRuns = false
     @State private var showArchived = false
     /// Live coding session presented as a full-screen cover (same path as Chat).
     /// Nested `navigationDestination` under Code was unreliable: sessions never
@@ -600,6 +601,10 @@ struct CodeHomeView: View {
         }
         .sheet(isPresented: $showFilterSheet) {
             SessionFilterSheet(selection: $statusFilter)
+        }
+        .sheet(isPresented: $showSandboxRuns) {
+            SandboxesView()
+                .environmentObject(state)
         }
         .sheet(isPresented: $showEnvironmentPicker) {
             EnvironmentPickerSheet()
@@ -1000,8 +1005,7 @@ struct CodeHomeView: View {
     private var newSessionFAB: some View {
         HStack(spacing: 10) {
             Button {
-                // Keep the quick-run affordance available beside session creation.
-                launchError = "Quick runs are available from a coding session. Start a session first."
+                showSandboxRuns = true
             } label: {
                 Image(systemName: "terminal.cursor.and.arrow.forward")
                     .font(.system(size: 17, weight: .semibold))
