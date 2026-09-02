@@ -701,6 +701,36 @@ struct AppSettingsView: View {
         }
     }
 
+    // MARK: - Sandboxes (E2B)
+
+    /// Settings entry for the full E2B screen and the phone-owned API key.
+    private var sandboxesSection: some View {
+        settingsCard(header: "Sandboxes (E2B)") {
+            VStack(spacing: 0) {
+                Button {
+                    showSandboxes = true
+                } label: {
+                    row(systemImage: "shippingbox", title: "E2B runs", trailing: "Open")
+                }
+                .buttonStyle(.plain)
+
+                Divider().background(Theme.separator)
+
+                Button {
+                    e2bKeyDraft = ""
+                    showE2BKeySheet = true
+                } label: {
+                    row(
+                        systemImage: state.e2bKeyStore.hasKey ? "key.fill" : "key",
+                        title: "E2B API key",
+                        trailing: state.e2bKeyStore.hasKey ? "Set" : "Not set"
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
     // MARK: - Settings backup
 
     /// GitHub-backed settings sync. The app auto-creates
