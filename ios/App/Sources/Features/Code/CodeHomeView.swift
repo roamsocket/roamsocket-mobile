@@ -432,7 +432,7 @@ struct CodeHomeView: View {
     @State private var showModelPicker = false
     @State private var showNewSession = false
     @State private var showSandboxRuns = false
-    @State private var codeMode: CodeMode = .sandboxes
+    @State private var codeMode: CodeMode = .desktop
     @State private var showArchived = false
     /// Live coding session presented as a full-screen cover (same path as Chat).
     /// Nested `navigationDestination` under Code was unreliable: sessions never
@@ -765,6 +765,9 @@ struct CodeHomeView: View {
                 .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
             }
             .buttonStyle(.plain)
+            Text("Start from your phone with an E2B API key — no desktop required.")
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.textTertiary)
         }
     }
 
