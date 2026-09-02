@@ -33,6 +33,12 @@ struct E2bSessionView: View {
     /// normal `assistant` message and clear the buffer.
     @State private var streamingText: String = ""
     @State private var agentTask: Task<Void, Never>?
+    /// Drives the model picker sheet. Surfaced as a small pill
+    /// above the input bar so the user can change models without
+    /// leaving the code session — the picker is filtered to
+    /// coding-capable providers via `codingOnly: true`.
+    @State private var showModelPicker: Bool = false
+    @State private var showProviderSettings: Bool = false
     @FocusState private var inputFocused: Bool
     @Environment(\.openURL) private var openURL
 
@@ -51,6 +57,20 @@ struct E2bSessionView: View {
             }
             .navigationTitle(session?.title ?? "Session")
             .navigationBarTitleDisplayMode(.inline)
+            .sheet(isPresented: $showModelPicker, onDismiss: syncSessionModelFromGlobal) {
+                ModelPickerSheet(codingOnly: true)
+                    .environmentObject(state)
+            }
+            .sheet(isPresented: $showProviderSettings) {
+                // The "Add a model" CTA in the model pill needs
+                // somewhere to land. The chat composer's
+                // `showProviderSettings` jumps into the providers
+                // tab; here we re-use the same view but inside the
+                // session sheet so the back button still returns to
+                // the chat.
+                AppSettingsView()
+                    .environmentObject(state)
+            }
             .toolbar {
                 // Leave the chat without killing the sandbox — the
                 // session stays listed on the Code home and can be
@@ -229,6 +249,30 @@ struct E2bSessionView: View {
     private var inputBar: some View {
         VStack(spacing: 0) {
             Divider().overlay(Theme.separator)
+            // Model picker — sits above the text field so the
+            // user can see which model is about to run and
+            // switch without leaving the session. The pill's
+            // `requiresCodingAgent` flag means phone-only Metal
+            // isn't offered (the agent loop is wired for
+            // Anthropic / OpenAI-compatible providers).
+            HStack(spacing: 8) {
+                ModelSelectorPill(
+                    modelDisplayName: modelPillTitle,
+                    onPick: {
+                        inputFocused = false
+                        showModelPicker = true
+                    },
+                    onAddModel: {
+                        inputFocused = false
+                        showProviderSettings = true
+                    },
+                    requiresCodingAgent: true
+                )
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 6)
+            .padding(.bottom, 2)
             HStack(alignment: .bottom, spacing: 8) {
                 TextField(
                     "Ask the agent to write, run, or commit code…",
@@ -289,6 +333,34 @@ struct E2bSessionView: View {
         case .failed: return "Failed"
         case .killed: return "Closed"
         }
+    }
+
+    /// Display name shown on the model pill above the input
+    /// bar. Empty when no model is selected — the pill itself
+    /// switches into the "+ Add a model" CTA in that case.
+    /// The session has its own `modelID` (stamped at first turn
+    /// so cost estimates stay consistent), but the picker
+    /// writes through `state.selectedModel` and mirrors onto
+    /// the session — that's what `send()` already reads, so
+    /// changing the pill takes effect on the next message.
+    private var modelPillTitle: String {
+        guard let model = state.selectedModel else { return "" }
+        return state.displayName(for: model)
+    }
+
+    /// Mirror the global `state.selectedModel` onto the session
+    /// when the model picker dismisses. Without this, the cost
+    /// footer would keep quoting the old rate until the next
+    /// message goes out (and `send()` only stamps the session
+    /// when the model *id* changes, so a same-id rename via
+    /// the picker would be invisible). Cheap to call — the
+    /// store's setter is a no-op when the value is unchanged.
+    private func syncSessionModelFromGlobal() {
+        guard let model = state.selectedModel,
+              let s = session,
+              s.modelID != model.modelID
+        else { return }
+        store.setModelID(sessionId, modelID: model.modelID)
     }
 
     // MARK: - Actions
