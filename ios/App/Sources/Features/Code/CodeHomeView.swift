@@ -337,6 +337,7 @@ struct CodeHomeView: View {
                     case .desktop: desktopSection
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
             // FABs for the sandbox tab: terminal/cursor quick run at left,
             // followed by the primary new-session action.
@@ -542,7 +543,7 @@ struct CodeHomeView: View {
         if rows.isEmpty && sessions.isEmpty {
             CodeEmptyState(
                 hasPhoneKey: state.e2bKeyStore.hasKey,
-                onStart: { showStartSheet = true },
+                onStart: { showSessionSheet = true },
                 onAddKey: { state.showE2BKeySheet = true },
             )
             .frame(maxWidth: .infinity)
@@ -854,6 +855,7 @@ private struct NewE2BSessionSheet: View {
     @State private var title: String = ""
     @State private var branch: String = "main"
     @State private var isOpening: Bool = false
+    @State private var showRepositoryPicker = false
 
     var body: some View {
         NavigationStack {
@@ -861,6 +863,19 @@ private struct NewE2BSessionSheet: View {
                 Theme.background.ignoresSafeArea()
                 Form {
                     Section {
+                        Button {
+                            showRepositoryPicker = true
+                        } label: {
+                            HStack {
+                                Image(systemName: "folder")
+                                Text(state.selectedRepo?.fullName ?? "Choose repository")
+                                    .foregroundStyle(state.selectedRepo == nil ? Theme.textSecondary : Theme.textPrimary)
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .foregroundStyle(Theme.textTertiary)
+                            }
+                        }
+                        .buttonStyle(.plain)
                         TextField("Session title (optional)", text: $title)
                         TextField("Branch", text: $branch)
                             .textInputAutocapitalization(.never)
@@ -868,11 +883,7 @@ private struct NewE2BSessionSheet: View {
                     } header: {
                         Text("Repository")
                     } footer: {
-                        if let repo = state.selectedRepo {
-                            Text("Will open \(repo.fullName) on a fresh e2b sandbox.")
-                        } else {
-                            Text("Choose a repository on the home screen first.")
-                        }
+                        Text(state.selectedRepo.map { "Will open \($0.fullName) on a fresh e2b sandbox." } ?? "Choose a repository above.")
                     }
                 }
                 .scrollContentBackground(.hidden)
@@ -895,6 +906,10 @@ private struct NewE2BSessionSheet: View {
                     .disabled(state.selectedRepo == nil || isOpening)
                 }
             }
+        }
+        .sheet(isPresented: $showRepositoryPicker) {
+            RepositoryPickerSheet()
+                .environmentObject(state)
         }
     }
 }
