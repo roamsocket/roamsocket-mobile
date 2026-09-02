@@ -537,9 +537,12 @@ struct CodeHomeView: View {
                     pairDesktopCard
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .top)
             .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.top, 12)
+            .padding(.bottom, 96)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     /// E2B sandboxes section. Shows the user's long-lived code
@@ -550,7 +553,8 @@ struct CodeHomeView: View {
     @ViewBuilder
     private var e2bSection: some View {
         let sessions = state.e2bSessionStore.sessions
-        if rows.isEmpty && sessions.isEmpty {
+        ScrollView {
+            if rows.isEmpty && sessions.isEmpty {
             CodeEmptyState(
                 hasPhoneKey: state.e2bKeyStore.hasKey,
                 onStart: { showSessionSheet = true },
@@ -630,7 +634,12 @@ struct CodeHomeView: View {
                     }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .top)
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 96)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     /// Row for one E2B code session. Tap to open the chat.
