@@ -317,6 +317,12 @@ struct CodeHomeView: View {
         ZStack(alignment: .bottomTrailing) {
             Theme.background.ignoresSafeArea()
             VStack(spacing: 0) {
+                // Own top bar: Code is a sidebar-level destination, so the
+                // leading edge shows the drawer button, never a back
+                // chevron. The system nav bar is hidden entirely
+                // (`.toolbar(.hidden, for: .navigationBar)` below) so a back
+                // button can't reappear next to the hamburger.
+                topBar
                 // Segmented picker at the top — same UX as the
                 // Settings quick-access cards but cleaner for two
                 // parallel runtimes.
@@ -350,8 +356,8 @@ struct CodeHomeView: View {
                             state.showE2BKeySheet = true
                         }
                     } label: {
-                        Image(systemName: "terminal.cursor")
-                            .font(.system(size: 17, weight: .semibold))
+                        Image(systemName: "chevron.left.forwardslash.chevron.right")
+                            .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(Theme.textPrimary)
                             .frame(width: 48, height: 48)
                             .background(Theme.surfaceElevated, in: Circle())
@@ -382,18 +388,10 @@ struct CodeHomeView: View {
                 .padding(.bottom, 24)
             }
         }
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button(action: onOpenSidebar) {
-                    Image(systemName: "line.3.horizontal")
-                        .font(.system(size: 18, weight: .medium))
-                        .foregroundStyle(Theme.textPrimary)
-                        .frame(width: 36, height: 36)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Open sidebar")
-            }
-        }
+        // Hide the system navigation bar (same pattern as BrowserHomeView).
+        // The custom `topBar` above replaces it, so only the hamburger
+        // shows — the back button can never appear.
+        .toolbar(.hidden, for: .navigationBar)
         .sheet(isPresented: $showStartSheet) {
             StartRunSheet(onStart: { req in startRun(req) })
                 .presentationDetents([.large])
@@ -443,6 +441,26 @@ struct CodeHomeView: View {
         } message: {
             Text(startError ?? "")
         }
+    }
+
+    /// Top-left hamburger that opens the sidebar drawer. Replaces the
+    /// system back button (see `body`: the nav bar is hidden entirely).
+    private var topBar: some View {
+        HStack(spacing: 0) {
+            Button(action: onOpenSidebar) {
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(Theme.textPrimary)
+                    .frame(width: 36, height: 36)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open sidebar")
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
     }
 
     private var rows: [RunRow] {

@@ -306,10 +306,11 @@ final class DirectE2BClientTests: XCTestCase {
     }
 
     /// e2b.dev rejects `timeout` values over 1 hour with a
-    /// confusing server-side error. The client clamps to the
-    /// ceiling so callers can't trip the API. Verify the clamp
-    /// via the captured request body: a 2-hour timeout must
-    /// arrive at the server as 3,600,000.
+    /// confusing server-side error ("Timeout can not be greater
+    /// than 1 hours"). The client clamps to the ceiling and sends
+    /// the value in **seconds**. Verify via the captured request
+    /// body: a 2-hour (7,200,000 ms) timeout must arrive as
+    /// 3,600 seconds, not 3,600,000.
     func testCreateSandboxClampsTimeoutToOneHour() async throws {
         final class CapturingHTTP: HTTPClient, @unchecked Sendable {
             var capturedBody: Data?
@@ -336,8 +337,9 @@ final class DirectE2BClientTests: XCTestCase {
         let body = try XCTUnwrap(cap.capturedBody)
         let obj = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
         let timeout = try XCTUnwrap(obj["timeout"] as? Int)
-        XCTAssertEqual(timeout, 3_600_000, "timeout must be clamped to 1 hour")
+        XCTAssertEqual(timeout, 3_600, "timeout must be sent in seconds, clamped to 1 hour")
         XCTAssertEqual(DirectE2BClient.maxSandboxTimeoutMs, 3_600_000)
+        XCTAssertEqual(DirectE2BClient.maxSandboxTimeoutSeconds, 3_600)
     }
 
     /// Negative or zero timeouts shouldn't blow up — clamp to 0
@@ -402,6 +404,68 @@ final class DirectE2BClientTests: XCTestCase {
         // No HTTP client needed — empty key short-circuits.
         let client = DirectE2BClient(apiKey: "   ", http: MockHTTPClient(routes: []))
         await client.killSandbox(sandboxId: "sb_xyz") // should not throw
+    }
+
+    // MARK: - extendTimeout
+
+    func testExtendTimeoutPostsSecondsToTimeoutEndpoint() async throws {
+        final class Capturing: HTTPClient, @unchecked Sendable {
+            var lastMethod: String?
+            var lastURL: String?
+            var capturedBody: Data?
+            func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+                lastMethod = request.httpMethod
+                lastURL = request.url?.absoluteString
+                capturedBody = request.httpBody
+                return (Data(), HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: nil
+                )!)
+            }
+        }
+        let cap = Capturing()
+        let client = DirectE2BClient(
+            apiKey: "e2b_testkey1234567890abcdef",
+            http: cap
+        )
+        let status = try await client.extendTimeout(sandboxId: "sb_xyz")
+        XCTAssertEqual(status, 200)
+        XCTAssertEqual(cap.lastMethod, "POST")
+        XCTAssertEqual(cap.lastURL?.contains("/sandboxes/sb_xyz/timeout"), true)
+        let obj = try XCTUnwrap(
+            cap.capturedBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        )
+        // e2b's endpoint counts TTL in seconds — the wire value must
+        // never be the ms number (same trap as createSandbox).
+        XCTAssertEqual(obj["timeout"] as? Int, 3600)
+    }
+
+    func testExtendTimeoutClampsToMax() async throws {
+        final class Capturing: HTTPClient, @unchecked Sendable {
+            var capturedBody: Data?
+            func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+                capturedBody = request.httpBody
+                return (Data(), HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: nil
+                )!)
+            }
+        }
+        let cap = Capturing()
+        let client = DirectE2BClient(
+            apiKey: "e2b_testkey1234567890abcdef",
+            http: cap
+        )
+        // Ask for 2 hours — must clamp down to 1 hour, in seconds.
+        try await client.extendTimeout(sandboxId: "sb_xyz", timeoutSeconds: 7_200)
+        let obj = try XCTUnwrap(
+            cap.capturedBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        )
+        XCTAssertEqual(obj["timeout"] as? Int, 3_600)
     }
 
     // MARK: - verifyKey

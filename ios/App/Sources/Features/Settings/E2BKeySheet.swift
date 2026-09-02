@@ -171,8 +171,9 @@ struct E2BKeySheet: View {
             switch error {
             case .noApiKey: return .failed("Key is empty.")
             case let .http(status, body):
-                let snippet = body.isEmpty ? "" : " — \(body.prefix(80))"
-                return .failed("e2b.dev rejected the key (HTTP \(status))\(snippet)")
+                // e2b.dev returns JSON error bodies; surface the
+                // human-readable `message` instead of the raw blob.
+                return .failed("e2b.dev rejected the key: \(DirectE2BError.friendlyMessage(status: status, body: body))")
             case let .transport(msg): return .failed("Network error: \(msg)")
             case let .decoding(msg): return .failed("Couldn't decode the response: \(msg)")
             case let .stream(msg): return .failed("Stream error: \(msg)")

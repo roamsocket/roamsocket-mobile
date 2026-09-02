@@ -20,15 +20,36 @@ import AnyProvCore
 final class E2bSessionStore: ObservableObject {
     @Published private(set) var sessions: [E2bCodeSession] = []
 
-    private let client: DirectE2BClient?
-    private let apiKey: String?
+    /// Optional key captured at init (tests / overrides). When nil the
+    /// store reads the live key from the shared `E2BKeyStore` at each
+    /// call, so a key saved after launch is picked up immediately.
+    private let overrideKey: String?
+    private let defaults: UserDefaults
     private let persistence: E2bSessionPersistence
 
-    init(apiKey: String? = nil) {
-        self.apiKey = apiKey
-        self.client = apiKey.map { DirectE2BClient(apiKey: $0) }
+    init(apiKey: String? = nil, defaults: UserDefaults = .standard) {
+        self.overrideKey = apiKey
+        self.defaults = defaults
         self.persistence = E2bSessionPersistence()
         self.sessions = persistence.load().map { Self.normaliseOnLoad($0) }
+    }
+
+    /// Build the e2b client from the *current* key: an explicit init
+    /// override wins, otherwise the live value from `E2BKeyStore` on
+    /// this device. Resolving per call (instead of at init) matters
+    /// because `AppState` creates this store at launch, before the
+    /// user necessarily has a key — sandbox creation and teardown
+    /// must see the key the user actually saved.
+    private func makeClient() -> DirectE2BClient? {
+        let key: String?
+        if let overrideKey, !overrideKey.isEmpty {
+            key = overrideKey
+        } else {
+            key = E2BKeyStore(defaults: defaults).get()?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard let key, !key.isEmpty else { return nil }
+        return DirectE2BClient(apiKey: key)
     }
 
     // MARK: - Session lifecycle
@@ -49,7 +70,7 @@ final class E2bSessionStore: ObservableObject {
         modelID: String = "claude-sonnet-4-5",
         githubToken: String? = nil,
     ) async throws -> UUID {
-        guard let client else {
+        guard let client = makeClient() else {
             throw E2BSessionError.noApiKey
         }
         // 1. Persist a placeholder row so the UI can render the
@@ -223,7 +244,7 @@ final class E2bSessionStore: ObservableObject {
         guard let idx = sessions.firstIndex(where: { $0.id == sessionId }) else { return }
         let sandboxId = sessions[idx].sandboxId
         let accessToken = sessions[idx].sandboxAccessToken
-        if let client, let sandboxId, !sandboxId.isEmpty {
+        if let client = makeClient(), let sandboxId, !sandboxId.isEmpty {
             await client.killSandbox(sandboxId: sandboxId)
         }
         sessions[idx].sandboxId = nil

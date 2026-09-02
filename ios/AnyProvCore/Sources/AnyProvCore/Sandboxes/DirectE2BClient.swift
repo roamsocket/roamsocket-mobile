@@ -218,12 +218,43 @@ public enum DirectE2BError: Error, LocalizedError {
         switch self {
         case .noApiKey: return "Add your e2b.dev API key in Settings first."
         case let .http(status, body):
-            let snippet = body.isEmpty ? "" : " — \(body.prefix(160))"
-            return "E2B HTTP \(status)\(snippet)"
+            return "E2B HTTP \(status): \(Self.friendlyMessage(status: status, body: body))"
         case let .decoding(msg): return "Failed to decode E2B response: \(msg)"
         case let .stream(msg): return "E2B stream: \(msg)"
         case let .transport(msg): return "E2B transport: \(msg)"
         }
+    }
+
+    /// Turn an e2b.dev error response body into a short,
+    /// human-readable message.
+    ///
+    /// e2b returns JSON shaped like
+    /// `{"code":…,"message":"…","error_code":"…"}` — when it
+    /// parses we surface the `message` verbatim. Anything else (proxy
+    /// errors, HTML, empty bodies) falls back to the first line of the
+    /// raw body, truncated, so callers never dump the full JSON blob
+    /// into the UI.
+    public static func friendlyMessage(status: Int, body: String) -> String {
+        struct Payload: Decodable {
+            let message: String?
+            let errorCode: String?
+            enum CodingKeys: String, CodingKey {
+                case message
+                case errorCode = "error_code"
+            }
+        }
+        if let data = body.data(using: .utf8),
+           let payload = try? JSONDecoder().decode(Payload.self, from: data),
+           let message = payload.message?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !message.isEmpty {
+            return message
+        }
+        let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        let firstLine = trimmed.split(separator: "\n").first.map(String.init) ?? ""
+        if !firstLine.isEmpty {
+            return firstLine.count > 160 ? String(firstLine.prefix(160)) + "…" : firstLine
+        }
+        return "HTTP \(status) with no message"
     }
 }
 
@@ -463,10 +494,14 @@ public final class DirectE2BClient: @unchecked Sendable {
 
     // MARK: - Sandbox lifecycle
 
-    /// e2b.dev's `POST /sandboxes` rejects `timeout` values over
-    /// 1 hour (3,600,000 ms). We clamp to that ceiling so callers
-    /// can't trip the API by accident — the request is in ms.
+    /// e2b.dev's `POST /sandboxes` reads `timeout` in **seconds** and
+    /// rejects values over 1 hour ("Timeout can not be greater than
+    /// 1 hours"). The public API stays millisecond-based
+    /// (`timeoutMs`), so we keep the ms ceiling here and convert to
+    /// seconds on the wire (`maxSandboxTimeoutSeconds`).
     public static let maxSandboxTimeoutMs: Int = 3_600_000
+    /// e2b.dev's wire-level cap for `POST /sandboxes`: 3600 seconds.
+    public static let maxSandboxTimeoutSeconds: Int = 3_600
 
     /// Create a fresh sandbox. Returns the e2b sandbox id and the
     /// "X-Access-Token" the sandbox returned; the token is needed to
@@ -474,9 +509,11 @@ public final class DirectE2BClient: @unchecked Sendable {
     ///
     /// `timeoutMs` is the sandbox lifetime in **milliseconds** and
     /// is clamped to `maxSandboxTimeoutMs` (1 hour) — e2b.dev's
-    /// own limit. The default of 1 hour is right for long-lived
-    /// code sessions where the user might run an agent loop for
-    /// a while; one-shot runs can pass a smaller value.
+    /// own limit. The wire value is sent in seconds
+    /// (`timeoutMs / 1000`): sending the raw ms number makes the API
+    /// reject the request. The default of 1 hour is right for
+    /// long-lived code sessions where the user might run an agent
+    /// loop for a while; one-shot runs can pass a smaller value.
     public func createSandbox(
         template: String = DirectE2BClient.codeInterpreterTemplate,
         timeoutMs: Int = 3_600_000,
@@ -496,7 +533,9 @@ public final class DirectE2BClient: @unchecked Sendable {
         req.setValue("anyprov-code", forHTTPHeaderField: "User-Agent")
         let body: [String: Any] = [
             "templateID": template,
-            "timeout": safeTimeoutMs,
+            // e2b.dev validates this field in seconds (max 3_600), so
+            // the ms value must be divided down before sending.
+            "timeout": safeTimeoutMs / 1000,
         ]
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
@@ -529,6 +568,50 @@ public final class DirectE2BClient: @unchecked Sendable {
         } catch {
             throw DirectE2BError.decoding(String(describing: error))
         }
+    }
+
+    /// Keep a running sandbox alive by resetting its TTL.
+    /// e2b.dev expires sandboxes N seconds after creation (or after the
+    /// last timeout call), so long agent sessions call this on every
+    /// user message and tool call — exactly the keep-alive the E2B
+    /// design doc prescribes (`sandbox.setTimeout(...)` per step).
+    ///
+    /// - Parameter timeoutSeconds: TTL measured **from now**, in
+    ///   seconds, clamped to `maxSandboxTimeoutSeconds` (1 hour for
+    ///   Hobby accounts).
+    /// - Returns: the HTTP status (200 on success).
+    @discardableResult
+    public func extendTimeout(
+        sandboxId: String,
+        timeoutSeconds: Int = DirectE2BClient.maxSandboxTimeoutSeconds,
+    ) async throws -> Int {
+        let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw DirectE2BError.noApiKey }
+        let safe = min(max(0, timeoutSeconds), DirectE2BClient.maxSandboxTimeoutSeconds)
+
+        var req = URLRequest(
+            url: baseURL
+                .appendingPathComponent("sandboxes")
+                .appendingPathComponent(sandboxId)
+                .appendingPathComponent("timeout")
+        )
+        req.httpMethod = "POST"
+        req.setValue(trimmed, forHTTPHeaderField: "X-API-Key")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("anyprov-code", forHTTPHeaderField: "User-Agent")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["timeout": safe])
+
+        let (data, response): (Data, HTTPURLResponse)
+        do {
+            (data, response) = try await http.data(for: req)
+        } catch {
+            throw DirectE2BError.transport(error.localizedDescription)
+        }
+        guard (200..<300).contains(response.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw DirectE2BError.http(status: response.statusCode, body: body)
+        }
+        return response.statusCode
     }
 
     /// Kill a sandbox by id. Best-effort: errors are swallowed because
