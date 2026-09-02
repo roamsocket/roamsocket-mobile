@@ -393,18 +393,29 @@ extension DirectE2BClient {
         cwd: String? = nil,
         timeoutSeconds: Int = 60,
     ) async throws -> ShellResult {
-        // `escapePython` already returns a quoted Python literal
-        // (e.g. `'value'`), so the placeholder is just the literal
-        // followed by a `; ` so we can keep appending the default
-        // (`None`) without comma-separated-expression ambiguity.
-        let cwdLiteral = cwd.map { "\(escapePython($0)); " } ?? ""
+        // `cwd=` needs to be a real Python expression so the
+        // generated script parses — putting `cwd='<value>';`
+        // followed by `None,` on the next line is a SyntaxError
+        // (the `None,` after a statement-level `;` starts a
+        // bare tuple that the next line is allowed to extend
+        // into, but our user-visible `cwd='<value>'; None,`
+        // is actually `cwd='<value>';\n        None,` once the
+        // multi-line literal interpolates the cwd, which
+        // Python reads as two unrelated statements and bails
+        // on `None,`). Use a Python ternary inline instead.
+        let cwdExpr: String
+        if let cwd, !cwd.isEmpty {
+            cwdExpr = "\(escapePython(cwd))"
+        } else {
+            cwdExpr = "None"
+        }
         let script = """
         import subprocess, json
         try:
             proc = subprocess.run(
                 \(escapePython(command)),
                 shell=True,
-                cwd=\(cwdLiteral)None,
+                cwd=\(cwdExpr),
                 capture_output=True,
                 text=True,
                 timeout=\(timeoutSeconds),
