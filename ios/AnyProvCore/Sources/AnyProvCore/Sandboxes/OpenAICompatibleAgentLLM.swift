@@ -15,11 +15,15 @@ import Foundation
 /// per tool index, parse to a JSON object on `finish_reason:
 /// "tool_calls"`, and emit the corresponding `AgentLLMEvent`.
 public actor OpenAICompatibleAgentLLM: AgentLLM {
-    let baseURL: URL
-    let modelID: String
-    let apiKey: String
-    let maxTokens: Int
-    let session: URLSession
+    // Set once in init, never mutated, so expose nonisolated for
+    // tests and call sites that need to inspect configuration
+    // (e.g. the regression test that pins `.minimax` to
+    // `api.minimax.io` rather than the OpenAI default).
+    nonisolated let baseURL: URL
+    nonisolated let modelID: String
+    nonisolated let apiKey: String
+    nonisolated let maxTokens: Int
+    nonisolated let session: URLSession
 
     public init(
         apiKey: String,

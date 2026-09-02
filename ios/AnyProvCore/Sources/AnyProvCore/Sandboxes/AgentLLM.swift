@@ -179,7 +179,12 @@ public enum AgentLLMFactory {
     }
 
     /// Default base URL for OpenAI-compatible providers. Custom
-    /// endpoints must supply their own `baseURL`.
+    /// endpoints must supply their own `baseURL`. Each entry
+    /// mirrors `OpenAICompatibleProvider.defaultBaseURL(for:)`
+    /// so the chat path and the E2B agent loop talk to the same
+    /// upstream for a given provider — drift here was the cause
+    /// of the MiniMax 401 (the agent's `default` arm pointed at
+    /// `api.openai.com`).
     private static func defaultBaseURL(for provider: ProviderID) -> URL {
         switch provider {
         case .openai: return URL(string: "https://api.openai.com")!
@@ -187,6 +192,7 @@ public enum AgentLLMFactory {
         case .openrouter: return URL(string: "https://openrouter.ai/api")!
         case .xai: return URL(string: "https://api.x.ai")!
         case .mistral: return URL(string: "https://api.mistral.ai")!
+        case .minimax: return URL(string: "https://api.minimax.io")!
         default: return URL(string: "https://api.openai.com")!
         }
     }

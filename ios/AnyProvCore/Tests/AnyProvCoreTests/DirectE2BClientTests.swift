@@ -787,4 +787,54 @@ final class DirectE2BClientTests: XCTestCase {
             "https://example.com/x.git"
         )
     }
+
+    // MARK: - Agent LLM factory base URLs
+
+    /// Regression lock for the MiniMax 401. The E2B agent's
+    /// `defaultBaseURL(for:)` switch was missing a `.minimax`
+    /// case, so MiniMax requests fell into the `default` arm and
+    /// were sent to `api.openai.com` — which 401'd the MiniMax
+    /// key with "Incorrect API key provided". The chat path
+    /// already had the right URL via `OpenAICompatibleProvider`.
+    /// The fix added a `.minimax` case here. Lock the URL the
+    /// factory hands the E2B agent for each OpenAI-compatible
+    /// provider so chat and the E2B agent can't drift again.
+    func testAgentLLMFactoryPicksProviderCorrectBaseURL() throws {
+        // For providers whose default URL is provider-hosted, the
+        // factory must NOT route to api.openai.com.
+        let minimaxLLM = try AgentLLMFactory.make(
+            provider: .minimax,
+            modelID: "MiniMax-Plus",
+            apiKey: "sk-cp-test"
+        )
+        let openAICompatible = try XCTUnwrap(minimaxLLM as? OpenAICompatibleAgentLLM)
+        XCTAssertEqual(
+            openAICompatible.baseURL.absoluteString,
+            "https://api.minimax.io",
+            "E2B agent must talk to api.minimax.io for .minimax, not api.openai.com"
+        )
+        // And the model id passes through unchanged.
+        XCTAssertEqual(openAICompatible.modelID, "MiniMax-Plus")
+
+        // Spot-check the other built-ins so the same drift can't
+        // hide there.
+        let openai = try XCTUnwrap(
+            try AgentLLMFactory.make(
+                provider: .openai, modelID: "gpt-x", apiKey: "k"
+            ) as? OpenAICompatibleAgentLLM
+        )
+        XCTAssertEqual(openai.baseURL.absoluteString, "https://api.openai.com")
+        let openrouter = try XCTUnwrap(
+            try AgentLLMFactory.make(
+                provider: .openrouter, modelID: "or-x", apiKey: "k"
+            ) as? OpenAICompatibleAgentLLM
+        )
+        XCTAssertEqual(openrouter.baseURL.absoluteString, "https://openrouter.ai/api")
+        let mistral = try XCTUnwrap(
+            try AgentLLMFactory.make(
+                provider: .mistral, modelID: "m-x", apiKey: "k"
+            ) as? OpenAICompatibleAgentLLM
+        )
+        XCTAssertEqual(mistral.baseURL.absoluteString, "https://api.mistral.ai")
+    }
 }
