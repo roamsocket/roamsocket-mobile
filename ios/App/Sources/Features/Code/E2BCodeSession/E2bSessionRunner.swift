@@ -123,7 +123,18 @@ public actor E2bSessionRunner {
             system: system,
             messages: history,
             tools: tools,
-            maxTokens: 4096
+            // E2B agent responses routinely include a
+            // directory tree dump + multi-file code edits
+            // + a verbal summary in one turn. The previous
+            // 4K cap was hitting the model before the
+            // response completed (visible in the Code
+            // session as the assistant message cutting off
+            // mid-sentence / mid-code-block). 16K is well
+            // under MiniMax M3's recommended 131K ceiling
+            // and gives the agent room to finish a typical
+            // turn without truncation; the runner can always
+            // be revisited if a use case needs more.
+            maxTokens: 16384
         ) {
             if Task.isCancelled { break }
             switch event {
