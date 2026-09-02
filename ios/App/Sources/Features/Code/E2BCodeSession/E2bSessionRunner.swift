@@ -186,6 +186,15 @@ public actor E2bSessionRunner {
             }
         }
         let thinking = streamedThinking.joined()
+        // The view should only see the model's prose —
+        // `[tool_call: …]` synthesis is internal history
+        // (the next turn needs to know what tools ran). The
+        // tool card on screen already shows the call's name
+        // and result, so duplicating the markup in the chat
+        // bubble just makes the transcript hard to read and
+        // looks like the agent "printed" the command instead
+        // of running it.
+        let visibleText = streamedText.joined()
         // The runner is provider-agnostic; it doesn't know how
         // to attach `thoughtProcess` to a specific history row.
         // Emit a dedicated event so the view can stamp the
@@ -194,7 +203,7 @@ public actor E2bSessionRunner {
         if !thinking.isEmpty {
             onEvent(.assistantTurnComplete(
                 thinking: thinking,
-                text: finalContent
+                text: visibleText
             ))
         }
         history.append(.init(role: .assistant, content: finalContent))
