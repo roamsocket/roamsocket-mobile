@@ -639,6 +639,7 @@ struct CodeHomeView: View {
             .padding(.top, 12)
             .padding(.bottom, 96)
         }
+        }
     }
 
     /// Row for one E2B code session. Tap to open the chat.
