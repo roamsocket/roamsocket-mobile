@@ -33,28 +33,24 @@ struct NewSessionView: View {
 
             VStack(spacing: 0) {
                 header
-                // Dock suggestions + repo + composer to the bottom so the page
-                // doesn't float mid-screen with a large empty gap.
-                GeometryReader { geo in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 18) {
-                            suggestionsSection
-                            repoControls
-                            composer
-                            if let errorMessage {
-                                Text(errorMessage)
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(.red)
-                                    .padding(.horizontal, 4)
-                            }
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        suggestionsSection
+                        repoControls
+                        composer
+                        if let errorMessage {
+                            Text(errorMessage)
+                                .font(.system(size: 13))
+                                .foregroundStyle(.red)
+                                .padding(.horizontal, 4)
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.top, 12)
-                        .padding(.bottom, 24)
-                        .frame(maxWidth: .infinity, minHeight: geo.size.height, alignment: .bottom)
                     }
-                    .scrollDismissesKeyboard(.interactively)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                    .padding(.bottom, 24)
+                    .frame(maxWidth: .infinity, alignment: .top)
                 }
+                .scrollDismissesKeyboard(.interactively)
             }
         }
         .navigationBarHidden(true)
@@ -125,14 +121,6 @@ struct NewSessionView: View {
             }
 
             HStack {
-                Button(action: { dismiss() }) {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 22, weight: .medium))
-                        .foregroundStyle(Theme.textPrimary)
-                        .frame(width: 48, height: 48)
-                        .background(Theme.surfaceElevated, in: Circle())
-                }
-                .buttonStyle(.plain)
                 Spacer()
             }
         }
@@ -170,17 +158,6 @@ struct NewSessionView: View {
 
     private var repoControls: some View {
         HStack(spacing: 10) {
-            Button(action: chooseRepository) {
-                Image(systemName: "plus")
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(Theme.textPrimary)
-                    .frame(width: 46, height: 46)
-                    .background(Theme.surface, in: Circle())
-                    .overlay(Circle().stroke(Theme.separator, lineWidth: 1))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Choose repository")
-
             Button(action: chooseRepository) {
                 HStack(spacing: 8) {
                     GitHubGlyph()

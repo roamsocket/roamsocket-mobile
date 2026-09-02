@@ -461,11 +461,15 @@ struct CodeHomeView: View {
             Theme.background.ignoresSafeArea()
             VStack(spacing: 0) {
                 header
-                // Single List so swipe-to-archive works (swipeActions need List rows).
-                // Prefer plain Buttons over onTapGesture so taps always fire.
-                List {
-                    Section {
-                        if state.serverName == nil && state.serverToken == nil {
+                // Keep the content in a flexible scroll view so the home screen
+                // fills the available height instead of collapsing toward the bottom.
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Devices")
+                                .font(.system(size: 17))
+                                .foregroundStyle(Theme.textSecondary)
+                            if state.serverName == nil && state.serverToken == nil {
                             Button {
                                 presentPairingSheet()
                             } label: {
@@ -491,19 +495,32 @@ struct CodeHomeView: View {
                             .listRowSeparator(.hidden)
                             .accessibilityHint("Reconnect to the desktop server")
                         }
-                    } header: {
-                        Text("Devices")
-                            .font(.system(size: 17))
-                            .foregroundStyle(Theme.textSecondary)
-                            .textCase(nil)
                     }
 
-                    Section {
-                        if filteredSessions.isEmpty {
-                            sessionsEmpty
-                                .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-                                .listRowBackground(Color.clear)
-                                .listRowSeparator(.hidden)
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Sessions")
+                                    .font(.system(size: 17))
+                                    .foregroundStyle(Theme.textSecondary)
+                                Spacer()
+                                Button { showFilterSheet = true } label: {
+                                    HStack(spacing: 4) {
+                                        Text(statusFilter?.rawValue ?? "All")
+                                            .font(.system(size: 14))
+                                            .foregroundStyle(Theme.textPrimary)
+                                        Image(systemName: "chevron.down")
+                                            .font(.system(size: 12))
+                                            .foregroundStyle(Theme.textTertiary)
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(Theme.surfaceElevated, in: Capsule())
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Filter sessions")
+                            }
+                            if filteredSessions.isEmpty {
+                                sessionsEmpty
                         } else {
                             ForEach(filteredSessions) { session in
                                 Button {
@@ -512,9 +529,6 @@ struct CodeHomeView: View {
                                     sessionCard(session)
                                 }
                                 .buttonStyle(.plain)
-                                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
-                                .listRowBackground(Color.clear)
-                                .listRowSeparator(.hidden)
                                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                     Button {
                                         requestArchive(session)
@@ -548,37 +562,13 @@ struct CodeHomeView: View {
                                 }
                             }
                         }
-                    } header: {
-                        HStack {
-                            Text("Sessions")
-                                .font(.system(size: 17))
-                                .foregroundStyle(Theme.textSecondary)
-                            Spacer()
-                            Button {
-                                showFilterSheet = true
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Text(statusFilter?.rawValue ?? "All")
-                                        .font(.system(size: 14))
-                                        .foregroundStyle(Theme.textPrimary)
-                                    Image(systemName: "chevron.down")
-                                        .font(.system(size: 12))
-                                        .foregroundStyle(Theme.textTertiary)
-                                }
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(Theme.surfaceElevated, in: Capsule())
-                                .contentShape(Capsule())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Filter sessions")
                         }
-                        .textCase(nil)
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                    .padding(.bottom, 80)
                 }
-                .listStyle(.plain)
-                .scrollContentBackground(.hidden)
-                .padding(.bottom, 80)
+                .scrollIndicators(.hidden)
             }
             newSessionFAB
                 .padding(.trailing, 18)
@@ -1008,29 +998,44 @@ struct CodeHomeView: View {
     // MARK: - New session FAB
 
     private var newSessionFAB: some View {
-        Button {
-            Task {
-                // Require a live desktop before the new-session flow; recovery
-                // sheet / re-pair covers the cases SessionLauncher can't fix.
-                guard await ensureDesktopConnected() else { return }
-                showNewSession = true
+        HStack(spacing: 10) {
+            Button {
+                // Keep the quick-run affordance available beside session creation.
+                launchError = "Quick runs are available from a coding session. Start a session first."
+            } label: {
+                Image(systemName: "terminal.cursor.and.arrow.forward")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                    .frame(width: 48, height: 48)
+                    .background(Theme.surfaceElevated, in: Circle())
+                    .shadow(color: .black.opacity(0.3), radius: 7, x: 0, y: 3)
             }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "square.and.pencil")
-                    .font(.system(size: 15, weight: .semibold))
-                Text("New session")
-                    .font(.system(size: 15, weight: .semibold))
+            .buttonStyle(.plain)
+            .accessibilityLabel("Start a run")
+
+            Button {
+                Task {
+                    guard await ensureDesktopConnected() else { return }
+                    showNewSession = true
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("Start a session")
+                        .font(.system(size: 15, weight: .semibold))
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .bold))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(Theme.accent, in: Capsule())
+                .shadow(color: .black.opacity(0.35), radius: 8, x: 0, y: 4)
             }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background(Theme.accent, in: Capsule())
-            .shadow(color: .black.opacity(0.35), radius: 8, x: 0, y: 4)
-            .contentShape(Capsule())
+            .buttonStyle(.plain)
+            .accessibilityLabel("Start a session")
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Start a new coding session")
     }
 
     // MARK: - Session lifecycle

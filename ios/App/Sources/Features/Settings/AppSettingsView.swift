@@ -13,7 +13,6 @@ struct AppSettingsView: View {
     @State private var showMCP = false
     @State private var showMarketplace = false
     @State private var showMemory = false
-    @State private var showSandboxes = false
     @State private var showAbout = false
     @State private var showProviderKeys = false
     @State private var showLocalMetal = false
@@ -56,7 +55,6 @@ struct AppSettingsView: View {
                         quickAccessSection
                         accountSection
                         desktopServerSection
-                        sandboxesSection
                         defaultModelSection
                         appearanceSection
                         chatSection
@@ -700,87 +698,6 @@ struct AppSettingsView: View {
             .buttonStyle(.plain)
         }
     }
-
-    // MARK: - Sandboxes (E2B)
-
-    /// E2B sandbox runs. The desktop server kicks off a sandbox after every
-    /// successful git push (the auto-trigger) and streams the output back
-    /// over the same WS. The user can also start runs directly from the
-    /// phone using their own e2b.dev API key (entered via the E2B API
-    /// key row below) — that's the "no PC" path.
-    private var sandboxesSection: some View {
-        settingsCard(header: "Sandboxes (E2B)") {
-            VStack(spacing: 0) {
-                Button {
-                    showSandboxes = true
-                } label: {
-                    HStack(spacing: 14) {
-                        Image(systemName: "shippingbox")
-                            .font(.system(size: 20))
-                            .foregroundStyle(Theme.textPrimary)
-                            .frame(width: 28)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("E2B runs")
-                                .font(.system(size: 17, weight: .regular))
-                                .foregroundStyle(Theme.textPrimary)
-                            Text("Run pushed branches in a clean E2B sandbox.")
-                                .font(.system(size: 12))
-                                .foregroundStyle(Theme.textSecondary)
-                        }
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 14, weight: .regular))
-                            .foregroundStyle(Theme.textSecondary)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 14)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-
-                Divider().background(Theme.separator)
-
-                Button {
-                    e2bKeyDraft = ""
-                    showE2BKeySheet = true
-                } label: {
-                    HStack(spacing: 14) {
-                        Image(systemName: state.e2bKeyStore.hasKey ? "key.fill" : "key")
-                            .font(.system(size: 20))
-                            .foregroundStyle(state.e2bKeyStore.hasKey ? Theme.accent : Theme.textPrimary)
-                            .frame(width: 28)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("E2B API key")
-                                .font(.system(size: 17, weight: .regular))
-                                .foregroundStyle(Theme.textPrimary)
-                            Text(state.e2bKeyStore.hasKey
-                                 ? "Your key is set — sandboxes can run from this device."
-                                 : "Add your e2b.dev key to run sandboxes from your phone.")
-                                .font(.system(size: 12))
-                                .foregroundStyle(Theme.textSecondary)
-                        }
-                        Spacer()
-                        Text(state.e2bKeyStore.hasKey ? "Set" : "Not set")
-                            .font(.system(size: 15))
-                            .foregroundStyle(Theme.textSecondary)
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 14, weight: .regular))
-                            .foregroundStyle(Theme.textSecondary)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 14)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
-    /// Whether the user has entered their personal e2b.dev key on
-    /// this device. Used by the Sandboxes card to label the E2B API
-    /// key row and by the Sandboxes view to gate the "Start a run"
-    /// flow when no desktop is paired.
-    private var e2bKeyHasValue: Bool { state.e2bKeyStore.hasKey }
 
     // MARK: - Settings backup
 
