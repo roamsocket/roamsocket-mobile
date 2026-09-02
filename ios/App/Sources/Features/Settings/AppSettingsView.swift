@@ -110,10 +110,6 @@ struct AppSettingsView: View {
             ManageMemoryView()
                 .environmentObject(state)
         }
-        .sheet(isPresented: $showSandboxes) {
-            SandboxesView()
-                .environmentObject(state)
-        }
         .sheet(isPresented: $showE2BKeySheet) {
             SettingsE2BKeySheet(
                 hasKey: state.e2bKeyStore.hasKey,
@@ -223,11 +219,7 @@ struct AppSettingsView: View {
                     statusLabel: e2bQuickAccessStatus,
                     isReady: e2bQuickAccessIsReady,
                     action: {
-                        if state.serverToken != nil || !(state.e2bKeyStore.get() ?? "").isEmpty {
-                            showSandboxes = true
-                        } else {
-                            showE2BKeySheet = true
-                        }
+                        showE2BKeySheet = true
                     },
                 )
                 Divider().background(Theme.separator)
