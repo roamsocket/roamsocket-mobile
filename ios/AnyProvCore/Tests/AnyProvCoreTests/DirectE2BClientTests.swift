@@ -87,6 +87,103 @@ final class DirectE2BClientTests: XCTestCase {
         )
     }
 
+    /// The pre-clone script is intentionally a flat module body
+    /// (no function wrapper) so e2b's `/execute` endpoint can run
+    /// it as-is. That means `return` is **not** valid at the
+    /// short-circuit points — Python would raise
+    /// `'return' outside function`, the exact error users saw
+    /// after the URL-quoting fix landed. The script must use
+    /// `sys.exit(0)` for those early exits. We assert on the
+    /// actual source string in `E2bSessionStore.swift` so a
+    /// regression trips the test instead of just the user.
+    func testPreCloneScriptShortCircuitsWithSysExitNotReturn() throws {
+        // Locate the package source file. The test runs in the
+        // AnyProvCore SPM target, so the App-level `E2bSessionStore`
+        // isn't in the same module — we read the file directly
+        // from the repo so the test is independent of the iOS
+        // app's build status.
+        let repoRoot = Self.repoRoot()
+        let sourcePath = repoRoot
+            .appendingPathComponent("ios")
+            .appendingPathComponent("App")
+            .appendingPathComponent("Sources")
+            .appendingPathComponent("Features")
+            .appendingPathComponent("Code")
+            .appendingPathComponent("E2BCodeSession")
+            .appendingPathComponent("E2bSessionStore.swift")
+        let source = try String(
+            contentsOf: sourcePath,
+            encoding: .utf8
+        )
+        // Find the script literal in `preCloneRepo`. The block
+        // opens with `import subprocess, json, sys` (the full
+        // import line, not just the prefix — anchoring on the
+        // prefix would land `upperBound` *before* the trailing
+        // `import sys` and the slice would lose it) and closes
+        // with the trailing `"""` of the multiline string. We
+        // grab everything between so the assertions below
+        // operate on the actual Python source.
+        let importLine = "import subprocess, json, sys"
+        guard let openRange = source.range(of: importLine),
+              let closeRange = source.range(
+                of: "\"\"\"",
+                range: openRange.upperBound..<source.endIndex
+              )
+        else {
+            XCTFail("could not locate the pre-clone script in \(sourcePath.path)")
+            return
+        }
+        let script = String(source[openRange.lowerBound..<closeRange.lowerBound])
+
+        // The literal `import sys` isn't a substring of the
+        // composite `import subprocess, json, sys` line, so check
+        // the full line — that's the actual contract the
+        // pre-clone script must satisfy.
+        XCTAssertTrue(
+            script.contains(importLine),
+            "pre-clone script must keep the `\(importLine)` import; the body is module-level, so the only valid early-exit is `sys.exit(...)`. script=\(script)"
+        )
+        // Two short-circuit sites (clone failure, checkout
+        // failure). Each must be `sys.exit(0)`, not bare
+        // `return`. Count occurrences of each so a regression
+        // either direction shows up clearly.
+        let sysExitCount = script.components(separatedBy: "sys.exit").count - 1
+        let bareReturnCount = script.components(separatedBy: "\n        return").count - 1
+            + script.components(separatedBy: "\n            return").count - 1
+        XCTAssertGreaterThanOrEqual(
+            sysExitCount, 2,
+            "pre-clone script must call `sys.exit(...)` at least twice (clone failure, checkout failure); found \(sysExitCount)"
+        )
+        XCTAssertEqual(
+            bareReturnCount, 0,
+            "pre-clone script must not use bare `return` at module level (causes `'return' outside function`); found \(bareReturnCount)"
+        )
+    }
+
+    /// Walk up from the test bundle until we find the repo root
+    /// (the directory that contains the `ios/` subdir). Falls
+    /// back to the current working directory if no `ios/`
+    /// ancestor is in the chain — keeps the test runnable from
+    /// a future SPM-based layout where the path changes.
+    private static func repoRoot() -> URL {
+        // The test file lives at
+        //   <repo>/ios/AnyProvCore/Tests/AnyProvCoreTests/...
+        // so going up 4 levels lands on the repo root. We
+        // search upward for the first directory that has an
+        // `ios/` child to be robust against any future layout
+        // change.
+        var dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<10 {
+            if FileManager.default.fileExists(atPath: dir.appendingPathComponent("ios").path) {
+                return dir
+            }
+            let parent = dir.deletingLastPathComponent()
+            if parent.path == dir.path { break }
+            dir = parent
+        }
+        return URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+    }
+
     /// Same regression lock for the long-lived code-session shim.
     /// `makeShimScript` interpolates branch / URL / command /
     /// install command the same way. If PythonQuote regresses, the

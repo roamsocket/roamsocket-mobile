@@ -135,15 +135,12 @@ struct SidebarView: View {
                 SidebarRow(systemImage: "chevron.left.forwardslash.chevron.right", title: "Code") {
                     onSelect(.code)
                 }
-                // Sandboxes (E2B) is a first-class destination: the
-                // phone drives e2b.dev sandboxes directly with the
-                // user's own API key, so this works whether or not a
-                // desktop is paired. Surfacing it in the sidebar
-                // makes the "run code without a desktop" path
-                // discoverable from anywhere in the app.
-                SidebarRow(systemImage: "shippingbox", title: "Sandboxes") {
-                    onSelect(.sandboxes)
-                }
+                // Sandboxes (E2B) used to live in the sidebar too,
+                // but the Code destination already covers it (the
+                // E2B phone-originated run list is the first tab on
+                // the Code home). Keep the SidebarDestination.sandboxes
+                // case + the AppSettingsView entry as the discoverable
+                // surface; the sidebar just doesn't need both.
             }
             SidebarRow(systemImage: "globe", title: "Browser") {
                 onSelect(.browser)

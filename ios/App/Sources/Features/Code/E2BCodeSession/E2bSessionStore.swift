@@ -157,9 +157,17 @@ final class E2bSessionStore: ObservableObject {
             cloneURL = "https://oauth2:\(token)@github.com/\(repoFullName).git"
         }
         // Build the Python that does the clone + checkout.
-        // Output is JSON so we can detect errors.
+        // Output is JSON so we can detect errors. The body is
+        // deliberately flat (no function wrapper) so it can be passed
+        // straight to e2b's `/execute` endpoint. The two
+        // short-circuit `return`s are `sys.exit(0)` for the same
+        // reason — `return` at module level is a `SyntaxError`
+        // (`'return' outside function`), which is what users saw
+        // after the URL-quoting fix landed: the SyntaxError
+        // stopped, and the next error down the stack was the bare
+        // `return`. `sys.exit(0)` is the equivalent for a script.
         let script = """
-        import subprocess, json
+        import subprocess, json, sys
         clone_url = \(PythonQuote.escape(cloneURL))
         branch = \(PythonQuote.escape(branch))
         try:
@@ -169,7 +177,7 @@ final class E2bSessionStore: ObservableObject {
             )
             if clone.returncode != 0:
                 print(json.dumps({"ok": False, "step": "clone", "stderr": clone.stderr}))
-                return
+                sys.exit(0)
             # Try to switch to the requested branch; depth-1
             # clone may not have it.
             subprocess.run(
@@ -182,7 +190,7 @@ final class E2bSessionStore: ObservableObject {
             )
             if co.returncode != 0:
                 print(json.dumps({"ok": False, "step": "checkout", "stderr": co.stderr}))
-                return
+                sys.exit(0)
             sha = subprocess.run(
                 ["git", "rev-parse", "--short", "HEAD"],
                 cwd="/code", capture_output=True, text=True, timeout=10,
