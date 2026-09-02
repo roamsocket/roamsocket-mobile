@@ -311,6 +311,114 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
         let toolCalls: [ProviderTextCall]
     }
 
+    /// Parse a single tool-call body (the text between the
+    /// `[tool_call: name]` opener and the next marker or end of
+    /// text). Two shapes are supported; both come from MiniMax
+    /// M3 at different temperatures:
+    ///
+    /// 1. **Tag shape** (the earlier format):
+    ///    ```
+    ///    <command>ls /code</command>
+    ///    ```
+    /// 2. **Key-value shape** (the newer format):
+    ///    ```
+    ///    id=call_cb7d56d06ce74debaa41963d
+    ///    input={"command":"ls -la && echo \"-----\" && git log --oneline -10"}
+    ///    ```
+    ///
+    /// For the key-value shape, the `input=` value is usually a
+    /// JSON object that already matches the tool's parameter
+    /// schema (MiniMax serialises the tool arguments as JSON
+    /// in-line). When that value parses as a dictionary, the
+    /// dictionary replaces the entire input map; otherwise it
+    /// is stored under the `input` key.
+    nonisolated static func parseToolCallBody(_ raw: String) -> [String: Any] {
+        let block = raw
+        // 1. Tag shape. Walk the body and pull every
+        //    `<param>value</param>` pair.
+        var fromTags: [String: Any] = [:]
+        var tagSearch = block.startIndex
+        while tagSearch < block.endIndex {
+            guard let openAngle = block[tagSearch...].firstIndex(of: "<") else { break }
+            let afterOpen = block.index(after: openAngle)
+            // Tag name: letters / digits / underscore / dash /
+            // space (some MiniMax outputs have whitespace
+            // inside the open angle).
+            var nameEnd = afterOpen
+            while nameEnd < block.endIndex,
+                  let c = block[nameEnd].unicodeScalars.first,
+                  (CharacterSet.letters.contains(c) ||
+                   CharacterSet.decimalDigits.contains(c) ||
+                   c == "_" || c == "-" || c == " ") {
+                nameEnd = block.index(after: nameEnd)
+            }
+            let tagName = String(block[afterOpen..<nameEnd])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !tagName.isEmpty,
+                  nameEnd < block.endIndex,
+                  block[nameEnd] == ">",
+                  let closeAngle = block[block.index(after: nameEnd)...].firstIndex(of: "<")
+            else {
+                tagSearch = block.index(after: openAngle)
+                continue
+            }
+            let valueStart = block.index(after: nameEnd)
+            let valueEnd = closeAngle
+            let raw = String(block[valueStart..<valueEnd])
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let data = trimmed.data(using: .utf8),
+               let parsed = try? JSONSerialization.jsonObject(with: data),
+               !(parsed is NSNull) {
+                fromTags[tagName] = parsed
+            } else {
+                fromTags[tagName] = trimmed
+            }
+            tagSearch = valueEnd
+        }
+        if !fromTags.isEmpty {
+            return fromTags
+        }
+        // 2. Key-value shape. Split on newlines; each line
+        //    that's `key=value` adds an entry. The value side
+        //    is JSON-parsed when it looks structured, which is
+        //    the common case for MiniMax's `input={…}` lines.
+        var fromKeyValue: [String: Any] = [:]
+        for line in block.split(separator: "\n", omittingEmptySubsequences: false) {
+            let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedLine.isEmpty,
+                  let equals = trimmedLine.firstIndex(of: "=")
+            else { continue }
+            let key = String(trimmedLine[..<equals])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            // Skip OpenAI-style metadata that the model leaks
+            // alongside the call. We generate our own call id
+            // (see `tc_text_<n>_<uuid>` below) so the model's
+            // `id=` line is never useful; `name=` would just
+            // shadow the marker we already parsed.
+            if key == "id" || key == "name" { continue }
+            let value = String(trimmedLine[trimmedLine.index(after: equals)...])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty else { continue }
+            if let data = value.data(using: .utf8),
+               let parsed = try? JSONSerialization.jsonObject(with: data),
+               !(parsed is NSNull) {
+                // The `input=` line carries the tool's argument
+                // object. When it parses as a dict, splat it
+                // into the top level so the rest of the runner
+                // (which reads `command` / `path` / etc.
+                // directly off the input map) just works.
+                if key == "input", let dict = parsed as? [String: Any] {
+                    for (k, v) in dict { fromKeyValue[k] = v }
+                } else {
+                    fromKeyValue[key] = parsed
+                }
+            } else {
+                fromKeyValue[key] = value
+            }
+        }
+        return fromKeyValue
+    }
+
     /// Parse provider-text tool-call markup out of an assistant
     /// message body. Covers the MiniMax M3 format:
     ///
@@ -398,72 +506,7 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
             let blockEnd = nextStart
             guard marker.end <= blockEnd else { continue }
             let block = String(text[marker.end..<blockEnd])
-            // Extract `<param>value</param>` pairs.
-            var inputObject: [String: Any] = [:]
-            var tagSearch = block.startIndex
-            while tagSearch < block.endIndex {
-                guard let openAngle = block[tagSearch...].firstIndex(of: "<") else { break }
-                let afterOpen = block.index(after: openAngle)
-                // Tag name: letters / digits / underscore / dash /
-                // space. Some MiniMax outputs have whitespace
-                // inside the open angle (e.g. `< command>`,
-                // `< command >`) — accept that rather than
-                // dropping the value.
-                var nameEnd = afterOpen
-                while nameEnd < block.endIndex,
-                      let c = block[nameEnd].unicodeScalars.first,
-                      (CharacterSet.letters.contains(c) ||
-                       CharacterSet.decimalDigits.contains(c) ||
-                       c == "_" || c == "-" || c == " ") {
-                    nameEnd = block.index(after: nameEnd)
-                }
-                let tagName = String(block[afterOpen..<nameEnd])
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !tagName.isEmpty,
-                      nameEnd < block.endIndex,
-                      block[nameEnd] == ">",
-                      let closeAngle = block[block.index(after: nameEnd)...].firstIndex(of: "<")
-                else {
-                    // No parseable open tag on this stretch —
-                    // skip past it and try again.
-                    tagSearch = block.index(after: openAngle)
-                    continue
-                }
-                let valueStart = block.index(after: nameEnd)
-                let valueEnd = closeAngle
-                // Be lenient about the close tag: anything that
-                // starts with `</` and ends at the first `>`
-                // after the value is treated as the close, even
-                // if the name is missing, has whitespace, or
-                // doesn't match. MiniMax has shipped every
-                // variant of this in the wild (`</command>`,
-                // `</ command>`, `</invoke>`, a stray
-                // `</tool_call>` mid-block, etc.) and the
-                // user-visible contract is "first `</` after
-                // the open tag closes the value".
-                let closeStart = block.index(after: valueEnd)
-                if closeStart < block.endIndex,
-                   block[closeStart...] == "/" || block[closeStart...].hasPrefix("/") {
-                    if let closeAngleEnd = block[closeStart...].firstIndex(of: ">") {
-                        tagSearch = block.index(after: closeAngleEnd)
-                    } else {
-                        tagSearch = block.endIndex
-                    }
-                } else {
-                    // No close tag at all — take the rest of
-                    // the block as the value and stop.
-                    tagSearch = block.endIndex
-                }
-                let raw = String(block[valueStart..<valueEnd])
-                let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                if let data = trimmed.data(using: .utf8),
-                   let parsed = try? JSONSerialization.jsonObject(with: data),
-                   !(parsed is NSNull) {
-                    inputObject[tagName] = parsed
-                } else {
-                    inputObject[tagName] = trimmed
-                }
-            }
+            let inputObject = Self.parseToolCallBody(block)
             hits.append(Hit(
                 markerStart: marker.start,
                 markerEnd: marker.end,
