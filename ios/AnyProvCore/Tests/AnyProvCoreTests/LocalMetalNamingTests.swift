@@ -144,6 +144,47 @@ final class LocalMetalNamingTests: XCTestCase {
         }
     }
 
+    func testSupportedVLMFamiliesUseVisionDetection() {
+        let families = [
+            "mlx-community/PaliGemma-3B-448-4bit",
+            "mlx-community/IDEFICS3-8B-LLaVA-4bit",
+            "mlx-community/InternVL2-2B-4bit",
+            "mlx-community/MiniCPM-V-2.6-4bit",
+            "mlx-community/DeepSeek-VL2-Tiny-4bit",
+            "mlx-community/Pixtral-12B-4bit",
+            "mlx-community/Mistral-3-3B-Instruct-4bit",
+            "mlx-community/LFM2-VL-1.6B-4bit",
+            "mlx-community/FastVLM-0.5B-bf16",
+        ]
+        for hub in families {
+            XCTAssertTrue(
+                LocalMetalCatalog.isLikelyVisionHubID(hub),
+                "expected supported VLM family: \(hub)"
+            )
+        }
+    }
+
+    func testSizeEstimatesHandleQuantizationAndMoENames() {
+        XCTAssertEqual(
+            LocalMetalCatalogEntry.estimatedDownloadSize(
+                forHubID: "mlx-community/Qwen3-4B-4bit"
+            ),
+            "~2.0 GB"
+        )
+        XCTAssertEqual(
+            LocalMetalCatalogEntry.estimatedDownloadSize(
+                forHubID: "mlx-community/Qwen3-30B-A3B-4bit"
+            ),
+            "~1.5 GB"
+        )
+        XCTAssertEqual(
+            LocalMetalCatalogEntry.estimatedDownloadSize(
+                forHubID: "mlx-community/Phi-3.5-mini-instruct-bf16"
+            ),
+            "~7.0 GB"
+        )
+    }
+
     func testCanonicalAndLegacyPathRootsDiffer() {
         XCTAssertEqual(LocalMetalPaths.relativeRoot, "RoamSocket/LocalModels")
         XCTAssertEqual(LocalMetalPaths.legacyRelativeRoot, "AnyProvCode/LocalModels")

@@ -319,6 +319,7 @@ struct ModelPickerSheet: View {
             isLoadedInMemory: !codingOnly
                 && model.provider == .localMetal
                 && loadedMetalIDs.contains(model.modelID),
+            compatibilityWarning: metalCompatibilityWarning(for: model),
             onSelect: {
                 // Selection triggers AppState local-Metal load/unload policy
                 // only for phone weights; desktop Metal runs on the server.
@@ -375,6 +376,17 @@ struct ModelPickerSheet: View {
                 )
             }
         }
+    }
+
+    /// Returns a compatibility warning for local Metal models that may be too
+    /// large for this device, or `nil` when the model should work fine.
+    private func metalCompatibilityWarning(for model: AIModel) -> String? {
+        guard model.provider == .localMetal else { return nil }
+        let hubID = model.modelID
+        // Look up the catalog entry to get approxSize.
+        let entry = LocalMetalCatalog.recommended.first { $0.hubID == hubID }
+            ?? LocalMetalCatalog.registry.first { $0.hubID == hubID }
+        return entry?.compatibilityMessage(forDeviceRAM: DeviceCapabilities.physicalMemoryBytes)
     }
 
     private var unloadAllRow: some View {
@@ -519,6 +531,7 @@ private struct ModelRow: View {
     let providerDisplayName: String
     var isLoadedInMemory: Bool = false
     var isHidden: Bool = false
+    var compatibilityWarning: String? = nil
     var onSelect: () -> Void
     var onUnload: (() -> Void)?
     var onToggleHidden: (() -> Void)? = nil
@@ -564,14 +577,27 @@ private struct ModelRow: View {
                             .padding(.vertical, 3)
                             .background(Color.yellow.opacity(0.18), in: Capsule())
                     }
+                    if let warning = compatibilityWarning {
+                        Text("⚠")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.orange)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Color.orange.opacity(0.15), in: Capsule())
+                    }
                 }
                 if let contextSubtitle {
                     Text(contextSubtitle)
                         .font(.system(size: 13))
                         .foregroundStyle(isLoadedInMemory ? Theme.accent : Theme.textTertiary)
                 }
+                if let warning = compatibilityWarning {
+                    Text(warning)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.orange)
+                }
             }
-            .opacity(isHidden ? 0.55 : 1)
+            .opacity(isHidden ? 0.55 : (compatibilityWarning != nil ? 0.5 : 1))
             Spacer()
             if let onToggleHidden {
                 Button {

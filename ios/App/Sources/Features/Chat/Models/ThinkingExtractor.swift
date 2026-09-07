@@ -24,7 +24,7 @@ enum ThinkingExtractor {
     /// verbatim means we don't need a backref and both open and close
     /// always match.
     private static let thinkingTagNames =
-        "think|thinking|reasoning|reflection|thought|analysis|scratch_pad"
+        "think|thinking|reasoning|reflection|thought|analysis|scratch_pad|antml:thinking|antml:reasoning|antml:reflection|antml:thought|antml:analysis"
 
     /// Paired tags; multi-line body. Case-insensitive tag name.
     /// Covers `think`/`thinking` plus a handful of variants emitted by
@@ -32,7 +32,7 @@ enum ThinkingExtractor {
     /// RAG agents, Hermes 4 scratch pad, etc.).
     private static let pairedPattern: NSRegularExpression = {
         try! NSRegularExpression(
-            pattern: "<(\(thinkingTagNames))\\b[^>]*>[\\s\\S]*?</\\1>",
+            pattern: "<(\(thinkingTagNames))\\b[^>]*>([\\s\\S]*?)</\\1>",
             options: [.caseInsensitive]
         )
     }()
@@ -40,7 +40,7 @@ enum ThinkingExtractor {
     /// Unclosed open tag (e.g. still streaming). Captures everything after it.
     private static let openOnlyPattern: NSRegularExpression = {
         try! NSRegularExpression(
-            pattern: "<(\(thinkingTagNames))\\b[^>]*>[\\s\\S]*$",
+            pattern: "<(\(thinkingTagNames))\\b[^>]*>([\\s\\S]*)$",
             options: [.caseInsensitive]
         )
     }()
@@ -61,8 +61,9 @@ enum ThinkingExtractor {
         )
     }()
 
-    /// Anthropic-style `antml:thinking` and other namespaced reasoning
-    /// containers (Claude Opus 5 leak, antml legacy prompt format).
+    /// Kept as a cleanup fallback for malformed/nested Anthropic-style
+    /// namespaced reasoning containers. Well-formed tags are extracted by the
+    /// paired thinking pattern above so their body is preserved in `thinking`.
     private static let antmlThinkingPattern: NSRegularExpression = {
         try! NSRegularExpression(
             pattern: "<antml:(?:thinking|reasoning|reflection|thought|analysis)\\b[^>]*>[\\s\\S]*?</antml:(?:thinking|reasoning|reflection|thought|analysis)>",
@@ -85,8 +86,8 @@ enum ThinkingExtractor {
         if !matches.isEmpty {
             sawThinkingTags = true
             thinkingParts = matches.compactMap { match in
-                guard match.numberOfRanges > 1,
-                      let r = Range(match.range(at: 1), in: stripped) else { return nil }
+                guard match.numberOfRanges > 2,
+                      let r = Range(match.range(at: 2), in: stripped) else { return nil }
                 let part = String(stripped[r]).trimmingCharacters(in: .whitespacesAndNewlines)
                 return part.isEmpty ? nil : part
             }
@@ -100,8 +101,8 @@ enum ThinkingExtractor {
 
         let afterPairs = NSRange(stripped.startIndex..., in: stripped)
         if let open = openOnlyPattern.firstMatch(in: stripped, options: [], range: afterPairs),
-           open.numberOfRanges > 1,
-           let innerRange = Range(open.range(at: 1), in: stripped),
+           open.numberOfRanges > 2,
+           let innerRange = Range(open.range(at: 2), in: stripped),
            let outerRange = Range(open.range, in: stripped) {
             sawThinkingTags = true
             isThinkingOpen = true
@@ -153,7 +154,7 @@ enum ThinkingExtractor {
     /// separately because they use a different syntax.
     private static let controlTokenPattern: NSRegularExpression = {
         try! NSRegularExpression(
-            pattern: "<\\|\\s*(?:begin_of_text|end_of_text|start_header_id|end_header_id|eot_id|eom_id|python_tag|user|assistant|system|end|endoftext|im_start|im_end)\\s*\\|>",
+            pattern: "<\\|\\s*(?:begin_of_text|end_of_text|start_header_id|end_header_id|eot_id|eom_id|python_tag|user|assistant|system|end|endoftext|im_start|im_end|tool_call_start|tool_call_end|tool_call_argument_begin|tool_call_argument_end)\\s*\\|>",
             options: [.caseInsensitive]
         )
     }()
@@ -196,10 +197,54 @@ enum ThinkingExtractor {
         )
     }()
 
+    /// LFM2's Pythonic tool-call wrapper. Tool calls are not executed by the
+    /// chat path, so remove the complete block instead of exposing its syntax.
+    private static let lfmToolCallPattern: NSRegularExpression = {
+        try! NSRegularExpression(
+            pattern: "<\\|tool_call_start\\|>[\\s\\S]*?<\\|tool_call_end\\|>",
+            options: [.caseInsensitive]
+        )
+    }()
+
+    /// Gemma 4's tool-call wrapper uses a delimiter with a pipe on each side.
+    private static let gemma4ToolCallPattern: NSRegularExpression = {
+        try! NSRegularExpression(
+            pattern: "<\\|tool_call>[\\s\\S]*?<tool_call\\|>",
+            options: [.caseInsensitive]
+        )
+    }()
+
+    /// Mistral 3's tool-call response starts with `[TOOL_CALLS]` and is
+    /// terminal output, so discard the marker and everything that follows.
+    private static let mistralToolCallPattern: NSRegularExpression = {
+        try! NSRegularExpression(
+            pattern: "\\[TOOL_CALLS\\][\\s\\S]*$",
+            options: [.caseInsensitive]
+        )
+    }()
+
+    /// Gemma's function-call wrapper (used by Gemma 3 tool-capable models).
+    private static let gemmaToolCallPattern: NSRegularExpression = {
+        try! NSRegularExpression(
+            pattern: "<start_function_call>[\\s\\S]*?<end_function_call>",
+            options: [.caseInsensitive]
+        )
+    }()
+
     /// Strip leaked tokenizer / turn-marker control tokens. Pure function.
     static func stripControlTokens(from raw: String) -> String {
         guard !raw.isEmpty else { return raw }
         var s = raw
+        let blockPatterns = [
+            lfmToolCallPattern,
+            gemma4ToolCallPattern,
+            mistralToolCallPattern,
+            gemmaToolCallPattern,
+        ]
+        for pattern in blockPatterns {
+            let range = NSRange(s.startIndex..., in: s)
+            s = pattern.stringByReplacingMatches(in: s, options: [], range: range, withTemplate: "")
+        }
         let full = NSRange(s.startIndex..., in: s)
         s = controlTokenPattern.stringByReplacingMatches(in: s, options: [], range: full, withTemplate: "")
         let r1 = NSRange(s.startIndex..., in: s)
@@ -453,7 +498,7 @@ enum ThinkingExtractor {
     }
 
     private static func tidy(_ stripped: String) -> String {
-        stripToolCallXML(from: stripped)
+        stripControlTokens(from: stripToolCallXML(from: stripped))
             .replacingOccurrences(of: #"[ \t]{2,}"#, with: " ", options: .regularExpression)
             .replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
