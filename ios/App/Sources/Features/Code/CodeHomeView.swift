@@ -866,10 +866,15 @@ private struct E2BSessionCover: Identifiable, Hashable {
 
 // MARK: - New E2B session sheet
 
-/// Quick picker for a new E2B code session. Uses the user's
-/// currently selected repo + lets them name the session and
-/// override the branch. Hands the values back to the parent
-/// which drives provisioning.
+/// Quick picker for a new E2B code session. Lets the user pick
+/// the repo (via the same `RepositoryPickerSheet` the Sandboxes
+/// sheet uses), name the session, and override the branch. The
+/// chosen repo is also written to `state.selectedRepo` so the
+/// parent's `startE2BSession` can drive the rest.
+///
+/// Renders as a card via `SheetScaffold` (consistent with the
+/// other pickers in the app) and is constrained to a sensible
+/// max width on iPad so the form doesn't span the full screen.
 private struct NewE2BSessionSheet: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
@@ -879,49 +884,144 @@ private struct NewE2BSessionSheet: View {
     let onStart: (String, String, AnyProvCore.GitHubRepo) -> Void
 
     @State private var title: String = ""
-    @State private var branch: String = "main"
+    @State private var branch: String = ""
     @State private var isOpening: Bool = false
+    @State private var showRepositoryPicker: Bool = false
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                Theme.background.ignoresSafeArea()
-                Form {
-                    Section {
-                        TextField("Session title (optional)", text: $title)
-                        TextField("Branch", text: $branch)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                    } header: {
-                        Text("Repository")
-                    } footer: {
-                        if let repo = state.selectedRepo {
-                            Text("Will open \(repo.fullName) on a fresh e2b sandbox.")
-                        } else {
-                            Text("Choose a repository on the home screen first.")
-                        }
-                    }
+        SheetScaffold(
+            title: "New code session",
+            trailing: AnyView(openButton),
+            onClose: { dismiss() }
+        ) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    repoPickerRow
+                    Divider().overlay(Theme.separator)
+                    fieldRow(
+                        label: "Branch",
+                        placeholder: state.selectedRepo?.defaultBranch ?? "main"
+                    )
+                    fieldRow(
+                        label: "Title",
+                        placeholder: "Optional"
+                    )
+                    Text(footerText)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textSecondary)
+                        .padding(.top, 4)
                 }
-                .scrollContentBackground(.hidden)
-            }
-            .navigationTitle("New code session")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                // No "Cancel" button: sidebar is the navigation
-                // surface and iOS sheets dismiss via swipe-down.
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Open") {
-                        guard let repo = state.selectedRepo else { return }
-                        let titleTrimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-                        let branchTrimmed = branch.trimmingCharacters(in: .whitespacesAndNewlines)
-                        let resolvedBranch = branchTrimmed.isEmpty ? repo.defaultBranch : branchTrimmed
-                        isOpening = true
-                        onStart(titleTrimmed, resolvedBranch, repo)
-                    }
-                    .disabled(state.selectedRepo == nil || isOpening)
-                }
+                .padding(20)
             }
         }
+        .frame(maxWidth: 480)
+        .presentationDetents([.medium])
+        .presentationDragIndicator(.visible)
+        .sheet(isPresented: $showRepositoryPicker) {
+            RepositoryPickerSheet()
+                .environmentObject(state)
+                .onDisappear {
+                    if let picked = state.selectedRepo,
+                       branch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        branch = picked.defaultBranch
+                    }
+                }
+        }
+    }
+
+    // MARK: - Subviews
+
+    private var repoPickerRow: some View {
+        Button {
+            showRepositoryPicker = true
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "folder")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                    .frame(width: 28, height: 28)
+                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: 8))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Repository")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.textTertiary)
+                        .textCase(.uppercase)
+                    Text(state.selectedRepo?.fullName ?? "Choose repository")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(state.selectedRepo == nil ? Theme.textSecondary : Theme.textPrimary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.textTertiary)
+            }
+            .padding(12)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(Theme.separator.opacity(0.6), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func fieldRow(label: String, placeholder: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Theme.textTertiary)
+                .textCase(.uppercase)
+            TextField(placeholder, text: bindingForField(label: label))
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .font(.system(size: 15))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder(Theme.separator.opacity(0.6), lineWidth: 1)
+                )
+        }
+    }
+
+    private func bindingForField(label: String) -> Binding<String> {
+        switch label {
+        case "Branch": return $branch
+        case "Title": return $title
+        default: return .constant("")
+        }
+    }
+
+    private var footerText: String {
+        if let repo = state.selectedRepo {
+            return "Will open \(repo.fullName) on a fresh e2b sandbox."
+        }
+        return "Pick a repository to start a chat-driven agent loop on a fresh e2b sandbox."
+    }
+
+    private var openButton: some View {
+        Button {
+            guard let repo = state.selectedRepo else { return }
+            let titleTrimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let branchTrimmed = branch.trimmingCharacters(in: .whitespacesAndNewlines)
+            let resolvedBranch = branchTrimmed.isEmpty ? repo.defaultBranch : branchTrimmed
+            isOpening = true
+            onStart(titleTrimmed, resolvedBranch, repo)
+        } label: {
+            Text("Open")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(state.selectedRepo == nil ? Theme.textTertiary : Theme.background)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(
+                    state.selectedRepo == nil ? Theme.surfaceElevated : Theme.accent,
+                    in: Capsule()
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(state.selectedRepo == nil || isOpening)
     }
 }
 
