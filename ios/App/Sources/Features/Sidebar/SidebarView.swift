@@ -12,6 +12,7 @@ enum SidebarDestination: Hashable {
     case code
     case browser
     case models
+    case sandboxes
     case chat(ChatHistoryItem)
     case project(ProjectItem)
 }
@@ -134,6 +135,12 @@ struct SidebarView: View {
                 SidebarRow(systemImage: "chevron.left.forwardslash.chevron.right", title: "Code") {
                     onSelect(.code)
                 }
+                // Sandboxes (E2B) used to live in the sidebar too,
+                // but the Code destination already covers it (the
+                // E2B phone-originated run list is the first tab on
+                // the Code home). Keep the SidebarDestination.sandboxes
+                // case + the AppSettingsView entry as the discoverable
+                // surface; the sidebar just doesn't need both.
             }
             SidebarRow(systemImage: "globe", title: "Browser") {
                 onSelect(.browser)

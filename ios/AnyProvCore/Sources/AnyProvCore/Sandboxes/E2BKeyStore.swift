@@ -32,4 +32,45 @@ public final class E2BKeyStore: ObservableObject, @unchecked Sendable {
             hasKey = true
         }
     }
+
+    // MARK: - Format validation
+
+    /// Loose validator for the e2b.dev API key shape.
+    ///
+    /// Real keys today look like `e2b_abc123…` followed by 20+ characters
+    /// of base62-ish payload. We intentionally do **not** enforce the
+    /// exact length (e2b can rotate schemes) — the goal is just to
+    /// catch copy-paste mistakes before saving.
+    ///
+    /// Returns `nil` for valid, or a short human-readable reason for
+    /// invalid. Empty / nil input returns a "missing" reason so the UI
+    /// can show a different message than a malformed key.
+    public static func validate(_ raw: String?) -> ValidationResult {
+        let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return .missing
+        }
+        if !trimmed.hasPrefix("e2b_") {
+            return .invalid("e2b keys start with “e2b_”.")
+        }
+        // Strip the prefix; what's left must be reasonably long and only
+        // contain characters e2b uses in API keys today (alphanumerics
+        // and a small set of separators).
+        let payload = trimmed.dropFirst("e2b_".count)
+        if payload.count < 20 {
+            return .invalid("That key is too short — paste the full string from e2b.dev.")
+        }
+        let allowed = CharacterSet.alphanumerics
+            .union(CharacterSet(charactersIn: "_-"))
+        if payload.unicodeScalars.contains(where: { !allowed.contains($0) }) {
+            return .invalid("That key contains unexpected characters — paste it from e2b.dev without edits.")
+        }
+        return .valid
+    }
+
+    public enum ValidationResult: Equatable, Sendable {
+        case valid
+        case missing
+        case invalid(String)
+    }
 }

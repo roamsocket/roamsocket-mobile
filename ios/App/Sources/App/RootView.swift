@@ -137,6 +137,30 @@ struct RootView: View {
         .sheet(isPresented: $showSettings) {
             AppSettingsView()
         }
+        // Sandboxes (E2B) is presented here — not inside
+        // AppSettingsView — so the sidebar's "Sandboxes" row works
+        // even when Settings is closed. The single
+        // `state.showSandboxes` flag is flipped by the sidebar,
+        // the unpaired Code-home banner, the Settings E2B card,
+        // and any future deep links.
+        .sheet(isPresented: Binding(
+            get: { state.showSandboxes },
+            set: { state.showSandboxes = $0 }
+        )) {
+            SandboxesView()
+                .environmentObject(state)
+        }
+        // E2B key entry sheet. Same pattern as the Sandboxes
+        // sheet: lifted to RootView so the same UI opens from
+        // any surface (Settings, the unpaired Code home, the
+        // Sandboxes empty state).
+        .sheet(isPresented: Binding(
+            get: { state.showE2BKeySheet },
+            set: { state.showE2BKeySheet = $0 }
+        )) {
+            E2BKeySheet()
+                .environmentObject(state)
+        }
         .sheet(isPresented: $showIncognitoSheet) {
             IncognitoChatSheet(
                 history: history,
@@ -382,6 +406,16 @@ struct RootView: View {
             history.discardActiveIfBlank()
             history.forgetActiveIfOnExit()
             path = [.browser]
+            setSidebarOpen(false)
+        case .sandboxes:
+            // Open the Sandboxes sheet. The E2B flow is phone-only
+            // (see Sandboxes/DirectE2BClient.swift) and works
+            // without a paired desktop. The actual sheet is owned by
+            // AppSettingsView; flipping `state.showSandboxes` here
+            // requests presentation from any surface.
+            history.discardActiveIfBlank()
+            history.forgetActiveIfOnExit()
+            state.showSandboxes = true
             setSidebarOpen(false)
         case .models:
             history.discardActiveIfBlank()

@@ -90,6 +90,29 @@ struct ChatView: View {
         .onAppear {
             bindAndLoad()
         }
+        .task {
+            // The chat path is reached via RootView's task today,
+            // but the Sandboxes sidebar entry used to be a
+            // second refresh hook — and other surfaces (Code /
+            // E2B / Sandboxes in Settings) already call
+            // `refreshModels` on appear. Pin the chat to the same
+            // contract so the model pill never opens an empty
+            // picker just because the user landed here first.
+            if state.allModels.isEmpty {
+                await state.refreshModels()
+            }
+            // Even after the catalog loads, the model pill on
+            // the home screen reads "Add a model" if no
+            // selection has been made yet — the user might
+            // have added an API key in Settings without
+            // explicitly picking a default. Honor any stored
+            // chat default so a configured provider lands
+            // visibly on the composer. The `if let` in
+            // `applyDefault(for:)` is a no-op when a usable
+            // selection already exists, so this never
+            // stomps a deliberate pick.
+            state.applyDefault(for: .chat)
+        }
         .onChange(of: resumeToken) {
             // Switching chats / new chat while this screen stays mounted.
             persistAndAutoTitleOnLeave()

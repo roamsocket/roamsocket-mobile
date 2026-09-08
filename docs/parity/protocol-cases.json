@@ -283,39 +283,6 @@
       }
     },
     {
-      "name": "e2b_list",
-      "input": "{\"type\":\"e2b_list\",\"sessionId\":\"s1\",\"runs\":[{\"id\":\"r1\",\"sessionId\":\"s1\",\"repoFullName\":\"o/r\",\"branch\":\"main\",\"command\":\"npm test\",\"status\":\"completed\",\"exitCode\":0,\"sandboxId\":\"sbx1\",\"sandboxUrl\":\"https://sbx1.e2b.dev\",\"startedAt\":1710000000000,\"finishedAt\":1710000001000,\"outputTail\":[\"ok\"],\"error\":null}]}",
-      "expected": {
-        "kind": "e2b_list",
-        "sessionId": "s1",
-        "runs": [
-          {
-            "id": "r1",
-            "sessionId": "s1",
-            "repoFullName": "o/r",
-            "branch": "main",
-            "command": "npm test",
-            "status": "completed",
-            "exitCode": 0,
-            "sandboxId": "sbx1",
-            "sandboxUrl": "https://sbx1.e2b.dev",
-            "startedAt": 1710000000000,
-            "finishedAt": 1710000001000,
-            "outputTail": ["ok"],
-            "error": null
-          }
-        ]
-      }
-    },
-    {
-      "name": "e2b_key_ack",
-      "input": "{\"type\":\"e2b_key_ack\",\"overrideActive\":true}",
-      "expected": {
-        "kind": "e2b_key_ack",
-        "overrideActive": true
-      }
-    },
-    {
       "name": "unknown type must fail decode",
       "input": "{\"type\":\"not_a_real_type\"}",
       "expected": {

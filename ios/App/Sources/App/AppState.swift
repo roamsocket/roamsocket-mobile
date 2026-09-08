@@ -23,6 +23,19 @@ final class AppState: ObservableObject {
     /// it to spin up sandboxes directly (without a paired desktop).
     let e2bKeyStore = E2BKeyStore()
 
+    /// Phone-originated sandbox runs. Shared by the Code home and
+    /// the Sandboxes sheet so the active run, the run list, and
+    /// the in-flight cancellation handles are visible from both.
+    /// Hydrates from `Application Support/phoneRuns.v1.json` on init.
+    let sandboxesStore = SandboxesStore()
+
+    /// Long-lived E2B code sessions (the phone-driven agent loop).
+    /// One sandbox per session, kept alive across multiple
+    /// operations so the user can have a chat-style "write code
+    /// → run → commit → PR" flow over e2b.dev. Hydrates from
+    /// `Application Support/e2bCodeSessions.v1.json` on init.
+    let e2bSessionStore = E2bSessionStore()
+
     /// Single source of truth for chat history + projects. `RootView` creates
     /// the store via `@StateObject` and calls `setChatHistory(...)` on first
     /// appear so SettingsSync (which lives here) can read/write the same
@@ -149,6 +162,20 @@ final class AppState: ObservableObject {
     /// When non-nil, the iOS app will push its settings to this GitHub
     /// repo on every change (and pull on launch when a token is linked).
     @AppStorage("settingsSyncRepoFullName.v1") var settingsSyncRepoFullName: String?
+
+    /// Set to `true` to present the Sandboxes sheet. The view
+    /// layer flips it back to `false` once the sheet dismisses.
+    /// Lifted onto AppState so multiple surfaces (Settings, the
+    /// unpaired Code-home banner, future deep links) can open
+    /// the same sheet without each owning its own `@State`.
+    @Published var showSandboxes: Bool = false
+
+    /// Set to `true` to present the E2B API key entry sheet.
+    /// Same pattern as `showSandboxes`: owned by RootView so any
+    /// surface (the unpaired Code home, the Sandboxes empty
+    /// state, future deep links) can drive it without owning a
+    /// local `@State`. Cleared on dismiss.
+    @Published var showE2BKeySheet: Bool = false
 
     // Catalog state
     @Published var providerResults: [ModelCatalog.ProviderResult] = []

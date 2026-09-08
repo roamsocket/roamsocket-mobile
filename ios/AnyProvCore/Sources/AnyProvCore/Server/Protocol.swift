@@ -237,18 +237,11 @@ public enum ClientMessage: Encodable, Sendable {
     /// `force: true` tears down the existing access tunnel and starts a new one.
     case remoteEndpointRequest(force: Bool = false)
 
-    // MARK: - E2B sandbox runs
-
-    /// Start an E2B sandbox run for the session. The desktop server picks a
-    /// language-aware default command (`npm test`, `pytest`, …) when none is
-    /// supplied. Auto-triggered after a successful `gitPublish`; this case
-    /// is the manual re-run path from the Sandboxes panel.
-    case e2bStart(sessionId: String, command: String? = nil, apiKey: String? = nil)
-    case e2bAbort(runId: String)
-    case e2bList(sessionId: String? = nil, limit: Int = 50)
-    /// Per-connection user override for the admin-managed E2B key. Empty
-    /// string clears the override and falls back to the admin env key.
-    case e2bSetKey(apiKey: String)
+    // E2B sandbox runs were previously modelled here. The desktop
+    // no longer brokers sandbox starts / lists / aborts / key
+    // overrides — E2B is now a phone-only concern that talks
+    // directly to e2b.dev. The corresponding cases have been
+    // removed; the iOS app no longer encodes or sends them.
 
     public enum PermissionDecision: String, Codable, Sendable { case allow, deny }
 
@@ -362,21 +355,6 @@ public enum ClientMessage: Encodable, Sendable {
         case let .remoteEndpointRequest(force):
             try c.encode("remote_endpoint_request", forKey: .init("type"))
             if force { try c.encode(true, forKey: .init("force")) }
-        case let .e2bStart(sessionId, command, apiKey):
-            try c.encode("e2b_start", forKey: .init("type"))
-            try c.encode(sessionId, forKey: .init("sessionId"))
-            if let command { try c.encode(command, forKey: .init("command")) }
-            if let apiKey { try c.encode(apiKey, forKey: .init("apiKey")) }
-        case let .e2bAbort(runId):
-            try c.encode("e2b_abort", forKey: .init("type"))
-            try c.encode(runId, forKey: .init("runId"))
-        case let .e2bList(sessionId, limit):
-            try c.encode("e2b_list", forKey: .init("type"))
-            if let sessionId { try c.encode(sessionId, forKey: .init("sessionId")) }
-            try c.encode(limit, forKey: .init("limit"))
-        case let .e2bSetKey(apiKey):
-            try c.encode("e2b_set_key", forKey: .init("type"))
-            try c.encode(apiKey, forKey: .init("apiKey"))
         }
     }
 }
@@ -476,13 +454,12 @@ public enum ServerMessage: Decodable, Sendable {
     /// Agent working checklist snapshot (`update_tasks` tool).
     case taskList(sessionId: String, tasks: [AgentTaskPayload])
 
-    // MARK: - E2B sandbox runs (E2B.dev)
+    // E2B sandbox state was previously modelled here. The desktop no
+    // longer brokers sandbox runs — the iOS app talks to e2b.dev
+    // directly via `DirectE2BClient` and never decodes these
+    // messages. The corresponding cases and the `E2bRunPayload`
+    // type have been removed from this file.
 
-    case e2bStarted(sessionId: String, run: E2bRunPayload)
-    case e2bLog(runId: String, sessionId: String, stream: String, line: String, ts: Double)
-    case e2bStatus(sessionId: String, run: E2bRunPayload)
-    case e2bList(sessionId: String?, runs: [E2bRunPayload])
-    case e2bKeyAck(overrideActive: Bool)
     /// `/goal` completion-condition status for the coding session.
     case goalStatus(
         sessionId: String,
@@ -844,28 +821,6 @@ public enum ServerMessage: Decodable, Sendable {
                 events: try c.decode([TranscriptEvent].self, forKey: .events),
                 truncated: try c.decodeIfPresent(Bool.self, forKey: .truncated) ?? false,
                 isLive: try c.decodeIfPresent(Bool.self, forKey: .isLive) ?? false)
-        case "e2b_started":
-            self = .e2bStarted(
-                sessionId: try c.decode(String.self, forKey: .sessionId),
-                run: try c.decode(E2bRunPayload.self, forKey: .run))
-        case "e2b_log":
-            self = .e2bLog(
-                runId: try c.decode(String.self, forKey: .runId),
-                sessionId: try c.decode(String.self, forKey: .sessionId),
-                stream: try c.decode(String.self, forKey: .stream),
-                line: try c.decode(String.self, forKey: .line),
-                ts: try c.decode(Double.self, forKey: .ts))
-        case "e2b_status":
-            self = .e2bStatus(
-                sessionId: try c.decode(String.self, forKey: .sessionId),
-                run: try c.decode(E2bRunPayload.self, forKey: .run))
-        case "e2b_list":
-            self = .e2bList(
-                sessionId: try c.decodeIfPresent(String.self, forKey: .sessionId),
-                runs: try c.decode([E2bRunPayload].self, forKey: .runs))
-        case "e2b_key_ack":
-            self = .e2bKeyAck(
-                overrideActive: try c.decode(Bool.self, forKey: .overrideActive))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .type, in: c, debugDescription: "Unknown server message type: \(type)")
@@ -873,58 +828,10 @@ public enum ServerMessage: Decodable, Sendable {
     }
 }
 
-/// One persisted E2B sandbox run, returned in `e2b_list` and the body
-/// of `e2b_status`. Mirrors the canonical Zod `E2bRun` in
-/// `desktop-server/src/protocol.ts`. Top-level (not nested under
-/// `ServerMessage`) so the app target can use it as
-/// `AnyProvCore.E2bRunPayload` in the same way it uses `Skill` /
-/// `MCPServer` / `RepoRef`.
-public struct E2bRunPayload: Codable, Hashable, Sendable, Identifiable {
-    public let id: String
-    public let sessionId: String
-    public let repoFullName: String
-    public let branch: String
-    public let command: String
-    /// queued | running | completed | failed | killed
-    public let status: String
-    public let exitCode: Int?
-    public let sandboxId: String?
-    public let sandboxUrl: String?
-    public let startedAt: Double?
-    public let finishedAt: Double?
-    public let outputTail: [String]
-    public let error: String?
-
-    public init(
-        id: String,
-        sessionId: String,
-        repoFullName: String,
-        branch: String,
-        command: String,
-        status: String,
-        exitCode: Int? = nil,
-        sandboxId: String? = nil,
-        sandboxUrl: String? = nil,
-        startedAt: Double? = nil,
-        finishedAt: Double? = nil,
-        outputTail: [String] = [],
-        error: String? = nil,
-    ) {
-        self.id = id
-        self.sessionId = sessionId
-        self.repoFullName = repoFullName
-        self.branch = branch
-        self.command = command
-        self.status = status
-        self.exitCode = exitCode
-        self.sandboxId = sandboxId
-        self.sandboxUrl = sandboxUrl
-        self.startedAt = startedAt
-        self.finishedAt = finishedAt
-        self.outputTail = outputTail
-        self.error = error
-    }
-}
+/// The previous `E2bRunPayload` model that mirrored the desktop
+/// Zod `E2bRun` has been removed. The phone-originated equivalent
+/// is `E2bPhoneRun` in `Sandboxes/DirectE2BClient.swift` and is
+/// kept on disk via `PhoneRunPersistence` instead of over the wire.
 
 /// String coding key for building heterogeneous JSON objects.
 struct DynamicKey: CodingKey {
