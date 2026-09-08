@@ -486,6 +486,10 @@ struct ChatView: View {
                             onShare: { viewModel.shareMessage(message) },
                             onDelete: { viewModel.deleteMessage(message) },
                             onRegenerate: { Task { await viewModel.regenerateResponse(for: message) } },
+                            onPickSuggestion: { suggestion in
+                                viewModel.inputText = suggestion
+                                Task { await viewModel.sendMessage() }
+                            },
                             isArtifactSource: isArtifactSource(message)
                         )
                         .id(message.id)

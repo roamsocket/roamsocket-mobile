@@ -51,6 +51,7 @@
 		4BF37354D50C69E27E6F7102 /* ChatTitleGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07E0EA6CEE19C97FF0163C50 /* ChatTitleGenerator.swift */; };
 		4C3F1A45F6166F0FB3619396 /* CreateProjectSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B113EFED5DCB949A927BDF5 /* CreateProjectSheet.swift */; };
 		50127AE18A6F3A5813FCFF30 /* BrowserStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA22EEF171C8C5BF6D6F64F1 /* BrowserStore.swift */; };
+		5033380BB84832EC7A0A5792 /* FollowUpChips.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49B4C620C266FD61D885F2DF /* FollowUpChips.swift */; };
 		515A632E92983A2E155F91B8 /* CodeDefaultSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30FAD250300B1820AB25342A /* CodeDefaultSelectionTests.swift */; };
 		519CD9CF7D2942240434B175 /* MCPManagerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51F057DEB317B1FB052775B7 /* MCPManagerView.swift */; };
 		5277A4402CB29FA2F5ED3424 /* CodeSessionLauncher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13B3870C0EA82767F54B3116 /* CodeSessionLauncher.swift */; };
@@ -240,6 +241,7 @@
 		44394A209E58F5112FF34826 /* RoamSocketControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoamSocketControls.swift; sourceTree = "<group>"; };
 		471E0875DF99071BF74BD76E /* WebSearchService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSearchService.swift; sourceTree = "<group>"; };
 		484A3E7253B503CC7D47B333 /* VisionCapability.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionCapability.swift; sourceTree = "<group>"; };
+		49B4C620C266FD61D885F2DF /* FollowUpChips.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowUpChips.swift; sourceTree = "<group>"; };
 		4A045B4A62AB92DA7B74C1A2 /* VisionGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionGateTests.swift; sourceTree = "<group>"; };
 		4B113EFED5DCB949A927BDF5 /* CreateProjectSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateProjectSheet.swift; sourceTree = "<group>"; };
 		4D74A9315918540821F3A6D3 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -491,6 +493,7 @@
 				122D73711B783A293FCCA9E5 /* ChatView.swift */,
 				25BB8C5338F7DF305283B5CA /* ChatViewModel.swift */,
 				54E6B70D6D9963ABFF34F70B /* ConnectorsView.swift */,
+				49B4C620C266FD61D885F2DF /* FollowUpChips.swift */,
 				8BAED357FB143CAA4A585022 /* GalleryPicker.swift */,
 				1527859F8C93DC72EBCFD9F2 /* ImageProcessing.swift */,
 				9CDA789F62DF1F26F2CAF00E /* IncognitoChatSheet.swift */,
@@ -995,6 +998,7 @@
 				8CCFF3A7038AF2B4D2975167 /* EnvironmentPickerSheet.swift in Sources */,
 				75E2A949A36E02B2681DAD28 /* FlashcardDecksListView.swift in Sources */,
 				549702D77C444B25F0C6BD29 /* FlashcardModels.swift in Sources */,
+				5033380BB84832EC7A0A5792 /* FollowUpChips.swift in Sources */,
 				93BFF170E4B5AD70F4AF7E92 /* GalleryPicker.swift in Sources */,
 				0DBC945A4F7EA9E196F7106D /* GitHubLinkView.swift in Sources */,
 				17DFB0DCF3023CAA287B08CD /* GuidedLearningModels.swift in Sources */,

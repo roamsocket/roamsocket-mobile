@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import AnyProvCore
 
 /// Renders an individual chat message with actions.
 struct ChatMessageView: View {
@@ -9,6 +10,9 @@ struct ChatMessageView: View {
     var onShare: () -> Void
     var onDelete: () -> Void
     var onRegenerate: () -> Void
+    /// Tap a follow-up suggestion chip → parent seeds the composer
+    /// with the label and sends the next turn.
+    var onPickSuggestion: (String) -> Void = { _ in }
     /// Highlight when this message is the source of the open artifact panel.
     var isArtifactSource: Bool = false
 
@@ -98,19 +102,23 @@ struct ChatMessageView: View {
 
     // MARK: - Assistant Message
 
-    /// Prefer an explicit `thoughtProcess`; otherwise peel `<think>` tags
-    /// out of the visible content so raw markup never shows in the bubble.
-    /// Empty `text` (non-nil) means tags were present with no body yet → grey Thinking...
-    private var resolvedThinking: (text: String?, content: String) {
+    /// Peel `<think>` tags (and friends) out of the visible content
+    /// so raw markup never shows in the bubble, then peel any
+    /// `[SUGGEST: a | b | c]` markers out for the follow-up chip
+    /// row. Empty `thinking` text (non-nil) means tags were
+    /// present with no body yet → grey Thinking...
+    private var resolvedThinking: (text: String?, content: String, suggestions: [String]) {
+        let raw = message.content
         if let existing = message.thoughtProcess, !existing.isEmpty {
             // Content may still contain tags if it was set independently.
-            let parsed = ThinkingExtractor.extract(from: message.content)
+            let parsed = ThinkingExtractor.extract(from: raw)
             let visible = parsed.content
-            // Keep stored reasoning; never fall back to raw tagged content.
-            return (existing, visible)
+            let followUps = FollowUpExtractor.extract(from: visible)
+            return (existing, followUps.content, followUps.suggestions)
         }
-        let parsed = ThinkingExtractor.extract(from: message.content)
-        return (parsed.thinking, parsed.content)
+        let parsed = ThinkingExtractor.extract(from: raw)
+        let followUps = FollowUpExtractor.extract(from: parsed.content)
+        return (parsed.thinking, followUps.content, followUps.suggestions)
     }
 
     private var assistantMessageContent: some View {
@@ -137,6 +145,15 @@ struct ChatMessageView: View {
                 ForEach(ids, id: \.self) { id in
                     MemoryHintCard(memory: UserMemoryStore.shared, activityID: id)
                 }
+            }
+
+            // Follow-up suggestion chips below the prose. The model
+            // emits these as `[SUGGEST: a | b | c]` markers; we strip
+            // them out of `resolved.content` and render the chips
+            // here so the user can one-tap the next turn.
+            if !message.isStreaming, !resolved.suggestions.isEmpty {
+                FollowUpChips(suggestions: resolved.suggestions, onPick: onPickSuggestion)
+                    .padding(.top, 2)
             }
 
             // Animated typing indicator while waiting on the model after tools

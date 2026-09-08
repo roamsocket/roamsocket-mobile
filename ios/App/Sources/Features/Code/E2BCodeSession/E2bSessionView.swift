@@ -595,21 +595,51 @@ struct E2bSessionView: View {
 /// pill) and a monospaced output body.
 private struct MessageBubble: View {
     let message: E2bCodeMessage
+    /// Tap a follow-up suggestion chip → parent seeds the input
+    /// bar with the label so the user can edit + send.
+    var onPickSuggestion: (String) -> Void = { _ in }
 
     var body: some View {
         switch message.kind {
         case .tool:
             ToolCard(message: message)
         default:
-            textBubble
+            VStack(alignment: isUser ? .trailing : .leading, spacing: 6) {
+                if !isUser, let thinking = resolved.thinking {
+                    ThinkingBlock(text: thinking)
+                }
+                if !resolved.content.isEmpty {
+                    textBubble
+                }
+                if !isUser, !followUps.suggestions.isEmpty {
+                    FollowUpChips(suggestions: followUps.suggestions, onPick: onPickSuggestion)
+                }
+            }
         }
+    }
+
+    /// Strip `<think>` (and friends) tags out of the assistant text
+    /// so raw reasoning markup never lands in the chat bubble. The
+    /// chat surface and the E2B session both use the same
+    /// `ThinkingExtractor` so a Claude 4 / Qwen3 / DeepSeek leak
+    /// renders as a collapsible row here just like it does in
+    /// `ChatMessageView`.
+    private var resolved: ThinkingExtractor.Result {
+        ThinkingExtractor.extract(from: message.text)
+    }
+
+    /// Follow-up suggestions peeled out of the post-thinking
+    /// content. The agent loop's system prompt nudges the model
+    /// to emit `[SUGGEST: a | b | c]` after it finishes a turn.
+    private var followUps: FollowUpExtractor.Result {
+        FollowUpExtractor.extract(from: resolved.content)
     }
 
     private var textBubble: some View {
         HStack {
             if isUser { Spacer(minLength: 32) }
             VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
-                Text(message.text)
+                Text(followUps.content)
                     .font(.system(size: 14))
                     .foregroundStyle(textColor)
                     .textSelection(.enabled)
