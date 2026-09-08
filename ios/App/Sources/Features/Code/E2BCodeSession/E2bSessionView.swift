@@ -337,12 +337,18 @@ struct E2bSessionView: View {
         // split from the runner.
         let agentLLM: AgentLLM
         do {
-            // The factory picks the right default base URL for
-            // built-in providers (OpenAI, Groq, etc.); pass `nil`
-            // so the factory owns the URL choice. Custom providers
-            // need their own URL stored on `model` — fall back to
-            // nil here and the user can re-add the key if needed.
-            let baseURL: URL? = nil
+            // Pull the user's base URL (custom OpenAI-compatible
+            // host) when one is configured. The factory's
+            // `defaultBaseURL(for:)` only knows the built-ins
+            // and falls through to `api.openai.com` for `.custom`
+            // — which is why a key issued by a custom host was
+            // reaching OpenAI and getting rejected as
+            // "Incorrect API key provided" inside the E2B agent
+            // even though the chat composer (which uses the same
+            // URL via `OpenAICompatibleProvider`) worked fine.
+            // Built-in providers still get `nil` and the
+            // factory's defaults take over.
+            let baseURL = state.baseURL(for: model.provider)
             agentLLM = try AgentLLMFactory.make(
                 provider: model.provider,
                 modelID: model.modelID,

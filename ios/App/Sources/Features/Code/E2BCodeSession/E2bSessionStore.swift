@@ -136,9 +136,15 @@ final class E2bSessionStore: ObservableObject {
             cloneURL = "https://oauth2:\(token)@github.com/\(repoFullName).git"
         }
         // Build the Python that does the clone + checkout.
-        // Output is JSON so we can detect errors.
+        // Output is JSON so we can detect errors. The body is
+        // deliberately flat (no function wrapper) so e2b's
+        // /execute endpoint can run it as-is; the short-circuit
+        // exits therefore have to be `sys.exit(0)` (bare
+        // `return` is a SyntaxError at module level), and
+        // `escapePython` wraps the URL/branch in single quotes
+        // so the assignments below are valid string literals.
         let script = """
-        import subprocess, json
+        import subprocess, json, sys
         clone_url = \(Self.escapePython(cloneURL))
         branch = \(Self.escapePython(branch))
         try:
@@ -148,7 +154,7 @@ final class E2bSessionStore: ObservableObject {
             )
             if clone.returncode != 0:
                 print(json.dumps({"ok": False, "step": "clone", "stderr": clone.stderr}))
-                return
+                sys.exit(0)
             # Try to switch to the requested branch; depth-1
             # clone may not have it.
             subprocess.run(
@@ -161,7 +167,7 @@ final class E2bSessionStore: ObservableObject {
             )
             if co.returncode != 0:
                 print(json.dumps({"ok": False, "step": "checkout", "stderr": co.stderr}))
-                return
+                sys.exit(0)
             sha = subprocess.run(
                 ["git", "rev-parse", "--short", "HEAD"],
                 cwd="/code", capture_output=True, text=True, timeout=10,
@@ -202,9 +208,22 @@ final class E2bSessionStore: ObservableObject {
         )
     }
 
-    private static func escapePython(_ s: String) -> String {
-        s.replacingOccurrences(of: "\\", with: "\\\\")
+    /// Wrap `s` as a single-quoted Python string literal. The
+    /// previous version only escaped backslashes + single quotes
+    /// but never added the surrounding quotes, so the generated
+    /// `clone_url = https://...` lines were bare identifiers and
+    /// Python raised `SyntaxError: invalid syntax (...) line 3`
+    /// on the first run of every session. Mirrors the quoting
+    /// `PythonQuote.escape` does in `DirectE2BClient` for the
+    /// command/shim scripts so both code paths share the same
+    /// shape. `nonisolated` so unit tests can call it from
+    /// outside the store's `@MainActor`.
+    nonisolated static func escapePython(_ s: String) -> String {
+        if s.isEmpty { return "''" }
+        let escaped = s
+            .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "'", with: "\\'")
+        return "'\(escaped)'"
     }
 
     /// Append a message to a session's transcript. Cheap —
