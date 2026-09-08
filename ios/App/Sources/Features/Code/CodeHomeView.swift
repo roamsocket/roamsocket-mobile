@@ -342,14 +342,32 @@ struct CodeHomeView: View {
                 }
             }
             // Floating action affordances for the sandbox tab.
-            // Two pills: "Start session" (chat-driven agent loop
-            // against a persistent sandbox) above "Start a run"
-            // (one-shot shell command). Both disabled until the
-            // user has an e2b key; the empty state surfaces the
-            // "Add your e2b.dev key" CTA.
+            // Primary: full-width "Start session" pill (chat-driven
+            // agent loop against a persistent sandbox). Secondary:
+            // icon-only "terminal" pill on the leading edge for the
+            // one-shot run flow. Both disabled until the user has an
+            // e2b key; the empty state surfaces the "Add your
+            // e2b.dev key" CTA.
             if tab == .sandbox {
-                VStack(spacing: 10) {
-                    Spacer()
+                HStack(spacing: 10) {
+                    // Icon-only terminal pill: the one-shot "run a
+                    // command" flow. Smaller, sits on the leading
+                    // edge of the bottom bar.
+                    Button {
+                        showStartSheet = true
+                    } label: {
+                        Image(systemName: "terminal.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(Theme.background)
+                            .frame(width: 44, height: 44)
+                            .background(state.e2bKeyStore.hasKey ? Theme.accent : Theme.textTertiary,
+                                        in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!state.e2bKeyStore.hasKey)
+                    .accessibilityLabel("Start a run")
+                    // Full-width primary pill: opens the E2B code
+                    // session sheet (repo + branch + title).
                     Button {
                         showSessionSheet = true
                     } label: {
@@ -359,31 +377,16 @@ struct CodeHomeView: View {
                         }
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(.white)
-                        .padding(.horizontal, 18)
-                        .padding(.vertical, 10)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
                         .background(state.e2bKeyStore.hasKey ? Theme.accent : Theme.textTertiary,
                                     in: Capsule())
                     }
                     .buttonStyle(.plain)
                     .disabled(!state.e2bKeyStore.hasKey)
-                    Button {
-                        showStartSheet = true
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "play.fill")
-                            Text("Start a run")
-                        }
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(Theme.background)
-                        .padding(.horizontal, 18)
-                        .padding(.vertical, 10)
-                        .background(state.e2bKeyStore.hasKey ? Theme.accent : Theme.textTertiary,
-                                    in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!state.e2bKeyStore.hasKey)
-                    .padding(.bottom, 24)
                 }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 24)
             }
         }
         .navigationTitle("Code")
@@ -645,7 +648,7 @@ struct CodeHomeView: View {
             // Leave room at the bottom for the stacked FABs so the
             // last list row isn't hidden under the "Start a run"
             // pill.
-            .padding(.bottom, 120)
+            .padding(.bottom, 90)
         }
     }
 
