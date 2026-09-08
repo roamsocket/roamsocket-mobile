@@ -61,9 +61,11 @@ struct SandboxesView: View {
             .navigationTitle("Sandboxes")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
-                }
+                // No "Done" / back button: the sidebar is the
+                // navigation surface, and iOS sheets are
+                // dismissible via the standard swipe-down gesture.
+                // Keeping the start-run button so the sheet remains
+                // self-sufficient when opened from Settings.
                 ToolbarItem(placement: .primaryAction) {
                     Button {
                         showStartSheet = true

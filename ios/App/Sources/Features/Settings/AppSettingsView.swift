@@ -691,43 +691,13 @@ struct AppSettingsView: View {
 
     // MARK: - Sandboxes (E2B)
 
-    /// E2B sandbox runs. The desktop server kicks off a sandbox after every
-    /// successful git push (the auto-trigger) and streams the output back
-    /// over the same WS. The user can also start runs directly from the
-    /// phone using their own e2b.dev API key (entered via the E2B API
-    /// key row below) — that's the "no PC" path.
+    /// E2B API key entry. The runs list + the "Start a run" sheet
+    /// moved to the Code destination's Sandboxes tab (the single
+    /// E2B entry point); the Settings card now only holds the key
+    /// row so the user has one obvious place to add / replace it.
     private var sandboxesSection: some View {
         settingsCard(header: "Sandboxes (E2B)") {
             VStack(spacing: 0) {
-                Button {
-                    showSandboxes = true
-                } label: {
-                    HStack(spacing: 14) {
-                        Image(systemName: "shippingbox")
-                            .font(.system(size: 20))
-                            .foregroundStyle(Theme.textPrimary)
-                            .frame(width: 28)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("E2B runs")
-                                .font(.system(size: 17, weight: .regular))
-                                .foregroundStyle(Theme.textPrimary)
-                            Text("Run pushed branches in a clean E2B sandbox.")
-                                .font(.system(size: 12))
-                                .foregroundStyle(Theme.textSecondary)
-                        }
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 14, weight: .regular))
-                            .foregroundStyle(Theme.textSecondary)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 14)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-
-                Divider().background(Theme.separator)
-
                 Button {
                     state.showE2BKeySheet = true
                 } label: {

@@ -12,7 +12,6 @@ enum SidebarDestination: Hashable {
     case code
     case browser
     case models
-    case sandboxes
     case chat(ChatHistoryItem)
     case project(ProjectItem)
 }
@@ -135,15 +134,13 @@ struct SidebarView: View {
                 SidebarRow(systemImage: "chevron.left.forwardslash.chevron.right", title: "Code") {
                     onSelect(.code)
                 }
-                // Sandboxes (E2B) is a first-class destination: the
-                // phone drives e2b.dev sandboxes directly with the
-                // user's own API key, so this works whether or not a
-                // desktop is paired. Surfacing it in the sidebar
-                // makes the "run code without a desktop" path
-                // discoverable from anywhere in the app.
-                SidebarRow(systemImage: "shippingbox", title: "Sandboxes") {
-                    onSelect(.sandboxes)
-                }
+                // Sandboxes (E2B) intentionally not surfaced in the
+                // sidebar — the Code destination now hosts the
+                // Sandboxes tab, which is the single entry point for
+                // E2B sessions + one-shot runs. A top-level sidebar
+                // row opens the same Sandboxes sheet behind another
+                // modal layer, so dropping it removes the duplicate
+                // path. The E2B API key still lives in Settings.
             }
             SidebarRow(systemImage: "globe", title: "Browser") {
                 onSelect(.browser)

@@ -52,6 +52,25 @@ struct E2bSessionView: View {
             .navigationTitle(session?.title ?? "Session")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                // Explicit Close button — the fullScreenCover has no
+                // default dismiss affordance, and the old Menu-only
+                // toolbar forced users to know the "End session" trick
+                // to leave. Closing does NOT kill the sandbox; the
+                // sandbox is intentionally preserved across close so
+                // the user can reopen it from the Code home. The
+                // Menu still exposes End session / Reopen sandbox.
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Theme.textPrimary)
+                            .frame(width: 32, height: 32)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Close session")
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         if let s = session, s.isLive {

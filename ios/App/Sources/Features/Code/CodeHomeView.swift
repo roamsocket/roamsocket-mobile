@@ -315,6 +315,9 @@ struct CodeHomeView: View {
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
+            // Solid background that fills edge-to-edge. The VStack
+            // below stays inside the safe area so the picker and
+            // tab content are not pushed under the status bar.
             Theme.background.ignoresSafeArea()
             VStack(spacing: 0) {
                 // Segmented picker at the top — same UX as the
@@ -338,12 +341,31 @@ struct CodeHomeView: View {
                     }
                 }
             }
-            // Floating "Start a run" affordance for the sandbox
-            // tab. Disabled until the user has an e2b key; the
-            // empty state surfaces the "Add your e2b.dev key" CTA.
+            // Floating action affordances for the sandbox tab.
+            // Two pills: "Start session" (chat-driven agent loop
+            // against a persistent sandbox) above "Start a run"
+            // (one-shot shell command). Both disabled until the
+            // user has an e2b key; the empty state surfaces the
+            // "Add your e2b.dev key" CTA.
             if tab == .sandbox {
-                VStack {
+                VStack(spacing: 10) {
                     Spacer()
+                    Button {
+                        showSessionSheet = true
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "bubble.left.and.bubble.right.fill")
+                            Text("Start session")
+                        }
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 10)
+                        .background(state.e2bKeyStore.hasKey ? Theme.accent : Theme.textTertiary,
+                                    in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!state.e2bKeyStore.hasKey)
                     Button {
                         showStartSheet = true
                     } label: {
@@ -529,91 +551,101 @@ struct CodeHomeView: View {
     /// E2B sandboxes section. Shows the user's long-lived code
     /// sessions at the top (each is a chat-driven agent loop
     /// against a persistent e2b sandbox) and the one-shot run
-    /// list below. The "Start a session" CTA opens a chat; the
-    /// "Start a run" CTA opens the one-shot runner.
+    /// list below. The "Start session" FAB opens a chat; the
+    /// "Start a run" FAB opens the one-shot runner. Wrapped in
+    /// a ScrollView so long session / run lists can scroll
+    /// instead of being pushed off-screen.
     @ViewBuilder
     private var e2bSection: some View {
         let sessions = state.e2bSessionStore.sessions
-        if rows.isEmpty && sessions.isEmpty {
-            CodeEmptyState(
-                hasPhoneKey: state.e2bKeyStore.hasKey,
-                onStart: { showStartSheet = true },
-                onAddKey: { state.showE2BKeySheet = true },
-            )
-            .frame(maxWidth: .infinity)
-            .padding(.top, 24)
-        } else {
+        ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                // Code sessions (long-lived, agent-driven).
-                HStack {
-                    Image(systemName: "bubble.left.and.bubble.right.fill")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(Theme.accent)
-                    Text("Sessions")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Theme.textSecondary)
-                        .textCase(.uppercase)
-                    Spacer()
-                    Button {
-                        showSessionSheet = true
-                    } label: {
-                        HStack(spacing: 3) {
-                            Image(systemName: "plus")
-                                .font(.system(size: 11, weight: .bold))
-                            Text("New")
-                                .font(.system(size: 12, weight: .semibold))
+                if rows.isEmpty && sessions.isEmpty {
+                    CodeEmptyState(
+                        hasPhoneKey: state.e2bKeyStore.hasKey,
+                        onStart: { showStartSheet = true },
+                        onAddKey: { state.showE2BKeySheet = true },
+                    )
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 24)
+                } else {
+                    // Code sessions (long-lived, agent-driven).
+                    HStack {
+                        Image(systemName: "bubble.left.and.bubble.right.fill")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(Theme.accent)
+                        Text("Sessions")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Theme.textSecondary)
+                            .textCase(.uppercase)
+                        Spacer()
+                        Button {
+                            showSessionSheet = true
+                        } label: {
+                            HStack(spacing: 3) {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 11, weight: .bold))
+                                Text("New")
+                                    .font(.system(size: 12, weight: .semibold))
+                            }
+                            .foregroundStyle(Theme.accent)
                         }
-                        .foregroundStyle(Theme.accent)
+                        .buttonStyle(.plain)
+                        .disabled(!state.e2bKeyStore.hasKey)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(!state.e2bKeyStore.hasKey)
-                }
-                .padding(.horizontal, 4)
-                if sessions.isEmpty {
-                    Text("No sessions yet. Start a chat with a repo to write code, run, and commit.")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.textTertiary)
-                        .padding(.horizontal, 4)
-                } else {
-                    ForEach(sessions) { session in
-                        sessionRow(session)
+                    .padding(.horizontal, 4)
+                    if sessions.isEmpty {
+                        Text("No sessions yet. Tap Start session to write code, run, and commit.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.textTertiary)
+                            .padding(.horizontal, 4)
+                    } else {
+                        ForEach(sessions) { session in
+                            sessionRow(session)
+                        }
                     }
-                }
-                Divider().overlay(Theme.separator).padding(.vertical, 4)
-                // One-shot run list (existing flow).
-                HStack {
-                    Image(systemName: "play.square")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(Theme.accent)
-                    Text("Quick runs")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Theme.textSecondary)
-                        .textCase(.uppercase)
-                    Spacer()
-                }
-                .padding(.horizontal, 4)
-                if rows.isEmpty {
-                    Text("No runs yet. Tap play below to start a one-shot sandbox run.")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.textTertiary)
-                        .padding(.horizontal, 4)
-                } else {
-                    let active = rows.first(where: { $0.status == "running" || $0.status == "queued" })
-                    let past = rows.filter { $0.status != "running" && $0.status != "queued" }
-                    if let active {
-                        RunRowView(row: active, onStop: {
-                            state.sandboxesStore.cancelPhoneRun(runId: active.id)
-                        }, onRerun: { rerun(row: active) })
+                    Divider().overlay(Theme.separator).padding(.vertical, 4)
+                    // One-shot run list (existing flow).
+                    HStack {
+                        Image(systemName: "play.square")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(Theme.accent)
+                        Text("Quick runs")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Theme.textSecondary)
+                            .textCase(.uppercase)
+                        Spacer()
                     }
-                    if !past.isEmpty {
-                        ForEach(past) { row in
-                            RunRowView(row: row, onStop: {
-                                state.sandboxesStore.cancelPhoneRun(runId: row.id)
-                            }, onRerun: { rerun(row: row) })
+                    .padding(.horizontal, 4)
+                    if rows.isEmpty {
+                        Text("No runs yet. Tap Start a run to launch a one-shot sandbox run.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.textTertiary)
+                            .padding(.horizontal, 4)
+                    } else {
+                        let active = rows.first(where: { $0.status == "running" || $0.status == "queued" })
+                        let past = rows.filter { $0.status != "running" && $0.status != "queued" }
+                        if let active {
+                            RunRowView(row: active, onStop: {
+                                state.sandboxesStore.cancelPhoneRun(runId: active.id)
+                            }, onRerun: { rerun(row: active) })
+                        }
+                        if !past.isEmpty {
+                            ForEach(past) { row in
+                                RunRowView(row: row, onStop: {
+                                    state.sandboxesStore.cancelPhoneRun(runId: row.id)
+                                }, onRerun: { rerun(row: row) })
+                            }
                         }
                     }
                 }
             }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            // Leave room at the bottom for the stacked FABs so the
+            // last list row isn't hidden under the "Start a run"
+            // pill.
+            .padding(.bottom, 120)
         }
     }
 
@@ -875,9 +907,8 @@ private struct NewE2BSessionSheet: View {
             .navigationTitle("New code session")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
+                // No "Cancel" button: sidebar is the navigation
+                // surface and iOS sheets dismiss via swipe-down.
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Open") {
                         guard let repo = state.selectedRepo else { return }
