@@ -2,7 +2,9 @@ import SwiftUI
 import UIKit
 
 /// Claude-style thinking row: clock on the left, grey summary, chevron on the right.
-/// No card/bubble. Tap opens a **Thought process** sheet with the full reasoning.
+/// No card/bubble. Tap **expands the row inline** to reveal the full reasoning
+/// underneath; tap again to collapse. (The old sheet-based path is gone — the
+/// inline disclosure keeps the user in the same scroll position.)
 ///
 /// When `text` is empty (open tag with no body yet), shows a non-interactive
 /// grey **Thinking...** row so raw markup never leaks.
@@ -11,14 +13,24 @@ struct ThinkingBlock: View {
     let text: String
     /// Optional precomputed one-line label (from Apple Foundation Models).
     var summary: String? = nil
-    /// When true, also show full reasoning inline under the row
-    /// (Settings → Always expand thinking).
+    /// When true, skip the collapse and render the full reasoning inline by
+    /// default (Settings → Always expand thinking). The user can still
+    /// collapse manually via the chevron.
     var expanded: Bool = false
 
-    @State private var showSheet = false
     @State private var resolvedSummary: String = ""
     @State private var isSummarizing = false
     @State private var showCopiedToast = false
+    /// User-controlled disclosure. Seeded from `expanded` so the Settings
+    /// "always expand" flag wins, but the user can override per row.
+    @State private var isExpanded: Bool
+
+    init(text: String, summary: String? = nil, expanded: Bool = false) {
+        self.text = text
+        self.summary = summary
+        self.expanded = expanded
+        self._isExpanded = State(initialValue: expanded)
+    }
 
     private var hasBody: Bool {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -35,24 +47,21 @@ struct ThinkingBlock: View {
         VStack(alignment: .leading, spacing: 8) {
             summaryRow
 
-            if hasBody, expanded {
+            if hasBody, isExpanded {
                 Text(text)
                     .font(.system(size: 14))
                     .foregroundStyle(Theme.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 2)
+                    .padding(.leading, 24) // align under the summary, past the clock icon
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .animation(.spring(response: 0.34, dampingFraction: 0.86), value: expanded)
+        .animation(.spring(response: 0.34, dampingFraction: 0.86), value: isExpanded)
         .task(id: summaryTaskID) {
             await refreshSummaryIfNeeded()
-        }
-        .sheet(isPresented: $showSheet) {
-            ThoughtProcessSheet(text: text) {
-                showSheet = false
-            }
         }
     }
 
@@ -83,24 +92,31 @@ struct ThinkingBlock: View {
                     .foregroundStyle(Theme.accent)
                     .transition(.opacity)
             } else if hasBody {
-                Image(systemName: "chevron.right")
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Theme.textTertiary.opacity(0.75))
+                    .contentTransition(.symbolEffect(.replace))
             }
         }
         .contentShape(Rectangle())
         .onTapGesture {
             guard hasBody else { return }
-            showSheet = true
+            isExpanded.toggle()
         }
         .onLongPressGesture(minimumDuration: 0.4, perform: copyThinking)
         .contextMenu {
             if hasBody {
                 Button {
-                    showSheet = true
+                    isExpanded = true
                 } label: {
-                    Label("View thought process", systemImage: "text.alignleft")
+                    Label("Expand", systemImage: "arrow.down.right.and.arrow.up.left")
                 }
+                Button {
+                    isExpanded = false
+                } label: {
+                    Label("Collapse", systemImage: "arrow.up.left.and.arrow.down.right")
+                }
+                Divider()
                 Button {
                     copyThinking()
                 } label: {
@@ -110,7 +126,7 @@ struct ThinkingBlock: View {
         }
         .accessibilityAddTraits(hasBody ? .isButton : [])
         .accessibilityLabel(hasBody ? "Thought process: \(displaySummary)" : "Thinking")
-        .accessibilityHint(hasBody ? "Shows the model’s private reasoning" : "Model is reasoning")
+        .accessibilityHint(hasBody ? (isExpanded ? "Tap to collapse" : "Tap to expand") : "Model is reasoning")
         .accessibilityAction(named: "Copy thinking") { copyThinking() }
     }
 
@@ -159,57 +175,5 @@ struct ThinkingBlock: View {
                 showCopiedToast = false
             }
         }
-    }
-}
-
-// MARK: - Full thought process sheet (Claude-style)
-
-private struct ThoughtProcessSheet: View {
-    let text: String
-    var onClose: () -> Void
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                Text(text)
-                    .font(.system(size: 17))
-                    .foregroundStyle(Theme.textPrimary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 12)
-            }
-            .background(Theme.background.ignoresSafeArea())
-            .navigationTitle("Thought process")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button {
-                        onClose()
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .symbolRenderingMode(.hierarchical)
-                            .foregroundStyle(Theme.textTertiary)
-                            .font(.system(size: 22))
-                    }
-                    .accessibilityLabel("Close")
-                }
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        #if canImport(UIKit)
-                        UIPasteboard.general.string = text
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        #endif
-                    } label: {
-                        Image(systemName: "doc.on.doc")
-                            .foregroundStyle(Theme.textSecondary)
-                    }
-                    .accessibilityLabel("Copy thought process")
-                }
-            }
-        }
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
-        .presentationBackground(Theme.surface)
     }
 }

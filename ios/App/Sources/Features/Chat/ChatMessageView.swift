@@ -160,48 +160,12 @@ struct ChatMessageView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// Grey tool-use status lines (web search, research, Wikipedia, …).
-    /// Mirrors the thinking-row treatment: tertiary text, no card chrome.
+    /// Collapsible tool-calls block. Renders a single summary row
+    /// ("Ran 3 tools" / "Running web search…" / "1 tool failed") by
+    /// default; tap to expand inline to the per-tool lines. Mirrors
+    /// the ThinkingBlock treatment.
     private func toolStatusLines(toolCalls: [ToolCall]) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ForEach(toolCalls) { call in
-                HStack(alignment: .top, spacing: 8) {
-                    Group {
-                        if case .running = call.status {
-                            ProgressView()
-                                .controlSize(.mini)
-                        } else {
-                            Image(systemName: iconForTool(call))
-                                .font(.system(size: 12, weight: .regular))
-                        }
-                    }
-                    .foregroundStyle(Theme.textTertiary)
-                    .frame(width: 16, height: 16)
-                    .padding(.top, 1)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(call.summary)
-                            .font(.system(size: 14))
-                            .foregroundStyle(Theme.textTertiary)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .textSelection(.enabled)
-
-                        if let detail = call.detail,
-                           !detail.isEmpty,
-                           call.status == .completed || isFailed(call.status)
-                        {
-                            Text(detail)
-                                .font(.system(size: 12))
-                                .foregroundStyle(Theme.textTertiary.opacity(0.85))
-                                .lineLimit(2)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel(accessibilityLabel(for: call))
-            }
-        }
+        ToolCallsBlock(calls: toolCalls, iconForTool: iconForTool)
     }
 
     private func isFailed(_ status: ToolCall.Status) -> Bool {
