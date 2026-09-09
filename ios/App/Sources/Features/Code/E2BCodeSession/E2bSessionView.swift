@@ -206,8 +206,21 @@ struct E2bSessionView: View {
                                 else { return false }
                                 return index != lastShellIndex
                             }()
-                            MessageBubble(message: message, isCollapsed: isCollapsed)
-                                .id(message.id)
+                            MessageBubble(
+                                message: message,
+                                isCollapsed: isCollapsed,
+                                onPickSuggestion: { suggestion in
+                                    // Fill the input bar (no auto-send) so
+                                    // the user can review / edit the label
+                                    // before firing the next turn. Mirrors
+                                    // the chat surface's chip behaviour
+                                    // (which auto-sends) — E2B picks the
+                                    // safer default because the user often
+                                    // wants to tweak the agent's prompt.
+                                    draft = suggestion
+                                }
+                            )
+                            .id(message.id)
                         }
                     }
                     // Streaming assistant message: ephemeral,
@@ -768,6 +781,10 @@ struct E2bSessionView: View {
 private struct MessageBubble: View {
     let message: E2bCodeMessage
     var isCollapsed: Bool = false
+    /// Tap a follow-up suggestion chip → parent seeds the input
+    /// bar with the label so the user can edit + send. Default
+    /// no-op so non-E2B call-sites (and previews) can omit it.
+    var onPickSuggestion: (String) -> Void = { _ in }
 
     var body: some View {
         switch message.kind {
@@ -776,6 +793,24 @@ private struct MessageBubble: View {
         default:
             textBubble
         }
+    }
+
+    /// Strip `<think>` (and friends) tags out of the assistant text
+    /// so raw reasoning markup never lands in the chat bubble. The
+    /// chat surface and the E2B session both use the same
+    /// `ThinkingExtractor` so a Claude 4 / Qwen3 / DeepSeek leak
+    /// renders as a collapsible row here just like it does in
+    /// `ChatMessageView`.
+    private var resolved: ThinkingExtractor.Result {
+        ThinkingExtractor.extract(from: message.text)
+    }
+
+    /// Follow-up suggestions peeled out of the post-thinking
+    /// content. The agent loop's system prompt nudges the model
+    /// to emit `[SUGGEST: a | b | c]` (or `<suggest>…</suggest>`
+    /// or a `Next steps:` list) after it finishes a turn.
+    private var followUps: FollowUpExtractor.Result {
+        FollowUpExtractor.extract(from: resolved.content)
     }
 
     private var textBubble: some View {
@@ -811,11 +846,21 @@ private struct MessageBubble: View {
                    let thinking = message.thoughtProcess,
                    !thinking.isEmpty {
                     ThinkingBlock(text: thinking)
+                } else if message.kind == .assistant,
+                          let thinking = resolved.thinking,
+                          !thinking.isEmpty {
+                    ThinkingBlock(text: thinking)
                 }
-                if !message.text.isEmpty {
-                    MarkdownContentView(text: message.text, fontSize: 14)
+                if !followUps.content.isEmpty {
+                    MarkdownContentView(text: followUps.content, fontSize: 14)
                         .foregroundStyle(Theme.textPrimary)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if message.kind == .assistant, !followUps.suggestions.isEmpty {
+                    FollowUpChips(
+                        suggestions: followUps.suggestions,
+                        onPick: onPickSuggestion
+                    )
                 }
             }
         )

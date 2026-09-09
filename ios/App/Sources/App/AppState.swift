@@ -434,6 +434,35 @@ final class AppState: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &bag)
+        // Code home + Sandboxes sheet read `state.e2bKeyStore.hasKey`
+        // (or `get()`) directly, but neither observes the inner
+        // `E2BKeyStore` ObservableObject. Without this forward the
+        // views keep showing the "Add your e2b.dev API key" empty
+        // state / disabled Start button after the user pastes a key
+        // in Settings — the key is on disk, just not visible. Same
+        // pattern as `codeSessionStore` above.
+        e2bKeyStore.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &bag)
+        // Same forwarding for the E2B code session list. CodeHomeView
+        // reads `state.e2bSessionStore.sessions` directly, but a new
+        // session created via `openSession` would never re-render the
+        // list — the new row lives in the store, the view just
+        // doesn't know to ask again.
+        e2bSessionStore.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &bag)
+        // And the same for the one-shot sandboxes list. Both
+        // `SandboxesView` and the Code tab's run list read
+        // `state.sandboxesStore.phoneRuns`; without the forward,
+        // starting a run wouldn't re-render the row until the next
+        // unrelated AppState change.
+        sandboxesStore.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &bag)
         loadEnvironments()
         loadSyncedRepos()
         loadCustomProviders()

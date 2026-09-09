@@ -509,6 +509,14 @@ struct ChatView: View {
                             onShare: { viewModel.shareMessage(message) },
                             onDelete: { viewModel.deleteMessage(message) },
                             onRegenerate: { Task { await viewModel.regenerateResponse(for: message) } },
+                            onPickSuggestion: { suggestion in
+                                // Seed the composer with the picked label
+                                // and send the next turn. Mirrors the E2B
+                                // session's behaviour where the chip fills
+                                // the input bar instead of auto-sending.
+                                viewModel.inputText = suggestion
+                                Task { await viewModel.sendMessage() }
+                            },
                             isArtifactSource: isArtifactSource(message)
                         )
                         .id(message.id)
