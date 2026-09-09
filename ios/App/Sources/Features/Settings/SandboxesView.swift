@@ -195,8 +195,6 @@ struct SandboxesView: View {
             githubToken: state.githubToken,
             request: req,
         )
-<<<<<<< HEAD
-=======
     }
 
     /// Present the phone-key entry sheet. Use when the user wants to
@@ -204,32 +202,11 @@ struct SandboxesView: View {
     private func openPhoneKeySheet() {
         phoneKeyDraft = ""
         showPhoneKeySheet = true
->>>>>>> 0693eb5 (fix(ios): open E2B key sheet in Sandboxes when no phone key is set)
     }
 
     @ViewBuilder
     private var content: some View {
-<<<<<<< HEAD
         if rows.isEmpty {
-=======
-        if !store.isReady && store.runs.isEmpty && store.phoneRuns.isEmpty {
-            VStack(spacing: 12) {
-                if state.serverEndpoint != nil && state.serverToken != nil {
-                    ProgressView().tint(Theme.accent)
-                    Text("Connecting to desktop…")
-                        .font(.system(size: 14))
-                        .foregroundStyle(Theme.textSecondary)
-                } else {
-                    NoDesktopEmptyState(
-                        hasKey: state.e2bKeyStore.hasKey,
-                        onStart: { showStartSheet = true },
-                        onAddKey: { openPhoneKeySheet() }
-                    )
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if unifiedRuns.isEmpty {
->>>>>>> 0693eb5 (fix(ios): open E2B key sheet in Sandboxes when no phone key is set)
             EmptyState(
                 hasPhoneKey: state.e2bKeyStore.hasKey,
                 onStart: { showStartSheet = true },
@@ -535,8 +512,6 @@ struct EmptyState: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
             if hasPhoneKey {
-<<<<<<< HEAD
-=======
                 Button(action: onStart) {
                     HStack(spacing: 6) {
                         Image(systemName: "play.fill")
@@ -563,7 +538,7 @@ struct EmptyState: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Add your e2b.dev API key")
-                Text("Tapping this opens the key entry — the run will start as soon as you save.")
+                Text("Tapping this opens the key entry, and the run will start as soon as you save.")
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.textTertiary)
                     .multilineTextAlignment(.center)
@@ -574,26 +549,6 @@ struct EmptyState: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
-
-private struct NoDesktopEmptyState: View {
-    let hasKey: Bool
-    var onStart: () -> Void
-    var onAddKey: () -> Void
-    var body: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "shippingbox")
-                .font(.system(size: 40, weight: .light))
-                .foregroundStyle(Theme.textTertiary)
-            Text("No desktop paired")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(Theme.textPrimary)
-            Text("You can still run sandboxes from this device by adding your e2b.dev API key, then tapping Start a run.")
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.textSecondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
-            if hasKey {
->>>>>>> 0693eb5 (fix(ios): open E2B key sheet in Sandboxes when no phone key is set)
                 Button(action: onStart) {
                     HStack(spacing: 6) {
                         Image(systemName: "play.fill")
@@ -620,15 +575,12 @@ private struct NoDesktopEmptyState: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Add your e2b.dev API key")
-<<<<<<< HEAD
                 Text("Tapping this opens the key entry, and the run will start as soon as you save.")
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.textTertiary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 40)
                     .padding(.top, 4)
-=======
->>>>>>> 0693eb5 (fix(ios): open E2B key sheet in Sandboxes when no phone key is set)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
