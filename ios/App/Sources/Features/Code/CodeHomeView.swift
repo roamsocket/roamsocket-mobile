@@ -586,6 +586,11 @@ struct CodeHomeView: View {
                 .zIndex(1)
         }
         .toolbar(.hidden, for: .navigationBar)
+        // The Code destination is reached via the sidebar (the
+        // sidebar's "Code" row), so the system-injected back chevron
+        // is redundant — the sidebar IS the navigation surface. The
+        // custom header still has the hamburger for the drawer.
+        .navigationBarBackButtonHidden(true)
         .onAppear {
             // Apply the user's code default if the current selection isn't a
             // coding-capable model (or isn't set at all). Per-chat / per-session
