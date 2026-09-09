@@ -24,11 +24,19 @@ object ThinkingExtractor {
 
     // Tag names treated as reasoning/scratch containers. Matches iOS
     // (think / thinking / reasoning / reflection / thought / analysis /
-    // scratch_pad). Inlined into the regexes below — repeating the
-    // pattern verbatim means we don't need a backref and open and close
-    // always match.
+    // scratch_pad / xai:reasoning / xai:thinking). Inlined into the
+    // regexes below — repeating the pattern verbatim means we don't
+    // need a backref and open and close always match.
+    //
+    // Coverage:
+    // - think/thinking/reasoning/reflection/thought/analysis/scratch_pad
+    //   — generic reasoning tags emitted by Claude 4, Qwen3, DeepSeek
+    //   R1, Hermes 4, Phi-4 fine-tunes, RAG agents.
+    // - xai:reasoning / xai:thinking — Grok 3 / Grok 4 reasoning
+    //   blocks. Grok wraps the model's scratch reasoning in
+    //   <xai:reasoning>…</xai:reasoning>.
     private const val THINKING_TAGS =
-        "think|thinking|reasoning|reflection|thought|analysis|scratch_pad"
+        "think|thinking|reasoning|reflection|thought|analysis|scratch_pad|xai:reasoning|xai:thinking"
 
     /**
      * Every non-empty prefix of one of the [THINKING_TAGS] names. The
@@ -146,9 +154,12 @@ object ThinkingExtractor {
     // MARK: - Provider control-token strip
 
     // Llama 3 / Qwen / Phi / Gemma tokenizer special tokens.
+    // Also covers Qwen-VL vision tokens (`box_start`, `box_end`,
+    // `image_pad`, `object_ref_*`) and the JSON-mode `constrain`
+    // tokens.
     private val controlTokenPattern: Regex =
         Regex(
-            """<\|\s*(?:begin_of_text|end_of_text|start_header_id|end_header_id|eot_id|eom_id|python_tag|user|assistant|system|end|endoftext|im_start|im_end)\s*\|>""",
+            """<\|\s*(?:begin_of_text|end_of_text|start_header_id|end_header_id|eot_id|eom_id|python_tag|user|assistant|system|end|endoftext|im_start|im_end|ref|box_start|box_end|image_pad|object_ref_start|object_ref_end|constrain|/constrain|reasoning|/reasoning)\s*\|>""",
             RegexOption.IGNORE_CASE,
         )
 
@@ -169,14 +180,63 @@ object ThinkingExtractor {
     private val geminiUnusedPattern: Regex =
         Regex("""<unused\d+\b[^>]*>""", RegexOption.IGNORE_CASE)
 
+    // Llama 2 chat template system block: <<SYS>>…<</SYS>>. Some
+    // Llama 2 fine-tunes emit the wrapper in the visible answer
+    // instead of behind the scenes.
+    private val llama2SystemBlockPattern: Regex =
+        Regex("""<<SYS>>[\s\S]*?<</SYS>>""")
+
+    // </s> end-of-sentence token leaked by Llama-family chat models.
+    private val endOfSentenceTokenPattern: Regex = Regex("""</s>""")
+
+    // HTML comment strip. Some Claude 3.7 Sonnet and Llama 3.3
+    // fine-tunes leak reasoning as `<!-- reasoning … -->`.
+    private val htmlCommentPattern: Regex =
+        Regex("""<!--[\s\S]*?-->""")
+
+    // Llama 3.1 / some Grok 3 fine-tunes wrap reasoning in special
+    // tokens: <|reasoning|>…<|/reasoning|>. Strip the whole block.
+    private val llamaReasoningBlockPattern: Regex =
+        Regex("""<\|reasoning\|>[\s\S]*?<\|/reasoning\|>""", RegexOption.IGNORE_CASE)
+
+    // ChatGLM / Qwen-Chat output wrapper.
+    private val chatGlmOutputPattern: Regex =
+        Regex("""<output\b[^>]*>[\s\S]*?</output>""", RegexOption.IGNORE_CASE)
+
+    // [SYSTEM_PROMPT] orphan marker some Mistral 3 fine-tunes emit
+    // when the system prompt wasn't fully suppressed. Strip the
+    // marker plus everything up to the next blank line or the end
+    // of the reply.
+    private val systemPromptLeakPattern: Regex =
+        Regex("""\[SYSTEM_PROMPT\][\s\S]*?(?=\n\s*\n|$)""", RegexOption.IGNORE_CASE)
+
     /** Strip leaked tokenizer / turn-marker control tokens. */
     fun stripControlTokens(raw: String): String {
         if (raw.isEmpty()) return raw
         var s = raw
+
+        // New in this revision: provider-specific output wrappers that
+        // should never reach the chat bubble. The Llama 3.1
+        // `<|reasoning|>…<|/reasoning|>` block goes here so the
+        // entire body is dropped, not just the wrapper tokens
+        // (leaving the body bare would surface reasoning as plain
+        // text).
+        val blockPatterns = listOf(
+            llama2SystemBlockPattern,
+            llamaReasoningBlockPattern,
+            chatGlmOutputPattern,
+            htmlCommentPattern,
+            systemPromptLeakPattern,
+        )
+        for (pattern in blockPatterns) {
+            s = pattern.replace(s, "")
+        }
+
         s = controlTokenPattern.replace(s, "")
         s = gemmaTurnPattern.replace(s, "")
         s = mistralInstPattern.replace(s, "")
         s = geminiUnusedPattern.replace(s, "")
+        s = endOfSentenceTokenPattern.replace(s, "")
 
         // Mistral [TOOL_CALLS][...] opener: drop the opener, then balance
         // brackets in the JSON that follows to find the matching close.
@@ -215,8 +275,18 @@ object ThinkingExtractor {
 
     // Capturing alternation of known tool-call wrapper names. The capture
     // group is the wrapper name so the closing-tag backref `\1` works.
+    // Covers the standard families plus `xai:tool_calls` (plural) which
+    // was missing in the previous revision.
     private const val TOOL_CALL_WRAPPER_NAME =
-        "([A-Za-z][\\w-]*:tool_call|xai:function_call|xai:tool_call|tool_calls|tool_call|function_calls|antml:function_calls)"
+        "([A-Za-z][\\w-]*:tool_call|xai:function_call|xai:tool_call|xai:tool_calls|tool_calls|tool_call|function_calls|antml:function_calls)"
+
+    // Anthropic legacy single-invoke wrapper. The newer Anthropic
+    // wire format is JSON `tool_use` blocks (handled at the API
+    // layer), but some Claude 3 Opus / 3.5 Sonnet fine-tunes still
+    // leak `<antml:invoke name="…">…</antml:invoke>` calls into the
+    // visible text. The chat path doesn't parse them, so strip.
+    private val antmlInvokePattern: Regex =
+        Regex("""<antml:invoke\b(?:"[^"]*"|'[^']*'|[^'">])*>(?!/)[\s\S]*?</antml:invoke>""", RegexOption.IGNORE_CASE)
 
     // DeepSeek's full-width-pipe XML tool-call blocks (`｜DSML｜…｜`).
     // Strip innermost first because Kotlin Regex doesn't support recursion.
@@ -277,6 +347,13 @@ object ThinkingExtractor {
     fun stripToolCallXml(raw: String): String {
         if (raw.isEmpty()) return raw
         var s = raw
+
+        // Anthropic legacy `<antml:invoke>` blocks first. They're
+        // well-formed (open + close tag) but not in the
+        // `TOOL_CALL_WRAPPER_NAME` alternation (the wrapper name is
+        // `invoke`, not `tool_call` / `function_calls`), so they need
+        // their own pattern.
+        s = antmlInvokePattern.replace(s, "")
 
         // DeepSeek's full-width-pipe ｜DSML｜…｜ blocks first, innermost
         // → outermost.

@@ -477,6 +477,14 @@ fun SessionScreen(
                         actionHistoryTools = tools
                         showActionHistory = true
                     },
+                    // PR #XXX (provider conventions v2): tap a
+                    // follow-up suggestion chip → fill the input
+                    // bar (no auto-send) so the user can tweak the
+                    // agent's prompt before firing. Mirrors the iOS
+                    // E2B session behaviour.
+                    onPickSuggestion = { suggestion ->
+                        viewModel.updateDraft(suggestion)
+                    },
                 )
             }
             // Live typing indicator while the agent is mid-turn and
@@ -733,9 +741,14 @@ private fun SegmentRow(
     segment: SessionTranscriptSegment,
     isRunning: Boolean,
     onOpenActionHistory: (List<TranscriptItem.Tool>) -> Unit,
+    onPickSuggestion: (String) -> Unit = {},
 ) {
     when (segment) {
-        is SessionTranscriptSegment.Item -> TranscriptRow(item = segment.item, isRunning = isRunning)
+        is SessionTranscriptSegment.Item -> TranscriptRow(
+            item = segment.item,
+            isRunning = isRunning,
+            onPickSuggestion = onPickSuggestion,
+        )
         is SessionTranscriptSegment.Actions -> ActionGroupCard(
             tools = segment.tools,
             onOpenHistory = { onOpenActionHistory(segment.tools) },
@@ -744,10 +757,14 @@ private fun SegmentRow(
 }
 
 @Composable
-private fun TranscriptRow(item: TranscriptItem, isRunning: Boolean) {
+private fun TranscriptRow(item: TranscriptItem, isRunning: Boolean, onPickSuggestion: (String) -> Unit = {}) {
     when (item) {
         is TranscriptItem.User -> UserBubble(item.text)
-        is TranscriptItem.Assistant -> AssistantBubble(item.text, isRunning = isRunning)
+        is TranscriptItem.Assistant -> AssistantBubble(
+            text = item.text,
+            isRunning = isRunning,
+            onPickSuggestion = onPickSuggestion,
+        )
         // Tool rows are routed through the segment-based renderer
         // (see [SegmentRow] / [ActionGroupCard]). Direct tool rendering
         // is no longer used in the live transcript.
@@ -776,7 +793,11 @@ private fun UserBubble(text: String) {
 }
 
 @Composable
-private fun AssistantBubble(text: String, isRunning: Boolean) {
+private fun AssistantBubble(
+    text: String,
+    isRunning: Boolean,
+    onPickSuggestion: (String) -> Unit = {},
+) {
     if (text.isEmpty()) return
     // Parity with iOS `SessionAssistantMessage`: pull `<think>` blocks
     // out via [ThinkingExtractor] and render the body as Markwon
@@ -785,15 +806,26 @@ private fun AssistantBubble(text: String, isRunning: Boolean) {
     val cleaned = ThinkingExtractor
         .stripControlTokens(parsed.content)
         .let { ThinkingExtractor.stripToolCallXml(it) }
+    // PR #XXX (provider conventions v2): peel follow-up markers
+    // out of the cleaned body. The remaining text goes through
+    // Markwon; the chip row renders the labels below.
+    val followUps = FollowUpExtractor.extract(cleaned)
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)) {
         parsed.thinking?.let { thinking ->
             ThinkingBlock(text = thinking)
             Spacer(Modifier.size(8.dp))
         }
-        if (cleaned.isNotBlank()) {
-            MarkdownContentView(text = cleaned, fontSize = 16.sp)
+        if (followUps.content.isNotBlank()) {
+            MarkdownContentView(text = followUps.content, fontSize = 16.sp)
         }
-        if (isRunning && parsed.thinking == null && cleaned.isBlank()) {
+        if (!isRunning && followUps.suggestions.isNotEmpty()) {
+            Spacer(Modifier.size(6.dp))
+            FollowUpChips(
+                suggestions = followUps.suggestions,
+                onPick = onPickSuggestion,
+            )
+        }
+        if (isRunning && parsed.thinking == null && followUps.content.isBlank()) {
             Spacer(Modifier.size(4.dp))
             AssistantTypingIndicator()
         }
