@@ -1,3 +1,6 @@
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 /**
  * Electron main process.
  *
@@ -14,36 +17,68 @@
  *      safeStorage, server control, copy-to-clipboard, open external URLs).
  */
 import {
-  app,
   BrowserWindow,
-  Tray,
   Menu,
-  ipcMain,
-  dialog,
-  shell,
+  Tray,
+  app,
   clipboard,
-  safeStorage,
+  dialog,
+  ipcMain,
   nativeImage,
   nativeTheme,
+  safeStorage,
+  shell,
 } from 'electron';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { startServer, type RunningServer } from '../index.js';
 import {
+  type DesktopPrefs,
+  type TunnelProviderPref,
+  loadDesktopPrefs,
+  saveDesktopPrefs,
+} from '../desktop-config.js';
+import { type RunningServer, startServer } from '../index.js';
+import {
+  ensureFoundationCliBuilt,
+  foundationGenerate,
+  getFoundationStatus,
+} from '../lightweight/foundation-bridge.js';
+import { applyMarketplaceToDesktop, getMarketplaceStore } from '../marketplace/index.js';
+import {
+  getMetalRuntimeStatus,
+  getMetalStore,
+  installMetalRuntime,
+  metalGenerate,
+  resetMetalPythonCache,
+} from '../metal/index.js';
+import {
+  DirectE2BClient,
+  DirectE2BError,
+  E2B_CODE_INTERPRETER_PORT,
+  type SandboxRun,
+  appendSandboxRun,
+  clearE2BKey,
+  clearSandboxRuns,
+  e2bKeyStatus,
+  friendlyE2BError,
+  loadSandboxRuns,
+  readE2BKey,
+  updateSandboxRun,
+  validateE2BKey,
+  writeE2BKey,
+} from '../sandboxes/index.js';
+import {
+  type TunnelCliId,
   hostTriple,
   installStrategySummary,
   installTunnelCli,
   listTunnelCliStatus,
   managedBinDir,
-  type TunnelCliId,
 } from '../workspace/tunnel-clis.js';
 import {
+  type TunnelInfo,
   detectTunnelProviders,
   listTunnels,
   startTunnel,
   stopTunnel,
-  type TunnelInfo,
 } from '../workspace/tunnels.js';
 import {
   findConflictingProcesses,
@@ -51,25 +86,6 @@ import {
   isPortHeld,
   killProcesses,
 } from './instance-cleanup.js';
-import {
-  loadDesktopPrefs,
-  saveDesktopPrefs,
-  type DesktopPrefs,
-  type TunnelProviderPref,
-} from '../desktop-config.js';
-import {
-  getMetalStore,
-  getMetalRuntimeStatus,
-  metalGenerate,
-  installMetalRuntime,
-  resetMetalPythonCache,
-} from '../metal/index.js';
-import { applyMarketplaceToDesktop, getMarketplaceStore } from '../marketplace/index.js';
-import {
-  getFoundationStatus,
-  foundationGenerate,
-  ensureFoundationCliBuilt,
-} from '../lightweight/foundation-bridge.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -78,6 +94,13 @@ function dbg(msg: string): void {
   // process uses `stdio: 'inherit'` on macOS where Electron's stdout can
   // be captured by the internal logger.
   process.stderr.write(`[apc-debug] ${msg}\n`);
+}
+
+/** Trim a (potentially large) string down to a manageable tail of lines. */
+function splitTail(text: string, maxLines = 80): string[] {
+  const lines = text.split('\n').filter((l) => l.length > 0);
+  if (lines.length <= maxLines) return lines;
+  return lines.slice(-maxLines);
 }
 
 dbg(`main.ts loaded, electron=${typeof process.versions.electron} node=${process.versions.node}`);
@@ -361,9 +384,7 @@ function buildTrayIcon(): Electron.NativeImage {
   // uses the PNG as-is.
   const buildDir = iconDir();
   const isDark =
-    typeof nativeTheme.shouldUseDarkColors === 'boolean'
-      ? nativeTheme.shouldUseDarkColors
-      : false;
+    typeof nativeTheme.shouldUseDarkColors === 'boolean' ? nativeTheme.shouldUseDarkColors : false;
   const file = isDark ? 'tray-dark.png' : 'tray-light.png';
   const img = nativeImage.createFromPath(path.join(buildDir, file));
   if (!img.isEmpty()) {
@@ -387,9 +408,7 @@ function buildTrayIcon(): Electron.NativeImage {
 function buildAppIcon(): Electron.NativeImage | undefined {
   const buildDir = iconDir();
   const isDark =
-    typeof nativeTheme.shouldUseDarkColors === 'boolean'
-      ? nativeTheme.shouldUseDarkColors
-      : false;
+    typeof nativeTheme.shouldUseDarkColors === 'boolean' ? nativeTheme.shouldUseDarkColors : false;
   // `icon-dark.png` is the dark-mode variant of the brand logo. macOS picks
   // `icon.icns` from the bundle automatically; this is what we hand to
   // BrowserWindow in dev / un-bundled runs.
@@ -716,6 +735,109 @@ function registerIpc(): void {
     (_e, providerId: string) => secrets.providerKeys[providerId] ?? null
   );
   ipcMain.handle('secrets:readGithubToken', () => secrets.githubToken || null);
+
+  // -----------------------------------------------------------------
+  // E2B sandbox (desktop-originated, talks to api.e2b.dev directly).
+  // Mirrors the iOS AnyProvCore/Sandboxes API surface; the protocol
+  // intentionally removed E2B WS messages, so the desktop is its own
+  // client (see src/protocol.ts).
+  // -----------------------------------------------------------------
+  ipcMain.handle('sandboxes:status', () => loadSandboxRuns());
+  ipcMain.handle('sandboxes:keyStatus', () => e2bKeyStatus());
+  ipcMain.handle('sandboxes:verifyKey', async () => {
+    const key = readE2BKey();
+    if (!key) return { ok: false as const, reason: 'Add your e2b.dev API key in Settings first.' };
+    const validation = validateE2BKey(key);
+    if (!validation.ok) return { ok: false as const, reason: validation.reason };
+    const client = new DirectE2BClient({ apiKey: key });
+    try {
+      const status = await client.verifyKey();
+      return { ok: true as const, status };
+    } catch (err) {
+      if (err instanceof DirectE2BError) {
+        return { ok: false as const, reason: friendlyE2BError(err.kind, err.status) };
+      }
+      return { ok: false as const, reason: (err as Error).message };
+    }
+  });
+  ipcMain.handle('sandboxes:setKey', (_e, value: string) => writeE2BKey(value ?? ''));
+  ipcMain.handle('sandboxes:clearKey', () => {
+    clearE2BKey();
+    return e2bKeyStatus();
+  });
+  ipcMain.handle('sandboxes:clearRuns', () => {
+    clearSandboxRuns();
+    return loadSandboxRuns();
+  });
+  ipcMain.handle('sandboxes:startRun', async (_e, command: string) => {
+    const key = readE2BKey();
+    if (!key) throw new DirectE2BError('no_api_key', 'E2B key missing');
+    const trimmed = (command ?? '').trim();
+    if (!trimmed) throw new DirectE2BError('unknown', 'Command is empty');
+
+    const id = `r_desktop_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+    const now = Date.now();
+    const seed: SandboxRun = {
+      id,
+      source: 'desktop',
+      command: trimmed,
+      status: 'running',
+      exitCode: null,
+      sandboxId: null,
+      sandboxUrl: null,
+      startedAt: now,
+      finishedAt: null,
+      outputTail: [],
+      error: null,
+    };
+    appendSandboxRun(seed);
+
+    const client = new DirectE2BClient({ apiKey: key });
+    try {
+      const info = await client.createSandbox();
+      updateSandboxRun(id, {
+        sandboxId: info.sandboxId,
+        sandboxUrl: `https://${E2B_CODE_INTERPRETER_PORT}-${info.sandboxId}.e2b.dev`,
+      });
+      const result = await client.runShell(info.sandboxId, trimmed, { timeoutMs: 5 * 60_000 });
+      updateSandboxRun(id, {
+        status: result.ok ? 'completed' : 'failed',
+        exitCode: result.exitCode,
+        outputTail: splitTail(`${result.stdout}\n${result.stderr}`),
+        finishedAt: Date.now(),
+        error: result.ok ? null : result.stderr.trim() || `exit ${result.exitCode}`,
+      });
+      return loadSandboxRuns().find((r) => r.id === id) ?? null;
+    } catch (err) {
+      const reason =
+        err instanceof DirectE2BError
+          ? friendlyE2BError(err.kind, err.status)
+          : (err as Error).message;
+      updateSandboxRun(id, {
+        status: 'failed',
+        error: reason,
+        finishedAt: Date.now(),
+        outputTail: splitTail(reason),
+      });
+      return loadSandboxRuns().find((r) => r.id === id) ?? null;
+    }
+  });
+  ipcMain.handle('sandboxes:killRun', async (_e, id: string) => {
+    const all = loadSandboxRuns();
+    const run = all.find((r) => r.id === id);
+    if (!run?.sandboxId) return all;
+    const key = readE2BKey();
+    if (key) {
+      const client = new DirectE2BClient({ apiKey: key });
+      await client.killSandbox(run.sandboxId).catch(() => undefined);
+    }
+    updateSandboxRun(id, {
+      status: 'killed',
+      finishedAt: Date.now(),
+      error: 'Killed by user.',
+    });
+    return loadSandboxRuns();
+  });
 
   ipcMain.handle('clipboard:write', (_e, text: string) => clipboard.writeText(text));
   ipcMain.handle('shell:open', (_e, url: string) => shell.openExternal(url));

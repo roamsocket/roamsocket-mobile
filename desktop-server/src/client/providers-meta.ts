@@ -48,7 +48,14 @@ export function effortExplanation(effort: Effort): {
 }
 
 /** Primary sidebar destinations — Vision intentionally excluded. */
-export const SIDEBAR_DESTINATIONS = ['chats', 'projects', 'artifacts', 'code', 'settings'] as const;
+export const SIDEBAR_DESTINATIONS = [
+  'chats',
+  'projects',
+  'artifacts',
+  'code',
+  'sandboxes',
+  'settings',
+] as const;
 
 export type SidebarDestination = (typeof SIDEBAR_DESTINATIONS)[number];
 
