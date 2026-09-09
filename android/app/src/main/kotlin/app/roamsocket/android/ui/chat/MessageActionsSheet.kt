@@ -19,6 +19,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -37,24 +38,31 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * PR #80: bottom-sheet picker for message-level actions. Mirrors
- * the iOS `MessageActionsSheet` (`square.and.arrow.up` / `tray.full`
- * / `star` / `pencil` / `trash` rows) at the subset the Android
- * chat supports today:
+ * Bottom-sheet picker for per-message actions. Mirrors the per-
+ * message actions that are actually wired on iOS:
  *
  *  * **Copy** — write the message text to the system clipboard.
  *  * **Share** — fire `Intent.ACTION_SEND` so the user can pick
  *    any installed share target.
+ *  * **Regenerate** *(assistant only)* — re-send the user prompt
+ *    that produced this assistant turn and drop the existing row.
+ *    Mirrors the iOS `regenerateResponse(for:)` flow at
+ *    `ios/.../ChatViewModel.swift:1167-1177`. Hidden when the
+ *    message is still streaming or isn't an assistant row.
  *  * **Delete** — drop the message from the in-memory transcript
- *    via [ChatViewModel.deleteMessage].
+ *    via [ChatViewModel.deleteMessage]. The iOS chat surface
+ *    doesn't expose a per-message delete (delete is per-chat in
+ *    the sidebar) but Android already has it, so we keep it
+ *    rather than regress.
  *
- * The iOS-only "Add to project" / "Star" / "Rename" rows aren't
- * surfaced on Android yet — the corresponding
- * `ChatHistoryStore.setStarred` / `rename` / `addChatToProject`
- * hooks are already wired (see PR #76 sidebar map) but the iOS
- * project model itself has no Android equivalent so the rows
- * would always be no-ops. A follow-up could surface "Star" once
- * the Android sidebar adopts the same star field.
+ * Star / Rename / Add to project are **per-chat** actions, not
+ * per-message — they live in the sidebar (`SidebarView.kt`) on
+ * both platforms, not here. The iOS `MessageActionsSheet.swift`
+ * file that lists 5 actions (Share / Add to project / Star /
+ * Rename / Delete) is **dead code** — `grep -rn
+ * "MessageActionsSheet(" ios` shows it's only referenced from
+ * its own `#Preview`. Mirroring it 1:1 would just add dead UI
+ * to Android, so we deliberately don't.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -62,6 +70,7 @@ fun MessageActionsSheet(
     message: ChatMessage,
     onCopy: () -> Unit,
     onShare: () -> Unit,
+    onRegenerate: (() -> Unit)? = null,
     onDelete: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -120,6 +129,15 @@ fun MessageActionsSheet(
                         context.startActivity(chooser)
                     }
                     onShare()
+                    onDismiss()
+                },
+            )
+            ActionRow(
+                icon = Icons.Outlined.Refresh,
+                title = "Regenerate",
+                tint = MaterialTheme.colorScheme.onSurface,
+                onClick = {
+                    onRegenerate?.invoke()
                     onDismiss()
                 },
             )
