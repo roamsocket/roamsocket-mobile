@@ -5,12 +5,10 @@ import AnyProvCore
 enum VisionCapability {
     /// Whether this catalog model is likely to accept multimodal (image + text) turns.
     ///
-    /// **Vision is an API-only feature in this build.** On-device Metal is
-    /// excluded entirely, so even hub ids that look like Vision models
-    /// (gemma-4, qwen-vl, smolvlm, …) won't enable the camera/gallery
-    /// buttons — those chips still appear in Settings and the model picker
-    /// as downloadable weights, but the chat composer treats them as
-    /// text-only until on-device vision ships.
+    /// On-device Metal vision models (Gemma 4, Qwen3-VL, SmolVLM, etc.) are
+    /// included when their hub id matches known vision markers. The MLX backend
+    /// handles the vision tower; this gate only controls whether the camera/
+    /// gallery buttons appear in the UI.
     ///
     /// - Parameter providerMarkedVisionCapable: When true (custom provider toggle),
     ///   every non-excluded model from that provider is treated as vision-capable.
@@ -23,10 +21,6 @@ enum VisionCapability {
 
         // Apple Foundation Model is text-only in this client.
         if model.provider == .appleFoundation { return false }
-
-        // On-device Metal never runs the vision path. See the long-form
-        // note above; this is the single switch.
-        if model.provider == .localMetal { return false }
 
         let id = model.modelID.lowercased()
 

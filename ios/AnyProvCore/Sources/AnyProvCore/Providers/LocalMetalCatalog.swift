@@ -178,6 +178,139 @@ public struct LocalMetalCatalogEntry: Identifiable, Hashable, Codable, Sendable 
         // `72b-a12b` style after extra split still catches via 72b if present.
         return false
     }
+
+    // MARK: - Device compatibility
+
+    /// Estimated RAM bytes needed to load this model, derived from `approxSize`.
+    /// Applies a 1.5x multiplier on download size to account for KV cache and
+    /// MLX working memory overhead. Returns `nil` when `approxSize` is empty
+    /// or unparseable.
+    public var approxRAMBytes: Int64? {
+        guard let downloadBytes = Self.parseSizeBytes(approxSize) else { return nil }
+        // MLX models typically need ~1.2–1.5x the download size in RAM;
+        // use 1.5x as a conservative upper bound that keeps the UI honest.
+        return Int64(Double(downloadBytes) * 1.5)
+    }
+
+    /// Human-readable RAM requirement, e.g. `"Needs ~3.5 GB RAM"`, or `nil`
+    /// when the estimate is unavailable.
+    public var ramRequirementLabel: String? {
+        guard let bytes = approxRAMBytes else { return nil }
+        let gb = Double(bytes) / 1_073_741_824
+        if gb >= 1.0 {
+            return String(format: "Needs ~%.1f GB RAM", gb)
+        }
+        let mb = Double(bytes) / 1_048_576
+        return String(format: "Needs ~%.0f MB RAM", mb)
+    }
+
+    /// Returns `nil` when the model is expected to run on `deviceRAMBytes`,
+    /// or a human-readable warning string when it likely won't fit.
+    ///
+    /// Thresholds (of device RAM):
+    /// - ≤50 % → compatible (nil)
+    /// - ≤70 % → may be slow
+    /// - >70 % → unlikely to load
+    public func compatibilityMessage(forDeviceRAM deviceRAMBytes: UInt64) -> String? {
+        guard let ram = approxRAMBytes, deviceRAMBytes > 0 else { return nil }
+        let ratio = Double(ram) / Double(deviceRAMBytes)
+        if ratio <= 0.50 { return nil }
+        if ratio <= 0.70 {
+            return "May be slow on this device"
+        }
+        let deviceGB = Int(ceil(Double(deviceRAMBytes) / 1_073_741_824))
+        return "Needs more RAM than this \(deviceGB) GB device has"
+    }
+
+    /// Parse catalog `approxSize` strings like `~5.2 GB` / `~800 MB` into bytes.
+    /// Same logic as `LocalMetalMLXBackend.parseApproxSizeBytes` but public and
+    /// static so it can be shared by the catalog entry and the app layer.
+    public static func parseSizeBytes(_ raw: String?) -> Int64? {
+        guard var s = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty else {
+            return nil
+        }
+        if s.hasPrefix("~") { s = String(s.dropFirst()) }
+        s = s.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let numberPart = s.prefix(while: { $0.isNumber || $0 == "." || $0 == "," })
+        let unitPart = s.dropFirst(numberPart.count).trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = numberPart.replacingOccurrences(of: ",", with: ".")
+        guard let value = Double(normalized), value > 0 else { return nil }
+        if unitPart.hasPrefix("GB") || unitPart.hasPrefix("G") {
+            return Int64(value * 1_000_000_000)
+        }
+        if unitPart.hasPrefix("MB") || unitPart.hasPrefix("M") {
+            return Int64(value * 1_000_000)
+        }
+        if unitPart.hasPrefix("KB") || unitPart.hasPrefix("K") {
+            return Int64(value * 1_000)
+        }
+        return nil
+    }
+
+    /// Rough download-size estimate for a hub id, derived from the parameter
+    /// count token and quantization bit. Falls back to an empty string when
+    /// the hub id doesn't contain enough info.
+    ///
+    /// Heuristic: params × bytes_per_param (4-bit ≈ 0.5 B/param, 8-bit ≈ 1 B,
+    /// bf16 ≈ 2 B). MoE models use active params only when the
+    /// `A<n>B` token is present (e.g. `30B-A3B` → 3B active).
+    static func estimatedDownloadSize(forHubID hubID: String) -> String {
+        let lower = hubID.lowercased()
+        // Extract parameter count (e.g. "7b" from "Qwen3-7B-4bit"). The
+        // numeric value is expressed in billions so the final multiplication
+        // below produces decimal GB directly.
+        let tokens = lower.split { ch in
+            !(ch.isLetter || ch.isNumber || ch == ".")
+        }.map(String.init)
+        var paramB: Double?
+        for tok in tokens {
+            if tok.hasSuffix("b"), let num = Double(String(tok.dropLast())) {
+                paramB = num
+                break
+            }
+            if tok.hasSuffix("m"), let num = Double(String(tok.dropLast())) {
+                paramB = num / 1_000
+                break
+            }
+        }
+        // MoE: prefer active params (e.g. "30b-a3b" → 3B active).
+        for tok in tokens where tok.hasPrefix("a") && tok.hasSuffix("b") {
+            if let num = Double(String(tok.dropFirst().dropLast())) {
+                paramB = num
+                break
+            }
+        }
+        // Some well-known family names omit the parameter suffix (for example
+        // `Phi-3.5-mini`). Preserve a useful estimate for those catalog rows.
+        if paramB == nil, lower.contains("phi-3.5-mini") || lower.contains("phi_3.5_mini") {
+            paramB = 3.5
+        }
+        guard let params = paramB, params > 0 else { return "" }
+
+        // Determine bytes per parameter from an explicit quantization tag.
+        // Do not treat a model-size token such as `8B` as 8-bit quantization.
+        var bytesPerParam: Double = 0.5 // default: 4-bit
+        if lower.contains("8bit") || lower.contains("8-bit") || lower.contains("q8") {
+            bytesPerParam = 1.0
+        } else if lower.contains("bf16") || lower.contains("fp16") || lower.contains("f16") {
+            bytesPerParam = 2.0
+        } else if lower.contains("6bit") || lower.contains("6-bit") || lower.contains("q6") {
+            bytesPerParam = 0.75
+        } else if lower.contains("3bit") || lower.contains("3-bit") || lower.contains("q3")
+            || lower.contains("2bit") || lower.contains("2-bit") || lower.contains("q2")
+            || lower.contains("mxfp4")
+        {
+            bytesPerParam = 0.35
+        }
+
+        // `params` is in billions and bytes/parameter is the approximate
+        // storage multiplier, so the product is already a decimal GB estimate.
+        let gb = params * bytesPerParam
+        if gb >= 1.0 {
+            return String(format: "~%.1f GB", gb)
+        }
+        return String(format: "~%.0f MB", gb * 1_000)
+    }
 }
 
 // MARK: - Catalog service
@@ -325,7 +458,9 @@ public actor LocalMetalCatalog {
         {
             return true
         }
-        if id.contains("ministral-3") { return true }
+        if id.contains("ministral-3") || id.contains("mistral-3") || id.contains("mistral3") {
+            return true
+        }
         if id.contains("vision") || id.contains("vlm") { return true }
         // Generic VL token in id (avoid matching "vl" inside unrelated names carefully).
         if id.contains("-vl-") || id.contains("_vl_") || id.contains("-vl_")
@@ -916,6 +1051,88 @@ public actor LocalMetalCatalog {
             source: .recommended,
             tags: [.recommended, .vision, .new]
         ),
+
+        // MARK: - More models by device tier
+
+        // 4 GB devices (iPhone XR, SE, 11) — keep under ~1.5 GB download
+        .init(
+            hubID: "lmstudio-community/Phi-4-reasoning-MLX-4bit",
+            displayName: "Phi 4 Reasoning",
+            approxSize: "~1.2 GB",
+            blurb: "Microsoft Phi 4 (2B) reasoning model. Compact chain-of-thought for 4 GB devices.",
+            source: .recommended,
+            tags: [.recommended, .thinking]
+        ),
+        .init(
+            hubID: "mlx-community/gemma-3-1b-it-qat-4bit",
+            displayName: "Gemma 3 1B",
+            approxSize: "~0.6 GB",
+            blurb: "Small Gemma 3 instruct. Fast replies on any device with limited storage.",
+            source: .recommended,
+            tags: [.recommended]
+        ),
+        .init(
+            hubID: "mlx-community/Llama-3.2-3B-Instruct-4bit",
+            displayName: "Llama 3.2 3B",
+            approxSize: "~1.8 GB",
+            blurb: "Meta Llama 3.2 3B — solid all-rounder for 6 GB devices.",
+            source: .recommended,
+            tags: [.recommended]
+        ),
+
+        // 6 GB devices (iPhone 13, 14) — up to ~3 GB download
+        .init(
+            hubID: "lmstudio-community/Qwen3.5-4B-MLX-4bit",
+            displayName: "Qwen 3.5 4B",
+            approxSize: "~2.3 GB",
+            blurb: "Newer Qwen 3.5 4B. Strong chat quality when you have the RAM for it.",
+            source: .recommended,
+            tags: [.recommended, .new]
+        ),
+        .init(
+            hubID: "mlx-community/Phi-3.5-mini-instruct-4bit",
+            displayName: "Phi 3.5 Mini",
+            approxSize: "~2.2 GB",
+            blurb: "Microsoft Phi 3.5 Mini — compact reasoning and chat for mid-range devices.",
+            source: .recommended,
+            tags: [.recommended]
+        ),
+
+        // 8 GB devices (iPhone 15 Pro, 16) — up to ~5 GB download
+        .init(
+            hubID: "lmstudio-community/Qwen2.5-7B-Instruct-MLX-4bit",
+            displayName: "Qwen 2.5 7B",
+            approxSize: "~4.5 GB",
+            blurb: "Strong Qwen 2.5 7B for high-quality chat. Best on 8 GB+ devices.",
+            source: .recommended,
+            tags: [.recommended]
+        ),
+        .init(
+            hubID: "lmstudio-community/Qwen3.5-9B-MLX-4bit",
+            displayName: "Qwen 3.5 9B",
+            approxSize: "~5.5 GB",
+            blurb: "Qwen 3.5 9B — top phone-class quality when RAM allows. 8 GB+ recommended.",
+            source: .recommended,
+            tags: [.recommended, .new]
+        ),
+        .init(
+            hubID: "mlx-community/gemma-2-9b-it-4bit",
+            displayName: "Gemma 2 9B",
+            approxSize: "~5.5 GB",
+            blurb: "Google Gemma 2 9B. Strong reasoning and chat for high-end phones.",
+            source: .recommended,
+            tags: [.recommended]
+        ),
+
+        // 12 GB+ devices (iPhone 16 Pro Max, iPad Pro) — large models
+        .init(
+            hubID: "lmstudio-community/Qwen2.5-14B-Instruct-MLX-4bit",
+            displayName: "Qwen 2.5 14B",
+            approxSize: "~8 GB",
+            blurb: "Qwen 2.5 14B — near-cloud quality. iPad or 12 GB+ iPhone only.",
+            source: .recommended,
+            tags: [.experimental]
+        ),
     ]
 
     /// Models registered in mlx-swift-lm `LLMRegistry` (architectures supported by this stack).
@@ -1010,7 +1227,7 @@ public actor LocalMetalCatalog {
         return LocalMetalCatalogEntry(
             hubID: hub,
             displayName: prettyName(from: hub),
-            approxSize: "",
+            approxSize: LocalMetalCatalogEntry.estimatedDownloadSize(forHubID: hub),
             blurb: isVision
                 ? "Vision-language model (MLXVLM). Download for on-device photo analysis."
                 : "Registered for mlx-swift-lm. Larger sizes may be slow or fail on phone RAM.",

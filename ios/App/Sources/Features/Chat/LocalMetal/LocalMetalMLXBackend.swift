@@ -243,7 +243,14 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
                     // resident multi-GB vision tower).
                     MLX.Memory.clearCache()
                     let images = try Self.userInputImages(from: last.images)
-                    let prompt = last.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let prompt = Self.promptForGeneration(last.content, modelID: modelID)
+                    // Do not race MLX with a structured timeout task. A
+                    // `ChatSession` generation is a child task and MLX may not
+                    // observe cancellation until its Metal command completes;
+                    // a timeout group would therefore wait for the supposedly
+                    // timed-out child anyway, leaving Vision stuck on Thinking.
+                    // The caller can still cancel the enclosing generation when
+                    // the user retakes or leaves Vision.
                     let output = try await session.respond(
                         to: prompt.isEmpty ? "Describe this image." : prompt,
                         images: images,
@@ -258,7 +265,9 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
                     await cache.remove(modelID)
                     return try nonEmpty(output)
                 }
-                let output = try await session.respond(to: last.content)
+                let output = try await session.respond(
+                    to: Self.promptForGeneration(last.content, modelID: modelID)
+                )
                 return try nonEmpty(output)
             case .assistant, .system:
                 let all = conversation.map { mapMessage($0) }
@@ -640,26 +649,36 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
         // the same multi-GB model into RAM.
         do {
             let container = try await cache.getOrLoad(id: id) { [hubClient] report in
+                // Explicit hub client so weights land in Application Support (deletable).
+                // VLMs (Gemma 4, Qwen-VL, …) must load via VLMModelFactory.
+                let useVLM = preferVLM || Self.isLikelyVLM(id)
                 let configuration: ModelConfiguration
                 if id.hasPrefix("local/") {
                     let name = String(id.dropFirst("local/".count))
                     if let dir = try? await LocalMetalModelStore.shared.modelsDirectory() {
                         let folder = dir.appendingPathComponent(name, isDirectory: true)
                         if FileManager.default.fileExists(atPath: folder.path) {
-                            configuration = ModelConfiguration(directory: folder)
+                            configuration = Self.modelConfiguration(id: id, directory: folder)
                         } else {
-                            configuration = ModelConfiguration(id: name)
+                            configuration = Self.modelConfiguration(id: name)
                         }
                     } else {
-                        configuration = ModelConfiguration(id: name)
+                        configuration = Self.modelConfiguration(id: name)
                     }
                 } else {
-                    configuration = ModelConfiguration(id: id)
+                    // Start with the pinned package registry's exact model
+                    // configuration (EOS/tool format/defaults), then apply
+                    // conservative id-based overrides for remote conversions
+                    // that are not registered by mlx-swift-lm.
+                    let registered = useVLM
+                        ? VLMModelFactory.shared.configuration(id: id)
+                        : LLMModelFactory.shared.configuration(id: id)
+                    configuration = Self.modelConfiguration(
+                        id: id,
+                        base: registered
+                    )
                 }
 
-                // Explicit hub client so weights land in Application Support (deletable).
-                // VLMs (Gemma 4, Qwen-VL, …) must load via VLMModelFactory.
-                let useVLM = preferVLM || Self.isLikelyVLM(id)
                 if useVLM {
                     return try await VLMModelFactory.shared.loadContainer(
                         from: #hubDownloader(hubClient),
@@ -688,19 +707,28 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
             progress(1)
             return container
         } catch {
-            // If loading failed, the cache may be incomplete/corrupted. Clear the
-            // downloaded mark and verified sentinel so the user can re-download.
-            if !id.hasPrefix("local/") {
-                await LocalMetalModelStore.shared.markDeleted(modelID: id)
-                if let repoID = Repo.ID(rawValue: id) {
-                    let repoDir = hubCache.repoDirectory(repo: repoID, kind: .model)
+            let description = error.localizedDescription
+            let isWeightMismatch = description.contains("not found in")
+                || (description.contains("Key ") && description.contains("not found"))
+            // If loading failed, the cache may be incomplete/corrupted.
+            // Clear the downloaded mark for missing files OR weight-key
+            // mismatches (architecture incompatibility) — in both cases the
+            // cached weights are unusable and the user needs to try a
+            // different model version.
+            if !id.hasPrefix("local/"),
+               let repoID = Repo.ID(rawValue: id)
+            {
+                let repoDir = hubCache.repoDirectory(repo: repoID, kind: .model)
+                let filesPresent = LocalMetalModelStore.hasUsableModelCache(at: repoDir)
+                if !filesPresent || isWeightMismatch {
+                    await LocalMetalModelStore.shared.markDeleted(modelID: id)
                     LocalMetalModelStore.removeVerifiedSentinel(at: repoDir)
                 }
             }
-            throw ProviderError.transport(
-                "Failed to load on-device model “\(id)”: \(error.localizedDescription). " +
-                "Check network for the download, then retry. Models are not bundled in the app."
-            )
+            let message = isWeightMismatch
+                ? "On-device model \(id) is incompatible with this version of RoamSocket. The model architecture may have changed upstream. Delete it in Settings → Manage models and try a different version."
+                : "Failed to load on-device model \(id): \(description). If this keeps happening, delete the model in Settings → Manage models and re-download."
+            throw ProviderError.transport(message)
         }
     }
 
@@ -1016,7 +1044,12 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
 
     private func mapMessage(_ turn: ProviderChatMessage) -> Chat.Message {
         switch turn.role {
-        case .user: return .user(turn.content)
+        case .user:
+            // Keep the original image in the structured history. Without this,
+            // a Vision follow-up becomes text-only and the model loses the photo
+            // after the first answer (especially visible with Qwen-VL).
+            let images = (try? Self.userInputImages(from: turn.images)) ?? []
+            return .user(turn.content, images: images)
         case .assistant: return .assistant(turn.content)
         case .system: return .system(turn.content)
         }
@@ -1025,6 +1058,87 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
     /// Hub-id heuristic matching VisionCapability / MLXVLM registry families.
     private static func isLikelyVLM(_ modelID: String) -> Bool {
         LocalMetalCatalog.isLikelyVisionHubID(modelID)
+    }
+
+    /// Reasoning-capable Qwen 3 checkpoints count hidden reasoning tokens toward
+    /// `maxTokens`. If the normal chat path leaves reasoning enabled, a short
+    /// visible answer can look clipped even though generation consumed its
+    /// entire budget. Keep explicit `/think` requests intact; otherwise use the
+    /// model's documented soft switch for answer-first generation.
+    private static func promptForGeneration(_ prompt: String, modelID: String) -> String {
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isQwen3ReasoningModel(modelID),
+              !trimmed.localizedCaseInsensitiveContains("/think"),
+              !trimmed.localizedCaseInsensitiveContains("/no_think")
+        else { return prompt }
+        return trimmed.isEmpty ? "/no_think" : "\(trimmed)\n/no_think"
+    }
+
+    private static func isQwen3VLM(_ modelID: String) -> Bool {
+        let id = modelID.lowercased()
+        return id.contains("qwen3-vl") || id.contains("qwen3_vl")
+    }
+
+    private static func isQwen3ReasoningModel(_ modelID: String) -> Bool {
+        let id = modelID.lowercased()
+        guard id.contains("qwen3") else { return false }
+        // Keep explicitly named thinking checkpoints in their native mode.
+        return !id.contains("thinking") && !id.contains("reason")
+    }
+
+    /// Configure model-family conventions that are not reliably inferred from a
+    /// hub id alone by older MLX conversions. The model factory still reads
+    /// config.json and selects the architecture; these values only control
+    /// generation boundaries and tool-call serialization.
+    ///
+    /// Documented mlx-swift-lm 3.31.x conventions:
+    /// - Qwen/Gemma/Phi/Llama use family-specific EOS strings.
+    /// - LFM2, GLM4, Gemma4, Mistral3, Nemotron, and Qwen3.5 use non-default
+    ///   tool-call formats.
+    private static func modelConfiguration(
+        id: String,
+        directory: URL? = nil,
+        base: ModelConfiguration? = nil
+    ) -> ModelConfiguration {
+        var configuration: ModelConfiguration
+        if let directory {
+            configuration = ModelConfiguration(directory: directory)
+        } else {
+            configuration = base ?? ModelConfiguration(id: id)
+        }
+
+        let lower = id.lowercased()
+        if isQwen3VLM(id) || isQwen3ReasoningModel(id) || lower.contains("qwen2") {
+            configuration.extraEOSTokens.insert("<|im_end|>")
+        }
+        if lower.contains("gemma4") || lower.contains("gemma-4") {
+            configuration.extraEOSTokens.insert("<turn|>")
+        } else if lower.contains("gemma3") || lower.contains("gemma-3") {
+            configuration.extraEOSTokens.insert("<end_of_turn>")
+        }
+        if lower.contains("phi-3") || lower.contains("phi3") || lower.contains("phi-4")
+            || lower.contains("phi4")
+        {
+            configuration.extraEOSTokens.insert("<|end|>")
+        }
+        if lower.contains("llama-3") || lower.contains("llama3") {
+            configuration.extraEOSTokens.insert("<|eot_id|>")
+        }
+
+        if lower.contains("lfm2") || lower.contains("lfm2.5") || lower.contains("lfm2_5") {
+            configuration.toolCallFormat = .lfm2
+        } else if lower.contains("glm-4") || lower.contains("glm4") {
+            configuration.toolCallFormat = .glm4
+        } else if lower.contains("gemma-4") || lower.contains("gemma4") {
+            configuration.toolCallFormat = .gemma4
+        } else if lower.contains("mistral3") || lower.contains("mistral-3") {
+            configuration.toolCallFormat = .mistral
+        } else if lower.contains("nemotron") || lower.contains("qwen3.5")
+            || lower.contains("qwen3_5")
+        {
+            configuration.toolCallFormat = .xmlFunction
+        }
+        return configuration
     }
 
     private static func userInputImages(
@@ -1088,7 +1202,10 @@ private final class Engine: LocalMetalGenerating, @unchecked Sendable {
             maxTokens = 2048
             temperature = 0.8
         default:
-            maxTokens = 1024
+            // Keep enough room for a complete answer. Qwen3-VL reasoning is
+            // disabled by promptForGeneration, so this is answer capacity,
+            // not a budget that gets consumed by hidden chain-of-thought.
+            maxTokens = 2048
             temperature = 0.6
         }
         return GenerateParameters(maxTokens: maxTokens, temperature: temperature)

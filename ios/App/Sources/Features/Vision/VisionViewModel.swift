@@ -169,6 +169,10 @@ final class VisionViewModel: ObservableObject {
     private let webSearchService = WebSearchService()
     private weak var state: AppState?
     private var analysisTask: Task<Void, Never>?
+    /// Identifies the currently active capture/re-analysis operation. A cancelled
+    /// MLX task can finish after a replacement task starts, so state and the
+    /// global thinking indicator must only be changed by the current operation.
+    private var analysisRequestID = UUID()
 
     /// Provider-facing history (includes the hidden first analysis prompt + image).
     private var providerMessages: [ProviderChatMessage] = []
@@ -420,6 +424,7 @@ final class VisionViewModel: ObservableObject {
         guard canCapture else { return }
         analysisTask?.cancel()
         analysisTask = nil
+        analysisRequestID = UUID()
         AIThinkingActivityManager.shared.thinkingDidEnd()
 
         analysisText = ""
@@ -461,6 +466,7 @@ final class VisionViewModel: ObservableObject {
         guard phase == .capturing else { return }
         analysisTask?.cancel()
         analysisTask = nil
+        analysisRequestID = UUID()
         AIThinkingActivityManager.shared.thinkingDidEnd()
         capturedImage = nil
         analysisSourceImage = nil
@@ -487,6 +493,8 @@ final class VisionViewModel: ObservableObject {
         guard phase == .capturing || phase == .analyzing else { return }
 
         analysisTask?.cancel()
+        let requestID = UUID()
+        analysisRequestID = requestID
 
         // Publish analyzing UI *before* any downscale work so the sheet and
         // freeze path never wait on JPEG/raster work.
@@ -518,7 +526,6 @@ final class VisionViewModel: ObservableObject {
             let forDisplay = Self.displayImage(from: image)
             let forModel = Self.scaledImage(forDisplay, maxDimension: 1024)
             guard !Task.isCancelled else {
-                AIThinkingActivityManager.shared.thinkingDidEnd()
                 return
             }
             self.analysisSourceImage = forDisplay
@@ -527,7 +534,8 @@ final class VisionViewModel: ObservableObject {
             self.startAnalysisTask(
                 image: forModel,
                 providerPrompt: promptSnapshot,
-                livePreview: livePreview
+                livePreview: livePreview,
+                requestID: requestID
             )
         }
     }
@@ -548,6 +556,8 @@ final class VisionViewModel: ObservableObject {
         let prompt = lastProviderPrompt.isEmpty ? resolvedProviderPrompt() : lastProviderPrompt
 
         analysisTask?.cancel()
+        let requestID = UUID()
+        analysisRequestID = requestID
         analysisText = ""
         errorMessage = nil
         turns = []
@@ -565,7 +575,8 @@ final class VisionViewModel: ObservableObject {
         startAnalysisTask(
             image: forModel,
             providerPrompt: prompt,
-            livePreview: livePreview
+            livePreview: livePreview,
+            requestID: requestID
         )
     }
 
@@ -605,6 +616,8 @@ final class VisionViewModel: ObservableObject {
         }()
 
         analysisTask?.cancel()
+        let requestID = UUID()
+        analysisRequestID = requestID
         analysisText = ""
         errorMessage = nil
         turns = []
@@ -622,7 +635,8 @@ final class VisionViewModel: ObservableObject {
         startAnalysisTask(
             image: forModel,
             providerPrompt: promptSnapshot,
-            livePreview: livePreview
+            livePreview: livePreview,
+            requestID: requestID
         )
     }
 
@@ -702,6 +716,7 @@ final class VisionViewModel: ObservableObject {
     func retake() {
         analysisTask?.cancel()
         analysisTask = nil
+        analysisRequestID = UUID()
         AIThinkingActivityManager.shared.thinkingDidEnd()
         showReanalyzePrompt = false
         capturedImage = nil
@@ -794,20 +809,29 @@ final class VisionViewModel: ObservableObject {
     private func startAnalysisTask(
         image: UIImage,
         providerPrompt: String,
-        livePreview: String
+        livePreview: String,
+        requestID: UUID
     ) {
         AIThinkingActivityManager.shared.thinkingDidStart(kind: .vision, prompt: livePreview)
 
         analysisTask = Task { [weak self] in
             guard let self else { return }
             defer {
-                self.activeToolCalls = []
-                AIThinkingActivityManager.shared.thinkingDidEnd()
+                if self.analysisRequestID == requestID {
+                    self.activeToolCalls = []
+                    AIThinkingActivityManager.shared.thinkingDidEnd()
+                }
             }
             do {
+                guard self.analysisRequestID == requestID else { return }
                 let model = try await self.resolveModel()
                 let attachment = try self.makeAttachment(from: image, model: model)
 
+                // Local Metal should use one stable model instance for the whole
+                // capture. Do not run the optional search-query pass or resolve
+                // the model again while the VLM is loaded; Qwen3-VL is especially
+                // sensitive to concurrent/repeated sessions on iOS.
+                //
                 // Capture-time search is image-grounded: extract a query from the
                 // photo, then SERP — never use the system/capture prompt as the query.
                 let imageQuery = try await self.extractImageSearchQuery(attachment: attachment)
@@ -818,7 +842,7 @@ final class VisionViewModel: ObservableObject {
                     searchContext: tools.promptBlock,
                     webSearchQuery: tools.nativeWebSearchQuery
                 )
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, self.analysisRequestID == requestID else { return }
                 self.analysisText = reply
                 // Initial capture/system prompt is a compact header chip (popover
                 // for full text) — never a thread bubble — so the answer leads.
@@ -836,7 +860,7 @@ final class VisionViewModel: ObservableObject {
             } catch is CancellationError {
                 // Retake / dismiss / re-crop — leave UI as-is for the new state.
             } catch {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, self.analysisRequestID == requestID else { return }
                 let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 self.errorMessage = msg
                 self.analysisText = ""
@@ -854,6 +878,12 @@ final class VisionViewModel: ObservableObject {
         attachment: ProviderChatMessage.ImageAttachment
     ) async throws -> String? {
         guard supportsWebTools, researchEnabled || webSearchEnabled else { return nil }
+
+        // On-device Metal models are too slow for a two-pass pipeline: the
+        // model would be loaded, run once to extract a search query, evicted,
+        // then loaded again for the actual analysis. Skip the search-query
+        // pass entirely so the single forward pass goes straight to analysis.
+        if selectedModel?.provider == .localMetal { return nil }
 
         let scanID = UUID()
         var scan = ToolCall(
@@ -1051,7 +1081,15 @@ final class VisionViewModel: ObservableObject {
         guard let state else {
             throw ProviderError.transport("App state is not ready.")
         }
-        let model = try await resolveModel()
+        // Re-use the already-resolved model when available to avoid a
+        // redundant ensureSelectedLocalMetalLoaded() call that would cancel
+        // the in-flight sync task and trigger an unnecessary unload/reload.
+        let model: AIModel
+        if let existing = selectedModel {
+            model = existing
+        } else {
+            model = try await resolveModel()
+        }
 
         let key = state.resolvedAPIKey(for: model.provider)
         if model.provider.requiresAPIKey, key.isEmpty {
@@ -1152,7 +1190,7 @@ final class VisionViewModel: ObservableObject {
         let jpeg = try Self.jpegData(from: image, maxDimension: maxDim, quality: quality)
         return ProviderChatMessage.ImageAttachment(
             mimeType: "image/jpeg",
-            base64Data: jpeg.base64EncodedString()
+            jpegData: jpeg
         )
     }
 

@@ -721,11 +721,13 @@ struct ChatView: View {
                 .buttonStyle(.plain)
 
                 // Model pill — switches to a "+ Add a model" CTA when
-                // no usable model is configured.
+                // no usable model is configured. Shows a loading spinner
+                // while the catalog is being fetched on cold launch.
                 ModelSelectorPill(
                     modelDisplayName: modelPillTitle,
                     onPick: { viewModel.showModelPicker = true },
-                    onAddModel: { showProviderSettings = true }
+                    onAddModel: { showProviderSettings = true },
+                    isLoading: state.isLoadingModels
                 )
 
                 Spacer(minLength: 0)

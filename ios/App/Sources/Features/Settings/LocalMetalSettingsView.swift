@@ -433,6 +433,7 @@ struct LocalMetalSettingsView: View {
             sizeLabel: sizeLabel(for: entry),
             runtimeReady: runtimeReady,
             busy: downloads.isBusy,
+            compatibilityWarning: entry.compatibilityMessage(forDeviceRAM: DeviceCapabilities.physicalMemoryBytes),
             onDownload: { startDownload(entry.hubID) },
             onRedownload: { redownloadFromScratch(entry.hubID) },
             onDelete: { Task { await delete(entry.hubID) } },
@@ -701,6 +702,7 @@ private struct ModelFamilyDetailView: View {
                         sizeLabel: sizeLabel(entry),
                         runtimeReady: runtimeReady,
                         busy: downloads.isBusy,
+                        compatibilityWarning: entry.compatibilityMessage(forDeviceRAM: DeviceCapabilities.physicalMemoryBytes),
                         onDownload: { onDownload(entry.hubID) },
                         onRedownload: { onRedownload(entry.hubID) },
                         onDelete: { Task { await onDelete(entry.hubID) } },
@@ -794,6 +796,7 @@ private struct ModelBucketListView: View {
                                 sizeLabel: sizeLabel(entry),
                                 runtimeReady: runtimeReady,
                                 busy: downloads.isBusy,
+                                compatibilityWarning: entry.compatibilityMessage(forDeviceRAM: DeviceCapabilities.physicalMemoryBytes),
                                 onDownload: { onDownload(entry.hubID) },
                                 onRedownload: { onRedownload(entry.hubID) },
                                 onDelete: { Task { await onDelete(entry.hubID) } },
@@ -991,6 +994,7 @@ private struct ModelDownloadRow: View {
     let sizeLabel: String
     let runtimeReady: Bool
     let busy: Bool
+    var compatibilityWarning: String? = nil
     var onDownload: () -> Void
     var onRedownload: () -> Void
     var onDelete: () -> Void
@@ -1052,6 +1056,16 @@ private struct ModelDownloadRow: View {
             // Full-width tags so the Download control never compresses pill labels.
             if !entry.tags.isEmpty {
                 FlowTagMap(tags: entry.tags)
+            }
+
+            if let warning = compatibilityWarning {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11))
+                    Text(warning)
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .foregroundStyle(.orange)
             }
 
             if showProgress, let track {
@@ -1123,13 +1137,13 @@ private struct ModelDownloadRow: View {
             Button(action: isActiveDownload ? onCancel : onDownload) {
                 Text(isActiveDownload ? "Cancel" : (track?.phase == .error ? "Resume" : "Download"))
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Theme.textPrimary)
+                    .foregroundStyle(compatibilityWarning != nil ? Theme.textTertiary : Theme.textPrimary)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
                     .background(Theme.surfaceElevated, in: Capsule())
             }
             .buttonStyle(.borderless)
-            .disabled((busy && !isActiveDownload && track?.phase != .error) || !runtimeReady || false)
+            .disabled(compatibilityWarning != nil || (busy && !isActiveDownload && track?.phase != .error) || !runtimeReady)
         }
     }
 }

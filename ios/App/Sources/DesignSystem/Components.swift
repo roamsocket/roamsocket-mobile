@@ -84,12 +84,27 @@ struct ModelSelectorPill: View {
     var onAddModel: () -> Void
     /// When true, only cloud / desktop-agent providers count as usable.
     var requiresCodingAgent: Bool = false
+    /// Show a loading spinner instead of the "Add a model" CTA while the
+    /// catalog is being fetched on cold launch.
+    var isLoading: Bool = false
 
     var body: some View {
         Button {
             if hasUsableModel { onPick() } else { onAddModel() }
         } label: {
-            if hasUsableModel {
+            if isLoading && !hasUsableModel {
+                HStack(spacing: 4) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Loading models…")
+                        .font(.system(size: 13, weight: .medium))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(Theme.textSecondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Theme.surfaceElevated, in: Capsule())
+            } else if hasUsableModel {
                 HStack(spacing: 4) {
                     Text(modelDisplayName)
                         .font(.system(size: 13, weight: .medium))

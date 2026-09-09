@@ -2,17 +2,13 @@ import XCTest
 import AnyProvCore
 @testable import RoamSocket
 
-/// Locks in the "vision is API-only" semantics in `VisionCapability`.
-///
-/// The chat composer calls `AppState.modelSupportsVision(_:)` to decide
-/// whether the camera + gallery buttons are enabled. If this regresses,
-/// the buttons come back on for on-device Metal models — which immediately
-/// re-introduces the in-process MLX vision path and the OOM/jetsam risks
-/// the team explicitly retired.
+/// Locks in the vision capability semantics used by the camera and gallery
+/// controls. Local Metal VLMs are supported when their model id is recognized;
+/// text-only Metal models remain excluded by the shared catalog heuristic.
 final class VisionGateTests: XCTestCase {
 
-    func testOnDeviceMetalNeverSupportsVision() {
-        // Even hub ids that look like a Vision model stay disabled.
+    func testOnDeviceVisionModelsSupportVision() {
+        // Recognized Metal VLM ids enable the camera and gallery controls.
         let visionHubIDs = [
             "gemma-4-e2b",
             "qwen3-vl-4b",
@@ -26,9 +22,9 @@ final class VisionGateTests: XCTestCase {
                 displayName: id,
                 contextWindow: 8192
             )
-            XCTAssertFalse(
+            XCTAssertTrue(
                 VisionCapability.supportsVision(model),
-                "On-device Metal model \(id) must not be treated as vision-capable"
+                "On-device Vision model \(id) must be treated as vision-capable"
             )
         }
     }

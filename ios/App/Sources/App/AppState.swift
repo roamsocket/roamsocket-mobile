@@ -2061,15 +2061,11 @@ final class AppState: ObservableObject {
             }
             return def
         }
-        // No usable stored default. For code + vision, scan the catalog for
-        // any visible model we can run right now so the composer doesn't
-        // render "+ Add a model" when the user has configured a provider
-        // with a key but no lane-specific default. Lightweight is permissive
-        // (`modelMeetsLane` accepts anything) and the chat path is handled
-        // by `applyDefault(for: .chat)` callers / `autoPickSelectionIfNeeded`
-        // — both intentionally fall through to a no-op here.
-        if kind == .code || kind == .vision,
-           let fallback = firstUsableModel(for: kind),
+        // No usable stored default. Scan the catalog for any visible model
+        // we can run right now so the composer doesn't render "+ Add a model"
+        // when the user has configured a provider with a key but no
+        // lane-specific default.
+        if let fallback = firstUsableModel(for: kind),
            fallback.id != selectedModel?.id {
             selectedModel = fallback
         }
@@ -2114,7 +2110,9 @@ final class AppState: ObservableObject {
     func isUsableForLane(_ model: AIModel, kind: DefaultModelKind) -> Bool {
         switch kind {
         case .chat:
-            return true
+            guard Self.isChatDefaultCandidate(model) else { return false }
+            if !model.provider.requiresAPIKey { return true }
+            return !resolvedAPIKey(for: model.provider).isEmpty
         case .code:
             guard model.provider.supportsCodingAgent else { return false }
             if model.provider == .localMetal {
@@ -2136,10 +2134,10 @@ final class AppState: ObservableObject {
     }
 
     /// First visible model in the live catalog that `isUsableForLane` accepts
-    /// for `kind`. Used by `applyDefault(for: .code/.vision)` when the current
-    /// selection doesn't meet the lane AND no explicit default is set, so the
-    /// composer doesn't render "+ Add a model" if the user has any usable
-    /// provider configured.
+    /// for `kind`. Used by `applyDefault(for:)` when the current selection
+    /// doesn't meet the lane AND no explicit default is set, so the composer
+    /// doesn't render "+ Add a model" if the user has any usable provider
+    /// configured.
     func firstUsableModel(for kind: DefaultModelKind) -> AIModel? {
         allModels.first { isUsableForLane($0, kind: kind) }
     }
