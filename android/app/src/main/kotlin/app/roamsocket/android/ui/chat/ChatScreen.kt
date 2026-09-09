@@ -415,6 +415,13 @@ fun ChatScreen(
                     // sheet (Copy / Share / Delete). Mirrors the iOS
                     // inline action-button row that appears on hover.
                     onLongPress = { actionsTarget = message },
+                    // PR #XXX (provider conventions v2): tap a
+                    // follow-up suggestion chip → seed the composer
+                    // and send the next turn. Mirrors the iOS
+                    // `onPickSuggestion` behaviour.
+                    onPickSuggestion = { suggestion ->
+                        viewModel.send(suggestion)
+                    },
                 )
             }
         }
@@ -512,6 +519,10 @@ private fun MessageBubble(
     memoryStore: MemoryStore? = null,
     /** PR #80: long-press the bubble to open the message actions sheet. */
     onLongPress: (() -> Unit)? = null,
+    /** PR #XXX (provider conventions v2): tap a follow-up suggestion
+     *  chip → fire the next turn. No-op default so call-sites that
+     *  don't need it (previews, tests) can omit it. */
+    onPickSuggestion: (String) -> Unit = {},
 ) {
     val isUser = message is ChatMessage.User
     val isFailed = isUser && (message as ChatMessage.User).delivery == ChatMessage.User.Delivery.FAILED
@@ -579,6 +590,13 @@ private fun MessageBubble(
                     val cleaned = ThinkingExtractor
                         .stripControlTokens(parsed.content)
                         .let { ThinkingExtractor.stripToolCallXml(it) }
+                    // PR #XXX (provider conventions v2): peel any
+                    // follow-up suggestion markers (`[SUGGEST: …]`,
+                    // `<suggest>…</suggest>`, or a `Next steps:`
+                    // numbered list) out of the cleaned body. The
+                    // remaining text is what the markdown view shows;
+                    // the chip row renders the labels below.
+                    val followUps = FollowUpExtractor.extract(cleaned)
                     Column(modifier = Modifier.padding(horizontal = 4.dp)) {
                         parsed.thinking?.let { thinking ->
                             ThinkingBlock(
@@ -587,17 +605,28 @@ private fun MessageBubble(
                             )
                             Spacer(Modifier.size(8.dp))
                         }
-                        if (cleaned.isNotBlank()) {
+                        if (followUps.content.isNotBlank()) {
                             MarkdownContentView(
-                                text = cleaned,
+                                text = followUps.content,
                                 fontSize = 16.sp,
+                            )
+                        }
+                        // Follow-up suggestion chips. Hidden while
+                        // the model is still streaming (we don't know
+                        // yet whether a trailing marker is real or a
+                        // hallucinated prefix).
+                        if (!isStreaming && followUps.suggestions.isNotEmpty()) {
+                            Spacer(Modifier.size(6.dp))
+                            FollowUpChips(
+                                suggestions = followUps.suggestions,
+                                onPick = onPickSuggestion,
                             )
                         }
                         // While the assistant is mid-turn and there's no
                         // visible progress yet, surface a typing indicator
                         // so the user knows the agent is still working
                         // (mirrors iOS `shouldShowTypingIndicator`).
-                        if (isStreaming && parsed.thinking == null && cleaned.isBlank()) {
+                        if (isStreaming && parsed.thinking == null && followUps.content.isBlank()) {
                             Spacer(Modifier.size(4.dp))
                             AssistantTypingIndicator()
                         }
