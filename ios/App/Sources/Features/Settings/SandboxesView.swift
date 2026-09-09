@@ -195,11 +195,41 @@ struct SandboxesView: View {
             githubToken: state.githubToken,
             request: req,
         )
+<<<<<<< HEAD
+=======
+    }
+
+    /// Present the phone-key entry sheet. Use when the user wants to
+    /// add / change their key without first opening a run sheet.
+    private func openPhoneKeySheet() {
+        phoneKeyDraft = ""
+        showPhoneKeySheet = true
+>>>>>>> 0693eb5 (fix(ios): open E2B key sheet in Sandboxes when no phone key is set)
     }
 
     @ViewBuilder
     private var content: some View {
+<<<<<<< HEAD
         if rows.isEmpty {
+=======
+        if !store.isReady && store.runs.isEmpty && store.phoneRuns.isEmpty {
+            VStack(spacing: 12) {
+                if state.serverEndpoint != nil && state.serverToken != nil {
+                    ProgressView().tint(Theme.accent)
+                    Text("Connecting to desktop…")
+                        .font(.system(size: 14))
+                        .foregroundStyle(Theme.textSecondary)
+                } else {
+                    NoDesktopEmptyState(
+                        hasKey: state.e2bKeyStore.hasKey,
+                        onStart: { showStartSheet = true },
+                        onAddKey: { openPhoneKeySheet() }
+                    )
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if unifiedRuns.isEmpty {
+>>>>>>> 0693eb5 (fix(ios): open E2B key sheet in Sandboxes when no phone key is set)
             EmptyState(
                 hasPhoneKey: state.e2bKeyStore.hasKey,
                 onStart: { showStartSheet = true },
@@ -505,6 +535,8 @@ struct EmptyState: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
             if hasPhoneKey {
+<<<<<<< HEAD
+=======
                 Button(action: onStart) {
                     HStack(spacing: 6) {
                         Image(systemName: "play.fill")
@@ -531,12 +563,72 @@ struct EmptyState: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Add your e2b.dev API key")
+                Text("Tapping this opens the key entry — the run will start as soon as you save.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.textTertiary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
+                    .padding(.top, 4)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct NoDesktopEmptyState: View {
+    let hasKey: Bool
+    var onStart: () -> Void
+    var onAddKey: () -> Void
+    var body: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "shippingbox")
+                .font(.system(size: 40, weight: .light))
+                .foregroundStyle(Theme.textTertiary)
+            Text("No desktop paired")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(Theme.textPrimary)
+            Text("You can still run sandboxes from this device by adding your e2b.dev API key, then tapping Start a run.")
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.textSecondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+            if hasKey {
+>>>>>>> 0693eb5 (fix(ios): open E2B key sheet in Sandboxes when no phone key is set)
+                Button(action: onStart) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "play.fill")
+                        Text("Start a run")
+                    }
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.background)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 10)
+                    .background(Theme.accent, in: Capsule())
+                }
+                .buttonStyle(.plain)
+            } else {
+                Button(action: onAddKey) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "key.fill")
+                        Text("Add your e2b.dev key")
+                    }
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.background)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 10)
+                    .background(Theme.accent, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Add your e2b.dev API key")
+<<<<<<< HEAD
                 Text("Tapping this opens the key entry, and the run will start as soon as you save.")
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.textTertiary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 40)
                     .padding(.top, 4)
+=======
+>>>>>>> 0693eb5 (fix(ios): open E2B key sheet in Sandboxes when no phone key is set)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -840,6 +932,62 @@ struct PresetChipsRow: View {
     private func background(for p: RunPreset, isAvailable: Bool) -> Color {
         if !isAvailable { return Theme.surfaceElevated }
         return p == preset ? Theme.accent : Theme.surfaceElevated
+    }
+}
+
+// MARK: - Phone E2B key sheet (in-Sandboxes, in-place add)
+
+/// Phone-local e2b.dev API key entry, shown directly from the Sandboxes
+/// view when the user taps "Start" without a key set. Reuses the same
+/// persistence (`AppState.e2bKeyStore`) as the Settings card so adding
+/// here and adding there are the same single key.
+private struct PhoneE2BKeySheet: View {
+    let hasKey: Bool
+    @Binding var draft: String
+    var onSave: (String) -> Void
+    var onClear: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Theme.background.ignoresSafeArea()
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Your e2b.dev key")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                    Text("Paste an e2b.dev API key so the phone can spin up sandboxes on its own. The key is held on this device only and is used to call e2b.dev directly — nothing is sent to the desktop server.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.textSecondary)
+                    SecureField("e2b_…", text: $draft)
+                        .textContentType(.password)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .padding(12)
+                        .background(Theme.surfaceElevated, in: RoundedRectangle(cornerRadius: 10))
+                    HStack {
+                        if hasKey {
+                            Button(role: .destructive) {
+                                onClear()
+                            } label: {
+                                Text("Clear")
+                            }
+                        }
+                        Spacer()
+                        Button("Cancel") { dismiss() }
+                            .foregroundStyle(Theme.textSecondary)
+                        Button("Save") { onSave(draft) }
+                            .foregroundStyle(Theme.accent)
+                            .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                    Spacer()
+                }
+                .padding(20)
+            }
+            .navigationTitle("E2B API key")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+        .presentationDetents([.medium])
     }
 }
 
