@@ -3,8 +3,21 @@ name: Android CI
 on:
   push:
     branches: [main]
+    # Skip the Android build for non-Android changes. Same broad
+    # CI-infra allowlist as the iOS workflow so touching shared
+    # CI files still re-runs.
+    paths:
+      - "android/**"
+      - ".github/workflows/android.yml"
+      - "package.json"
+      - "package-lock.json"
   pull_request:
     branches: [main]
+    paths:
+      - "android/**"
+      - ".github/workflows/android.yml"
+      - "package.json"
+      - "package-lock.json"
 
 jobs:
   build:
