@@ -402,10 +402,10 @@ struct CodeHomeView: View {
             if state.allModels.isEmpty {
                 await state.refreshModels()
             }
-            // And pin the lane to a coding-capable model — the
-            // E2B session pill is `requiresCodingAgent: true`, so
-            // a chat default like Apple Intelligence would render
-            // as "+ Add a model" otherwise.
+            // And pin the lane to a coding-capable model, since
+            // the E2B session pill is `requiresCodingAgent: true`,
+            // and a chat default like Apple Intelligence would
+            // render as "+ Add a model" otherwise.
             state.applyDefault(for: .code)
         }
         .sheet(isPresented: $showStartSheet) {
