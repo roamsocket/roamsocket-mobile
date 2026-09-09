@@ -76,4 +76,164 @@ final class ThinkingExtractorTests: XCTestCase {
         """
         XCTAssertEqual(ThinkingExtractor.plainVisibleText(from: raw), "assistant\nmodel\nComplete answer.")
     }
+
+    // MARK: - New providers (added in this revision)
+
+    func testGrokReasoningTagReturnsBodyAndVisibleAnswer() {
+        let result = ThinkingExtractor.extract(
+            from: "<xai:reasoning>Inspect the call graph.</xai:reasoning>\nThe fix is in PR #42."
+        )
+
+        XCTAssertEqual(result.thinking, "Inspect the call graph.")
+        XCTAssertEqual(result.content, "The fix is in PR #42.")
+    }
+
+    func testGrokReasoningTagUnclosedIsTreatedAsOpen() {
+        let result = ThinkingExtractor.extract(
+            from: "Lead in\n<xai:reasoning>still working on it"
+        )
+
+        XCTAssertEqual(result.thinking, "still working on it")
+        XCTAssertEqual(result.content, "Lead in")
+        XCTAssertTrue(result.isThinkingOpen)
+    }
+
+    func testLlama31ReasoningSpecialTokensAreStripped() {
+        // The block pattern matches the well-formed pair and drops
+        // the whole reasoning section (body + wrappers) so the body
+        // doesn't surface as plain text in the chat bubble.
+        let raw = """
+        <|reasoning|>let me check the docs first<|/reasoning|>
+        The answer is documented in section 4.
+        """
+        let result = ThinkingExtractor.extract(from: raw)
+        XCTAssertEqual(result.content, "The answer is documented in section 4.")
+        XCTAssertNil(result.thinking)
+    }
+
+    func testLlama31UnclosedReasoningTokenIsHandledGracefully() {
+        // When the model emits just the opener (still streaming, or
+        // truncated), the block pattern misses and the individual
+        // token strip kicks in: the `<|reasoning|>` token is removed
+        // and the body becomes part of the visible content. This is
+        // a known limitation — we'd rather show the body than leak
+        // the marker, but the visible content is no longer flagged
+        // as reasoning.
+        let raw = "Lead in\n<|reasoning|>still working on it"
+        let result = ThinkingExtractor.cleaned(raw)
+        XCTAssertFalse(result.contains("<|reasoning|>"))
+        XCTAssertTrue(result.contains("still working on it"))
+    }
+
+    func testLlama2SystemBlockIsStrippedEntirely() {
+        let raw = """
+        <<SYS>>You are a helpful assistant. Be concise.<</SYS>>
+        The short answer is 42.
+        """
+        XCTAssertEqual(
+            ThinkingExtractor.cleaned(raw),
+            "The short answer is 42."
+        )
+    }
+
+    func testChatGLMOutputWrapperIsStripped() {
+        let raw = "<output>The final answer is 42.</output>"
+        XCTAssertEqual(ThinkingExtractor.cleaned(raw), "The final answer is 42.")
+    }
+
+    func testHTMLCommentReasoningLeakIsStripped() {
+        let raw = """
+        <!-- I should think about this more carefully -->
+        The answer is 42.
+        """
+        XCTAssertEqual(
+            ThinkingExtractor.cleaned(raw),
+            "The answer is 42."
+        )
+    }
+
+    func testAnthropicInvokeWrapperIsStripped() {
+        let raw = """
+        Let me look that up.
+        <antml:invoke name="search">
+        <query>swift regex</query>
+        </antml:invoke>
+        Here's what I found.
+        """
+        XCTAssertEqual(
+            ThinkingExtractor.cleaned(raw),
+            "Let me look that up.\n\nHere's what I found."
+        )
+    }
+
+    func testXAIToolCallsPluralWrapperIsStripped() {
+        let raw = """
+        I'll search for that.
+        <xai:tool_calls>
+        <invoke name="search"><query>swift regex</query></invoke>
+        </xai:tool_calls>
+        Here you go.
+        """
+        XCTAssertEqual(
+            ThinkingExtractor.cleaned(raw),
+            "I'll search for that.\n\nHere you go."
+        )
+    }
+
+    func testLlamaEndOfSentenceTokenIsStripped() {
+        let raw = "Here's the answer.</s>"
+        XCTAssertEqual(ThinkingExtractor.cleaned(raw), "Here's the answer.")
+    }
+
+    func testSystemPromptLeakMarkerIsStripped() {
+        let raw = """
+        [SYSTEM_PROMPT]You are a helpful assistant. Be concise.
+
+        The actual answer is 42.
+        """
+        XCTAssertTrue(ThinkingExtractor.cleaned(raw).contains("The actual answer is 42."))
+        XCTAssertFalse(ThinkingExtractor.cleaned(raw).contains("[SYSTEM_PROMPT]"))
+    }
+
+    func testUserCodeIsNotMistakenForSystemPrompt() {
+        // A real system-prompt leak starts with `[SYSTEM_PROMPT]` —
+        // a code-fenced example containing that literal should be
+        // preserved.
+        let raw = """
+        Here is how to detect a leak:
+
+        ```
+        [SYSTEM_PROMPT]You are helpful.
+        ```
+
+        That's the pattern.
+        """
+        let cleaned = ThinkingExtractor.cleaned(raw)
+        XCTAssertTrue(cleaned.contains("[SYSTEM_PROMPT]You are helpful."))
+    }
+
+    func testQwenVisionBoxTokensAreStripped() {
+        let raw = "<|box_start|>image_pad<|box_end|>\nThe image shows a cat."
+        XCTAssertEqual(
+            ThinkingExtractor.cleaned(raw),
+            "\nThe image shows a cat."
+        )
+    }
+
+    func testAllNewReasoningTagShapesAreRecognised() {
+        // Regression: every tag name we added to the alternation
+        // should be picked up by the same paired pattern.
+        let cases: [(String, String)] = [
+            ("<think>x</think>", "x"),
+            ("<xai:reasoning>x</xai:reasoning>", "x"),
+            ("<xai:thinking>x</xai:thinking>", "x"),
+            ("<antml:thinking>x</antml:thinking>", "x"),
+            ("<scratch_pad>x</scratch_pad>", "x"),
+        ]
+        for (raw, expected) in cases {
+            let r = ThinkingExtractor.extract(from: raw)
+            XCTAssertEqual(r.thinking, expected, "raw: \(raw)")
+            XCTAssertTrue(r.content.isEmpty, "raw: \(raw) -> \(r.content)")
+        }
+    }
 }

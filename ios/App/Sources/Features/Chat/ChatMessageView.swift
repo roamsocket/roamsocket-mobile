@@ -9,6 +9,9 @@ struct ChatMessageView: View {
     var onShare: () -> Void
     var onDelete: () -> Void
     var onRegenerate: () -> Void
+    /// Tap a follow-up suggestion chip → parent seeds the composer
+    /// with the label and sends the next turn.
+    var onPickSuggestion: (String) -> Void = { _ in }
     /// Highlight when this message is the source of the open artifact panel.
     var isArtifactSource: Bool = false
 
@@ -98,19 +101,26 @@ struct ChatMessageView: View {
 
     // MARK: - Assistant Message
 
-    /// Prefer an explicit `thoughtProcess`; otherwise peel `<think>` tags
-    /// out of the visible content so raw markup never shows in the bubble.
-    /// Empty `text` (non-nil) means tags were present with no body yet → grey Thinking...
-    private var resolvedThinking: (text: String?, content: String) {
-        if let existing = message.thoughtProcess, !existing.isEmpty {
+    /// Peel `<think>` tags (and friends) out of the visible content
+    /// so raw markup never shows in the bubble, then peel any
+    /// `[SUGGEST: a | b | c]` markers (or `<suggest>…</suggest>` /
+    /// `Next steps:` numbered-list) out so the chip row can render
+    /// them. Empty `thinking` text (non-nil) means tags were
+    /// present with no body yet → grey Thinking...
+    private var resolvedThinking: (text: String?, content: String, suggestions: [String]) {
+        let raw = message.content
+        let parsed: ThinkingExtractor.Result
+        let storedReasoning = message.thoughtProcess
+        if let existing = storedReasoning, !existing.isEmpty {
             // Content may still contain tags if it was set independently.
-            let parsed = ThinkingExtractor.extract(from: message.content)
-            let visible = parsed.content
-            // Keep stored reasoning; never fall back to raw tagged content.
-            return (existing, visible)
+            parsed = ThinkingExtractor.extract(from: raw)
+        } else {
+            parsed = ThinkingExtractor.extract(from: raw)
         }
-        let parsed = ThinkingExtractor.extract(from: message.content)
-        return (parsed.thinking, parsed.content)
+        // Keep stored reasoning; never fall back to raw tagged content.
+        let thinking = storedReasoning?.isEmpty == false ? storedReasoning : parsed.thinking
+        let followUps = FollowUpExtractor.extract(from: parsed.content)
+        return (thinking, followUps.content, followUps.suggestions)
     }
 
     private var assistantMessageContent: some View {
@@ -131,6 +141,18 @@ struct ChatMessageView: View {
 
             if !resolved.content.isEmpty {
                 MarkdownContentView(text: resolved.content, fontSize: 17)
+            }
+
+            // Follow-up suggestion chips below the prose. The model
+            // emits these as `[SUGGEST: a | b | c]`, `<suggest>…</suggest>`,
+            // or a "Next steps:" numbered list; we strip them out of
+            // `resolved.content` and render the chips here so the user
+            // can one-tap the next turn. Hidden while the model is still
+            // streaming (we don't know yet whether the trailing marker
+            // is real or a hallucinated prefix).
+            if !message.isStreaming, !resolved.suggestions.isEmpty {
+                FollowUpChips(suggestions: resolved.suggestions, onPick: onPickSuggestion)
+                    .padding(.top, 2)
             }
 
             if let ids = message.memoryActivityIDs, !ids.isEmpty {

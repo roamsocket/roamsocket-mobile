@@ -23,8 +23,19 @@ enum ThinkingExtractor {
     /// Inlined into the four tag patterns below — repeating the pattern
     /// verbatim means we don't need a backref and both open and close
     /// always match.
+    ///
+    /// Coverage:
+    /// - `think`/`thinking`/`reasoning`/`reflection`/`thought`/`analysis`/
+    ///   `scratch_pad` — generic reasoning tags emitted by Claude 4,
+    ///   Qwen3, DeepSeek R1, Hermes 4, Phi-4 fine-tunes, RAG agents.
+    /// - `antml:*` — Anthropic's namespaced reasoning containers
+    ///   (Opus 5 leak, legacy antml prompt format).
+    /// - `xai:reasoning` / `xai:thinking` — Grok 3 / Grok 4 reasoning
+    ///   blocks. Grok wraps the model's scratch reasoning in
+    ///   `<xai:reasoning>…</xai:reasoning>` and the final answer in
+    ///   `<xai:thinking>` is rare but observed in previews.
     private static let thinkingTagNames =
-        "think|thinking|reasoning|reflection|thought|analysis|scratch_pad|antml:thinking|antml:reasoning|antml:reflection|antml:thought|antml:analysis"
+        "think|thinking|reasoning|reflection|thought|analysis|scratch_pad|antml:thinking|antml:reasoning|antml:reflection|antml:thought|antml:analysis|xai:reasoning|xai:thinking"
 
     /// Paired tags; multi-line body. Case-insensitive tag name.
     /// Covers `think`/`thinking` plus a handful of variants emitted by
@@ -154,7 +165,7 @@ enum ThinkingExtractor {
     /// separately because they use a different syntax.
     private static let controlTokenPattern: NSRegularExpression = {
         try! NSRegularExpression(
-            pattern: "<\\|\\s*(?:begin_of_text|end_of_text|start_header_id|end_header_id|eot_id|eom_id|python_tag|user|assistant|system|end|endoftext|im_start|im_end|tool_call_start|tool_call_end|tool_call_argument_begin|tool_call_argument_end)\\s*\\|>",
+            pattern: "<\\|\\s*(?:begin_of_text|end_of_text|start_header_id|end_header_id|eot_id|eom_id|python_tag|user|assistant|system|end|endoftext|im_start|im_end|tool_call_start|tool_call_end|tool_call_argument_begin|tool_call_argument_end|ref|box_start|box_end|image_pad|object_ref_start|object_ref_end|patch|patch_start|patch_end|quad_start|quad_end|vision_start|vision_end|place_holder|constrain|/constrain|reasoning|/reasoning)\\s*\\|>",
             options: [.caseInsensitive]
         )
     }()
@@ -175,6 +186,74 @@ enum ThinkingExtractor {
         try! NSRegularExpression(
             pattern: "\\[/?INST\\]",
             options: []
+        )
+    }()
+
+    /// Llama 2 chat template system block: `<<SYS>>…<</SYS>>`. Some
+    /// Llama 2 fine-tunes emit the wrapper in the visible answer
+    /// instead of behind the scenes; the `</s>` end-of-sentence token
+    /// and `[INST]` style brackets are also sometimes visible. Strip
+    /// the system block outright — its content is duplicated by the
+    /// system prompt we already send, so nothing of value is lost.
+    private static let llama2SystemBlockPattern: NSRegularExpression = {
+        try! NSRegularExpression(
+            pattern: "<<SYS>>[\\s\\S]*?<</SYS>>",
+            options: []
+        )
+    }()
+
+    /// `</s>` end-of-sentence token leaked by Llama-family chat
+    /// models. Standalone (not inside a code snippet) so we don't
+    /// touch user code.
+    private static let endOfSentenceTokenPattern: NSRegularExpression = {
+        try! NSRegularExpression(
+            pattern: "</s>",
+            options: []
+        )
+    }()
+
+    /// HTML comment strip. Some Claude 3.7 Sonnet and Llama 3.3
+    /// fine-tunes leak reasoning as `<!-- reasoning … -->`. Block
+    /// comments can span newlines and be arbitrarily long.
+    private static let htmlCommentPattern: NSRegularExpression = {
+        try! NSRegularExpression(
+            pattern: "<!--[\\s\\S]*?-->",
+            options: []
+        )
+    }()
+
+    /// Llama 3.1 / some Grok 3 fine-tunes wrap reasoning in special
+    /// tokens: `<|reasoning|>…<|/reasoning|>`. The body between the
+    /// tokens is the model's scratch reasoning. We strip the entire
+    /// block (body + wrappers) so the reasoning never reaches the
+    /// chat bubble; the `controlTokenPattern` falls back to removing
+    /// the individual tokens when the block is malformed / unclosed.
+    private static let llamaReasoningBlockPattern: NSRegularExpression = {
+        try! NSRegularExpression(
+            pattern: "<\\|reasoning\\|>[\\s\\S]*?<\\|/reasoning\\|>",
+            options: [.caseInsensitive]
+        )
+    }()
+
+    /// ChatGLM / Qwen-Chat output wrapper. The model emits the
+    /// visible answer inside `<output>…</output>` (used to disambiguate
+    /// from system context). The wrapper itself has no value to the
+    /// user; strip the entire block.
+    private static let chatGlmOutputPattern: NSRegularExpression = {
+        try! NSRegularExpression(
+            pattern: "<output\\b[^>]*>[\\s\\S]*?</output>",
+            options: [.caseInsensitive]
+        )
+    }()
+
+    /// `[SYSTEM_PROMPT]` orphan marker some Mistral 3 fine-tunes emit
+    /// when the system prompt wasn't fully suppressed. Strip the
+    /// marker plus everything up to the next blank line or the end
+    /// of the reply — the body is duplicate system context.
+    private static let systemPromptLeakPattern: NSRegularExpression = {
+        try! NSRegularExpression(
+            pattern: "\\[SYSTEM_PROMPT\\][\\s\\S]*?(?=\\n\\s*\\n|$)",
+            options: [.caseInsensitive]
         )
     }()
 
@@ -231,15 +310,38 @@ enum ThinkingExtractor {
         )
     }()
 
+    /// Anthropic legacy single-invoke wrapper. The newer Anthropic
+    /// wire format is JSON `tool_use` blocks (handled at the API
+    /// layer), but some Claude 3 Opus / 3.5 Sonnet fine-tunes still
+    /// leak `<antml:invoke name="…">…</antml:invoke>` calls into the
+    /// visible text. The chat path doesn't parse them, so strip.
+    private static let antmlInvokePattern: NSRegularExpression = {
+        try! NSRegularExpression(
+            pattern: "<antml:invoke\\b(?:\"[^\"]*\"|'[^']*'|[^'\">])*>(?!/)[\\s\\S]*?</antml:invoke>",
+            options: [.caseInsensitive]
+        )
+    }()
+
     /// Strip leaked tokenizer / turn-marker control tokens. Pure function.
     static func stripControlTokens(from raw: String) -> String {
         guard !raw.isEmpty else { return raw }
         var s = raw
-        let blockPatterns = [
+        let blockPatterns: [NSRegularExpression] = [
             lfmToolCallPattern,
             gemma4ToolCallPattern,
             mistralToolCallPattern,
             gemmaToolCallPattern,
+            // New in this revision: provider-specific output wrappers
+            // that should never reach the chat bubble. The Llama 3.1
+            // reasoning block goes here so the entire `<|reasoning|>…
+            // <|/reasoning|>` pair is dropped (not just the wrappers
+            // — leaving the body bare would surface reasoning as
+            // plain text in the chat bubble).
+            llama2SystemBlockPattern,
+            llamaReasoningBlockPattern,
+            chatGlmOutputPattern,
+            htmlCommentPattern,
+            systemPromptLeakPattern,
         ]
         for pattern in blockPatterns {
             let range = NSRange(s.startIndex..., in: s)
@@ -253,6 +355,8 @@ enum ThinkingExtractor {
         s = mistralInstPattern.stringByReplacingMatches(in: s, options: [], range: r2, withTemplate: "")
         let r3 = NSRange(s.startIndex..., in: s)
         s = geminiUnusedPattern.stringByReplacingMatches(in: s, options: [], range: r3, withTemplate: "")
+        let r3a = NSRange(s.startIndex..., in: s)
+        s = endOfSentenceTokenPattern.stringByReplacingMatches(in: s, options: [], range: r3a, withTemplate: "")
         // Mistral `[TOOL_CALLS][...]` opener: drop the opener, then balance
         // brackets in the JSON that follows to find the matching close.
         let r4 = NSRange(s.startIndex..., in: s)
@@ -301,17 +405,18 @@ enum ThinkingExtractor {
 
     /// Capturing alternation of known tool-call wrapper names. MiniMax M2
     /// uses `minimax:tool_call`, Anthropic's legacy XML uses
-    /// `function_calls` / `antml:function_calls`, xAI uses
-    /// `xai:function_call` / `xai:tool_call`, Hermes uses singular
-    /// `tool_call`, and some providers use bare `tool_calls`. Capturing so
-    /// the closing-tag backreference `\1` works.
+    /// `function_calls` / `antml:function_calls` / `antml:invoke`,
+    /// xAI uses `xai:function_call` / `xai:tool_call` / `xai:tool_calls`,
+    /// Hermes uses singular `tool_call`, and some providers use bare
+    /// `tool_calls`. Capturing so the closing-tag backreference `\1`
+    /// works.
     ///
     /// DeepSeek's `｜DSML｜function_calls｜` form (full-width `｜`, U+FF5C)
     /// is handled separately by `deepseekBlockPattern` because the
     /// opening / closing tag names are themselves bracketed in `｜` and
     /// don't backref cleanly against ASCII tag names.
     private static let toolCallWrapperName =
-        #"([A-Za-z][\w-]*:tool_call|xai:function_call|xai:tool_call|tool_calls|tool_call|function_calls|antml:function_calls)"#
+        #"([A-Za-z][\w-]*:tool_call|xai:function_call|xai:tool_call|xai:tool_calls|tool_calls|tool_call|function_calls|antml:function_calls)"#
 
     /// DeepSeek's full-width-pipe XML tool-call blocks. Strip in three
     /// passes — innermost first — because NSRegularExpression doesn't
@@ -415,11 +520,20 @@ enum ThinkingExtractor {
         guard !raw.isEmpty else { return raw }
         var s = raw
         let full = NSRange(s.startIndex..., in: s)
+        // Anthropic legacy `<antml:invoke>` blocks first. They're
+        // well-formed (open + close tag) but not in the
+        // `toolCallWrapperName` alternation (the wrapper name is
+        // `invoke`, not `tool_call` / `function_calls`), so they need
+        // their own pattern.
+        s = antmlInvokePattern.stringByReplacingMatches(
+            in: s, options: [], range: full, withTemplate: ""
+        )
+        let rAnti = NSRange(s.startIndex..., in: s)
         // DeepSeek's full-width-pipe `｜DSML｜…｜` blocks first, innermost
         // → outermost, so the inner `</｜…｜>` closer doesn't terminate
         // a non-greedy outer match prematurely.
         s = deepseekParameterBlockPattern.stringByReplacingMatches(
-            in: s, options: [], range: full, withTemplate: ""
+            in: s, options: [], range: rAnti, withTemplate: ""
         )
         let r1 = NSRange(s.startIndex..., in: s)
         s = deepseekInvokeBlockPattern.stringByReplacingMatches(
@@ -491,6 +605,8 @@ enum ThinkingExtractor {
             || lower.hasPrefix("<analy") || lower.hasPrefix("</analy")
             || lower.hasPrefix("<scratch_pad") || lower.hasPrefix("</scratch_pad")
             || lower.hasPrefix("<antml:think") || lower.hasPrefix("</antml:think")
+            || lower.hasPrefix("<xai:reason") || lower.hasPrefix("</xai:reason")
+            || lower.hasPrefix("<xai:think") || lower.hasPrefix("</xai:think")
         {
             return true
         }
