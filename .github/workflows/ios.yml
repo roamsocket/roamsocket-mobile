@@ -3,8 +3,21 @@ name: iOS CI
 on:
   push:
     branches: [main]
+    # Skip the heavy macOS iOS build for non-iOS changes. The list
+    # is intentionally broad (covers any iOS-related path including
+    # shared CI files) so that touching CI infra still re-runs.
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios.yml"
+      - "package.json"
+      - "package-lock.json"
   pull_request:
     branches: [main]
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios.yml"
+      - "package.json"
+      - "package-lock.json"
   workflow_dispatch:
 
 # Cancel in-flight runs for the same branch / PR when a new commit lands.

@@ -392,6 +392,11 @@ struct CodeHomeView: View {
         // The custom `topBar` above replaces it, so only the hamburger
         // shows — the back button can never appear.
         .toolbar(.hidden, for: .navigationBar)
+        // The Code destination is reached via the sidebar (the
+        // sidebar's "Code" row), so the system-injected back chevron
+        // is redundant — the sidebar IS the navigation surface. The
+        // custom header still has the hamburger for the drawer.
+        .navigationBarBackButtonHidden(true)
         .task {
             // Re-list the catalog the first time Code is shown so
             // the "Start a session" flow and any pills inside the
