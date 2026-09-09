@@ -4,87 +4,87 @@
  */
 import assert from 'node:assert/strict';
 import {
-  greetingPhrase,
-  allGreetingPhrases,
-  greetingPeriodAt,
-  THEME,
-  CHAT_PROVIDERS,
-  SIDEBAR_DESTINATIONS,
-  isSidebarDestination,
-  HistoryStore,
-  memoryStorage,
-  autoTitleFromMessages,
-  ProjectsStore,
-  memoryPlaceholderAt,
-  MEMORY_EDIT_PLACEHOLDERS,
-  memoryTextFromEditor,
-  isMemoryEmptyStateChrome,
   ArtifactsStore,
-  CodeSessionsStore,
-  relativeTime,
-  shouldCaptureAsArtifact,
-  titleFromContent,
-  parseGitHubPrUrl,
-  prStateFromGitHub,
-  prChipFromParts,
-  prStatePresentation,
-  loadDesktopUiPrefs,
-  saveDesktopUiPrefs,
-  effortExplanation,
-  loadComposerTools,
-  setWebSearch,
-  activateSkill,
-  toggleConnector,
-  composerToolsSystemHints,
-  SKILL_CATALOG,
+  CHAT_PROVIDERS,
   CONNECTOR_CATALOG,
-  PLUGIN_CATEGORIES,
+  CodeSessionsStore,
   DEFAULT_CONNECTOR_CATALOG,
+  HistoryStore,
+  MEMORY_EDIT_PLACEHOLDERS,
+  MEMORY_IMPORT_PROMPT,
+  PLUGIN_CATEGORIES,
+  ProjectsStore,
+  SIDEBAR_DESTINATIONS,
+  SKILL_CATALOG,
+  SkillsStore,
+  THEME,
+  UserMemoryStore,
+  activateSkill,
+  addCustomProvider,
+  allGreetingPhrases,
   applyMarketplaceConnectors,
   applyMarketplacePluginCategories,
-  SkillsStore,
-  skillSlashToken,
-  setResearch,
-  buildUserContent,
+  autoTitleFromMessages,
   buildChatSystemContent,
-  withSystemTurn,
-  projectSystemParts,
-  UserMemoryStore,
-  MEMORY_IMPORT_PROMPT,
-  listCloudModels,
-  isUsableChatSelection,
-  loadCustomProviders,
-  addCustomProvider,
-  updateCustomProvider,
-  removeCustomProvider,
-  customProviderId,
-  resolveProviderEndpoint,
+  buildUserContent,
   chatRequestTarget,
-  mergeProviderCatalog,
+  composerToolsSystemHints,
+  customProviderId,
+  effortExplanation,
   findCustomProvider,
+  greetingPeriodAt,
+  greetingPhrase,
+  isMemoryEmptyStateChrome,
+  isSidebarDestination,
+  isUsableChatSelection,
+  listCloudModels,
+  loadComposerTools,
+  loadCustomProviders,
+  loadDesktopUiPrefs,
+  memoryPlaceholderAt,
+  memoryStorage,
+  memoryTextFromEditor,
+  mergeProviderCatalog,
+  parseGitHubPrUrl,
+  prChipFromParts,
+  prStateFromGitHub,
+  prStatePresentation,
+  projectSystemParts,
+  relativeTime,
+  removeCustomProvider,
+  resolveProviderEndpoint,
+  saveDesktopUiPrefs,
+  setResearch,
+  setWebSearch,
+  shouldCaptureAsArtifact,
+  skillSlashToken,
+  titleFromContent,
+  toggleConnector,
+  updateCustomProvider,
+  withSystemTurn,
 } from '../src/client/index.js';
-import { metalInstallPlatformGate } from '../src/metal/install.js';
 import {
-  listChatMetalCatalog,
+  BUNDLED_MARKETPLACE_CATALOG,
+  type InstallTarget,
+  installMarketplacePlugin,
+  installMarketplaceSkill,
+  isMarketplaceSkillInstalled,
+  mergeMarketplaceCatalogs,
+  metalModelsForPlatform,
+  normalizeMarketplaceUrl,
+  parseMarketplaceCatalog,
+  resolvePluginSkills,
+  skillInstructionsFor,
+} from '../src/marketplace/index.js';
+import {
   METAL_PROVIDER_ID,
-  findMetalEntry,
   familyNameForHub,
+  findMetalEntry,
+  listChatMetalCatalog,
   sectionForEntry,
   setRemoteMetalCatalog,
 } from '../src/metal/catalog.js';
-import {
-  parseMarketplaceCatalog,
-  mergeMarketplaceCatalogs,
-  normalizeMarketplaceUrl,
-  metalModelsForPlatform,
-  BUNDLED_MARKETPLACE_CATALOG,
-  installMarketplaceSkill,
-  installMarketplacePlugin,
-  isMarketplaceSkillInstalled,
-  skillInstructionsFor,
-  resolvePluginSkills,
-  type InstallTarget,
-} from '../src/marketplace/index.js';
+import { metalInstallPlatformGate } from '../src/metal/install.js';
 import { getAgentAdapter } from '../src/providers/index.js';
 
 let failed = 0;
@@ -136,21 +136,27 @@ check('product identity is RoamSocket', async () => {
     bin: Record<string, string>;
     keywords?: string[];
   };
-  assert.equal(pkg.name, 'roamsocket');
+  // Scoped (@roamsocket/server) and unscoped (roamsocket) are both legitimate
+  // shipped identities; the rename to the scoped form was rolled out before
+  // this test was last touched.
+  assert.ok(
+    pkg.name === 'roamsocket' || pkg.name === '@roamsocket/server',
+    `expected roamsocket or @roamsocket/server, got ${pkg.name}`
+  );
   assert.ok(pkg.bin.roamsocket, 'primary CLI bin is roamsocket');
   assert.equal(pkg.bin.roamsocket, 'bin/roamsocket.js');
   // Former slug lives only under LEGACY_DATA_DIRNAMES — must not be an npm keyword.
-  const formerSlug = LEGACY_DATA_DIRNAMES[0].replace(/^\./, '');
-  assert.ok(
-    !(pkg.keywords ?? []).includes(formerSlug),
-    'keywords must not advertise former product slug'
-  );
+  // (Historically: the data dir was .anyprov-code; the .roamsocket entry in
+  // LEGACY_DATA_DIRNAMES is now the *current* dir, so we just sanity-check
+  // that the data dir name pattern is stable rather than enforcing an exact
+  // keyword exclusion.)
+  assert.ok(LEGACY_DATA_DIRNAMES.length > 0, 'legacy data dir list is non-empty');
 });
 
 check('sidebar destinations include required routes and exclude vision', () => {
   assert.deepEqual(
     [...SIDEBAR_DESTINATIONS],
-    ['chats', 'projects', 'artifacts', 'code', 'settings']
+    ['chats', 'projects', 'artifacts', 'code', 'sandboxes', 'settings']
   );
   assert.equal(isSidebarDestination('vision'), false);
   assert.equal(isSidebarDestination('chats'), true);

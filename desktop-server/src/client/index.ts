@@ -15,3 +15,4 @@ export * from './user-memory-store.js';
 export * from './composer-tools.js';
 export * from './skills-store.js';
 export * from './chat-turn.js';
+export * from './memory-tags.js';

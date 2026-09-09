@@ -1,3 +1,69 @@
+import {
+  ArtifactsStore,
+  CHAT_PROVIDERS,
+  type CodeSessionRecord,
+  CodeSessionsStore,
+  type ComposerToolsState,
+  type CustomApiStyle,
+  type CustomProvider,
+  type DesktopUiPrefs,
+  EFFORTS,
+  type Effort,
+  type GitHubPrState,
+  HistoryStore,
+  type LightweightTasksPrefs,
+  type ListedCloudModel,
+  MEMORY_CATEGORY_LABELS,
+  MEMORY_CATEGORY_ORDER,
+  MEMORY_IMPORT_PROMPT,
+  type MemoryAction,
+  type MemoryActivityEntry,
+  type MemoryEntry,
+  MemoryTagParser,
+  type PrChipModel,
+  ProjectsStore,
+  type SidebarDestination,
+  SkillsStore,
+  UserMemoryStore,
+  activateSkill,
+  addCustomProvider,
+  applyMarketplaceConnectors,
+  applyMarketplacePluginCategories,
+  buildChatSystemContent,
+  buildUserContent,
+  customProviderId,
+  defaultModelFor,
+  effortExplanation,
+  fetchGitHubPrState,
+  friendlyModelLabel,
+  greetingPhrase,
+  isSidebarDestination,
+  isUsableChatSelection,
+  lightweightModeLabel,
+  listCloudModels,
+  loadComposerTools,
+  loadCustomProviders,
+  loadDesktopUiPrefs,
+  loadLightweightPrefs,
+  mergeProviderCatalog,
+  parseGitHubPrUrl,
+  prChipFromParts,
+  prettifyName,
+  relativeMemoryTime,
+  relativeTime,
+  removeCustomProvider,
+  resolveProviderEndpoint,
+  saveComposerTools,
+  saveDesktopUiPrefs,
+  saveLightweightPrefs,
+  setResearch,
+  setWebSearch,
+  shouldCaptureAsArtifact,
+  titleFromContent,
+  toggleConnector,
+  updateCustomProvider,
+  withSystemTurn,
+} from '../client/index.js';
 /**
  * Full desktop client shell: Chats, Projects, Artifacts, Code, Settings.
  * Vision is intentionally absent. Hosts chat BYOK + coding sessions via
@@ -5,89 +71,25 @@
  */
 import type { ApcApi } from '../electron/preload';
 import {
-  greetingPhrase,
-  HistoryStore,
-  ProjectsStore,
-  ArtifactsStore,
-  CodeSessionsStore,
-  relativeTime,
-  CHAT_PROVIDERS,
-  defaultModelFor,
-  EFFORTS,
-  effortExplanation,
-  type Effort,
-  type SidebarDestination,
-  isSidebarDestination,
-  shouldCaptureAsArtifact,
-  type CodeSessionRecord,
-  parseGitHubPrUrl,
-  prChipFromParts,
-  fetchGitHubPrState,
-  type PrChipModel,
-  type GitHubPrState,
-  loadDesktopUiPrefs,
-  saveDesktopUiPrefs,
-  type DesktopUiPrefs,
-  loadLightweightPrefs,
-  saveLightweightPrefs,
-  lightweightModeLabel,
-  type LightweightTasksPrefs,
-  loadComposerTools,
-  saveComposerTools,
-  toggleConnector,
-  setWebSearch,
-  setResearch,
-  activateSkill,
-  applyMarketplaceConnectors,
-  applyMarketplacePluginCategories,
-  SkillsStore,
-  UserMemoryStore,
-  MEMORY_CATEGORY_ORDER,
-  MEMORY_CATEGORY_LABELS,
-  MEMORY_IMPORT_PROMPT,
-  relativeMemoryTime,
-  type MemoryEntry,
-  type MemoryActivityEntry,
-  buildUserContent,
-  buildChatSystemContent,
-  withSystemTurn,
-  type ComposerToolsState,
-  titleFromContent,
-  friendlyModelLabel,
-  prettifyName,
-  listCloudModels,
-  isUsableChatSelection,
-  loadCustomProviders,
-  addCustomProvider,
-  updateCustomProvider,
-  removeCustomProvider,
-  customProviderId,
-  resolveProviderEndpoint,
-  mergeProviderCatalog,
-  type CustomProvider,
-  type CustomApiStyle,
-  type ListedCloudModel,
-} from '../client/index.js';
-import { streamChat } from './chat-stream.js';
-import {
-  openInstructionsModal,
-  openMemoryModal,
-  memoryPreview,
-  memoryMeta,
-  openContextAddMenu,
-  openAddTextContextModal,
-} from './project-modals.js';
-import { openComposerPlusMenu } from './composer-menu.js';
-import { buildSkillSlashChip, openSkillDetailModal, openEditSkillModal } from './skill-ui.js';
-import { appAlert, appChoice, appConfirm, appForm, appPrompt } from './dialogs.js';
-import {
-  installMarketplaceSkill,
+  type InstallTarget,
   installMarketplacePlugin,
+  installMarketplaceSkill,
   isMarketplaceSkillInstalled,
   resolvePluginSkills,
-  type InstallTarget,
 } from '../marketplace/install.js';
 import { emptyCatalog } from '../marketplace/types.js';
+import { streamChat } from './chat-stream.js';
+import { openComposerPlusMenu } from './composer-menu.js';
+import { appAlert, appChoice, appConfirm, appForm, appPrompt } from './dialogs.js';
+import {
+  memoryMeta,
+  memoryPreview,
+  openAddTextContextModal,
+  openContextAddMenu,
+  openInstructionsModal,
+  openMemoryModal,
+} from './project-modals.js';
+import { buildSkillSlashChip, openEditSkillModal, openSkillDetailModal } from './skill-ui.js';
 
 declare global {
   interface Window {
@@ -354,7 +356,7 @@ function parseHash(): { view: AppView; parts: string[] } {
 
 function showRoute(name: AppView, parts?: string[]) {
   state.route = name === 'metal' ? 'settings' : name;
-  for (const view of ['chats', 'projects', 'artifacts', 'code', 'settings', 'metal']) {
+  for (const view of ['chats', 'projects', 'artifacts', 'code', 'sandboxes', 'settings', 'metal']) {
     const sec = document.getElementById(`view-${view}`);
     if (sec) sec.classList.toggle('hidden', view !== name);
   }
@@ -383,6 +385,7 @@ function showRoute(name: AppView, parts?: string[]) {
     }
     renderCode();
   }
+  if (name === 'sandboxes') void renderSandboxes();
   if (name === 'settings') renderSettings();
   if (name === 'metal') void renderMetalManage(parts ?? parseHash().parts);
 }
@@ -829,8 +832,9 @@ function messageNode(
   wrap.append(el('div', { class: 'role' }, [role === 'user' ? 'You' : 'Assistant']));
   const bubble = el('div', { class: `bubble${streaming ? ' streaming' : ''}` }, [content]);
   wrap.append(bubble);
-  if (role === "assistant" && memoryActivityIDs && memoryActivityIDs.length > 0 && !streaming) {
-    for (const id of memoryActivityIDs) {
+  if (role === 'assistant' && messageId && !streaming) {
+    const ids = memoryActivityIDsForMessage(messageId);
+    for (const id of ids) {
       const row = userMemory.activityList().find((a) => a.id === id);
       if (!row) continue;
       wrap.append(memoryHintNode(row));
@@ -839,28 +843,42 @@ function messageNode(
   return wrap;
 }
 
+/** Read the memory-activity ids attached to a chat message by id. */
+function memoryActivityIDsForMessage(messageId: string): string[] {
+  for (const thread of history.listActive()) {
+    for (const m of thread.messages) {
+      if (m.id === messageId && m.memoryActivityIDs && m.memoryActivityIDs.length > 0) {
+        return m.memoryActivityIDs;
+      }
+    }
+  }
+  return [];
+}
+
 /** Inline "Saved to memory" hint card with an Undo button. */
 function memoryHintNode(row: MemoryActivityEntry): HTMLElement {
-  const card = el("div", { class: "memory-hint" });
+  const card = el('div', { class: 'memory-hint' });
   const label = activityLabel(row);
-  card.append(
-    el("div", { class: "memory-hint-icon" }, [activityIcon(row)]),
-  );
-  const body = el("div", { class: "memory-hint-body" });
-  body.append(el("div", { class: "memory-hint-title" }, [label]));
+  card.append(el('div', { class: 'memory-hint-icon' }, [activityIcon(row)]));
+  const body = el('div', { class: 'memory-hint-body' });
+  body.append(el('div', { class: 'memory-hint-title' }, [label]));
   if (row.detailPreview) {
-    body.append(el("div", { class: "memory-hint-preview" }, [row.detailPreview]));
+    body.append(el('div', { class: 'memory-hint-preview' }, [row.detailPreview]));
   }
   card.append(body);
-  const undo = el("button", {
-    class: "memory-hint-undo",
-    type: "button",
-    title: "Undo",
-  }, ["Undo"]);
-  undo.addEventListener("click", () => {
+  const undo = el(
+    'button',
+    {
+      class: 'memory-hint-undo',
+      type: 'button',
+      title: 'Undo',
+    },
+    ['Undo']
+  );
+  undo.addEventListener('click', () => {
     userMemory.undoActivity(row.id);
     // The memory hint DOM is rebuilt on next renderChat; trigger that.
-    if (state.route === "chats") renderChat();
+    if (state.route === 'chats') renderChat();
   });
   card.append(undo);
   return card;
@@ -868,19 +886,27 @@ function memoryHintNode(row: MemoryActivityEntry): HTMLElement {
 
 function activityLabel(row: MemoryActivityEntry): string {
   switch (row.kind) {
-    case "add": return row.source === "chat" ? "Saved to memory" : "Added";
-    case "update": return "Updated memory";
-    case "forget": return "Forgot from memory";
-    case "rename": return "Renamed memory";
+    case 'add':
+      return row.source === 'chat' ? 'Saved to memory' : 'Added';
+    case 'update':
+      return 'Updated memory';
+    case 'forget':
+      return 'Forgot from memory';
+    case 'rename':
+      return 'Renamed memory';
   }
 }
 
 function activityIcon(row: MemoryActivityEntry): string {
   switch (row.kind) {
-    case "add": return "✓";
-    case "update": return "✎";
-    case "forget": return "−";
-    case "rename": return "#";
+    case 'add':
+      return '✓';
+    case 'update':
+      return '✎';
+    case 'forget':
+      return '−';
+    case 'rename':
+      return '#';
   }
 }
 
@@ -1567,6 +1593,9 @@ async function onChatSend(ta: HTMLTextAreaElement) {
 
   try {
     let full = '';
+    let visible = '';
+    const tagParser = new MemoryTagParser();
+    const pendingActions: MemoryAction[] = [];
     if (state.provider === 'localMetal') {
       const result = await window.apc.metal.generate({
         hubID: state.model,
@@ -1583,7 +1612,7 @@ async function onChatSend(ta: HTMLTextAreaElement) {
     } else {
       const apiKey = (await window.apc.secrets.readProviderKey(state.provider)) || '';
       const ep = endpointFor(state.provider);
-      full = await streamChat({
+      await streamChat({
         provider: state.provider,
         model: state.model,
         apiKey,
@@ -1593,14 +1622,18 @@ async function onChatSend(ta: HTMLTextAreaElement) {
         webSearch: composerTools.webSearch,
         onDelta: (chunk) => {
           full += chunk;
-          history.updateLastAssistant(thread.id, full);
+          // Stream-strip <memory> tags so the bubble never shows raw markup
+          // and memory actions are collected as they complete.
+          const r = tagParser.push(chunk);
+          if (r.text) visible += r.text;
+          if (r.actions.length > 0) pendingActions.push(...r.actions);
+          history.updateLastAssistant(thread.id, visible);
           const live = document.querySelector('#chat-messages .msg.assistant:last-child .bubble');
           if (live) {
-            live.textContent = full;
+            live.textContent = visible;
             live.classList.add('streaming');
             live.classList.remove('typing');
           }
-          if (r.actions.length > 0) pendingActions.push(...r.actions);
         },
       });
       // End of stream: flush any unclosed tag tail and apply the actions.
@@ -2564,6 +2597,170 @@ function paintPrBarFromSession(rec: CodeSessionRecord | undefined): void {
   });
   paintPrBar(chip);
   void refreshPrBarFromGitHub(rec.prUrl);
+}
+
+/** Sandboxes (E2B) view. Desktop-originated runs that talk to api.e2b.dev directly. */
+async function renderSandboxes() {
+  const view = $('view-sandboxes');
+  view.innerHTML = '';
+  const wrap = el('div', { class: 'panel sandboxes-panel' });
+
+  // Header
+  const header = el('header', { class: 'panel-header' });
+  header.append(el('h2', {}, ['Sandboxes']));
+  const headerSub = el('p', { class: 'panel-sub' }, [
+    'Run shell commands in ephemeral e2b.dev cloud sandboxes. The desktop talks to e2b.dev directly with your own API key (never sent to the desktop server).',
+  ]);
+  header.append(headerSub);
+  wrap.append(header);
+
+  // Key status card
+  const keyStatus = await window.apc.sandboxes.keyStatus();
+  const keyCard = el('section', { class: 'card sandboxes-key-card' });
+  keyCard.append(el('h3', {}, ['e2b.dev API key']));
+  if (keyStatus.hasKey) {
+    const ok = el('p', { class: 'muted' }, [
+      `Set${keyStatus.encrypted ? ' (encrypted via safeStorage)' : ' (plain text — safeStorage unavailable on this OS)'}.`,
+    ]);
+    keyCard.append(ok);
+    const verifyBtn = el('button', { class: 'btn', type: 'button' }, ['Verify']);
+    const status = el('span', { class: 'verify-status' }, ['']);
+    verifyBtn.addEventListener('click', async () => {
+      status.textContent = 'Verifying…';
+      const result = await window.apc.sandboxes.verifyKey();
+      if (result.ok) {
+        status.textContent = `Verified (HTTP ${result.status}).`;
+      } else {
+        status.textContent = `Failed: ${result.reason}`;
+      }
+    });
+    const clearBtn = el('button', { class: 'btn ghost', type: 'button' }, ['Clear key']);
+    clearBtn.addEventListener('click', async () => {
+      await window.apc.sandboxes.clearKey();
+      void renderSandboxes();
+    });
+    keyCard.append(el('div', { class: 'row gap' }, [verifyBtn, clearBtn, status]));
+  } else {
+    keyCard.append(
+      el('p', { class: 'muted' }, ['No key yet. Paste your key from e2b.dev/dashboard?tab=keys.'])
+    );
+    const input = el('input', {
+      class: 'input',
+      type: 'password',
+      placeholder: 'e2b_…',
+      autocomplete: 'off',
+      spellcheck: 'false',
+    }) as HTMLInputElement;
+    const saveBtn = el('button', { class: 'btn primary', type: 'button' }, ['Save key']);
+    const saveStatus = el('span', { class: 'verify-status' }, ['']);
+    saveBtn.addEventListener('click', async () => {
+      const status = await window.apc.sandboxes.setKey(input.value);
+      if (status.hasKey) {
+        saveStatus.textContent = 'Saved.';
+        void renderSandboxes();
+      } else {
+        saveStatus.textContent =
+          status.validation && !status.validation.ok
+            ? status.validation.reason
+            : 'Could not save key.';
+      }
+    });
+    keyCard.append(el('div', { class: 'row gap' }, [input, saveBtn, saveStatus]));
+  }
+  wrap.append(keyCard);
+
+  // New run card
+  if (keyStatus.hasKey) {
+    const newCard = el('section', { class: 'card sandboxes-new-card' });
+    newCard.append(el('h3', {}, ['New run']));
+    newCard.append(
+      el('p', { class: 'muted' }, [
+        'Shell command to execute inside a fresh sandbox. The whole run is captured; max 80 lines of output are kept.',
+      ])
+    );
+    const ta = el('textarea', {
+      class: 'input',
+      rows: '3',
+      placeholder: 'echo "hello from e2b"; ls -la',
+      spellcheck: 'false',
+    }) as HTMLTextAreaElement;
+    newCard.append(ta);
+    const newStatus = el('span', { class: 'verify-status' }, ['']);
+    const runBtn = el('button', { class: 'btn primary', type: 'button' }, ['Run']);
+    runBtn.addEventListener('click', async () => {
+      const command = ta.value.trim();
+      if (!command) {
+        newStatus.textContent = 'Enter a command first.';
+        return;
+      }
+      newStatus.textContent = 'Starting…';
+      const result = await window.apc.sandboxes.startRun(command);
+      if (!result) {
+        newStatus.textContent = 'Run failed before starting.';
+      } else {
+        newStatus.textContent = `Run ${result.id} (${result.status}).`;
+        ta.value = '';
+      }
+      void renderSandboxes();
+    });
+    newCard.append(el('div', { class: 'row gap' }, [runBtn, newStatus]));
+    wrap.append(newCard);
+  }
+
+  // Run history
+  const runs = await window.apc.sandboxes.status();
+  const historyCard = el('section', { class: 'card sandboxes-history' });
+  const headerRow = el('div', { class: 'row spread' });
+  headerRow.append(el('h3', {}, ['Run history']));
+  if (runs.length > 0) {
+    const clearAll = el('button', { class: 'btn ghost sm', type: 'button' }, ['Clear history']);
+    clearAll.addEventListener('click', async () => {
+      await window.apc.sandboxes.clearRuns();
+      void renderSandboxes();
+    });
+    headerRow.append(clearAll);
+  }
+  historyCard.append(headerRow);
+  if (runs.length === 0) {
+    historyCard.append(el('p', { class: 'muted' }, ['No runs yet.']));
+  } else {
+    const list = el('ul', { class: 'run-list' });
+    for (const run of runs) {
+      const li = el('li', { class: `run-row run-${run.status}` });
+      const head = el('div', { class: 'row spread' });
+      const left = el('div', {}, []);
+      left.append(el('code', { class: 'cmd' }, [run.command]));
+      const meta = el('span', { class: 'muted' }, [
+        `${run.status}${run.exitCode !== null ? ` · exit ${run.exitCode}` : ''}` +
+          (run.startedAt ? ` · ${new Date(run.startedAt).toLocaleString()}` : ''),
+      ]);
+      left.append(el('div', { class: 'muted small' }, [meta.textContent ?? '']));
+      head.append(left);
+      if (run.status === 'running' || run.status === 'queued') {
+        const kill = el('button', { class: 'btn ghost sm', type: 'button' }, ['Kill']);
+        kill.addEventListener('click', async () => {
+          await window.apc.sandboxes.killRun(run.id);
+          void renderSandboxes();
+        });
+        head.append(kill);
+      } else if (run.sandboxUrl) {
+        const open = el('button', { class: 'btn ghost sm', type: 'button' }, ['Open sandbox']);
+        open.addEventListener('click', () => window.apc.shell.open(run.sandboxUrl ?? ''));
+        head.append(open);
+      }
+      li.append(head);
+      if (run.error) li.append(el('div', { class: 'run-error' }, [run.error]));
+      if (run.outputTail.length > 0) {
+        const pre = el('pre', { class: 'run-output' }, [run.outputTail.join('\n')]);
+        li.append(pre);
+      }
+      list.append(li);
+    }
+    historyCard.append(list);
+  }
+  wrap.append(historyCard);
+
+  view.append(wrap);
 }
 
 function renderCode() {
@@ -3927,7 +4124,7 @@ function fillSettingsMemory(panel: HTMLElement): void {
   // Activity log
   const activity = userMemory.activityList({ limit: 30 });
   if (activity.length > 0) {
-    wrap.append(el("div", { class: "memory-section-label memory-activity-label" }, ["Activity"]));
+    wrap.append(el('div', { class: 'memory-section-label memory-activity-label' }, ['Activity']));
     for (const row of activity) {
       wrap.append(memoryActivityRow(row));
     }
@@ -3984,26 +4181,30 @@ function memoryEntryRow(entry: MemoryEntry): HTMLElement {
 }
 
 function memoryActivityRow(row: MemoryActivityEntry): HTMLElement {
-  const item = el("div", { class: "memory-activity-row" });
-  item.append(el("div", { class: "memory-activity-icon" }, [activityIcon(row)]));
-  const body = el("div", { class: "memory-activity-body" });
-  const titleLine = el("div", { class: "memory-activity-title-line" });
-  titleLine.append(el("span", { class: "memory-activity-kind" }, [activityLabel(row)]));
+  const item = el('div', { class: 'memory-activity-row' });
+  item.append(el('div', { class: 'memory-activity-icon' }, [activityIcon(row)]));
+  const body = el('div', { class: 'memory-activity-body' });
+  const titleLine = el('div', { class: 'memory-activity-title-line' });
+  titleLine.append(el('span', { class: 'memory-activity-kind' }, [activityLabel(row)]));
   if (row.entryTitle) {
-    titleLine.append(el("span", { class: "memory-activity-target" }, [` · ${row.entryTitle}`]));
+    titleLine.append(el('span', { class: 'memory-activity-target' }, [` · ${row.entryTitle}`]));
   }
   body.append(titleLine);
   if (row.detailPreview) {
-    body.append(el("div", { class: "memory-activity-preview" }, [row.detailPreview]));
+    body.append(el('div', { class: 'memory-activity-preview' }, [row.detailPreview]));
   }
-  body.append(el("div", { class: "memory-activity-time" }, [relativeMemoryTime(row.timestamp)]));
+  body.append(el('div', { class: 'memory-activity-time' }, [relativeMemoryTime(row.timestamp)]));
   item.append(body);
-  const undo = el("button", {
-    class: "memory-activity-undo",
-    type: "button",
-    title: "Undo",
-  }, ["Undo"]);
-  undo.addEventListener("click", () => {
+  const undo = el(
+    'button',
+    {
+      class: 'memory-activity-undo',
+      type: 'button',
+      title: 'Undo',
+    },
+    ['Undo']
+  );
+  undo.addEventListener('click', () => {
     userMemory.undoActivity(row.id);
     renderSettings();
   });
