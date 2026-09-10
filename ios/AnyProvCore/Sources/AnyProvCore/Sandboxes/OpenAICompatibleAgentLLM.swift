@@ -43,12 +43,17 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
         baseURL: URL,
         maxTokens: Int = 4096,
         useNonStreaming: Bool = false,
+        /// Injected for tests so the wire-shape tests can
+        /// intercept requests via a custom `URLProtocol`. Real
+        /// callers should leave this at the default
+        /// (`URLSession.shared`).
+        session: URLSession = URLSession.shared,
     ) {
         self.apiKey = apiKey
         self.modelID = modelID
         self.baseURL = baseURL
         self.maxTokens = maxTokens
-        self.session = URLSession.shared
+        self.session = session
         self.useNonStreaming = useNonStreaming
     }
 
@@ -286,8 +291,11 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
     /// Mutable accumulator for one in-flight tool call. The
     /// OpenAI stream gives us `id` on the first chunk, `name` on
     /// the first or second, and `arguments` as a growing
-    /// partial-JSON string across many chunks.
-    fileprivate struct ToolCallAcc {
+    /// partial-JSON string across many chunks. `internal` (not
+    /// `fileprivate`) so the chunk-parser unit tests can
+    /// construct one and pass it back into `parseChunk`
+    /// across multiple synthetic chunks.
+    struct ToolCallAcc {
         var id: String = ""
         var name: String = ""
         var arguments: String = ""
@@ -1029,7 +1037,15 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
     /// Parse a single OpenAI streaming chunk. Yields events via
     /// the `continuation` and returns `.stop` when the server
     /// signals `finish_reason: stop` so the caller can break.
-    private static func parseChunk(
+    /// `internal` (not `private`) so the unit tests in
+    /// `AgentLLMStreamParsingTests.swift` can lock the wire
+    /// format directly — the public `stream` path can be
+    /// covered by an end-to-end test, but chunk-level
+    /// regressions (the kind that drop a `tool_calls` finish
+    /// reason and silently leave the runner with no dispatch)
+    /// are easier to catch by feeding the parser synthetic
+    /// chunks in isolation.
+    static func parseChunk(
         _ json: String,
         acc: inout [Int: ToolCallAcc],
         continuation: AsyncThrowingStream<AgentLLMEvent, Error>.Continuation,
@@ -1078,6 +1094,20 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
                 }
             }
         }
+        // Usage block (only sent on the final chunk for some
+        // providers — OpenAI, for example, attaches `usage`
+        // to the same chunk that carries
+        // `finish_reason: "stop"`). We forward it if
+        // present. Checked BEFORE the finish_reason branch
+        // so the early-return on `"stop"` doesn't drop the
+        // token counts the cost footer needs.
+        if let usage = parsed["usage"] as? [String: Any] {
+            let input = usage["prompt_tokens"] as? Int ?? 0
+            let output = usage["completion_tokens"] as? Int ?? 0
+            if input > 0 || output > 0 {
+                continuation.yield(.usage(inputTokens: input, outputTokens: output))
+            }
+        }
         // finish_reason on this choice tells us the response
         // is over. For tool_calls, also emit a toolCallInputDelta
         // + toolCallEnd per accumulated tool so the runner can
@@ -1099,15 +1129,6 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
                         continuation.yield(.toolCallEnd(id: entry.id))
                     }
                 }
-            }
-        }
-        // Usage block (only sent on the final chunk for some
-        // providers). We forward it if present.
-        if let usage = parsed["usage"] as? [String: Any] {
-            let input = usage["prompt_tokens"] as? Int ?? 0
-            let output = usage["completion_tokens"] as? Int ?? 0
-            if input > 0 || output > 0 {
-                continuation.yield(.usage(inputTokens: input, outputTokens: output))
             }
         }
         return false
