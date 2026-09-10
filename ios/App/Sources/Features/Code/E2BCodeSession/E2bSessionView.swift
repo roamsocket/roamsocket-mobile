@@ -45,6 +45,7 @@ struct E2bSessionView: View {
     @State private var showModelPicker: Bool = false
     @State private var showProviderSettings: Bool = false
     @State private var showPermissionSheet: Bool = false
+    @State private var showFilesSheet: Bool = false
     /// One in-flight permission request at a time. The
     /// runner asks for permission synchronously from the
     /// agent task; the view's bridge waits on
@@ -108,6 +109,14 @@ struct E2bSessionView: View {
             }
             .sheet(isPresented: $showPermissionSheet) {
                 permissionModeSheet
+            }
+            .sheet(isPresented: $showFilesSheet) {
+                if let s = session {
+                    E2BFilesSheet(
+                        session: s,
+                        clientProvider: fileSheetClient ?? { nil }
+                    )
+                }
             }
             .toolbar {
                 // Leave the chat without killing the sandbox — the
@@ -363,6 +372,9 @@ struct E2bSessionView: View {
                     requiresCodingAgent: true
                 )
                 permissionPill
+                if let s = session, s.isLive {
+                    filesButton
+                }
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 12)
@@ -428,6 +440,49 @@ struct E2bSessionView: View {
     }
 
     // MARK: - Permission UI
+
+    /// Compact "Files" pill that opens the
+    /// repository file tree. Mirrors the desktop
+    /// session's "Files" tab — the user can browse
+    /// the working tree without asking the agent.
+    /// Hidden when the sandbox is no longer live
+    /// (the sheet would just error out).
+    private var filesButton: some View {
+        Button {
+            inputFocused = false
+            showFilesSheet = true
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "folder")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("Files")
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .foregroundStyle(Theme.textPrimary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Theme.surfaceElevated, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(isSending)
+    }
+
+    /// Builds a `DirectE2BClient` for the session's
+    /// current sandbox, using the live e2b key from
+    /// the shared `E2BKeyStore`. Called by the file
+    /// tree + file viewer sheets so a key change
+    /// after the sheet opened is picked up.
+    private var fileSheetClient: (() -> DirectE2BClient?)? {
+        let store = self.store
+        return {
+            guard let key = E2BKeyStore(defaults: .standard).get()?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !key.isEmpty
+            else { return nil }
+            _ = store // capture for the in-sheet closures
+            return DirectE2BClient(apiKey: key)
+        }
+    }
 
     /// One-line summary above the text field that the
     /// user taps to open the permission mode picker.
