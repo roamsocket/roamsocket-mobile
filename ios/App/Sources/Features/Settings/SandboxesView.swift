@@ -33,6 +33,14 @@ struct SandboxesView: View {
 
     @State private var showError: String?
     @State private var showStartSheet = false
+    /// Phone-key entry sheet. Opened in-place when the user taps Start in the
+    /// run sheet but the phone's e2b.dev key isn't set — same UX as the
+    /// Settings card, no round trip to Settings required.
+    @State private var showPhoneKeySheet = false
+    @State private var phoneKeyDraft = ""
+    /// `Start a run` request queued while the user adds their phone key.
+    /// Auto-resumed after the key is saved.
+    @State private var pendingPhoneRun: E2bPhoneRunRequest?
 
     private var rows: [RunRow] {
         store.phoneRuns.map { run in
@@ -82,6 +90,27 @@ struct SandboxesView: View {
                 )
                 .presentationDetents([.large])
             }
+            .sheet(isPresented: $showPhoneKeySheet) {
+                PhoneE2BKeySheet(
+                    hasKey: state.e2bKeyStore.hasKey,
+                    draft: $phoneKeyDraft,
+                    onSave: { newKey in
+                        state.e2bKeyStore.set(newKey)
+                        phoneKeyDraft = ""
+                        showPhoneKeySheet = false
+                        if let pending = pendingPhoneRun {
+                            pendingPhoneRun = nil
+                            startPhoneRun(pending)
+                        }
+                    },
+                    onClear: {
+                        state.e2bKeyStore.set(nil)
+                        phoneKeyDraft = ""
+                        showPhoneKeySheet = false
+                    },
+                )
+                .presentationDetents([.medium])
+            }
             .alert("Sandbox error", isPresented: Binding(
                 get: { showError != nil },
                 set: { if !$0 { showError = nil } }
@@ -97,16 +126,44 @@ struct SandboxesView: View {
     }
 
     private func startRun(_ req: E2bPhoneRunRequest) {
-        guard let apiKey = state.e2bKeyStore.get(), !apiKey.isEmpty else {
-            showError = "Add your e2b.dev API key in Settings → Sandboxes (E2B) first."
-            return
+        // The phone always drives "Start a run" directly via e2b.dev,
+        // even when a desktop is paired. The desktop's e2b_start path
+        // requires an active session, which a user coming from the
+        // Sandboxes sheet doesn't necessarily have. Direct keeps the
+        // UX consistent: one tap on "Start" → run starts.
+        //
+        // If the phone key isn't set, open the phone-key sheet
+        // in-place (don't bounce to Settings) and queue the request
+        // so the run starts automatically once the key is saved. The
+        // toolbar's "key" icon is the *desktop* override key,
+        // a different store with a different scope, so we surface
+        // the phone-key entry here instead of silently erroring.
+        if let apiKey = state.e2bKeyStore.get(), !apiKey.isEmpty {
+            startPhoneRun(req)
+        } else {
+            pendingPhoneRun = req
+            showStartSheet = false
+            phoneKeyDraft = ""
+            showPhoneKeySheet = true
         }
+    }
+
+    /// Actually kicks off the phone-originated run. Assumes the phone
+    /// e2b.dev key is set — caller verifies first.
+    private func startPhoneRun(_ req: E2bPhoneRunRequest) {
+        guard let apiKey = state.e2bKeyStore.get(), !apiKey.isEmpty else { return }
         store.startPhoneRun(
             apiKey: apiKey,
             githubToken: state.githubToken,
             request: req,
         )
-        showStartSheet = false
+    }
+
+    /// Present the phone-key entry sheet. Use when the user wants to
+    /// add / change their key without first opening a run sheet.
+    private func openPhoneKeySheet() {
+        phoneKeyDraft = ""
+        showPhoneKeySheet = true
     }
 
     /// Re-run a finished run with the same repo + branch + command.
@@ -146,6 +203,7 @@ struct SandboxesView: View {
             EmptyState(
                 hasPhoneKey: state.e2bKeyStore.hasKey,
                 onStart: { showStartSheet = true },
+                onAddKey: { openPhoneKeySheet() }
             )
         } else {
             ScrollView {
@@ -429,7 +487,8 @@ struct StatusDot: View {
 
 struct EmptyState: View {
     let hasPhoneKey: Bool
-    let onStart: () -> Void
+    var onStart: () -> Void
+    var onAddKey: () -> Void
     var body: some View {
         VStack(spacing: 14) {
             Image(systemName: "shippingbox")
@@ -458,6 +517,26 @@ struct EmptyState: View {
                     .background(Theme.accent, in: Capsule())
                 }
                 .buttonStyle(.plain)
+            } else {
+                Button(action: onAddKey) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "key.fill")
+                        Text("Add your e2b.dev key")
+                    }
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.background)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 10)
+                    .background(Theme.accent, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Add your e2b.dev API key")
+                Text("Tapping this opens the key entry, and the run will start as soon as you save.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.textTertiary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
+                    .padding(.top, 4)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -761,5 +840,61 @@ struct PresetChipsRow: View {
     private func background(for p: RunPreset, isAvailable: Bool) -> Color {
         if !isAvailable { return Theme.surfaceElevated }
         return p == preset ? Theme.accent : Theme.surfaceElevated
+    }
+}
+
+// MARK: - Phone E2B key sheet (in-Sandboxes, in-place add)
+
+/// Phone-local e2b.dev API key entry, shown directly from the Sandboxes
+/// view when the user taps "Start" without a key set. Reuses the same
+/// persistence (`AppState.e2bKeyStore`) as the Settings card so adding
+/// here and adding there are the same single key.
+private struct PhoneE2BKeySheet: View {
+    let hasKey: Bool
+    @Binding var draft: String
+    var onSave: (String) -> Void
+    var onClear: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Theme.background.ignoresSafeArea()
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Your e2b.dev key")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                    Text("Paste an e2b.dev API key so the phone can spin up sandboxes on its own. The key is held on this device only and is used to call e2b.dev directly — nothing is sent to the desktop server.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.textSecondary)
+                    SecureField("e2b_…", text: $draft)
+                        .textContentType(.password)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .padding(12)
+                        .background(Theme.surfaceElevated, in: RoundedRectangle(cornerRadius: 10))
+                    HStack {
+                        if hasKey {
+                            Button(role: .destructive) {
+                                onClear()
+                            } label: {
+                                Text("Clear")
+                            }
+                        }
+                        Spacer()
+                        Button("Cancel") { dismiss() }
+                            .foregroundStyle(Theme.textSecondary)
+                        Button("Save") { onSave(draft) }
+                            .foregroundStyle(Theme.accent)
+                            .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                    Spacer()
+                }
+                .padding(20)
+            }
+            .navigationTitle("E2B API key")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+        .presentationDetents([.medium])
     }
 }

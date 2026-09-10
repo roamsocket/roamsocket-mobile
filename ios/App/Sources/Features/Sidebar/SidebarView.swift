@@ -31,24 +31,67 @@ struct SidebarView: View {
     @AppStorage("studyMode.v1") private var studyMode: Bool = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            navList
-            recents
-                .frame(maxHeight: .infinity, alignment: .top)
-            downloadBar
-            bottomBar
+        // Single List so the whole column scrolls (header, top nav,
+        // recents, downloads, bottom bar all ride together). A long
+        // recents list no longer pushes the "New chat" button off the
+        // bottom — it just keeps scrolling. The chat row swipeActions
+        // and contextMenu are preserved because rows are still inside
+        // a List.
+        List {
+            Section {
+                header.listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+            }
+
+            Section {
+                navListContent
+            }
+            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+
+            Section {
+                recentsContent
+            } header: {
+                Text("Recents")
+                    .font(.system(size: 14))
+                    .foregroundStyle(Theme.textSecondary)
+                    .textCase(nil)
+            }
+            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+
+            Section {
+                downloadBarContent
+                    .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 0, trailing: 0))
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+            }
+
+            Section {
+                bottomBar
+                    .listRowInsets(EdgeInsets(top: 12, leading: 0, bottom: 4, trailing: 0))
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+            }
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
-        .padding(.bottom, 8)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        // Solid fill so chat carets / selection chrome never show through the list.
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .scrollIndicators(.hidden)
+        // Solid fill so chat carets / selection chrome never show
+        // through the list. Keep the horizontal padding the VStack
+        // version used so the new "List" version lines up.
         .background {
             Rectangle()
                 .fill(Theme.background)
                 .ignoresSafeArea(edges: .vertical)
         }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .sheet(item: $renameTarget) { item in
             RenameChatSheet(
                 initialTitle: item.title,
@@ -68,6 +111,116 @@ struct SidebarView: View {
             AddChatToProjectSheet(history: history, chat: chat)
                 .presentationDetents([.medium])
         }
+    }
+
+    /// Per-row content for the top nav (Chats / Vision / Code / etc.).
+    /// Used inside the outer List — each row is a SidebarRow.
+    @ViewBuilder
+    private var navListContent: some View {
+        if studyMode {
+            SidebarRow(systemImage: "book.closed", title: "Classes") {
+                onSelect(.classes)
+            }
+            SidebarRow(systemImage: "camera.viewfinder", title: "Scan questions") {
+                onSelect(.scanQuestions)
+            }
+            SidebarRow(systemImage: "square.stack.3d.up", title: "Decks") {
+                onSelect(.study)
+            }
+            SidebarRow(systemImage: "square.stack.3d.up.badge.plus", title: "Artifacts") {
+                onSelect(.artifacts)
+            }
+        } else {
+            SidebarRow(systemImage: "bubble.left.and.bubble.right", title: "Chats") {
+                onSelect(.chats)
+            }
+            SidebarRow(systemImage: "eye", title: "Vision") {
+                onSelect(.vision)
+            }
+            SidebarRow(systemImage: "tray.full", title: "Projects") {
+                onSelect(.projects)
+            }
+            SidebarRow(systemImage: "square.stack.3d.up", title: "Artifacts") {
+                onSelect(.artifacts)
+            }
+            SidebarRow(systemImage: "chevron.left.forwardslash.chevron.right", title: "Code") {
+                onSelect(.code)
+            }
+        }
+        SidebarRow(systemImage: "globe", title: "Browser") {
+            onSelect(.browser)
+        }
+    }
+
+    /// Chat rows for the recents section. Kept as `swipeActions` +
+    /// `contextMenu` so the long-press / swipe behaviours still work
+    /// when the list is part of the parent sidebar List.
+    @ViewBuilder
+    private var recentsContent: some View {
+        ForEach(history.activeRecents) { item in
+            RecentRow(item: item) {
+                onSelect(.chat(item))
+            }
+            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                Button {
+                    history.archiveChat(item.id)
+                } label: {
+                    Label("Archive", systemImage: "archivebox")
+                }
+                .tint(Theme.accent)
+                Button {
+                    beginRename(item)
+                } label: {
+                    Label("Rename", systemImage: "pencil")
+                }
+                .tint(Theme.textSecondary)
+            }
+            .contextMenu {
+                if !item.isIncognito {
+                    Button {
+                        addToProjectTarget = item
+                    } label: {
+                        Label("Add to project", systemImage: "tray.full")
+                    }
+                }
+                if item.isIncognito {
+                    Button(role: .destructive) {
+                        history.forgetChatNow(item.id)
+                    } label: {
+                        Label("Forget now", systemImage: "theatermasks")
+                    }
+                }
+                Button {
+                    history.setStarred(item.id, starred: !item.isStarred)
+                } label: {
+                    Label(
+                        item.isStarred ? "Unstar" : "Star",
+                        systemImage: item.isStarred ? "star.slash" : "star"
+                    )
+                }
+                Button {
+                    beginRename(item)
+                } label: {
+                    Label("Rename", systemImage: "pencil")
+                }
+                Button(role: .destructive) {
+                    history.deleteChat(item.id)
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
+        }
+    }
+
+    /// Downloads bar (only rendered when there are active / failed
+    /// downloads — `SidebarDownloadBar` self-collapses to `EmptyView`
+    /// when its tracks are empty).
+    private var downloadBarContent: some View {
+        SidebarDownloadBar(
+            onOpenModels: { onSelect(.models) },
+            onRetry: onRetryDownload,
+            onCancel: onCancelDownload
+        )
     }
 
     // MARK: - Header
@@ -100,133 +253,6 @@ struct SidebarView: View {
             .accessibilityAddTraits(studyMode ? [.isSelected] : [])
         }
         .padding(.bottom, 16)
-    }
-
-    // MARK: - Top nav
-
-    private var navList: some View {
-        VStack(spacing: 2) {
-            if studyMode {
-                SidebarRow(systemImage: "book.closed", title: "Classes") {
-                    onSelect(.classes)
-                }
-                SidebarRow(systemImage: "camera.viewfinder", title: "Scan questions") {
-                    onSelect(.scanQuestions)
-                }
-                SidebarRow(systemImage: "square.stack.3d.up", title: "Decks") {
-                    onSelect(.study)
-                }
-                SidebarRow(systemImage: "square.stack.3d.up.badge.plus", title: "Artifacts") {
-                    onSelect(.artifacts)
-                }
-            } else {
-                SidebarRow(systemImage: "bubble.left.and.bubble.right", title: "Chats") {
-                    onSelect(.chats)
-                }
-                SidebarRow(systemImage: "eye", title: "Vision") {
-                    onSelect(.vision)
-                }
-                SidebarRow(systemImage: "tray.full", title: "Projects") {
-                    onSelect(.projects)
-                }
-                SidebarRow(systemImage: "square.stack.3d.up", title: "Artifacts") {
-                    onSelect(.artifacts)
-                }
-                SidebarRow(systemImage: "chevron.left.forwardslash.chevron.right", title: "Code") {
-                    onSelect(.code)
-                }
-                // Sandboxes (E2B) used to live in the sidebar too,
-                // but the Code destination already covers it (the
-                // E2B phone-originated run list is the first tab on
-                // the Code home). Keep the SidebarDestination.sandboxes
-                // case + the AppSettingsView entry as the discoverable
-                // surface; the sidebar just doesn't need both.
-            }
-            SidebarRow(systemImage: "globe", title: "Browser") {
-                onSelect(.browser)
-            }
-        }
-    }
-
-    // MARK: - Recents
-
-    private var recents: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("Recents")
-                .font(.system(size: 14))
-                .foregroundStyle(Theme.textSecondary)
-                .padding(.top, 20)
-                .padding(.bottom, 8)
-
-            // List is required for swipeActions + contextMenu on rows.
-            // Prefer onTapGesture over Button so long-press / swipe aren't stolen.
-            List {
-                ForEach(history.activeRecents) { item in
-                    RecentRow(item: item) {
-                        onSelect(.chat(item))
-                    }
-                    .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        Button {
-                            history.archiveChat(item.id)
-                        } label: {
-                            Label("Archive", systemImage: "archivebox")
-                        }
-                        .tint(Theme.accent)
-                        Button {
-                            beginRename(item)
-                        } label: {
-                            Label("Rename", systemImage: "pencil")
-                        }
-                        .tint(Theme.textSecondary)
-                    }
-                    .contextMenu {
-                        // Incognito transcripts are meant to self-destruct —
-                        // never copy them into a permanent project chat.
-                        if !item.isIncognito {
-                            Button {
-                                addToProjectTarget = item
-                            } label: {
-                                Label("Add to project", systemImage: "tray.full")
-                            }
-                        }
-                        if item.isIncognito {
-                            Button(role: .destructive) {
-                                history.forgetChatNow(item.id)
-                            } label: {
-                                Label("Forget now", systemImage: "theatermasks")
-                            }
-                        }
-                        Button {
-                            history.setStarred(item.id, starred: !item.isStarred)
-                        } label: {
-                            Label(
-                                item.isStarred ? "Unstar" : "Star",
-                                systemImage: item.isStarred ? "star.slash" : "star"
-                            )
-                        }
-                        Button {
-                            beginRename(item)
-                        } label: {
-                            Label("Rename", systemImage: "pencil")
-                        }
-                        Button(role: .destructive) {
-                            history.deleteChat(item.id)
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
-                    }
-                }
-            }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .scrollIndicators(.hidden)
-            // Rows use clear backgrounds; pin an opaque fill so nothing from
-            // the chat composer bleeds through the recents list.
-            .background(Theme.background)
-        }
     }
 
     // MARK: - Downloads (pinned above the footer)
