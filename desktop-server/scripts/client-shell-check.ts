@@ -3,7 +3,7 @@
  * Does not require Electron.
  */
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -16,6 +16,7 @@ assert.ok(html.includes('data-route="chats"'), 'chats nav');
 assert.ok(html.includes('data-route="projects"'), 'projects nav');
 assert.ok(html.includes('data-route="artifacts"'), 'artifacts nav');
 assert.ok(html.includes('data-route="code"'), 'code nav');
+assert.ok(html.includes('data-route="sandboxes"'), 'sandboxes nav');
 assert.ok(html.includes('btn-settings'), 'settings entry');
 assert.ok(!html.includes('data-route="vision"'), 'vision must not be primary nav');
 assert.ok(!main.includes('route === "vision"'), 'no vision route handler');
@@ -49,7 +50,7 @@ assert.ok(main.includes('Download a model') || main.includes('+ Add a model'), '
 // Empty pill must still open the model picker (CTAs live there). Must not be
 // the only path: exclusive hard-route to settings when !usable.
 assert.ok(
-  /addEventListener\("click",\s*\(\)\s*=>\s*openModelPicker\(\)\)/.test(main),
+  /addEventListener\(\s*['"]click['"]\s*,\s*\(\)\s*=>\s*openModelPicker\(\)\s*\)/.test(main),
   'pill click always opens openModelPicker'
 );
 // Forbid the prior bug: empty branch that only navigates to settings.
@@ -152,7 +153,7 @@ assert.ok(
 assert.ok(main.includes('applyMarketplaceStatusToRenderer'), 'marketplace applied to renderer');
 assert.ok(main.includes('applyMarketplaceConnectors'), 'marketplace connectors wired');
 assert.ok(main.includes('installMarketplaceSkill'), 'marketplace install in renderer');
-assert.ok(main.includes('"marketplace"'), 'marketplace settings tab');
+assert.ok(/['"]marketplace['"]/.test(main), 'marketplace settings tab');
 const marketplaceDir = path.join(root, 'src/marketplace');
 assert.ok(
   ['types.ts', 'store.ts', 'parse.ts', 'apply.ts', 'install.ts'].every((f) =>

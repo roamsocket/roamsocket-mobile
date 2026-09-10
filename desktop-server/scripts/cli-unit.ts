@@ -575,7 +575,9 @@ async function main() {
   await test('resolveModelSelection mock ignores missing keys', () => {
     const m = resolveModelSelection({ mock: true });
     assert.equal(m.model, 'mock');
-    assert.equal(m.apiKey, 'mock');
+    // Mock mode bypasses real key resolution and returns the 'none' sentinel
+    // so the offline smoke test still has a non-empty key field.
+    assert.equal(m.apiKey, 'none');
   });
 
   await test('reduceTui maps task_list', () => {

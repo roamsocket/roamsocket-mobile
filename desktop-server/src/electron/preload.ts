@@ -5,6 +5,27 @@
  */
 import { contextBridge, ipcRenderer } from 'electron';
 
+/** Minimal mirror of the main-process SandboxRun shape — full source is in `src/sandboxes/`. */
+interface SandboxRun {
+  id: string;
+  source: 'desktop';
+  command: string;
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'killed';
+  exitCode: number | null;
+  sandboxId: string | null;
+  sandboxUrl: string | null;
+  startedAt: number | null;
+  finishedAt: number | null;
+  outputTail: string[];
+  error: string | null;
+}
+
+interface E2BKeyStatus {
+  hasKey: boolean;
+  encrypted: boolean;
+  validation?: { ok: true } | { ok: false; reason: string };
+}
+
 interface BootstrapInfo {
   version: string;
   platform: NodeJS.Platform;
@@ -202,6 +223,25 @@ const api = {
       ipcRenderer.invoke('marketplace:setSourceEnabled', id, enabled),
     setSourceUrl: (id: string, url: string): Promise<MarketplaceStatusInfo> =>
       ipcRenderer.invoke('marketplace:setSourceUrl', id, url),
+  },
+
+  /**
+   * E2B sandboxes (desktop-originated, talks to api.e2b.dev directly).
+   * Mirrors the iOS AnyProvCore/Sandboxes API. The protocol no longer
+   * carries e2b_* WS messages (see protocol.ts) so the desktop is its
+   * own client.
+   */
+  sandboxes: {
+    status: (): Promise<SandboxRun[]> => ipcRenderer.invoke('sandboxes:status'),
+    keyStatus: (): Promise<E2BKeyStatus> => ipcRenderer.invoke('sandboxes:keyStatus'),
+    setKey: (value: string): Promise<E2BKeyStatus> => ipcRenderer.invoke('sandboxes:setKey', value),
+    clearKey: (): Promise<E2BKeyStatus> => ipcRenderer.invoke('sandboxes:clearKey'),
+    verifyKey: (): Promise<{ ok: true; status: number } | { ok: false; reason: string }> =>
+      ipcRenderer.invoke('sandboxes:verifyKey'),
+    startRun: (command: string): Promise<SandboxRun | null> =>
+      ipcRenderer.invoke('sandboxes:startRun', command),
+    killRun: (id: string): Promise<SandboxRun[]> => ipcRenderer.invoke('sandboxes:killRun', id),
+    clearRuns: (): Promise<SandboxRun[]> => ipcRenderer.invoke('sandboxes:clearRuns'),
   },
 
   /** On-device Metal / MLX models — managed in a dedicated desktop view. */

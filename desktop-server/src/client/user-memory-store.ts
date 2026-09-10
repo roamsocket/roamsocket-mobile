@@ -266,11 +266,13 @@ export class UserMemoryStore {
         const nextDetails = entry.details.filter(
           (d) => !d.toLowerCase().includes(topic.toLowerCase())
         );
-        if (nextDetails.length !== entry.details.length) {
-          entry.details = nextDetails;
-        } else {
-          entry.details = [...entry.details, `Note: user asked to forget “${topic}”.`];
+        if (nextDetails.length === entry.details.length) {
+          // No detail matched — leave the entry unchanged (mirrors iOS).
+          entry.updatedAt = Date.now();
+          this.persist();
+          return entry;
         }
+        entry.details = nextDetails;
         if (entry.summary.toLowerCase().includes(topic.toLowerCase())) {
           entry.summary = nextDetails[0] ?? entry.summary;
         }
