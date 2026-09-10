@@ -1174,17 +1174,15 @@ struct E2bSessionView: View {
 
     private func reopenSession() async {
         // Spawn a fresh sandbox for the same session (the old one
-        // was killed when the session closed). The user can keep
-        // chatting against the new sandbox.
-        guard let apiKey = state.e2bKeyStore.get(), !apiKey.isEmpty else { return }
-        let client = DirectE2BClient(apiKey: apiKey)
+        // was killed when the session closed) and re-clone the
+        // repo so the agent picks up where the previous sandbox
+        // left off. The pre-clone is best-effort: a failed clone
+        // lands as a transcript notice rather than failing the
+        // reopen outright.
         do {
-            let info = try await client.createSandbox()
-            store.attachSandbox(
+            try await store.reopenSession(
                 sessionId: sessionId,
-                sandboxId: info.sandboxId,
-                accessToken: info.accessToken,
-                domain: info.domain
+                githubToken: state.githubToken
             )
         } catch {
             store.appendMessage(

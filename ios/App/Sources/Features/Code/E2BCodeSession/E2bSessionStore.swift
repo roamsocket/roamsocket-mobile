@@ -318,6 +318,58 @@ final class E2bSessionStore: ObservableObject {
         persist()
     }
 
+    /// Reopen a killed session on a fresh sandbox and
+    /// pre-clone the repo so the agent can pick up
+    /// where the previous sandbox left off. Mirrors
+    /// the new-session flow but skips the
+    /// `E2bCodeSession` creation (the session row
+    /// already exists) and reuses the original repo +
+    /// branch from the persisted session.
+    ///
+    /// A failed pre-clone lands as a transcript notice
+    /// (the same "agent can `git clone` itself"
+    /// fallback `openSession` uses) so a transient
+    /// network blip doesn't lock the user out of
+    /// their session.
+    @discardableResult
+    func reopenSession(
+        sessionId: UUID,
+        githubToken: String? = nil,
+    ) async throws {
+        guard let s = session(id: sessionId) else {
+            throw E2BSessionError.noApiKey
+        }
+        guard let client = makeClient() else {
+            throw E2BSessionError.noApiKey
+        }
+        let info = try await client.createSandbox()
+        attachSandbox(
+            sessionId: sessionId,
+            sandboxId: info.sandboxId,
+            accessToken: info.accessToken,
+            domain: info.domain
+        )
+        do {
+            try await preCloneRepo(
+                e2b: client,
+                sessionId: sessionId,
+                sandboxId: info.sandboxId,
+                accessToken: info.accessToken,
+                repoFullName: s.repoFullName,
+                branch: s.branch,
+                githubToken: githubToken
+            )
+        } catch {
+            appendMessage(
+                sessionId: sessionId,
+                .init(
+                    kind: .notice,
+                    text: "Sandbox is up but the repo clone failed: \(error.localizedDescription). The agent can run `git clone` itself."
+                )
+            )
+        }
+    }
+
     /// Update the session's lifecycle status. The chat view
     /// drives this: `.working` when a turn starts, `.idle` when
     /// it ends (or `.failed` on a hard error). The Code home
