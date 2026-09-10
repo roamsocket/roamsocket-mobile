@@ -583,8 +583,23 @@ public actor OpenAICompatibleAgentLLM: AgentLLM {
                                 .trimmingCharacters(in: .whitespacesAndNewlines)
                             let value = String(trimmedLine[valueRange])
                                 .trimmingCharacters(in: .whitespacesAndNewlines)
-                            guard !key.isEmpty, key != "id", key != "name" else { return }
+                            // The line is "consumed" the
+                            // moment a `key=value` match
+                            // is found on it, even when the
+                            // key is one we drop (e.g. the
+                            // model-injected `id` /
+                            // `name` metadata). Without
+                            // this, a line like
+                            // `id=call_abc…` stays in
+                            // the cleaned text because the
+                            // `key != "id"` early-return
+                            // happens before `matchedAny`
+                            // flips, so the line never
+                            // gets added to `kvConsumed`
+                            // and leaks into the visible
+                            // content.
                             matchedAny = true
+                            guard !key.isEmpty, key != "id", key != "name" else { return }
                             if let data = value.data(using: .utf8),
                                let parsed = try? JSONSerialization.jsonObject(with: data),
                                !(parsed is NSNull)

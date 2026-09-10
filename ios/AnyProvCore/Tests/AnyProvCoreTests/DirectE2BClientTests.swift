@@ -778,6 +778,144 @@ final class DirectE2BClientTests: XCTestCase {
         }
     }
 
+    // MARK: - listFiles (glob tool)
+
+    /// `listFiles` is the E2B client method the agent loop's
+    /// `glob` tool dispatches to. It builds a Python shim
+    /// using `pathlib.Path.glob`, POSTs it to the sandbox's
+    /// `/execute` endpoint, and parses the JSON the shim
+    /// prints. This test pins the JSON envelope so a
+    /// format tweak can't silently drop a result.
+    func testListFilesReturnsSortedRelativePaths() async throws {
+        let http = CapturingJSONHTTP(responseBody: json(
+            #"{"ok":true,"matches":["src/main.py","src/util.py","tests/test_main.py"]}"#
+        ))
+        let client = DirectE2BClient(
+            apiKey: "e2b_testkey1234567890abcdef",
+            http: http
+        )
+        let matches = try await client.listFiles(
+            sandboxId: "sb_abc",
+            accessToken: "tok",
+            pattern: "**/*.py",
+            cwd: "/code"
+        )
+        XCTAssertEqual(matches, [
+            "src/main.py",
+            "src/util.py",
+            "tests/test_main.py",
+        ])
+    }
+
+    /// Empty result must return an empty array (not a
+    /// thrown error) so the agent loop can print
+    /// "(no matches)" without the runner's catch arm
+    /// treating it as a tool failure.
+    func testListFilesEmptyMatchesReturnsEmptyArray() async throws {
+        let http = CapturingJSONHTTP(responseBody: json(#"{"ok":true,"matches":[]}"#))
+        let client = DirectE2BClient(
+            apiKey: "e2b_testkey1234567890abcdef",
+            http: http
+        )
+        let matches = try await client.listFiles(
+            sandboxId: "sb_abc",
+            accessToken: "tok",
+            pattern: "**/*.nonexistent"
+        )
+        XCTAssertEqual(matches, [])
+    }
+
+    /// Sandbox `ok: false` (e.g. directory missing, pattern
+    /// invalid) must surface as a `.stream` error so the
+    /// tool card shows the Python error message.
+    func testListFilesErrorSurfacesAsStreamError() async {
+        let http = CapturingJSONHTTP(responseBody: json(
+            #"{"ok":false,"error":"not a directory: /missing"}"#
+        ))
+        let client = DirectE2BClient(
+            apiKey: "e2b_testkey1234567890abcdef",
+            http: http
+        )
+        do {
+            _ = try await client.listFiles(
+                sandboxId: "sb_abc",
+                accessToken: "tok",
+                pattern: "**/*"
+            )
+            XCTFail("Expected stream error")
+        } catch let DirectE2BError.stream(msg) {
+            XCTAssertTrue(msg.contains("not a directory"))
+        } catch {
+            XCTFail("Expected stream error, got \(error)")
+        }
+    }
+
+    /// The script sent to the sandbox must interpolate the
+    /// `cwd` and `pattern` values through `PythonQuote.escape`
+    /// (the same shlex.quote-style helper used by every
+    /// other shim in this file). Without quoting, a pattern
+    /// like `**/*'` would emit a Python `SyntaxError` and
+    /// the agent loop would silently lose every glob call.
+    func testListFilesScriptQuotesInterpolatedValues() async throws {
+        let http = CapturingJSONHTTP(responseBody: json(#"{"ok":true,"matches":[]}"#))
+        let client = DirectE2BClient(
+            apiKey: "e2b_testkey1234567890abcdef",
+            http: http
+        )
+        _ = try await client.listFiles(
+            sandboxId: "sb_abc",
+            accessToken: "tok",
+            pattern: "src/**/*.swift",
+            cwd: "/code"
+        )
+        let body = try XCTUnwrap(http.capturedBody)
+        let obj = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let script = try XCTUnwrap(obj["code"] as? String)
+        // `cwd` is the first interpolated value, must be
+        // a quoted Python literal.
+        XCTAssertTrue(
+            script.contains("root = '/code'"),
+            "cwd must be quoted; got: \(script)"
+        )
+        // `pattern` is the second, must also be quoted.
+        XCTAssertTrue(
+            script.contains("pattern = 'src/**/*.swift'"),
+            "pattern must be quoted; got: \(script)"
+        )
+        // The script uses pathlib.Path.glob under the
+        // hood so the agent gets Python's standard glob
+        // semantics (cross-segment `**` etc.).
+        XCTAssertTrue(
+            script.contains("pathlib"),
+            "script must use pathlib for the glob; got: \(script)"
+        )
+    }
+
+    /// `HTTPClient` that returns a canned JSON body and
+    /// captures the request body so the wire-shape tests
+    /// can assert what the agent sent.
+    private final class CapturingJSONHTTP: HTTPClient, @unchecked Sendable {
+        var capturedBody: Data?
+        private let responseBody: Data
+        private let responseStatus: Int
+
+        init(responseBody: Data, responseStatus: Int = 200) {
+            self.responseBody = responseBody
+            self.responseStatus = responseStatus
+        }
+
+        func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+            capturedBody = request.httpBody
+            let resp = HTTPURLResponse(
+                url: request.url!,
+                statusCode: responseStatus,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (responseBody, resp)
+        }
+    }
+
     // MARK: - E2bPhoneRepoSelection
 
     func testRepoSelectionDisplayName() {
@@ -1250,6 +1388,50 @@ final class DirectE2BClientTests: XCTestCase {
         // The whole marker must be stripped from the
         // visible content — the e2b sandbox result will
         // be shown in its own tool card.
+        XCTAssertTrue(
+            parsed.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            "stuffed-marker markup must NOT leak into visible content; got: \(parsed.content)"
+        )
+    }
+
+    /// The actual emit from the user's stuck session
+    /// (2026-09-10): MiniMax M3 returned a stuffed
+    /// marker where the `id=…` and `input=…` pieces
+    /// landed on SEPARATE LINES — `[tool_call: read_file
+    /// id=…\n input={…}]`. The pre-processor regex
+    /// `[^\]]+` is supposed to match across newlines,
+    /// but the scan loop that follows rejects the
+    /// extracted name when it contains a space (the
+    /// `allSatisfy({ isLetter / isNumber / _ / - })`
+    /// check fails for "read_file id=…"). Pin the
+    /// regression: a multi-line stuffed marker must be
+    /// rewritten into the canonical shape so the
+    /// subsequent scan loop finds a clean `[tool_call:
+    /// name]` marker.
+    func testParseProviderTextToolCallsStuffedMarkerAcrossNewlines() {
+        let raw = """
+        [tool_call: read_file id=call_7d6e6c2e9b56eafb
+        input={"path": "/code/README.md"}]
+        """
+        let parsed = OpenAICompatibleAgentLLM.parseProviderTextToolCalls(raw)
+        XCTAssertEqual(
+            parsed.toolCalls.count, 1,
+            "multi-line stuffed marker must parse as one tool call; content=\(parsed.content)"
+        )
+        XCTAssertEqual(
+            parsed.toolCalls.first?.name, "read_file",
+            "name must be just the tool name, not name+id; got: \(parsed.toolCalls.first?.name ?? "<nil>")"
+        )
+        let args = try! XCTUnwrap(
+            try? JSONSerialization.jsonObject(
+                with: Data(parsed.toolCalls[0].argumentsJSON.utf8)
+            ) as? [String: Any]
+        )
+        XCTAssertEqual(
+            args["path"] as? String,
+            "/code/README.md",
+            "input JSON must round-trip; argumentsJSON=\(parsed.toolCalls[0].argumentsJSON)"
+        )
         XCTAssertTrue(
             parsed.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             "stuffed-marker markup must NOT leak into visible content; got: \(parsed.content)"
