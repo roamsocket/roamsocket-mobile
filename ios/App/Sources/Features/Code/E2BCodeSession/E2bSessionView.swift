@@ -46,6 +46,15 @@ struct E2bSessionView: View {
     @State private var showProviderSettings: Bool = false
     @State private var showPermissionSheet: Bool = false
     @State private var showFilesSheet: Bool = false
+    @State private var showTaskListSheet: Bool = false
+    /// Current contents of the sandbox's
+    /// `/home/user/todos.json`. Updated by the
+    /// runner's `.taskListUpdated` event (after every
+    /// `todos` tool call). Empty array when the file
+    /// is missing or the list has been cleared — the
+    /// banner hides in that case so the chat stays
+    /// uncluttered.
+    @State private var taskItems: [String] = []
     /// One in-flight permission request at a time. The
     /// runner asks for permission synchronously from the
     /// agent task; the view's bridge waits on
@@ -67,6 +76,9 @@ struct E2bSessionView: View {
                 Theme.background.ignoresSafeArea()
                 VStack(spacing: 0) {
                     statusBar
+                    if !taskItems.isEmpty {
+                        taskListBanner
+                    }
                     messagesList
                     costFooter
                     inputBar
@@ -92,6 +104,14 @@ struct E2bSessionView: View {
                 // code-lane default to keep the pill honest
                 // before the user has to think about it.
                 state.applyDefault(for: .code)
+                // Pull the current task list from the
+                // sandbox so the banner renders any
+                // existing todos on appear. Without this
+                // the banner would only show after the
+                // next `todos` tool call, leaving a
+                // resumed session blank until the agent
+                // mutates the list.
+                await loadInitialTaskList()
             }
             .sheet(isPresented: $showModelPicker, onDismiss: syncSessionModelFromGlobal) {
                 ModelPickerSheet(codingOnly: true)
@@ -437,6 +457,129 @@ struct E2bSessionView: View {
     private var canSend: Bool {
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         return !trimmed.isEmpty && !isSending && session?.isLive == true
+    }
+
+    // MARK: - Task list UI
+
+    /// Read the sandbox's `/home/user/todos.json` on
+    /// appear so the banner shows existing items
+    /// without waiting for the next `todos` tool call.
+    /// Best-effort: a missing key or dead sandbox is
+    /// silently ignored (the banner just stays hidden).
+    private func loadInitialTaskList() async {
+        guard let key = E2BKeyStore(defaults: .standard).get()?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !key.isEmpty,
+              let s = session,
+              let sandboxId = s.sandboxId,
+              !sandboxId.isEmpty
+        else { return }
+        let client = DirectE2BClient(apiKey: key)
+        do {
+            let raw = try await client.readFile(
+                sandboxId: sandboxId,
+                accessToken: s.sandboxAccessToken,
+                path: "/home/user/todos.json"
+            )
+            guard let data = raw.data(using: .utf8),
+                  let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let items = parsed["items"] as? [String]
+            else { return }
+            taskItems = items
+        } catch {
+            // Missing file is normal (no todos yet);
+            // any other error is also non-fatal — the
+            // banner just stays hidden.
+        }
+    }
+
+    // MARK: - Task list UI
+
+    /// Compact banner above the messages list that
+    /// shows the agent's current task count. Tapping
+    /// opens the full task list sheet. Hidden when
+    /// `taskItems` is empty (no todos). Mirrors the
+    /// desktop session's `agentTasksBanner` (same
+    /// pattern, same "tap to expand" contract).
+    private var taskListBanner: some View {
+        Button {
+            showTaskListSheet = true
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "checklist")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                Text(taskListBannerTitle)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Theme.textPrimary)
+                    .lineLimit(1)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.textTertiary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Theme.surface)
+        }
+        .buttonStyle(.plain)
+        .sheet(isPresented: $showTaskListSheet) {
+            taskListSheet
+        }
+    }
+
+    /// Title for the banner. Two shapes:
+    /// - 1 task: "1 task — <first line>"
+    /// - N tasks: "N tasks"
+    private var taskListBannerTitle: String {
+        let count = taskItems.count
+        if count == 1, let first = taskItems.first {
+            // Truncate the first task so a long line
+            // doesn't push the chevron off the edge.
+            let truncated = first.count > 60
+                ? String(first.prefix(60)) + "…"
+                : first
+            return "1 task — \(truncated)"
+        }
+        return "\(count) tasks"
+    }
+
+    /// Full list of pending tasks. Same sheet pattern
+    /// as the desktop session's `AgentTasksSheet`.
+    private var taskListSheet: some View {
+        NavigationStack {
+            List {
+                Section {
+                    ForEach(Array(taskItems.enumerated()), id: \.offset) { idx, item in
+                        HStack(alignment: .top, spacing: 10) {
+                            Text("\(idx + 1).")
+                                .font(.system(size: 13, design: .monospaced))
+                                .foregroundStyle(Theme.textTertiary)
+                                .frame(width: 24, alignment: .trailing)
+                            Text(item)
+                                .font(.system(size: 14))
+                                .foregroundStyle(Theme.textPrimary)
+                                .textSelection(.enabled)
+                            Spacer()
+                        }
+                    }
+                } header: {
+                    Text("Pending tasks")
+                } footer: {
+                    Text("The agent manages this list via the `todos` tool. Items are removed when marked done.")
+                        .font(.system(size: 12))
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Tasks")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { showTaskListSheet = false }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
     }
 
     // MARK: - Permission UI
@@ -972,6 +1115,13 @@ struct E2bSessionView: View {
                 thoughtProcess: thinking
             )
             store.updateMessage(sessionId: sessionId, id: last.id, updated)
+        case let .taskListUpdated(items):
+            // The runner emits this after every `todos`
+            // call (add / finish / clear / list). Mirrors
+            // the desktop's `TaskListMsg` so the banner
+            // + sheet stay in sync with the agent's
+            // working checklist.
+            taskItems = items
         }
     }
 

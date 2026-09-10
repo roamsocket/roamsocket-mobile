@@ -280,6 +280,23 @@ public actor E2bSessionRunner {
                 sandboxId: sandboxId,
                 sandboxAccessToken: sandboxAccessToken,
             )
+            // For the `todos` tool, emit a task-list
+            // event so the view's banner + sheet stay in
+            // sync. Re-read the file rather than threading
+            // the items through the tool's return value
+            // (cleaner than a tuple — `runTool` has a
+            // single `(output, isError)` shape for every
+            // other tool, and the file read is a single
+            // sandbox round-trip on the small JSON
+            // payload).
+            if call.name == "todos" {
+                if let items = try? await loadTodos(
+                    sandboxId: sandboxId,
+                    accessToken: sandboxAccessToken
+                ) {
+                    onEvent(.taskListUpdated(items: items))
+                }
+            }
             onEvent(.toolCallFinished(
                 id: call.id,
                 name: call.name,
@@ -340,6 +357,13 @@ public actor E2bSessionRunner {
         /// so the E2B session renders the same collapsed
         /// ThinkingBlock as the chat composer.
         case assistantTurnComplete(thinking: String, text: String)
+        /// Fired after every `todos` tool call (and once at
+        /// session start) with the current contents of the
+        /// sandbox's `/home/user/todos.json`. Drives the
+        /// task-list banner in `E2bSessionView`. Empty
+        /// array when the file is missing or empty (the
+        /// banner hides in that case).
+        case taskListUpdated(items: [String])
     }
 
     /// The tool definitions Claude (or any OpenAI-compatible
@@ -603,7 +627,19 @@ public actor E2bSessionRunner {
         case "create_pr":
             return await createPrTool(input: input, sandboxId: sandboxId, sandboxAccessToken: sandboxAccessToken)
         case "todos":
-            return await todosTool(input: input, sandboxId: sandboxId, sandboxAccessToken: sandboxAccessToken)
+            // Todos returns a tuple so the caller can
+            // emit a `taskListUpdated` event with the
+            // post-action state (the `runTool` signature
+            // only returns `(output, isError)` for
+            // every other tool — the todos variant is
+            // the exception because its UI side effect
+            // is what the user sees in the banner).
+            let result = await todosTool(
+                input: input,
+                sandboxId: sandboxId,
+                sandboxAccessToken: sandboxAccessToken
+            )
+            return (result.output, result.isError)
         default:
             // The paired-desktop agent exposes more capabilities than
             // the phone sandbox. Surface the known ones as friendly
@@ -878,7 +914,16 @@ public actor E2bSessionRunner {
     /// `/home/user/todos.json` so it survives across messages and
     /// agent restarts (the runner itself is rebuilt per send). Actions:
     /// list, add, finish (1-based index), clear.
-    private func todosTool(input: AgentLLMInput, sandboxId: String, sandboxAccessToken: String?) async -> (String, Bool) {
+    /// Returns the (output, isError, items) tuple — the
+    /// `items` slice is the current task list the view's
+    /// banner should display after this call, so the
+    /// caller can emit a `taskListUpdated` event without
+    /// re-reading the file.
+    private func todosTool(
+        input: AgentLLMInput,
+        sandboxId: String,
+        sandboxAccessToken: String?,
+    ) async -> (output: String, isError: Bool, items: [String]) {
         let action = input.stringValue(for: "action") ?? "list"
         let todosPath = "/home/user/todos.json"
         var items: [String] = []
@@ -892,19 +937,27 @@ public actor E2bSessionRunner {
         switch action {
         case "add":
             let task = (input.stringValue(for: "task") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !task.isEmpty else { return ("todos add needs a `task` value.", true) }
+            guard !task.isEmpty else { return ("todos add needs a `task` value.", true, items) }
             items.append(task)
         case "finish":
             if let index = input.intValue(for: "index") {
                 guard (1...items.count).contains(index) else {
-                    return ("todos finish: index \(index) is out of range (list has \(items.count) tasks).", true)
+                    return (
+                        "todos finish: index \(index) is out of range (list has \(items.count) tasks).",
+                        true,
+                        items
+                    )
                 }
                 items.remove(at: index - 1)
             } else if let marker = input.stringValue(for: "task"), !marker.isEmpty,
                       let idx = items.firstIndex(where: { $0 == marker }) {
                 items.remove(at: idx)
             } else {
-                return ("todos finish needs a 1-based `index` (or the exact `task` text).", true)
+                return (
+                    "todos finish needs a 1-based `index` (or the exact `task` text).",
+                    true,
+                    items
+                )
             }
         case "clear":
             items = []
@@ -919,10 +972,29 @@ public actor E2bSessionRunner {
             )
         }
         if items.isEmpty {
-            return ("No pending tasks.", false)
+            return ("No pending tasks.", false, items)
         }
         let list = items.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
-        return ("Tasks:\n\(list)", false)
+        return ("Tasks:\n\(list)", false, items)
+    }
+
+    /// Read the sandbox's `/home/user/todos.json` and
+    /// return the `items` array. Returns `nil` when the
+    /// file doesn't exist or fails to parse — the caller
+    /// treats that as "no banner change" rather than an
+    /// error. Used by the runner's `step` to emit a
+    /// `taskListUpdated` event after every `todos` call.
+    private func loadTodos(
+        sandboxId: String,
+        accessToken: String?,
+    ) async -> [String]? {
+        let todosPath = "/home/user/todos.json"
+        guard let raw = try? await e2b.readFile(
+            sandboxId: sandboxId, accessToken: accessToken, path: todosPath
+        ), let data = raw.data(using: .utf8),
+           let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return parsed["items"] as? [String]
     }
 
     private func escapePythonForInline(_ value: String) -> String {
