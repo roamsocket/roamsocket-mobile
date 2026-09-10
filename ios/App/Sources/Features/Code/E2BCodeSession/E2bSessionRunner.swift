@@ -38,6 +38,25 @@ public actor E2bSessionRunner {
     /// network egress to GitHub, so the design doc routes these
     /// through the iOS backend instead of the sandbox shell.
     let github: GitHubContext
+    /// Permission mode for the agent's tool calls. Mirrors
+    /// the desktop session's `PermissionMode`
+    /// (`acceptEdits` / `ask` / `plan`). The mode is
+    /// captured at runner init and stays fixed for the
+    /// lifetime of the runner — the view sets it on the
+    /// session when the user sends a message, so a
+    /// mid-run mode swap never lands on a turn already
+    /// in flight (the runner can be re-created cheaply).
+    let permissionMode: E2bCodeSession.PermissionMode
+    /// Closure the runner calls when a mutating tool
+    /// fires in `.ask` mode. The closure bridges to the
+    /// chat view's permission bar (set the
+    /// `pendingPermission` state, wait for Allow/Deny),
+    /// and returns the decision. `nil` means the runner
+    /// runs every tool without prompting — used by
+    /// tests and by the "ask" mode caller that forgets
+    /// to wire up the bridge (the runner falls through
+    /// and runs the tool, which is safer than hanging).
+    let onPermissionRequest: (@Sendable (String, String) async -> Bool)?
 
     public init(
         e2b: DirectE2BClient,
@@ -52,11 +71,15 @@ public actor E2bSessionRunner {
         /// + commit + push + PR) doesn't get cut off mid-task on
         /// the 13th tool call.
         maxSteps: Int = 24,
+        permissionMode: E2bCodeSession.PermissionMode = .acceptEdits,
+        onPermissionRequest: (@Sendable (String, String) async -> Bool)? = nil,
     ) {
         self.e2b = e2b
         self.agentLLM = agentLLM
         self.github = github
         self.maxSteps = maxSteps
+        self.permissionMode = permissionMode
+        self.onPermissionRequest = onPermissionRequest
     }
 
     // MARK: - Public
@@ -481,12 +504,87 @@ public actor E2bSessionRunner {
 
     // MARK: - Dispatch
 
+    /// Tools whose execution mutates the sandbox working
+    /// tree, the Git remote, or the user-visible PR list.
+    /// Mirrors the desktop server's `MUTATING_TOOLS` set
+    /// (see `desktop-server/src/tools/index.ts`). The
+    /// agent loop gates these on the session's permission
+    /// mode — `acceptEdits` runs them, `ask` pauses for
+    /// the user's Allow / Deny, `plan` describes the
+    /// change without executing. Read-only tools
+    /// (`read_file`, `glob`) are never gated.
+    public static let mutatingTools: Set<String> = [
+        "run_shell", "write_file", "edit_file",
+        "git_commit", "git_push", "create_pr", "todos",
+    ]
+
+    /// One-line summary the permission bar shows for a
+    /// tool call awaiting user approval. Mirrors the
+    /// desktop's `Tool.summarize(input)` pattern. The
+    /// summary is intentionally terse — the bar caps at
+    /// one line and the full input is in the upcoming
+    /// tool card.
+    public static func summarize(tool: String, input: AgentLLMInput) -> String {
+        switch tool {
+        case "run_shell":
+            return "run: \(input.stringValue(for: "command") ?? "")"
+        case "write_file":
+            return "write: \(input.stringValue(for: "path") ?? "")"
+        case "edit_file":
+            return "edit: \(input.stringValue(for: "path") ?? "")"
+        case "git_commit":
+            let message = input.stringValue(for: "message") ?? ""
+            let firstLine = message.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? ""
+            return "commit: \(firstLine)"
+        case "git_push":
+            return "push current branch"
+        case "create_pr":
+            return "PR: \(input.stringValue(for: "title") ?? "")"
+        case "todos":
+            return "todos \(input.stringValue(for: "action") ?? "list")"
+        default:
+            return tool
+        }
+    }
+
     private func runTool(
         name: String,
         input: AgentLLMInput,
         sandboxId: String,
         sandboxAccessToken: String?,
     ) async -> (String, Bool) {
+        // Permission gate. Runs BEFORE the switch so the
+        // gating is a single concern, not interleaved
+        // with each tool's signature.
+        if Self.mutatingTools.contains(name) {
+            switch permissionMode {
+            case .plan:
+                // Plan mode: describe the intent so the
+                // model knows the change was described but
+                // not applied. The model's next turn can
+                // adjust the call before any real mutation.
+                return (
+                    "[plan mode] `\(name)` described but not executed. "
+                    + "Switch to Accept edits (or Ask) and re-send the request to apply.",
+                    false
+                )
+            case .ask:
+                // Ask mode: bridge to the chat view's
+                // permission bar. Falls through (runs
+                // the tool) when no closure is wired up
+                // — better to commit a no-op edit than to
+                // hang waiting for a UI that isn't there.
+                if let request = onPermissionRequest {
+                    let summary = Self.summarize(tool: name, input: input)
+                    let allowed = await request(name, summary)
+                    if !allowed {
+                        return ("Denied by user.", true)
+                    }
+                }
+            case .acceptEdits:
+                break
+            }
+        }
         switch name {
         case "run_shell":
             return await runShellTool(input: input, sandboxId: sandboxId, sandboxAccessToken: sandboxAccessToken)

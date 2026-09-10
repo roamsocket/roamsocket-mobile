@@ -69,6 +69,7 @@ final class E2bSessionStore: ObservableObject {
         branch: String,
         modelID: String = "claude-sonnet-4-5",
         githubToken: String? = nil,
+        permissionMode: E2bCodeSession.PermissionMode = .acceptEdits,
     ) async throws -> UUID {
         guard let client = makeClient() else {
             throw E2BSessionError.noApiKey
@@ -81,6 +82,7 @@ final class E2bSessionStore: ObservableObject {
             branch: branch,
             status: .provisioning,
             modelID: modelID,
+            permissionMode: permissionMode,
         )
         upsert(session)
 
@@ -338,6 +340,23 @@ final class E2bSessionStore: ObservableObject {
         guard let idx = sessions.firstIndex(where: { $0.id == sessionId }) else { return }
         guard sessions[idx].modelID != modelID else { return }
         sessions[idx].modelID = modelID
+        sessions[idx].updatedAt = Date()
+        persist()
+    }
+
+    /// Update the session's permission mode. The chat view
+    /// calls this from the permission pill; the runner
+    /// reads the value at the start of each turn so a
+    /// mode change between user messages takes effect on
+    /// the next turn (and not on a turn already in flight
+    /// — that would surprise the user mid-typing).
+    func setPermissionMode(
+        _ sessionId: UUID,
+        _ mode: E2bCodeSession.PermissionMode,
+    ) {
+        guard let idx = sessions.firstIndex(where: { $0.id == sessionId }) else { return }
+        guard sessions[idx].permissionMode != mode else { return }
+        sessions[idx].permissionMode = mode
         sessions[idx].updatedAt = Date()
         persist()
     }

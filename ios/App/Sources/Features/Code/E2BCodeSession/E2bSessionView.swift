@@ -44,6 +44,17 @@ struct E2bSessionView: View {
     /// coding-capable providers via `codingOnly: true`.
     @State private var showModelPicker: Bool = false
     @State private var showProviderSettings: Bool = false
+    @State private var showPermissionSheet: Bool = false
+    /// One in-flight permission request at a time. The
+    /// runner asks for permission synchronously from the
+    /// agent task; the view's bridge waits on
+    /// `pendingPermissionContinuation` so the Allow /
+    /// Deny buttons can resume the runner. We hold a
+    /// `pendingPermission` snapshot (tool + summary) so
+    /// the bar can render without re-querying the
+    /// runner.
+    @State private var pendingPermission: E2bCodeSession.PermissionMode.ToolRequest?
+    @State private var pendingPermissionContinuation: CheckedContinuation<Bool, Never>?
     @FocusState private var inputFocused: Bool
     @Environment(\.openURL) private var openURL
 
@@ -94,6 +105,9 @@ struct E2bSessionView: View {
                 // the chat.
                 AppSettingsView()
                     .environmentObject(state)
+            }
+            .sheet(isPresented: $showPermissionSheet) {
+                permissionModeSheet
             }
             .toolbar {
                 // Leave the chat without killing the sandbox — the
@@ -317,12 +331,24 @@ struct E2bSessionView: View {
     private var inputBar: some View {
         VStack(spacing: 0) {
             Divider().overlay(Theme.separator)
-            // Model picker — sits above the text field so the
-            // user can see which model is about to run and
-            // switch without leaving the session. The pill's
-            // `requiresCodingAgent` flag means phone-only Metal
-            // isn't offered (the agent loop is wired for
-            // Anthropic / OpenAI-compatible providers).
+            // Permission bar — appears above the input when
+            // the agent loop is awaiting an Allow / Deny
+            // decision in `ask` mode. The bar is the
+            // bridge from the runner to the view: tapping
+            // Allow / Deny resumes the continuation the
+            // runner is awaiting, and the agent loop
+            // proceeds (or skips the tool).
+            if let perm = pendingPermission {
+                permissionBar(perm)
+            }
+            // Model picker + permission pill — both sit
+            // above the text field so the user can see
+            // what's about to run and switch without
+            // leaving the session. The permission pill is
+            // disabled while a turn is in flight (the
+            // mode is captured at send time, not
+            // mid-flight) so a tap doesn't change the
+            // rule on a running agent.
             HStack(spacing: 8) {
                 ModelSelectorPill(
                     modelDisplayName: modelPillTitle,
@@ -336,6 +362,7 @@ struct E2bSessionView: View {
                     },
                     requiresCodingAgent: true
                 )
+                permissionPill
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 12)
@@ -357,6 +384,14 @@ struct E2bSessionView: View {
                 .onSubmit(send)
                 if isSending {
                     Button {
+                        // Resume any pending permission
+                        // continuation with `false` (treated
+                        // as a denial) so the runner's
+                        // `withCheckedContinuation` doesn't
+                        // leak when the user hits Stop.
+                        if pendingPermissionContinuation != nil {
+                            respondToPermission(allow: false)
+                        }
                         agentTask?.cancel()
                     } label: {
                         Image(systemName: "stop.fill")
@@ -390,6 +425,170 @@ struct E2bSessionView: View {
     private var canSend: Bool {
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         return !trimmed.isEmpty && !isSending && session?.isLive == true
+    }
+
+    // MARK: - Permission UI
+
+    /// One-line summary above the text field that the
+    /// user taps to open the permission mode picker.
+    /// Mirrors the desktop session's `permissionPill`
+    /// (same icon + label set, same disabled-while-
+    /// running contract). Locked while a turn is in
+    /// flight because the mode is captured at run start;
+    /// letting the user change it mid-run would surprise
+    /// them when the runner's actual mode flips at the
+    /// next turn.
+    private var permissionPill: some View {
+        Button {
+            if !isSending {
+                inputFocused = false
+                showPermissionSheet = true
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: (session?.permissionMode ?? .acceptEdits).icon)
+                    .font(.system(size: 11, weight: .semibold))
+                Text((session?.permissionMode ?? .acceptEdits).displayName)
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .foregroundStyle(isSending ? Theme.textTertiary : Theme.textPrimary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Theme.surfaceElevated, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(isSending)
+        .help(isSending
+              ? "Mode is locked while the agent is running"
+              : "Change permission mode")
+    }
+
+    /// The bar that appears while the runner is awaiting
+    /// a permission decision. Mirrors the desktop
+    /// session's `permissionBar`. Tapping Allow / Deny
+    /// resumes the `CheckedContinuation` the runner is
+    /// waiting on; the runner's `runTool` then proceeds
+    /// (or returns "Denied by user.").
+    private func permissionBar(_ perm: E2bCodeSession.PermissionMode.ToolRequest) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Allow \(perm.tool)?")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                Text(perm.summary)
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(Theme.textSecondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            Button("Deny") {
+                respondToPermission(allow: false)
+            }
+            .buttonStyle(.bordered)
+            Button("Allow") {
+                respondToPermission(allow: true)
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding(14)
+        .background(Theme.surfaceElevated)
+    }
+
+    /// Called by the runner (via the
+    /// `onPermissionRequest` closure) to pause for a
+    /// decision. Stashes the request, sets the
+    /// `pendingPermission` state so the bar appears,
+    /// and waits for the Allow / Deny button to
+    /// resume the continuation.
+    @MainActor
+    private func awaitPermissionDecision(tool: String, summary: String) async -> Bool {
+        // The runner can request permission from inside
+        // its actor context; we hop to MainActor to
+        // update the view state safely.
+        return await withCheckedContinuation { continuation in
+            pendingPermission = E2bCodeSession.PermissionMode.ToolRequest(
+                tool: tool,
+                summary: summary
+            )
+            pendingPermissionContinuation = continuation
+        }
+    }
+
+    /// Resume the pending continuation with the user's
+    /// decision and clear the bar. Called from the
+    /// Allow / Deny buttons in `permissionBar`.
+    @MainActor
+    private func respondToPermission(allow: Bool) {
+        pendingPermission = nil
+        let cont = pendingPermissionContinuation
+        pendingPermissionContinuation = nil
+        cont?.resume(returning: allow)
+    }
+
+    /// Modal picker for the permission mode. Mirrors the
+    /// desktop session's `PermissionModeSheet`. Each row
+    /// explains the mode in one sentence so the user
+    /// understands the trade-off (auto-run / ask per
+    /// tool / describe only). Selection writes to the
+    /// session's stored mode; the next user message
+    /// picks it up.
+    private var permissionModeSheet: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                ForEach(E2bCodeSession.PermissionMode.allCases, id: \.self) { mode in
+                    Button {
+                        if let s = session {
+                            store.setPermissionMode(s.id, mode)
+                        }
+                        showPermissionSheet = false
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: mode.icon)
+                                .font(.system(size: 16, weight: .semibold))
+                                .frame(width: 28, height: 28)
+                                .foregroundStyle(Theme.accent)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(mode.displayName)
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundStyle(Theme.textPrimary)
+                                Text(permissionModeDescription(mode))
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(Theme.textSecondary)
+                            }
+                            Spacer()
+                            if mode == (session?.permissionMode ?? .acceptEdits) {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 14, weight: .bold))
+                                    .foregroundStyle(Theme.accent)
+                            }
+                        }
+                        .padding(14)
+                    }
+                    .buttonStyle(.plain)
+                    Divider().overlay(Theme.separator)
+                }
+                Spacer()
+            }
+            .navigationTitle("Permission mode")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { showPermissionSheet = false }
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
+
+    private func permissionModeDescription(_ mode: E2bCodeSession.PermissionMode) -> String {
+        switch mode {
+        case .acceptEdits:
+            return "All tool calls run without asking. Best for trusted agents and quick iteration."
+        case .ask:
+            return "Show a permission bar before each mutating tool. Read-only tools still run automatically."
+        case .plan:
+            return "Mutating tools are described but not executed. The agent plans, you approve, then switch modes to apply."
+        }
     }
 
     private func statusLabel(for s: E2bCodeSession) -> String {
@@ -517,6 +716,13 @@ struct E2bSessionView: View {
         }
 
         agentTask?.cancel()
+        // Resume any pending permission continuation from
+        // a previous turn so it doesn't leak across a
+        // fresh send (the new runner takes over and the
+        // old continuation is no longer relevant).
+        if pendingPermissionContinuation != nil {
+            respondToPermission(allow: false)
+        }
         agentTask = Task { @MainActor in
             await runAgentLoop(
                 system: system,
@@ -566,7 +772,22 @@ struct E2bSessionView: View {
             history = s.transcript.compactMap(messageToAgent)
         }
         let e2b = DirectE2BClient(apiKey: e2bKey)
-        let runner = E2bSessionRunner(e2b: e2b, agentLLM: agentLLM, github: github)
+        // Read the current permission mode at run start. The
+        // pill lets the user change it between user messages;
+        // a mid-run swap never lands on a turn already in
+        // flight (the runner is re-created for the next turn
+        // when the mode changes).
+        let currentMode = store.session(id: sessionId)?.permissionMode ?? .acceptEdits
+        let permissionRequest: @Sendable (String, String) async -> Bool = { tool, summary in
+            await self.awaitPermissionDecision(tool: tool, summary: summary)
+        }
+        let runner = E2bSessionRunner(
+            e2b: e2b,
+            agentLLM: agentLLM,
+            github: github,
+            permissionMode: currentMode,
+            onPermissionRequest: permissionRequest
+        )
 
         while !Task.isCancelled {
             guard let s = store.session(id: sessionId), s.isLive else { return }

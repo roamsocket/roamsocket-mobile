@@ -20,6 +20,58 @@ import AnyProvCore
 /// struct is the *data model* the runner mutates and that
 /// `E2bSessionStore` persists.
 public struct E2bCodeSession: Codable, Identifiable, Hashable, Sendable {
+    /// Permission mode for the agent's tool calls, mirroring
+    /// the desktop session's `PermissionMode` (see
+    /// `desktop-server/src/protocol.ts` + the iOS
+    /// `SessionView.PermissionModeSheet`).
+    ///
+    /// - `acceptEdits` (default): all tools run automatically.
+    /// - `ask`: a permission bar appears in the chat before
+    ///   each mutating tool fires; the user picks Allow or
+    ///   Deny to continue. Read-only tools (`read_file`,
+    ///   `glob`) still run without prompting.
+    /// - `plan`: mutating tools are described but not
+    ///   executed — the runner returns a "skipped in plan
+    ///   mode" message and the model sees no side effect.
+    public enum PermissionMode: String, Codable, Hashable, Sendable, CaseIterable {
+        case acceptEdits
+        case ask
+        case plan
+
+        public var displayName: String {
+            switch self {
+            case .acceptEdits: return "Accept edits"
+            case .ask: return "Ask before edits"
+            case .plan: return "Plan only"
+            }
+        }
+
+        public var icon: String {
+            switch self {
+            case .acceptEdits: return "checkmark.shield"
+            case .ask: return "questionmark.circle"
+            case .plan: return "eye"
+            }
+        }
+
+        /// One in-flight permission request. The view's
+        /// permission bar renders this; the runner's
+        /// `onPermissionRequest` closure passes the same
+        /// shape back into the view's bridge so Allow /
+        /// Deny can resume the runner. Carries the tool
+        /// name + a one-line summary (`run: pytest -q`)
+        /// so the bar fits on a phone screen without
+        /// scrolling.
+        public struct ToolRequest: Hashable, Sendable {
+            public let tool: String
+            public let summary: String
+            public init(tool: String, summary: String) {
+                self.tool = tool
+                self.summary = summary
+            }
+        }
+    }
+
     public enum Status: String, Codable, Hashable, Sendable {
         /// Sandbox is being provisioned.
         case provisioning
@@ -57,6 +109,13 @@ public struct E2bCodeSession: Codable, Identifiable, Hashable, Sendable {
     /// open time so the cost estimate stays consistent even if
     /// the user later changes the selected model.
     public var modelID: String
+    /// Permission mode for the agent's tool calls. Defaults
+    /// to `acceptEdits` (every tool runs). The pill in
+    /// `E2bSessionView` shows the current mode and lets the
+    /// user change it before the next user message; the
+    /// mode is captured at first send so a mid-session
+    /// change doesn't alter a turn already in flight.
+    public var permissionMode: PermissionMode
 
     public init(
         id: UUID = UUID(),
@@ -75,6 +134,7 @@ public struct E2bCodeSession: Codable, Identifiable, Hashable, Sendable {
         totalInputTokens: Int = 0,
         totalOutputTokens: Int = 0,
         modelID: String = "claude-sonnet-4-5",
+        permissionMode: PermissionMode = .acceptEdits,
     ) {
         self.id = id
         self.title = title
@@ -92,6 +152,7 @@ public struct E2bCodeSession: Codable, Identifiable, Hashable, Sendable {
         self.totalInputTokens = totalInputTokens
         self.totalOutputTokens = totalOutputTokens
         self.modelID = modelID
+        self.permissionMode = permissionMode
     }
 
     /// Convenience: returns the e2b sandbox URL for "open in
