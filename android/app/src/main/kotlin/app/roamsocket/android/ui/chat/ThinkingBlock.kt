@@ -233,7 +233,14 @@ private fun sinWave(phase: Float, offset: Float): Float {
  * obvious. We don't run an on-device model on Android; the heuristic
  * alone is good enough for the collapsed-row label.
  */
-private object ThinkingSummaryGenerator {
+/**
+ * Heuristic one-line label generator for the collapsed Thinking
+ * row. Lives next to [ThinkingBlock] because the view layer is its
+ * primary consumer; the chat view-model also calls it on stream
+ * complete so the label can be persisted alongside the thinking
+ * body.
+ */
+object ThinkingSummaryGenerator {
     private const val MAX_SUMMARY_LENGTH = 56
 
     fun heuristicSummary(thinking: String): String {

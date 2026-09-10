@@ -488,15 +488,21 @@ fun ChatScreen(
         )
     }
 
-    // PR #80: message actions sheet (Copy / Share / Delete). Shown
-    // when the user long-presses a message bubble. We render the
-    // sheet on a single `actionsTarget` so the user can dismiss it
-    // by tapping the scrim without losing the rest of the chat.
+    // PR #80: message actions sheet (Copy / Share / Delete +
+    // Regenerate). Shown when the user long-presses a message
+    // bubble. We render the sheet on a single `actionsTarget` so
+    // the user can dismiss it by tapping the scrim without
+    // losing the rest of the chat. Regenerate is only offered
+    // for assistant rows (the sheet's icon/handler is null
+    // for user messages) — mirrors the iOS action-button row.
     actionsTarget?.let { target ->
         MessageActionsSheet(
             message = target,
             onCopy = { /* clipboard write is handled inside the sheet */ },
             onShare = { /* share intent is fired inside the sheet */ },
+            onRegenerate = if (target is ChatMessage.Assistant) {
+                { viewModel.regenerateResponse(forAssistant = target) }
+            } else null,
             onDelete = { viewModel.deleteMessage(target) },
             onDismiss = { actionsTarget = null },
         )
@@ -581,29 +587,70 @@ private fun MessageBubble(
                 }
                 is ChatMessage.Assistant -> {
                     // Parity with iOS `ChatMessageView.assistantMessageContent`:
-                    // extract `<think>…</think>` blocks via the iOS-port
-                    // [ThinkingExtractor] and render the reasoning as a
-                    // collapsed row (clock + grey summary + tap-to-open
-                    // Thought process sheet). The visible body goes through
-                    // Markwon (Port #8) the same way it did before.
-                    val parsed = ThinkingExtractor.extract(message.text)
-                    val cleaned = ThinkingExtractor
-                        .stripControlTokens(parsed.content)
-                        .let { ThinkingExtractor.stripToolCallXml(it) }
+                    // the structured fields on [ChatMessage.Assistant]
+                    // (thoughtProcess, thoughtSummary, toolCalls,
+                    // memoryActivityIDs) are preferred when populated,
+                    // which is the case for any message produced by the
+                    // chat view model after stream complete and for any
+                    // chat loaded from history. We fall back to the
+                    // runtime extractor for older messages persisted
+                    // before the structured fields landed, and to keep
+                    // the legacy "extract from raw text" path working
+                    // for the incognito tab.
+                    val storedThinking = message.thoughtProcess
+                    val storedSummary = message.thoughtSummary
+                    // If we already have structured thinking, the body
+                    // was stripped of `<think>` blocks at stream time
+                    // and we can skip the re-extract for the body (the
+                    // visible content is just `message.text`). If we
+                    // don't, run the extractor as before to peel the
+                    // thinking + control-token + tool-XML markup.
+                    val visibleContent: String
+                    val extractorThinking: String?
+                    if (storedThinking != null) {
+                        visibleContent = ThinkingExtractor
+                            .stripControlTokens(message.text)
+                            .let { ThinkingExtractor.stripToolCallXml(it) }
+                        extractorThinking = null
+                    } else {
+                        val parsed = ThinkingExtractor.extract(message.text)
+                        extractorThinking = parsed.thinking
+                        visibleContent = ThinkingExtractor
+                            .stripControlTokens(parsed.content)
+                            .let { ThinkingExtractor.stripToolCallXml(it) }
+                    }
+                    val thinking = storedThinking ?: extractorThinking
+                    val summary = storedSummary
+                        ?: thinking?.let { ThinkingSummaryGenerator.heuristicSummary(it) }
                     // PR #XXX (provider conventions v2): peel any
                     // follow-up suggestion markers (`[SUGGEST: …]`,
                     // `<suggest>…</suggest>`, or a `Next steps:`
                     // numbered list) out of the cleaned body. The
                     // remaining text is what the markdown view shows;
                     // the chip row renders the labels below.
-                    val followUps = FollowUpExtractor.extract(cleaned)
+                    val followUps = FollowUpExtractor.extract(visibleContent)
                     Column(modifier = Modifier.padding(horizontal = 4.dp)) {
-                        parsed.thinking?.let { thinking ->
+                        thinking?.let { thinkingBody ->
                             ThinkingBlock(
-                                text = thinking,
+                                text = thinkingBody,
+                                summary = summary,
                                 expanded = alwaysExpandThinking,
                             )
                             Spacer(Modifier.size(8.dp))
+                        }
+                        if (message.toolCalls.isNotEmpty()) {
+                            // Tool status lines (web search, research,
+                            // Wikipedia, …) rendered as grey secondary
+                            // text under the thinking row and above the
+                            // body. Mirrors the iOS
+                            // `toolStatusLines(toolCalls:)` block in
+                            // `ChatMessageView.assistantMessageContent`.
+                            // Android's connector tool surface is
+                            // smaller than iOS today (only web-search
+                            // style steps) so the renderer is a simple
+                            // text line per call.
+                            ToolStatusLines(toolCalls = message.toolCalls)
+                            Spacer(Modifier.size(4.dp))
                         }
                         if (followUps.content.isNotBlank()) {
                             MarkdownContentView(
@@ -614,8 +661,12 @@ private fun MessageBubble(
                         // Follow-up suggestion chips. Hidden while
                         // the model is still streaming (we don't know
                         // yet whether a trailing marker is real or a
-                        // hallucinated prefix).
-                        if (!isStreaming && followUps.suggestions.isNotEmpty()) {
+                        // hallucinated prefix). Uses the per-message
+                        // `isStreaming` flag when available, with the
+                        // state-level `isStreaming` parameter as a
+                        // fallback for callers that don't pass it.
+                        val stillStreaming = message.isStreaming || isStreaming
+                        if (!stillStreaming && followUps.suggestions.isNotEmpty()) {
                             Spacer(Modifier.size(6.dp))
                             FollowUpChips(
                                 suggestions = followUps.suggestions,
@@ -626,26 +677,30 @@ private fun MessageBubble(
                         // visible progress yet, surface a typing indicator
                         // so the user knows the agent is still working
                         // (mirrors iOS `shouldShowTypingIndicator`).
-                        if (isStreaming && parsed.thinking == null && followUps.content.isBlank()) {
+                        val stillStreamingForIndicator = message.isStreaming || isStreaming
+                        if (stillStreamingForIndicator && thinking == null && followUps.content.isBlank()) {
                             Spacer(Modifier.size(4.dp))
                             AssistantTypingIndicator()
                         }
-                        // PR #79: surface the most recent memory
-                        // activity row as a "Saved to memory" card
-                        // under the trailing assistant message. The
-                        // activity log is global; we pair it with the
-                        // latest assistant row so a long transcript
-                        // doesn't end up with every old card stacked
-                        // on the final bubble.
+                        // PR #79 + structured memory activity: when
+                        // this message carries memoryActivityIDs we
+                        // render one card per ID. Otherwise (legacy
+                        // / unrecognised store) we fall back to the
+                        // global latest-activity behaviour so the
+                        // first card still appears.
                         if (memoryStore != null && isLatestAssistant) {
-                            val latest = memoryStore.activity.collectAsState().value
-                                .lastOrNull()
-                            if (latest != null) {
-                                Spacer(Modifier.size(8.dp))
-                                MemoryHintCard(
-                                    memory = memoryStore,
-                                    activityID = latest.id,
+                            val ids = message.memoryActivityIDs.takeIf { it.isNotEmpty() }
+                                ?: listOfNotNull(
+                                    memoryStore.activity.collectAsState().value.lastOrNull()?.id
                                 )
+                            if (ids.isNotEmpty()) {
+                                Spacer(Modifier.size(8.dp))
+                                for (id in ids) {
+                                    MemoryHintCard(
+                                        memory = memoryStore,
+                                        activityID = id,
+                                    )
+                                }
                             }
                         }
                     }
@@ -1171,4 +1226,79 @@ private fun createCameraOutputUri(context: Context): Uri {
         "${context.packageName}.fileprovider",
         file,
     )
+}
+
+/**
+ * Grey tool-status lines (web search, research, Wikipedia, …) for a
+ * single assistant turn. Mirrors the iOS
+ * `ChatMessageView.toolStatusLines(toolCalls:)` block at
+ * `ios/App/Sources/Features/Chat/ChatMessageView.swift:165-205`.
+ *
+ * The Android connector surface is currently smaller than iOS
+ * (web-search style only; bash / read_file / write_file are E2B
+ * session concepts and don't reach the chat tab). Each tool call
+ * renders as a one-line label with a status indicator:
+ *
+ *  * `Pending` / `Running` — small progress spinner
+ *  * `Completed` — green checkmark
+ *  * `Failed(message)` — red exclamation
+ *
+ * The optional [detail] is rendered as a second line when the call
+ * has completed (or failed) and the detail is non-empty, mirroring
+ * the iOS detail-line behaviour. The render is a simple `Column` so
+ * a future `MarkdownContentView` wrap on the detail body is a one-
+ * line change.
+ */
+@Composable
+private fun ToolStatusLines(toolCalls: List<ToolCall>) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        for (call in toolCalls) {
+            ToolStatusRow(call = call)
+        }
+    }
+}
+
+@Composable
+private fun ToolStatusRow(call: ToolCall) {
+    val tint = MaterialTheme.colorScheme.onSurfaceVariant
+    Row(
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        when (call.status) {
+            is ToolCall.Status.Pending, ToolCall.Status.Running -> {
+                androidx.compose.material3.CircularProgressIndicator(
+                    modifier = Modifier.size(12.dp),
+                    strokeWidth = 1.5.dp,
+                    color = tint,
+                )
+            }
+            is ToolCall.Status.Completed -> Text(
+                text = "✓",
+                color = MaterialTheme.colorScheme.primary,
+                style = MaterialTheme.typography.labelSmall,
+            )
+            is ToolCall.Status.Failed -> Text(
+                text = "✕",
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                text = call.summary,
+                style = MaterialTheme.typography.bodySmall,
+                color = tint,
+            )
+            val detail = call.detail
+            if (!detail.isNullOrEmpty() && call.status !is ToolCall.Status.Pending && call.status !is ToolCall.Status.Running) {
+                Text(
+                    text = detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = tint.copy(alpha = 0.8f),
+                    maxLines = 2,
+                )
+            }
+        }
+    }
 }

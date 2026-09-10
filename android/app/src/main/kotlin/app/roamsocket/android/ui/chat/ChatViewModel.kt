@@ -17,6 +17,7 @@ import app.roamsocket.android.ui.sidebar.ChatHistoryStore
 import app.roamsocket.core.chats.ChatHistoryRepository
 import app.roamsocket.core.chats.IncognitoLifetime
 import app.roamsocket.core.chats.PersistedChatMessage
+import app.roamsocket.core.chats.PersistedToolStep
 import app.roamsocket.core.projects.ProjectChatItem
 import app.roamsocket.core.projects.ProjectItem
 import app.roamsocket.core.providers.AIModel
@@ -429,6 +430,7 @@ class ChatViewModel(
         val assistantMsg = ChatMessage.Assistant(
             text = "",
             timestampMillis = System.currentTimeMillis(),
+            isStreaming = true,
         )
         val nextMessages = _state.value.messages + userMsg + assistantMsg
         _state.value = _state.value.copy(
@@ -502,33 +504,64 @@ class ChatViewModel(
                     // Update the assistant message in-place so the UI re-renders
                     // the bubble as each chunk arrives. `copy()` creates a new
                     // list reference so StateFlow emits the new value.
+                    // The streaming message stays in the
+                    // `isStreaming = true` state — the structured thinking /
+                    // tool-call / memory fields are only populated on stream
+                    // complete (they require the full reply to extract).
                     val current = _state.value.messages.toMutableList()
                     if (assistantIdx in current.indices) {
                         val streamingMsg = ChatMessage.Assistant(
                             text = fullReply.toString(),
                             timestampMillis = assistantMsg.timestampMillis,
+                            isStreaming = true,
                         )
                         current[assistantIdx] = streamingMsg
                         _state.value = _state.value.copy(messages = current)
                     }
                 }
 
-                // Stream complete: finalize. Mark user SENT, parse memory tags,
-                // strip tags from visible reply, save artifact.
+                // Stream complete: finalize. Mark user SENT, parse thinking
+                // + memory tags, strip tags from visible reply, apply memory
+                // mutations, save artifact. Mirrors the iOS post-stream
+                // block at `ios/.../ChatViewModel.swift:773-799` so the
+                // Android chat surface has the same structured data the iOS
+                // view layer relies on.
                 val reply = fullReply.toString()
                 val withSent = markLastUserSent(nextMessages)
-                val tags = MemoryTagParser.parse(reply)
+                // Pull thinking out of the reply *before* stripping memory
+                // tags so the tag-strip step doesn't accidentally mangle a
+                // `<think>` body that happens to mention the string
+                // "<memory". Both extractors are order-independent in
+                // practice (thinking tags and memory tags don't overlap
+                // syntactically) but the iOS path runs them in this order
+                // and we mirror it for parity.
+                val thinkingResult = ThinkingExtractor.extract(reply)
+                val thought = thinkingResult.thinking
+                val tags = MemoryTagParser.parse(thinkingResult.content)
                 val visibleReply = if (tags.isNotEmpty()) {
-                    MemoryTagParser.stripTags(reply)
+                    MemoryTagParser.stripTags(thinkingResult.content)
                 } else {
-                    reply
+                    thinkingResult.content
                 }
+                // Apply each memory tag and collect the activity entry
+                // it produces. The `MemoryStore.apply` return value is
+                // exactly what the iOS `processMemoryTags` flow uses to
+                // build the inline "Saved to memory" cards (it
+                // identifies rows by their `id`).
+                val newActivityEntries = tags.mapNotNull { tag ->
+                    runCatching { memoryStore.apply(tag) }.getOrNull()
+                }
+                val newActivityIDs = newActivityEntries.map { it.id }
+                val heuristicSummary = thought?.let { ThinkingSummaryGenerator.heuristicSummary(it) }
                 val finalAssistantMsg = ChatMessage.Assistant(
                     text = visibleReply,
                     timestampMillis = assistantMsg.timestampMillis,
+                    isStreaming = false,
+                    thoughtProcess = thought,
+                    thoughtSummary = heuristicSummary,
+                    memoryActivityIDs = newActivityIDs,
                 )
                 val finalMessages = withSent.dropLast(1) + finalAssistantMsg
-                tags.forEach { tag -> memoryStore.apply(tag) }
                 captureArtifact(visibleReply, finalAssistantMsg.timestampMillis)
                 _state.value = _state.value.copy(
                     messages = finalMessages,
@@ -567,6 +600,60 @@ class ChatViewModel(
         val lastUser = messages.lastOrNull { it is ChatMessage.User && it.delivery == ChatMessage.User.Delivery.FAILED }
             ?: return
         send(lastUser.text)
+    }
+
+    /**
+     * Re-send the prompt that produced [message] (the assistant turn to
+     * regenerate) and drop the existing assistant row + every row
+     * after it (including the user turn it was a reply to, since
+     * [send] re-appends a fresh user + assistant placeholder pair).
+     * Mirrors the iOS `regenerateResponse(for:)` behaviour at
+     * `ios/.../ChatViewModel.swift:1167-1177` so the per-message
+     * `Regenerate` action in the actions sheet behaves the same on
+     * both platforms.
+     *
+     * Refuses to fire while a stream is in flight (the existing
+     * [send] guard also short-circuits in that case, but we want a
+     * clearer error here).
+     */
+    fun regenerateResponse(forAssistant message: ChatMessage) {
+        if (message !is ChatMessage.Assistant) return
+        if (_state.value.isStreaming) return
+        val messages = _state.value.messages
+        val messageIdx = messages.indexOfFirst { it === message }
+        if (messageIdx < 0) return
+        // The user turn directly above the assistant is the one to
+        // re-send. Walk backward over any tool / notice / diff rows
+        // that hang between them so a multi-segment transcript still
+        // finds the right prompt. (Today's chat surface doesn't
+        // insert such rows, but E2B / future surfaces will.)
+        var promptText: String? = null
+        var promptImages: List<ProviderChatMessage.ImageAttachment> = emptyList()
+        var promptFiles: List<ProviderChatMessage.FileAttachment> = emptyList()
+        for (i in messageIdx - 1 downTo 0) {
+            val row = messages[i]
+            if (row is ChatMessage.User) {
+                promptText = row.text
+                promptImages = row.images
+                promptFiles = row.files
+                break
+            }
+        }
+        val text = promptText ?: return
+        // Drop the user turn and everything after it. iOS does the
+        // same (removes both rows) so [send] can re-append them
+        // cleanly.
+        var userIdx = -1
+        for (i in messageIdx - 1 downTo 0) {
+            if (messages[i] is ChatMessage.User) { userIdx = i; break }
+        }
+        if (userIdx < 0) return
+        _state.value = _state.value.copy(
+            messages = messages.subList(0, userIdx),
+            attachedImages = promptImages,
+            attachedFiles = promptFiles,
+        )
+        send(text)
     }
 
     fun updateDraft(text: String) {
@@ -1117,6 +1204,45 @@ sealed interface ChatMessage {
     data class Assistant(
         override val text: String,
         override val timestampMillis: Long = System.currentTimeMillis(),
+        /**
+         * True while the model is still streaming chunks into this
+         * bubble. The chat view hides the suggestion chip row and
+         * the action button strip while streaming; the trailing
+         * memory hint card only renders on the last assistant row
+         * once streaming settles.
+         */
+        val isStreaming: Boolean = false,
+        /**
+         * Reasoning body extracted from the assistant reply
+         * (e.g. Claude 4 `<think>` blocks, DeepSeek R1 chain-of-
+         * thought, Qwen3 scratch, Apple Foundation Model
+         * transcript). The chat view renders this as the collapsed
+         * Thinking row above the visible body. Mirrors the iOS
+         * [ChatMessage.thoughtProcess] field. Optional so legacy
+         * chat-history rows that pre-date this revision still
+         * deserialise cleanly.
+         */
+        val thoughtProcess: String? = null,
+        /**
+         * Heuristic one-line label for the collapsed Thinking row.
+         * Computed on stream complete; never re-derived on load.
+         * Mirrors the iOS [ChatMessage.thoughtSummary] field.
+         */
+        val thoughtSummary: String? = null,
+        /**
+         * Grey tool-status lines (web search, research, Wikipedia,
+         * …) the assistant ran while producing this turn. Mirrors
+         * the iOS [ChatMessage.toolCalls] field.
+         */
+        val toolCalls: List<ToolCall> = emptyList(),
+        /**
+         * Memory-store activity rows created by the auto-save
+         * parser for this turn. Rendered as inline "Saved to
+         * memory" cards with an Undo button under the assistant
+         * bubble. Mirrors the iOS [ChatMessage.memoryActivityIDs]
+         * field.
+         */
+        val memoryActivityIDs: List<String> = emptyList(),
     ) : ChatMessage
 }
 
@@ -1137,6 +1263,22 @@ internal fun ChatMessage.toPersisted(markPending: Boolean = false): PersistedCha
         role = PersistedChatMessage.Role.ASSISTANT,
         content = text,
         timestampMillis = timestampMillis,
+        // Persist the structured fields so the reasoning body, the
+        // collapsed-row label, and the tool status lines all
+        // survive an app restart. `isStreaming` is always false on
+        // a persisted row (we only persist on stream-complete).
+        // `memoryActivityIDs` stays in-memory only — the activity
+        // log itself is a runtime construct.
+        thoughtProcess = thoughtProcess,
+        thoughtSummary = thoughtSummary,
+        toolSteps = toolCalls.map { call ->
+            PersistedToolStep(
+                id = call.id,
+                name = call.name,
+                summary = call.summary,
+                detail = call.detail,
+            )
+        },
     )
 }
 
@@ -1150,8 +1292,32 @@ internal fun PersistedChatMessage.toUi(): ChatMessage = when (role) {
             PersistedChatMessage.Delivery.SENT -> ChatMessage.User.Delivery.SENT
         },
     )
-    PersistedChatMessage.Role.ASSISTANT -> ChatMessage.Assistant(content, timestampMillis)
-    PersistedChatMessage.Role.SYSTEM -> ChatMessage.Assistant(content, timestampMillis)
+    PersistedChatMessage.Role.ASSISTANT -> ChatMessage.Assistant(
+        text = content,
+        timestampMillis = timestampMillis,
+        // Round-trip the structured fields persisted on the on-disk
+        // shape. `isStreaming` is always false on a loaded row.
+        // `memoryActivityIDs` is intentionally not restored — the
+        // runtime memory activity log is rebuilt from the persisted
+        // `UserMemoryStore` snapshot on cold start (TODO when
+        // `UserMemoryStore` lands on Android).
+        thoughtProcess = thoughtProcess,
+        thoughtSummary = thoughtSummary,
+        toolCalls = toolSteps.map { step ->
+            ToolCall(
+                id = step.id,
+                name = step.name,
+                summary = step.summary,
+                detail = step.detail,
+                result = null,
+                status = ToolCall.Status.Completed,
+            )
+        },
+    )
+    PersistedChatMessage.Role.SYSTEM -> ChatMessage.Assistant(
+        text = content,
+        timestampMillis = timestampMillis,
+    )
 }
 
 /**

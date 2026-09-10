@@ -2,6 +2,7 @@ package app.roamsocket.core.chats
 
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -98,5 +99,72 @@ class ChatHistorySchemaTest {
         val legacy = """{"id":"x","role":"user","content":"hi","timestampMillis":1}"""
         val decoded = json.decodeFromString(PersistedChatMessage.serializer(), legacy)
         assertEquals(PersistedChatMessage.Delivery.SENT, decoded.delivery)
+    }
+
+    // MARK: - Structured assistant fields (PR: structured ChatMessage)
+
+    @Test
+    fun assistantRowWithThinkingRoundtrips() {
+        // Mirrors the iOS `PersistedChatMessage.thoughtProcess` /
+        // `thoughtSummary` fields. Empty / missing fields stay null
+        // so a legacy row deserialises cleanly.
+        val msg = PersistedChatMessage(
+            id = "m-thinking",
+            role = PersistedChatMessage.Role.ASSISTANT,
+            content = "The answer is 42.",
+            timestampMillis = 100L,
+            thoughtProcess = "Let me think about this carefully...",
+            thoughtSummary = "Picking the right constant",
+        )
+        val encoded = json.encodeToString(PersistedChatMessage.serializer(), msg)
+        val decoded = json.decodeFromString(PersistedChatMessage.serializer(), encoded)
+        assertEquals(msg, decoded)
+        assertEquals("Let me think about this carefully...", decoded.thoughtProcess)
+        assertEquals("Picking the right constant", decoded.thoughtSummary)
+    }
+
+    @Test
+    fun assistantRowWithToolStepsRoundtrips() {
+        val msg = PersistedChatMessage(
+            id = "m-tools",
+            role = PersistedChatMessage.Role.ASSISTANT,
+            content = "Here's what I found.",
+            timestampMillis = 200L,
+            toolSteps = listOf(
+                PersistedToolStep(
+                    id = "t-1",
+                    name = "web_search",
+                    summary = "Searched the web for \"swift regex\"",
+                    detail = "3 sources",
+                ),
+                PersistedToolStep(
+                    id = "t-2",
+                    name = "wikipedia",
+                    summary = "Pulled the Wikipedia article on regex",
+                ),
+            ),
+        )
+        val encoded = json.encodeToString(PersistedChatMessage.serializer(), msg)
+        val decoded = json.decodeFromString(PersistedChatMessage.serializer(), encoded)
+        assertEquals(msg, decoded)
+        assertEquals(2, decoded.toolSteps.size)
+        assertEquals("web_search", decoded.toolSteps[0].name)
+        assertEquals("3 sources", decoded.toolSteps[0].detail)
+        assertNull(decoded.toolSteps[1].detail)
+    }
+
+    @Test
+    fun legacyAssistantRowsWithoutStructuredFieldsDefaultToEmpty() {
+        // A pre-structured-fields JSON blob (older installs) must
+        // deserialise with `thoughtProcess = null`, `thoughtSummary = null`,
+        // `toolSteps = []`. The chat view layer handles these
+        // gracefully (it falls back to re-extracting the body).
+        val legacy = """
+            {"id":"a-1","role":"assistant","content":"hello","timestampMillis":1}
+        """.trimIndent()
+        val decoded = json.decodeFromString(PersistedChatMessage.serializer(), legacy)
+        assertNull(decoded.thoughtProcess)
+        assertNull(decoded.thoughtSummary)
+        assertTrue(decoded.toolSteps.isEmpty())
     }
 }
