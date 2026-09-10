@@ -293,18 +293,22 @@ extension DirectE2BClient {
         let body: [String: Any] = ["code": code]
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response): (Data, URLResponse)
+        // Use the injected HTTP client so the wire shape
+        // is testable end-to-end (the existing tests for
+        // `createSandbox` / `verifyKey` rely on the same
+        // injection point). The `URLSession`-backed
+        // default routes to api.e2b.dev and the sandbox
+        // execute URL the same way; the test swap is
+        // transparent in production.
+        let (data, response): (Data, HTTPURLResponse)
         do {
-            (data, response) = try await URLSession.shared.data(for: req)
+            (data, response) = try await http.data(for: req)
         } catch {
             throw DirectE2BError.transport(error.localizedDescription)
         }
-        guard let http = response as? HTTPURLResponse else {
-            throw DirectE2BError.stream("non-HTTP response from /execute")
-        }
-        guard (200..<300).contains(http.statusCode) else {
+        guard (200..<300).contains(response.statusCode) else {
             let body = String(data: data, encoding: .utf8) ?? ""
-            throw DirectE2BError.http(status: http.statusCode, body: body)
+            throw DirectE2BError.http(status: response.statusCode, body: body)
         }
         // The /execute endpoint replies in NDJSON records; reconstruct
         // the script's plain stdout so every caller keeps parsing JSON
@@ -531,6 +535,59 @@ extension DirectE2BClient {
             accessToken: accessToken,
             path: path,
             content: newContent
+        )
+    }
+
+    /// Find files under `cwd` matching a glob pattern.
+    /// `pattern` follows the same syntax as the desktop
+    /// server's `globTool` (`*`, `**`, `?`). Returns
+    /// relative paths (relative to `cwd`) sorted
+    /// alphabetically, capped at `limit` results so a
+    /// pathological `**/*` doesn't blow up the tool
+    /// card. The matching is done with Python's
+    /// `pathlib.Path.glob` so semantics match the local
+    /// desktop agent.
+    public func listFiles(
+        sandboxId: String,
+        accessToken: String?,
+        pattern: String,
+        cwd: String = "/code",
+        limit: Int = 500,
+    ) async throws -> [String] {
+        let script = """
+        import json, os
+        try:
+            root = \(escapePython(cwd))
+            pattern = \(escapePython(pattern))
+            if not os.path.isdir(root):
+                print(json.dumps({"ok": False, "error": "not a directory: " + root}))
+            else:
+                from pathlib import Path
+                base = Path(root)
+                matches = []
+                for p in base.glob(pattern):
+                    if p.is_file():
+                        rel = str(p.relative_to(base))
+                        matches.append(rel)
+                        if len(matches) >= \(limit):
+                            break
+                matches.sort()
+                print(json.dumps({"ok": True, "matches": matches}))
+        except Exception as exc:
+            print(json.dumps({"ok": False, "error": str(exc)}))
+        """
+        let raw = try await exec(sandboxId: sandboxId, accessToken: accessToken, code: script)
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = trimmed.data(using: .utf8),
+              let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            throw DirectE2BError.stream("listFiles: invalid response — \(raw.prefix(200))")
+        }
+        if let ok = parsed["ok"] as? Bool, ok {
+            return parsed["matches"] as? [String] ?? []
+        }
+        throw DirectE2BError.stream(
+            "listFiles failed: \(parsed["error"] as? String ?? "unknown error")"
         )
     }
 }
