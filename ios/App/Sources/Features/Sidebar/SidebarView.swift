@@ -255,8 +255,6 @@ struct SidebarView: View {
         .padding(.bottom, 16)
     }
 
-<<<<<<< HEAD
-    // MARK: - Downloads (pinned above the footer)
     // MARK: - Downloads (pinned above the footer)
 
     private var downloadBar: some View {
