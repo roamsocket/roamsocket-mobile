@@ -43,7 +43,15 @@ public actor E2bSessionRunner {
         e2b: DirectE2BClient,
         agentLLM: AgentLLM,
         github: GitHubContext,
-        maxSteps: Int = 12,
+        /// Step limit to avoid runaway loops. Each assistant turn
+        /// that includes tool calls counts as one step; each
+        /// end_turn ends the loop. Bumped from 12 to 24 to match
+        /// the desktop server's `MAX_ROUNDS` (see
+        /// `desktop-server/src/agent/loop.ts`) so a long phone-
+        /// originated agent run (clone + multi-file edit + test
+        /// + commit + push + PR) doesn't get cut off mid-task on
+        /// the 13th tool call.
+        maxSteps: Int = 24,
     ) {
         self.e2b = e2b
         self.agentLLM = agentLLM
@@ -344,6 +352,20 @@ public actor E2bSessionRunner {
             )
         ),
         .init(
+            name: "glob",
+            description: "Find files inside `/code` matching a glob pattern. Returns up to 500 relative paths, one per line. Use this to discover the project layout before reading or editing files. Patterns use the same syntax as the desktop server's glob tool: `*` matches a single path segment, `**` matches across directories, `?` matches a single character. Examples: `**/*.swift` (every Swift file), `src/**/*.ts`, `*.md`.",
+            inputSchema: .init(
+                type: "object",
+                properties: [
+                    "pattern": .init(
+                        type: "string",
+                        description: "Glob pattern relative to `/code`, e.g. `src/**/*.swift`."
+                    )
+                ],
+                required: ["pattern"]
+            )
+        ),
+        .init(
             name: "write_file",
             description: "Write a UTF-8 text file. Creates parent directories as needed.",
             inputSchema: .init(
@@ -470,6 +492,8 @@ public actor E2bSessionRunner {
             return await runShellTool(input: input, sandboxId: sandboxId, sandboxAccessToken: sandboxAccessToken)
         case "read_file":
             return await readFileTool(input: input, sandboxId: sandboxId, sandboxAccessToken: sandboxAccessToken)
+        case "glob":
+            return await globTool(input: input, sandboxId: sandboxId, sandboxAccessToken: sandboxAccessToken)
         case "write_file":
             return await writeFileTool(input: input, sandboxId: sandboxId, sandboxAccessToken: sandboxAccessToken)
         case "edit_file":
@@ -534,6 +558,26 @@ public actor E2bSessionRunner {
             return (contents, false)
         } catch {
             return ("read_file failed: \(error.localizedDescription)", true)
+        }
+    }
+
+    private func globTool(input: AgentLLMInput, sandboxId: String, sandboxAccessToken: String?) async -> (String, Bool) {
+        guard let pattern = input.stringValue(for: "pattern") else {
+            return ("missing 'pattern' field", true)
+        }
+        do {
+            let matches = try await e2b.listFiles(
+                sandboxId: sandboxId,
+                accessToken: sandboxAccessToken,
+                pattern: pattern,
+                cwd: "/code"
+            )
+            if matches.isEmpty {
+                return ("(no matches)", false)
+            }
+            return (matches.joined(separator: "\n"), false)
+        } catch {
+            return ("glob failed: \(error.localizedDescription)", true)
         }
     }
 
